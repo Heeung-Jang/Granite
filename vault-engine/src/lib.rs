@@ -13,6 +13,7 @@ pub mod scanner;
 pub mod sqlite_fts;
 pub mod startup_reconciliation;
 pub mod tantivy_search;
+pub mod watcher_burst;
 
 pub const ENGINE_ABI_VERSION: u32 = 1;
 
@@ -41,6 +42,7 @@ pub fn health_check() -> EngineHealth {
             "sqlite_fts",
             "tantivy_search",
             "startup_reconciliation",
+            "watcher_burst",
         ],
     }
 }
@@ -72,6 +74,7 @@ mod tests {
                 "sqlite_fts",
                 "tantivy_search",
                 "startup_reconciliation",
+                "watcher_burst",
             ]
         );
     }
