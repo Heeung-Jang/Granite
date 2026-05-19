@@ -188,6 +188,10 @@ public final class AppState: ObservableObject {
         }
     }
 
+    public func isEditorDirty(file: FileTreeItem) -> Bool {
+        dirtyEditorFile == file
+    }
+
     public func dismissDirtyNavigationWarning() {
         dirtyNavigationWarning = nil
     }

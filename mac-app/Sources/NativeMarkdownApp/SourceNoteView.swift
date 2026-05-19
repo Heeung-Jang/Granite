@@ -15,6 +15,8 @@ struct SourceNoteView: View {
     @State private var saveSession: EditorSaveSession?
     @State private var pendingExternalLink: PendingExternalLink?
     @State private var interactionNotice: EditorInteractionNotice?
+    @State private var pendingRecoverySnapshot: EditorRecoverySnapshot?
+    @State private var recoveryTask: Task<Void, Never>?
 
     init(
         vaultURL: URL,
@@ -68,12 +70,20 @@ struct SourceNoteView: View {
         }
         .onChange(of: text) { _, newValue in
             saveSession?.updateContents(newValue)
+            scheduleRecoverySnapshot(contents: newValue)
         }
-        .onChange(of: saveSession) { _, newValue in
+        .onChange(of: saveSession) { oldValue, newValue in
             appState.updateEditorDirtyState(file: file, isDirty: newValue?.isDirty == true)
+            if oldValue?.isDirty == true, newValue?.isDirty == false {
+                clearRecoverySnapshot()
+            }
         }
         .onDisappear {
-            if saveSession?.isDirty != true {
+            recoveryTask?.cancel()
+            if saveSession?.isDirty == true, appState.isEditorDirty(file: file) {
+                writeRecoverySnapshot(contents: text)
+            } else {
+                clearRecoverySnapshot()
                 appState.updateEditorDirtyState(file: file, isDirty: false)
             }
         }
@@ -97,6 +107,16 @@ struct SourceNoteView: View {
             }
         } message: {
             Text(interactionNotice?.message ?? "")
+        }
+        .alert("Recovered Draft", isPresented: recoveryAlertBinding) {
+            Button("Use Draft") {
+                applyRecoverySnapshot()
+            }
+            Button("Discard Draft", role: .destructive) {
+                discardRecoverySnapshot()
+            }
+        } message: {
+            Text("A newer unsaved draft exists for \(file.displayName).")
         }
     }
 
@@ -130,6 +150,7 @@ struct SourceNoteView: View {
     private func load() async {
         state = .loading
         saveSession = nil
+        pendingRecoverySnapshot = nil
         let timer = AppTelemetryTimer()
         do {
             let document = try await Task.detached(priority: .userInitiated) {
@@ -149,12 +170,14 @@ struct SourceNoteView: View {
                 durationMilliseconds: timer.elapsedMilliseconds()
             )
             await captureSaveBaseline()
+            await loadRecoverySnapshot(diskContents: document.contents)
         } catch {
             if Task.isCancelled {
                 return
             }
             text = ""
             saveSession = nil
+            pendingRecoverySnapshot = nil
             state = .failed(displayMessage(for: error))
             AppTelemetry.noteLoadCompleted(
                 file,
@@ -410,6 +433,103 @@ struct SourceNoteView: View {
                 interactionNotice = nil
             }
         }
+    }
+
+    private var recoveryAlertBinding: Binding<Bool> {
+        Binding {
+            pendingRecoverySnapshot != nil
+        } set: { isPresented in
+            if !isPresented {
+                pendingRecoverySnapshot = nil
+            }
+        }
+    }
+
+    private func loadRecoverySnapshot(diskContents: String) async {
+        guard let store = recoveryStore() else {
+            return
+        }
+
+        do {
+            let file = file
+            let snapshot = try await Task.detached(priority: .utility) {
+                try store.loadSnapshot(for: file)
+            }.value
+
+            if Task.isCancelled {
+                return
+            }
+
+            if let snapshot, snapshot.contents != diskContents {
+                pendingRecoverySnapshot = snapshot
+            } else if snapshot != nil {
+                clearRecoverySnapshot()
+            }
+        } catch {
+            pendingRecoverySnapshot = nil
+        }
+    }
+
+    private func applyRecoverySnapshot() {
+        guard let snapshot = pendingRecoverySnapshot else {
+            return
+        }
+        text = snapshot.contents
+        saveSession?.updateContents(snapshot.contents)
+        appState.updateEditorDirtyState(file: file, isDirty: saveSession?.isDirty == true)
+        pendingRecoverySnapshot = nil
+        scheduleRecoverySnapshot(contents: snapshot.contents)
+    }
+
+    private func discardRecoverySnapshot() {
+        pendingRecoverySnapshot = nil
+        clearRecoverySnapshot()
+    }
+
+    private func scheduleRecoverySnapshot(contents: String) {
+        guard saveSession?.isDirty == true else {
+            return
+        }
+        recoveryTask?.cancel()
+        recoveryTask = Task {
+            try? await Task.sleep(for: .milliseconds(400))
+            if Task.isCancelled {
+                return
+            }
+            writeRecoverySnapshot(contents: contents)
+        }
+    }
+
+    private func writeRecoverySnapshot(contents: String) {
+        guard let store = recoveryStore() else {
+            return
+        }
+        let file = file
+        Task {
+            try? await Task.detached(priority: .utility) {
+                try store.writeSnapshot(file: file, contents: contents)
+            }.value
+        }
+    }
+
+    private func clearRecoverySnapshot() {
+        recoveryTask?.cancel()
+        guard let store = recoveryStore() else {
+            return
+        }
+        let file = file
+        Task {
+            try? await Task.detached(priority: .utility) {
+                try store.clearSnapshot(for: file)
+            }.value
+        }
+    }
+
+    private func recoveryStore() -> EditorRecoveryStore? {
+        guard let dataDirectory = appState.indexLocation?.dataDirectory else {
+            return nil
+        }
+        return EditorRecoveryStore(dataDirectory: dataDirectory)
     }
 
     private func handleEditorInteraction(_ interaction: MarkdownEditorInteraction) {
