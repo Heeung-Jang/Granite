@@ -1,0 +1,5 @@
+{
+  "enabled": true,
+  "note": "Fixture plugin data must not execute or be indexed as Markdown."
+}
+

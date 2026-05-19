@@ -1,0 +1,108 @@
+{
+  "schema_version": 1,
+  "vault": "compatibility-vault",
+  "excluded_paths": [
+    ".obsidian/ignored.md",
+    ".obsidian/plugins/fake-plugin/data.json"
+  ],
+  "files": [
+    {
+      "path": "Attachments.md",
+      "headings": ["Attachments"],
+      "wikilinks": [],
+      "embeds": [
+        {"target": "attachments/diagram.svg", "resolved": true},
+        {"target": "attachments/missing.png", "resolved": false}
+      ],
+      "markdown_links": [
+        {"target": "attachments/spec.pdf", "resolved": true}
+      ],
+      "tags": ["attachments"],
+      "properties": {"tags": ["attachments"]},
+      "unresolved": ["attachments/missing.png"]
+    },
+    {
+      "path": "Docs/Guide.md",
+      "headings": ["Guide"],
+      "wikilinks": [
+        {"target": "Home", "heading": "Home", "resolved": true}
+      ],
+      "embeds": [],
+      "markdown_links": [
+        {"target": "../Home.md", "resolved": true}
+      ],
+      "tags": ["docs"],
+      "properties": {"type": "guide", "tags": ["docs"]},
+      "unresolved": []
+    },
+    {
+      "path": "Folder/Duplicate.md",
+      "headings": ["Duplicate"],
+      "wikilinks": [
+        {"target": "Home", "resolved": true}
+      ],
+      "embeds": [],
+      "markdown_links": [],
+      "tags": ["duplicate"],
+      "properties": {"tags": ["duplicate"]},
+      "unresolved": []
+    },
+    {
+      "path": "Folder/Target.md",
+      "headings": ["Target", "Deep Heading"],
+      "wikilinks": [
+        {"target": "Home", "resolved": true}
+      ],
+      "embeds": [],
+      "markdown_links": [
+        {"target": "https://example.com/reference", "resolved": "external"}
+      ],
+      "tags": ["target", "project/native"],
+      "properties": {
+        "aliases": ["Target Alias"],
+        "tags": ["target", "project/native"],
+        "reviewed": true
+      },
+      "unresolved": []
+    },
+    {
+      "path": "Home.md",
+      "headings": ["Home"],
+      "wikilinks": [
+        {"target": "Folder/Target", "resolved": true},
+        {"target": "Folder/Target", "heading": "Deep Heading", "resolved": true},
+        {"target": "Folder/Target", "alias": "Target Alias", "resolved": true},
+        {"target": "Duplicate", "resolved": "ambiguous"},
+        {"target": "Missing Note", "resolved": false},
+        {"target": "Docs/Guide", "resolved": true}
+      ],
+      "embeds": [
+        {"target": "attachments/diagram.svg", "resolved": true}
+      ],
+      "markdown_links": [
+        {"target": "Docs/Guide.md", "resolved": true}
+      ],
+      "tags": ["home", "project/native", "nested/tag"],
+      "properties": {
+        "aliases": ["Start Here"],
+        "tags": ["home", "project/native"],
+        "status": "active",
+        "created": "2026-05-19"
+      },
+      "unresolved": ["Missing Note"]
+    },
+    {
+      "path": "Other/Duplicate.md",
+      "headings": ["Duplicate"],
+      "wikilinks": [
+        {"target": "Home", "resolved": true}
+      ],
+      "embeds": [],
+      "markdown_links": [],
+      "tags": ["duplicate", "other"],
+      "properties": {"tags": ["duplicate", "other"]},
+      "unresolved": []
+    }
+  ]
+}
+
