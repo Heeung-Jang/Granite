@@ -2,8 +2,9 @@ use std::env;
 use std::error::Error;
 use std::ffi::OsString;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process;
+use vault_profiler::corpus::{QueryCorpusOptions, generate_query_corpus};
 use vault_profiler::{ProfileOptions, is_output_inside_vault, profile_vault};
 
 fn main() {
@@ -15,21 +16,51 @@ fn main() {
 
 fn run() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse(env::args_os().skip(1))?;
-    let profile = profile_vault(&ProfileOptions {
-        vault_root: cli.vault_root.clone(),
-        largest_limit: cli.largest_limit,
-        include_paths: cli.include_paths,
-    })?;
+    match cli.command {
+        Command::Profile(command) => {
+            let profile = profile_vault(&ProfileOptions {
+                vault_root: command.vault_root.clone(),
+                largest_limit: command.largest_limit,
+                include_paths: command.include_paths,
+            })?;
+            write_json(
+                &command.vault_root,
+                command.output_path,
+                &profile,
+                command.pretty,
+            )
+        }
+        Command::QueryCorpus(command) => {
+            let corpus = generate_query_corpus(&QueryCorpusOptions {
+                vault_root: command.vault_root.clone(),
+                samples_per_class: command.samples_per_class,
+                seed: command.seed,
+            })?;
+            write_json(
+                &command.vault_root,
+                command.output_path,
+                &corpus,
+                command.pretty,
+            )
+        }
+    }
+}
 
-    let json = if cli.pretty {
-        serde_json::to_string_pretty(&profile)?
+fn write_json<T: serde::Serialize>(
+    vault_root: &Path,
+    output_path: Option<PathBuf>,
+    value: &T,
+    pretty: bool,
+) -> Result<(), Box<dyn Error>> {
+    let json = if pretty {
+        serde_json::to_string_pretty(value)?
     } else {
-        serde_json::to_string(&profile)?
+        serde_json::to_string(value)?
     };
 
-    if let Some(output_path) = cli.output_path {
-        if is_output_inside_vault(&cli.vault_root, &output_path)? {
-            return Err("refusing to write profiler output inside the vault".into());
+    if let Some(output_path) = output_path {
+        if is_output_inside_vault(vault_root, &output_path)? {
+            return Err("refusing to write output inside the vault".into());
         }
         fs::write(output_path, json)?;
     } else {
@@ -41,10 +72,30 @@ fn run() -> Result<(), Box<dyn Error>> {
 
 #[derive(Debug, PartialEq, Eq)]
 struct Cli {
+    command: Command,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum Command {
+    Profile(ProfileCommand),
+    QueryCorpus(QueryCorpusCommand),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ProfileCommand {
     vault_root: PathBuf,
     output_path: Option<PathBuf>,
     largest_limit: usize,
     include_paths: bool,
+    pretty: bool,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct QueryCorpusCommand {
+    vault_root: PathBuf,
+    output_path: Option<PathBuf>,
+    samples_per_class: usize,
+    seed: u64,
     pretty: bool,
 }
 
@@ -57,63 +108,140 @@ impl Cli {
             return Err(usage().into());
         };
 
-        if command != "profile" {
-            return Err(usage().into());
-        }
+        let command = match command.to_string_lossy().as_ref() {
+            "profile" => Command::Profile(ProfileCommand::parse(args)?),
+            "query-corpus" => Command::QueryCorpus(QueryCorpusCommand::parse(args)?),
+            _ => return Err(usage().into()),
+        };
 
-        let mut vault_root = None;
-        let mut output_path = None;
+        Ok(Self { command })
+    }
+}
+
+impl ProfileCommand {
+    fn parse<I>(args: I) -> Result<Self, Box<dyn Error>>
+    where
+        I: Iterator<Item = OsString>,
+    {
+        let mut parser = CommonParser::new(args);
         let mut largest_limit = 20;
         let mut include_paths = false;
-        let mut pretty = false;
 
-        while let Some(arg) = args.next() {
-            match arg.to_string_lossy().as_ref() {
-                "--vault" => vault_root = Some(required_path_arg(&mut args, "--vault")?),
-                "--output" => output_path = Some(required_path_arg(&mut args, "--output")?),
+        while let Some(arg) = parser.next_arg() {
+            match arg.as_str() {
                 "--largest" => {
-                    let value = required_string_arg(&mut args, "--largest")?;
+                    let value = parser.required_string_arg("--largest")?;
                     largest_limit = value.parse()?;
                 }
                 "--include-paths" => include_paths = true,
-                "--pretty" => pretty = true,
-                _ => return Err(usage().into()),
+                _ => parser.parse_common_arg(arg)?,
             }
         }
 
-        let Some(vault_root) = vault_root else {
-            return Err("missing required --vault argument".into());
-        };
-
+        let vault_root = parser.required_vault()?;
         Ok(Self {
             vault_root,
-            output_path,
+            output_path: parser.output_path,
             largest_limit,
             include_paths,
-            pretty,
+            pretty: parser.pretty,
         })
     }
 }
 
-fn required_path_arg<I>(args: &mut I, name: &str) -> Result<PathBuf, Box<dyn Error>>
-where
-    I: Iterator<Item = OsString>,
-{
-    Ok(PathBuf::from(required_string_arg(args, name)?))
+impl QueryCorpusCommand {
+    fn parse<I>(args: I) -> Result<Self, Box<dyn Error>>
+    where
+        I: Iterator<Item = OsString>,
+    {
+        let mut parser = CommonParser::new(args);
+        let mut samples_per_class = 100;
+        let mut seed = 20260519;
+
+        while let Some(arg) = parser.next_arg() {
+            match arg.as_str() {
+                "--samples-per-class" => {
+                    let value = parser.required_string_arg("--samples-per-class")?;
+                    samples_per_class = value.parse()?;
+                }
+                "--seed" => {
+                    let value = parser.required_string_arg("--seed")?;
+                    seed = value.parse()?;
+                }
+                _ => parser.parse_common_arg(arg)?,
+            }
+        }
+
+        let vault_root = parser.required_vault()?;
+        Ok(Self {
+            vault_root,
+            output_path: parser.output_path,
+            samples_per_class,
+            seed,
+            pretty: parser.pretty,
+        })
+    }
 }
 
-fn required_string_arg<I>(args: &mut I, name: &str) -> Result<String, Box<dyn Error>>
+struct CommonParser<I>
 where
     I: Iterator<Item = OsString>,
 {
-    let Some(value) = args.next() else {
-        return Err(format!("missing value for {name}").into());
-    };
-    Ok(value.to_string_lossy().to_string())
+    args: I,
+    vault_root: Option<PathBuf>,
+    output_path: Option<PathBuf>,
+    pretty: bool,
+}
+
+impl<I> CommonParser<I>
+where
+    I: Iterator<Item = OsString>,
+{
+    fn new(args: I) -> Self {
+        Self {
+            args,
+            vault_root: None,
+            output_path: None,
+            pretty: false,
+        }
+    }
+
+    fn next_arg(&mut self) -> Option<String> {
+        self.args
+            .next()
+            .map(|arg| arg.to_string_lossy().to_string())
+    }
+
+    fn parse_common_arg(&mut self, arg: String) -> Result<(), Box<dyn Error>> {
+        match arg.as_str() {
+            "--vault" => self.vault_root = Some(self.required_path_arg("--vault")?),
+            "--output" => self.output_path = Some(self.required_path_arg("--output")?),
+            "--pretty" => self.pretty = true,
+            _ => return Err(usage().into()),
+        }
+        Ok(())
+    }
+
+    fn required_vault(&mut self) -> Result<PathBuf, Box<dyn Error>> {
+        self.vault_root
+            .take()
+            .ok_or_else(|| "missing required --vault argument".into())
+    }
+
+    fn required_path_arg(&mut self, name: &str) -> Result<PathBuf, Box<dyn Error>> {
+        Ok(PathBuf::from(self.required_string_arg(name)?))
+    }
+
+    fn required_string_arg(&mut self, name: &str) -> Result<String, Box<dyn Error>> {
+        let Some(value) = self.args.next() else {
+            return Err(format!("missing value for {name}").into());
+        };
+        Ok(value.to_string_lossy().to_string())
+    }
 }
 
 fn usage() -> &'static str {
-    "usage: vault-profiler profile --vault <path> [--output <path>] [--largest <n>] [--include-paths] [--pretty]"
+    "usage: vault-profiler <profile|query-corpus> --vault <path> [--output <path>] [--pretty]"
 }
 
 #[cfg(test)]
@@ -142,11 +270,47 @@ mod tests {
         assert_eq!(
             cli,
             Cli {
-                vault_root: PathBuf::from("/tmp/vault"),
-                output_path: Some(PathBuf::from("/tmp/profile.json")),
-                largest_limit: 5,
-                include_paths: true,
-                pretty: true,
+                command: Command::Profile(ProfileCommand {
+                    vault_root: PathBuf::from("/tmp/vault"),
+                    output_path: Some(PathBuf::from("/tmp/profile.json")),
+                    largest_limit: 5,
+                    include_paths: true,
+                    pretty: true,
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_query_corpus_args() {
+        let cli = Cli::parse(
+            [
+                "query-corpus",
+                "--vault",
+                "/tmp/vault",
+                "--output",
+                "/tmp/query-corpus.json",
+                "--samples-per-class",
+                "25",
+                "--seed",
+                "99",
+                "--pretty",
+            ]
+            .into_iter()
+            .map(OsString::from),
+        )
+        .expect("cli");
+
+        assert_eq!(
+            cli,
+            Cli {
+                command: Command::QueryCorpus(QueryCorpusCommand {
+                    vault_root: PathBuf::from("/tmp/vault"),
+                    output_path: Some(PathBuf::from("/tmp/query-corpus.json")),
+                    samples_per_class: 25,
+                    seed: 99,
+                    pretty: true,
+                }),
             }
         );
     }

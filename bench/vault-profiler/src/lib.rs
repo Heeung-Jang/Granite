@@ -1,3 +1,5 @@
+pub mod corpus;
+
 use serde::Serialize;
 use std::cmp::Reverse;
 use std::collections::BTreeMap;
@@ -25,7 +27,7 @@ pub struct VaultProfile {
     pub warnings: Vec<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, PartialEq, Eq)]
 pub struct VaultIdentity {
     pub root_name: String,
     pub root_hash: String,
