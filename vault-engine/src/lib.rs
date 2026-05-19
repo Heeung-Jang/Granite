@@ -3,6 +3,7 @@ pub mod errors;
 pub mod ffi;
 pub mod index;
 pub mod parser;
+pub mod paths;
 pub mod scanner;
 
 pub const ENGINE_ABI_VERSION: u32 = 1;
@@ -16,7 +17,15 @@ pub struct EngineHealth {
 pub fn health_check() -> EngineHealth {
     EngineHealth {
         abi_version: ENGINE_ABI_VERSION,
-        modules: &["scanner", "parser", "index", "ffi", "errors", "benchmarks"],
+        modules: &[
+            "scanner",
+            "parser",
+            "paths",
+            "index",
+            "ffi",
+            "errors",
+            "benchmarks",
+        ],
     }
 }
 
@@ -31,7 +40,15 @@ mod tests {
         assert_eq!(health.abi_version, 1);
         assert_eq!(
             health.modules,
-            &["scanner", "parser", "index", "ffi", "errors", "benchmarks",]
+            &[
+                "scanner",
+                "parser",
+                "paths",
+                "index",
+                "ffi",
+                "errors",
+                "benchmarks",
+            ]
         );
     }
 }
