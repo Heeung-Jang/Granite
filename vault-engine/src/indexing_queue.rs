@@ -101,7 +101,14 @@ impl IndexingQueue {
                 last_error = NULL,
                 leased_unix_ms = NULL,
                 updated_unix_ms = excluded.updated_unix_ms
-            WHERE excluded.generation >= indexing_queue.generation",
+            WHERE excluded.generation > indexing_queue.generation
+               OR (
+                   excluded.generation = indexing_queue.generation
+                   AND NOT (
+                       indexing_queue.reason = 'own_save'
+                       AND excluded.reason = 'file_changed'
+                   )
+               )",
             params![
                 &file.file_id,
                 path_to_string(&file.relative_path),
@@ -585,6 +592,27 @@ mod tests {
 
         assert_eq!(item.generation, 2);
         assert_eq!(item.reason, IndexingQueueReason::FileChanged);
+        assert_eq!(queue.summary().expect("summary").pending, 1);
+    }
+
+    #[test]
+    fn same_generation_watcher_change_does_not_replace_own_save_work() {
+        let mut queue = IndexingQueue::open_in_memory().expect("queue");
+        queue
+            .enqueue_file(&fixture_file("Home.md", 2), IndexingQueueReason::OwnSave)
+            .expect("enqueue own save");
+        let watcher_item = queue
+            .enqueue_file(
+                &fixture_file("Home.md", 2),
+                IndexingQueueReason::FileChanged,
+            )
+            .expect("watcher change");
+
+        let item = queue.get_by_file_id("home.md").expect("get").expect("item");
+
+        assert_eq!(watcher_item.reason, IndexingQueueReason::OwnSave);
+        assert_eq!(item.reason, IndexingQueueReason::OwnSave);
+        assert_eq!(item.generation, 2);
         assert_eq!(queue.summary().expect("summary").pending, 1);
     }
 

@@ -39,6 +39,14 @@ pub struct SaveOutcome {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QueuedSaveOutcome {
+    pub baseline: SaveBaseline,
+    pub bytes_written: u64,
+    pub queued_item: IndexingQueueItem,
+    pub dirty: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SaveReloadOutcome {
     pub baseline: SaveBaseline,
     pub contents: Vec<u8>,
@@ -166,6 +174,28 @@ pub fn safe_save(root: &VaultRoot, request: SaveRequest<'_>) -> SafeSaveResult<S
     Ok(SaveOutcome {
         baseline,
         bytes_written: request.contents.len() as u64,
+    })
+}
+
+pub fn safe_save_and_enqueue_own_save(
+    root: &VaultRoot,
+    queue: &mut IndexingQueue,
+    request: SaveRequest<'_>,
+    generation: u64,
+) -> SaveConflictChoiceResult<QueuedSaveOutcome> {
+    let outcome = safe_save(root, request)?;
+    let queued_item = enqueue_saved_file(
+        queue,
+        &outcome.baseline,
+        generation,
+        IndexingQueueReason::OwnSave,
+    )?;
+
+    Ok(QueuedSaveOutcome {
+        baseline: outcome.baseline,
+        bytes_written: outcome.bytes_written,
+        queued_item,
+        dirty: false,
     })
 }
 
@@ -648,6 +678,74 @@ mod tests {
         assert_eq!(outcome.baseline.content_hash, stable_content_hash(edited));
         assert_eq!(unix_mode(&target), original_mode);
         assert_no_temp_files(&fixture.root_path);
+    }
+
+    #[test]
+    fn safe_save_and_enqueue_own_save_returns_baseline_without_false_conflict() {
+        let fixture = copied_save_fixture();
+        let target = fixture.root_path.join("Home.md");
+        let baseline = SaveBaseline::capture(&fixture.root, "Home.md").expect("baseline");
+        let mut queue = IndexingQueue::open_in_memory().expect("queue");
+
+        let outcome = safe_save_and_enqueue_own_save(
+            &fixture.root,
+            &mut queue,
+            SaveRequest::new(&baseline, b"# First app edit\n"),
+            2,
+        )
+        .expect("own save");
+
+        assert_eq!(
+            fs::read_to_string(&target).expect("target"),
+            "# First app edit\n"
+        );
+        assert_eq!(outcome.bytes_written, b"# First app edit\n".len() as u64);
+        assert!(!outcome.dirty);
+        assert_eq!(outcome.queued_item.reason, IndexingQueueReason::OwnSave);
+        assert_eq!(outcome.queued_item.generation, 2);
+
+        let second = safe_save(
+            &fixture.root,
+            SaveRequest::new(&outcome.baseline, b"# Second app edit\n"),
+        )
+        .expect("second save should not see own save as external conflict");
+
+        assert_eq!(
+            second.baseline.content_hash,
+            stable_content_hash(b"# Second app edit\n")
+        );
+    }
+
+    #[test]
+    fn same_generation_watcher_change_preserves_own_save_queue_reason() {
+        let fixture = copied_save_fixture();
+        let baseline = SaveBaseline::capture(&fixture.root, "Home.md").expect("baseline");
+        let mut queue = IndexingQueue::open_in_memory().expect("queue");
+
+        let outcome = safe_save_and_enqueue_own_save(
+            &fixture.root,
+            &mut queue,
+            SaveRequest::new(&baseline, b"# App edit\n"),
+            2,
+        )
+        .expect("own save");
+        let watcher_item = enqueue_saved_file(
+            &mut queue,
+            &outcome.baseline,
+            2,
+            IndexingQueueReason::FileChanged,
+        )
+        .expect("watcher item");
+
+        assert_eq!(watcher_item.reason, IndexingQueueReason::OwnSave);
+        assert_eq!(
+            queue
+                .get_by_file_id("home.md")
+                .expect("queue")
+                .expect("item")
+                .reason,
+            IndexingQueueReason::OwnSave
+        );
     }
 
     #[test]
