@@ -20,6 +20,7 @@ public struct AppOwnedIndexLocation: Equatable {
     public let vaultIdentityHash: String
     public let rootDirectory: URL
     public let dataDirectory: URL
+    public let indexingQueueFile: URL
     public let lockFile: URL
     public let rebuildDirectory: URL
     public let configuration: IndexConfiguration
@@ -60,6 +61,10 @@ public struct AppOwnedIndexDirectoryResolver: IndexDirectoryResolving {
             .appendingPathComponent(safePathComponent(configuration.tokenizerConfig), isDirectory: true)
         let dataDirectory = rootDirectory.appendingPathComponent("data", isDirectory: true)
         let rebuildDirectory = rootDirectory.appendingPathComponent("rebuild", isDirectory: true)
+        let indexingQueueFile = dataDirectory.appendingPathComponent(
+            "indexing-queue.sqlite",
+            isDirectory: false
+        )
         let lockFile = rootDirectory.appendingPathComponent("index.lock", isDirectory: false)
 
         try fileManager.createDirectory(at: dataDirectory, withIntermediateDirectories: true)
@@ -69,6 +74,7 @@ public struct AppOwnedIndexDirectoryResolver: IndexDirectoryResolving {
             vaultIdentityHash: identityHash,
             rootDirectory: rootDirectory,
             dataDirectory: dataDirectory,
+            indexingQueueFile: indexingQueueFile,
             lockFile: lockFile,
             rebuildDirectory: rebuildDirectory,
             configuration: configuration

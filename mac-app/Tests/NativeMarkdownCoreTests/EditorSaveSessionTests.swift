@@ -97,6 +97,59 @@ func editorSaveSessionPreservesDirtyBufferAfterConflict() {
     )))
 }
 
+@Test
+func editorSaveSessionAppliesReloadOutcomeAsCleanDiskState() {
+    let file = FileTreeItem(relativePath: "Home.md")
+    var session = EditorSaveSession(file: file, contents: "before")
+    session.completeBaseline(makeBaseline(relativePath: file.relativePath, hash: "old"))
+    session.updateContents("dirty buffer")
+    _ = session.beginSave()
+    session.failSave(EngineSaveClientError.engine(EngineSaveErrorPayload(
+        code: "save_conflict",
+        message: "changed outside app",
+        conflictKind: "ContentChanged",
+        conflict: makeConflict(relativePath: file.relativePath)
+    )))
+
+    session.completeReload(EngineSaveReloadOutcome(
+        baseline: makeBaseline(relativePath: file.relativePath, hash: "external"),
+        contents: "external contents",
+        queuedItem: makeQueuedItem(relativePath: file.relativePath),
+        dirty: false
+    ))
+
+    #expect(session.status == .clean)
+    #expect(session.isDirty == false)
+    #expect(session.currentContents == "external contents")
+    #expect(session.savedContents == "external contents")
+    #expect(session.conflict == nil)
+}
+
+@Test
+func editorSaveSessionAppliesOverwriteChoiceForSavedSnapshotOnly() {
+    let file = FileTreeItem(relativePath: "Home.md")
+    var session = EditorSaveSession(file: file, contents: "before")
+    session.completeBaseline(makeBaseline(relativePath: file.relativePath, hash: "old"))
+    session.updateContents("first edit")
+    let savedSnapshot = session.beginSave()?.contents ?? ""
+    session.updateContents("second edit")
+
+    session.completeChoice(
+        EngineSaveChoiceOutcome(
+            choice: "Overwrite",
+            baseline: makeBaseline(relativePath: file.relativePath, hash: "saved"),
+            bytesWritten: UInt64(savedSnapshot.utf8.count),
+            queuedItem: makeQueuedItem(relativePath: file.relativePath),
+            dirty: false
+        ),
+        savedContents: savedSnapshot
+    )
+
+    #expect(session.status == .dirty)
+    #expect(session.savedContents == "first edit")
+    #expect(session.currentContents == "second edit")
+}
+
 private func makeBaseline(relativePath: String, hash: String) -> EngineSaveBaseline {
     EngineSaveBaseline(
         relativePath: relativePath,
@@ -104,5 +157,28 @@ private func makeBaseline(relativePath: String, hash: String) -> EngineSaveBasel
         sizeBytes: 6,
         modified: EngineSystemTime(secsSinceUnixEpoch: 10, nanos: 20),
         contentHash: hash
+    )
+}
+
+private func makeQueuedItem(relativePath: String) -> EngineQueuedSaveItem {
+    EngineQueuedSaveItem(
+        relativePath: relativePath,
+        generation: 1,
+        reason: "OwnSave",
+        status: "Pending"
+    )
+}
+
+private func makeConflict(relativePath: String) -> EngineSaveConflict {
+    EngineSaveConflict(
+        relativePath: relativePath,
+        kind: "ContentChanged",
+        expected: makeBaseline(relativePath: relativePath, hash: "old"),
+        actual: EngineSaveConflictSnapshot(
+            fileIdentity: EngineFileIdentity(device: 1, inode: 2),
+            sizeBytes: 12,
+            modified: EngineSystemTime(secsSinceUnixEpoch: 11, nanos: 22),
+            contentHash: "external"
+        )
     )
 }

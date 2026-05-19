@@ -27,6 +27,13 @@ public struct EditorSaveSession: Equatable, Sendable {
         baseline != nil && isDirty && !status.isSaving
     }
 
+    public var conflict: EngineSaveConflict? {
+        guard case .failed(let failure) = status else {
+            return nil
+        }
+        return failure.conflict
+    }
+
     public mutating func updateContents(_ contents: String) {
         currentContents = contents
         refreshStatusAfterContentChange()
@@ -50,7 +57,31 @@ public struct EditorSaveSession: Equatable, Sendable {
         return EditorSaveRequest(baseline: baseline, contents: currentContents)
     }
 
+    public mutating func beginConflictResolution() -> EngineSaveConflict? {
+        guard let conflict, !status.isSaving else {
+            return nil
+        }
+        status = .saving
+        return conflict
+    }
+
     public mutating func completeSave(_ outcome: EngineSaveOutcome, savedContents: String) {
+        baseline = outcome.baseline
+        self.savedContents = savedContents
+        status = currentContents == savedContents ? .clean : .dirty
+    }
+
+    public mutating func completeReload(_ outcome: EngineSaveReloadOutcome) {
+        baseline = outcome.baseline
+        savedContents = outcome.contents
+        currentContents = outcome.contents
+        status = .clean
+    }
+
+    public mutating func completeChoice(
+        _ outcome: EngineSaveChoiceOutcome,
+        savedContents: String
+    ) {
         baseline = outcome.baseline
         self.savedContents = savedContents
         status = currentContents == savedContents ? .clean : .dirty

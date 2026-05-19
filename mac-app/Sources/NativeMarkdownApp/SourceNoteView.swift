@@ -3,6 +3,8 @@ import NativeMarkdownCore
 import SwiftUI
 
 struct SourceNoteView: View {
+    private static let conflictActionGeneration: UInt64 = 0
+
     @EnvironmentObject private var appState: AppState
     let vaultURL: URL
     let file: FileTreeItem
@@ -40,7 +42,13 @@ struct SourceNoteView: View {
                     interactionHandler: handleEditorInteraction
                 )
                     .frame(minHeight: 320)
-                SaveStatusStrip(session: saveSession, save: saveCurrentNote)
+                SaveStatusStrip(
+                    session: saveSession,
+                    save: saveCurrentNote,
+                    reloadAfterConflict: reloadAfterConflict,
+                    keepConflictAsNewNote: keepConflictAsNewNote,
+                    overwriteAfterConflict: overwriteAfterConflict
+                )
             case .failed(let message):
                 VStack(spacing: 8) {
                     Image(systemName: "exclamationmark.triangle")
@@ -209,6 +217,153 @@ struct SourceNoteView: View {
         }
     }
 
+    private func reloadAfterConflict() {
+        guard let queueURL = appState.indexLocation?.indexingQueueFile,
+              var session = saveSession,
+              let conflict = session.beginConflictResolution()
+        else {
+            showConflictActionUnavailable()
+            return
+        }
+
+        saveSession = session
+        Task {
+            do {
+                let saver = noteSaver
+                let vaultURL = vaultURL
+                let generation = Self.conflictActionGeneration
+                let outcome = try await Task.detached(priority: .userInitiated) {
+                    try saver.reloadAfterConflict(
+                        vaultURL: vaultURL,
+                        queueURL: queueURL,
+                        conflict: conflict,
+                        generation: generation
+                    )
+                }.value
+
+                if Task.isCancelled {
+                    return
+                }
+                text = outcome.contents
+                session = saveSession ?? session
+                session.completeReload(outcome)
+                saveSession = session
+            } catch {
+                if Task.isCancelled {
+                    return
+                }
+                session = saveSession ?? session
+                session.failSave(error)
+                saveSession = session
+            }
+        }
+    }
+
+    private func keepConflictAsNewNote() {
+        guard let queueURL = appState.indexLocation?.indexingQueueFile,
+              var session = saveSession,
+              session.beginConflictResolution() != nil
+        else {
+            showConflictActionUnavailable()
+            return
+        }
+
+        let savedSnapshot = text
+        let newRelativePath = conflictCopyRelativePath(for: file.relativePath)
+        saveSession = session
+        Task {
+            do {
+                let saver = noteSaver
+                let vaultURL = vaultURL
+                let generation = Self.conflictActionGeneration
+                let outcome = try await Task.detached(priority: .userInitiated) {
+                    try saver.keepConflictAsNewNote(
+                        vaultURL: vaultURL,
+                        queueURL: queueURL,
+                        newRelativePath: newRelativePath,
+                        contents: savedSnapshot,
+                        generation: generation
+                    )
+                }.value
+
+                if Task.isCancelled {
+                    return
+                }
+                session = saveSession ?? session
+                session.completeChoice(outcome, savedContents: savedSnapshot)
+                saveSession = session
+                appState.openFile(FileTreeItem(relativePath: outcome.baseline.relativePath))
+            } catch {
+                if Task.isCancelled {
+                    return
+                }
+                session = saveSession ?? session
+                session.failSave(error)
+                saveSession = session
+            }
+        }
+    }
+
+    private func overwriteAfterConflict() {
+        guard let queueURL = appState.indexLocation?.indexingQueueFile,
+              var session = saveSession,
+              let conflict = session.beginConflictResolution()
+        else {
+            showConflictActionUnavailable()
+            return
+        }
+
+        let savedSnapshot = text
+        saveSession = session
+        Task {
+            do {
+                let saver = noteSaver
+                let vaultURL = vaultURL
+                let generation = Self.conflictActionGeneration
+                let outcome = try await Task.detached(priority: .userInitiated) {
+                    try saver.overwriteAfterConflict(
+                        vaultURL: vaultURL,
+                        queueURL: queueURL,
+                        conflict: conflict,
+                        contents: savedSnapshot,
+                        generation: generation
+                    )
+                }.value
+
+                if Task.isCancelled {
+                    return
+                }
+                session = saveSession ?? session
+                session.completeChoice(outcome, savedContents: savedSnapshot)
+                saveSession = session
+            } catch {
+                if Task.isCancelled {
+                    return
+                }
+                session = saveSession ?? session
+                session.failSave(error)
+                saveSession = session
+            }
+        }
+    }
+
+    private func showConflictActionUnavailable() {
+        interactionNotice = EditorInteractionNotice(
+            title: "Conflict Action Unavailable",
+            message: "Save queue or conflict details are unavailable."
+        )
+    }
+
+    private func conflictCopyRelativePath(for relativePath: String) -> String {
+        let path = relativePath as NSString
+        let parent = path.deletingLastPathComponent
+        let fileName = path.lastPathComponent as NSString
+        let stem = fileName.deletingPathExtension
+        let ext = fileName.pathExtension
+        let copyName = ext.isEmpty ? "\(stem) Conflict Copy" : "\(stem) Conflict Copy.\(ext)"
+        return parent.isEmpty || parent == "." ? copyName : "\(parent)/\(copyName)"
+    }
+
     private func displayMessage(for error: Error) -> String {
         guard let error = error as? NoteDocumentLoadError else {
             return error.localizedDescription
@@ -306,11 +461,25 @@ struct SourceNoteView: View {
 private struct SaveStatusStrip: View {
     let session: EditorSaveSession?
     let save: () -> Void
+    let reloadAfterConflict: () -> Void
+    let keepConflictAsNewNote: () -> Void
+    let overwriteAfterConflict: () -> Void
 
     var body: some View {
         HStack(spacing: 10) {
             statusContent
             Spacer(minLength: 12)
+            if session?.conflict != nil {
+                Button(action: reloadAfterConflict) {
+                    Label("Reload", systemImage: "arrow.clockwise")
+                }
+                Button(action: keepConflictAsNewNote) {
+                    Label("Keep Copy", systemImage: "doc.badge.plus")
+                }
+                Button(action: overwriteAfterConflict) {
+                    Label("Overwrite", systemImage: "square.and.pencil")
+                }
+            }
             Button(action: save) {
                 Label("Save", systemImage: "square.and.arrow.down")
             }
