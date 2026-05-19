@@ -78,6 +78,7 @@ public struct NoteInspectorSnapshot: Equatable, Sendable {
     public let tags: [String]
     public let tagNotes: [TagNoteGroup]
     public let properties: [PropertyItem]
+    public let attachments: [AttachmentReferenceItem]
     public let warnings: [String]
     public let state: SearchResultState
 
@@ -88,6 +89,7 @@ public struct NoteInspectorSnapshot: Equatable, Sendable {
         tags: [String],
         tagNotes: [TagNoteGroup],
         properties: [PropertyItem],
+        attachments: [AttachmentReferenceItem],
         warnings: [String],
         state: SearchResultState
     ) {
@@ -97,6 +99,7 @@ public struct NoteInspectorSnapshot: Equatable, Sendable {
         self.tags = tags
         self.tagNotes = tagNotes
         self.properties = properties
+        self.attachments = attachments
         self.warnings = warnings
         self.state = state
     }
@@ -119,6 +122,11 @@ public struct FileSystemNoteInspectorLoader: NoteInspectorLoading {
         let titleIndex = titleIndex(for: files)
         let document = try FileSystemNoteDocumentLoader().loadNote(at: vaultURL, file: file)
         let parsed = parseNote(document.contents)
+        let attachments = try FileSystemAttachmentReferenceLoader().loadAttachments(
+            at: vaultURL,
+            file: file,
+            contents: document.contents
+        )
 
         let outgoing = parsed.links.enumerated().map { index, link in
             resolve(link: link, index: index, titleIndex: titleIndex, vaultURL: vaultURL)
@@ -138,6 +146,7 @@ public struct FileSystemNoteInspectorLoader: NoteInspectorLoading {
             tags: parsed.tags,
             tagNotes: tagNotes,
             properties: parsed.properties,
+            attachments: attachments,
             warnings: parsed.warnings,
             state: tree.state == .partial ? .partial : .complete
         )

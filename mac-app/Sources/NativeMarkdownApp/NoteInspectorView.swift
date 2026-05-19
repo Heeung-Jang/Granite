@@ -137,6 +137,16 @@ struct NoteInspectorView: View {
                         }
                     }
 
+                    InspectorSection(title: "Attachments") {
+                        if snapshot.attachments.isEmpty {
+                            EmptyInlineText("No attachments")
+                        } else {
+                            ForEach(snapshot.attachments) { attachment in
+                                AttachmentReferenceRow(reference: attachment)
+                            }
+                        }
+                    }
+
                     InspectorSection(title: "Graph") {
                         EmptyInlineText("Graph placeholder")
                             .onAppear {
@@ -263,6 +273,80 @@ private struct OutgoingLinkRow: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
+        }
+    }
+}
+
+private struct AttachmentReferenceRow: View {
+    let reference: AttachmentReferenceItem
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Label(reference.rawTarget, systemImage: systemImage)
+                .font(.caption)
+                .lineLimit(1)
+            Text("\(sourceText) - \(statusText)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+
+            if case .duplicate(let files) = reference.state {
+                ForEach(files) { file in
+                    Text(file.relativePath)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
+            }
+        }
+    }
+
+    private var systemImage: String {
+        switch reference.state {
+        case .resolved:
+            "paperclip"
+        case .missing:
+            "questionmark"
+        case .unreadable:
+            "lock"
+        case .duplicate:
+            "square.stack.3d.up"
+        case .remote:
+            "network"
+        case .rejected:
+            "exclamationmark.triangle"
+        case .unsupported:
+            "nosign"
+        }
+    }
+
+    private var statusText: String {
+        switch reference.state {
+        case .resolved(let file):
+            "Resolved: \(file.relativePath)"
+        case .missing:
+            "Missing"
+        case .unreadable(let file):
+            "Unreadable: \(file.relativePath)"
+        case .duplicate:
+            "Duplicate basename"
+        case .remote:
+            "Remote reference"
+        case .rejected(let reason):
+            "Rejected: \(reason.rawValue)"
+        case .unsupported:
+            "Unsupported"
+        }
+    }
+
+    private var sourceText: String {
+        switch reference.source {
+        case .wikiEmbed:
+            "Wiki embed"
+        case .markdownImage:
+            "Markdown image"
+        case .markdownLink:
+            "Markdown link"
         }
     }
 }

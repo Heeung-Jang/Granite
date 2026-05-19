@@ -42,6 +42,7 @@ func noteInspectorLoadsLinksTagsPropertiesAndBacklinks() throws {
     let projectTag = try #require(snapshot.tagNotes.first { $0.tag == "project/native" })
     #expect(projectTag.files.map(\.relativePath) == ["Target.md"])
     #expect(snapshot.properties.contains(PropertyItem(key: "status", value: "active")))
+    #expect(snapshot.attachments.isEmpty)
 }
 
 @Test
@@ -97,6 +98,88 @@ func noteInspectorReportsPartialWhenFileTreeIsLimited() throws {
     )
 
     #expect(snapshot.state == .partial)
+}
+
+@Test
+func noteInspectorListsAttachmentStates() throws {
+    let vaultURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let source = """
+        # Home
+        ![[attachments/diagram.png]]
+        ![[missing.png]]
+        ![[duplicate.png]]
+        ![[Other]]
+        ![[../../secret.png]]
+        ![[/tmp/secret.png]]
+        ![[~/secret.png]]
+        ![[bad\u{0}path.png]]
+        ![[./linked.png]]
+        ![remote](https://example.com/image.png)
+        [passwd](file:///etc/passwd)
+        """
+    let noteURL = vaultURL.appendingPathComponent("Home.md")
+    try write(source, to: noteURL)
+    try write("image", to: vaultURL.appendingPathComponent("attachments/diagram.png"))
+    try write("a", to: vaultURL.appendingPathComponent("a/duplicate.png"))
+    try write("b", to: vaultURL.appendingPathComponent("b/duplicate.png"))
+    try write("# Other\n", to: vaultURL.appendingPathComponent("Other.md"))
+    try FileManager.default.createSymbolicLink(
+        atPath: vaultURL.appendingPathComponent("linked.png").path,
+        withDestinationPath: "/tmp/secret.png"
+    )
+
+    let snapshot = try FileSystemNoteInspectorLoader().loadInspector(
+        at: vaultURL,
+        file: FileTreeItem(relativePath: "Home.md"),
+        maxFiles: 20
+    )
+
+    let states = Dictionary(uniqueKeysWithValues: snapshot.attachments.map { ($0.rawTarget, $0.state) })
+    #expect(snapshot.attachments.first?.source == .wikiEmbed)
+    #expect(snapshot.attachments.first?.rawTarget == "attachments/diagram.png")
+    #expect(states["attachments/diagram.png"] == .resolved(FileTreeItem(relativePath: "attachments/diagram.png")))
+    #expect(states["missing.png"] == .missing)
+    #expect(states["Other"] == .unsupported)
+    #expect(states["../../secret.png"] == .rejected(.outsideVault))
+    #expect(states["/tmp/secret.png"] == .rejected(.absolutePath))
+    #expect(states["~/secret.png"] == .rejected(.tildePrefix))
+    #expect(states["bad\u{0}path.png"] == .rejected(.containsNul))
+    #expect(states["./linked.png"] == .rejected(.symlinkEscape))
+    #expect(states["https://example.com/image.png"] == .remote)
+    #expect(states["file:///etc/passwd"] == .rejected(.urlScheme))
+
+    guard case .duplicate(let duplicates) = states["duplicate.png"] else {
+        Issue.record("expected duplicate attachment")
+        return
+    }
+    #expect(duplicates.map(\.relativePath) == ["a/duplicate.png", "b/duplicate.png"])
+    #expect(try String(contentsOf: noteURL, encoding: .utf8) == source)
+}
+
+@Test
+func noteInspectorReportsUnreadableAttachmentWhenFilesystemDoes() throws {
+    let vaultURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let unreadableURL = vaultURL.appendingPathComponent("secret.png")
+    try write("secret", to: unreadableURL)
+    try write("![[secret.png]]", to: vaultURL.appendingPathComponent("Home.md"))
+    try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: unreadableURL.path)
+    defer {
+        try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: unreadableURL.path)
+    }
+
+    guard !FileManager.default.isReadableFile(atPath: unreadableURL.path) else {
+        return
+    }
+
+    let snapshot = try FileSystemNoteInspectorLoader().loadInspector(
+        at: vaultURL,
+        file: FileTreeItem(relativePath: "Home.md"),
+        maxFiles: 20
+    )
+
+    #expect(snapshot.attachments.first?.state == .unreadable(FileTreeItem(relativePath: "secret.png")))
 }
 
 private func write(_ contents: String, to url: URL) throws {
