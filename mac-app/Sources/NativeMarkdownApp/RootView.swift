@@ -36,6 +36,22 @@ struct RootView: View {
         } message: {
             Text(dirtyNavigationMessage)
         }
+        .alert("Unsaved Changes", isPresented: dirtyLifecycleAlertBinding) {
+            Button("Stay", role: .cancel) {
+                appState.dismissDirtyLifecycleWarning()
+            }
+            Button(dirtyLifecycleDestructiveTitle, role: .destructive) {
+                if let action = appState.discardDirtyChangesForLifecycleWarning() {
+                    AppLifecycleController.shared.performDiscardedLifecycleAction(action)
+                }
+            }
+        } message: {
+            Text(dirtyLifecycleMessage)
+        }
+        .background(DirtyLifecycleWindowGuard())
+        .onAppear {
+            AppLifecycleController.shared.appState = appState
+        }
     }
 
     private var dirtyNavigationAlertBinding: Binding<Bool> {
@@ -53,6 +69,39 @@ struct RootView: View {
             return ""
         }
         return "Save or discard changes in \(warning.dirtyFile.displayName) before opening \(warning.requestedFile.displayName)."
+    }
+
+    private var dirtyLifecycleAlertBinding: Binding<Bool> {
+        Binding {
+            appState.dirtyLifecycleWarning != nil
+        } set: { isPresented in
+            if !isPresented {
+                appState.dismissDirtyLifecycleWarning()
+            }
+        }
+    }
+
+    private var dirtyLifecycleMessage: String {
+        guard let warning = appState.dirtyLifecycleWarning else {
+            return ""
+        }
+        switch warning.action {
+        case .closeWindow:
+            return "Discard unsaved changes in \(warning.dirtyFile.displayName) and close this window?"
+        case .quitApp:
+            return "Discard unsaved changes in \(warning.dirtyFile.displayName) and quit Native Markdown?"
+        }
+    }
+
+    private var dirtyLifecycleDestructiveTitle: String {
+        switch appState.dirtyLifecycleWarning?.action {
+        case .closeWindow:
+            return "Discard and Close"
+        case .quitApp:
+            return "Discard and Quit"
+        case nil:
+            return "Discard"
+        }
     }
 }
 

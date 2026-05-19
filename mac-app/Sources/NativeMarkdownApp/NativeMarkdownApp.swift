@@ -4,6 +4,7 @@ import SwiftUI
 @main
 @MainActor
 struct NativeMarkdownApp: App {
+    @NSApplicationDelegateAdaptor(NativeMarkdownAppDelegate.self) private var appDelegate
     @StateObject private var appState = AppState()
 
     init() {

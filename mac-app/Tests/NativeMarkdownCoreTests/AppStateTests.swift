@@ -129,6 +129,64 @@ func appStateClearsDirtyNavigationStateWhenVaultBecomesUnavailable() throws {
 }
 
 @Test
+func appStateAllowsCleanLifecycleActions() {
+    let state = AppState()
+
+    #expect(state.requestWindowClose())
+    #expect(state.requestAppQuit())
+    #expect(state.dirtyLifecycleWarning == nil)
+}
+
+@Test
+func appStateBlocksWindowCloseWhileEditorIsDirty() {
+    let state = AppState()
+    let file = FileTreeItem(relativePath: "Draft.md")
+
+    #expect(state.openFile(file))
+    state.updateEditorDirtyState(file: file, isDirty: true)
+
+    #expect(state.requestWindowClose() == false)
+    #expect(state.dirtyLifecycleWarning == DirtyLifecycleWarning(
+        dirtyFile: file,
+        action: .closeWindow
+    ))
+
+    state.dismissDirtyLifecycleWarning()
+    #expect(state.dirtyLifecycleWarning == nil)
+}
+
+@Test
+func appStateBlocksAppQuitWhileEditorIsDirty() {
+    let state = AppState()
+    let file = FileTreeItem(relativePath: "Draft.md")
+
+    #expect(state.openFile(file))
+    state.updateEditorDirtyState(file: file, isDirty: true)
+
+    #expect(state.requestAppQuit() == false)
+    #expect(state.dirtyLifecycleWarning == DirtyLifecycleWarning(
+        dirtyFile: file,
+        action: .quitApp
+    ))
+}
+
+@Test
+func appStateCanDiscardDirtyLifecycleWarning() {
+    let state = AppState()
+    let first = FileTreeItem(relativePath: "First.md")
+    let second = FileTreeItem(relativePath: "Second.md")
+
+    #expect(state.openFile(first))
+    state.updateEditorDirtyState(file: first, isDirty: true)
+    #expect(state.requestWindowClose() == false)
+
+    #expect(state.discardDirtyChangesForLifecycleWarning() == .closeWindow)
+    #expect(state.dirtyLifecycleWarning == nil)
+    #expect(state.dirtyNavigationWarning == nil)
+    #expect(state.openFile(second))
+}
+
+@Test
 func indexDirectoryResolverCreatesOnlyAppOwnedDirectories() throws {
     let temporaryRoot = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString, isDirectory: true)

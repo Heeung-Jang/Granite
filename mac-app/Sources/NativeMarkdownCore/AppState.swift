@@ -38,6 +38,20 @@ public struct DirtyNavigationWarning: Equatable, Identifiable, Sendable {
     }
 }
 
+public enum DirtyLifecycleAction: String, Equatable, Sendable {
+    case closeWindow
+    case quitApp
+}
+
+public struct DirtyLifecycleWarning: Equatable, Identifiable, Sendable {
+    public let dirtyFile: FileTreeItem
+    public let action: DirtyLifecycleAction
+
+    public var id: String {
+        "\(action.rawValue)->\(dirtyFile.id)"
+    }
+}
+
 public final class AppState: ObservableObject {
     @Published public private(set) var vaultSelection: VaultSelectionState
     @Published public private(set) var engineHealth: EngineHealthStatus
@@ -46,6 +60,7 @@ public final class AppState: ObservableObject {
     @Published public private(set) var selectedFile: FileTreeItem?
     @Published public private(set) var requestedSearch: WorkspaceSearchRequest?
     @Published public private(set) var dirtyNavigationWarning: DirtyNavigationWarning?
+    @Published public private(set) var dirtyLifecycleWarning: DirtyLifecycleWarning?
 
     private let indexDirectoryResolver: any IndexDirectoryResolving
     private let vaultAccessValidator: any VaultAccessValidating
@@ -81,6 +96,7 @@ public final class AppState: ObservableObject {
             selectedFile = nil
             dirtyEditorFile = nil
             dirtyNavigationWarning = nil
+            dirtyLifecycleWarning = nil
             vaultSelection = .unavailable(issue)
             rememberVault(vaultURL)
             return
@@ -91,6 +107,7 @@ public final class AppState: ObservableObject {
         selectedFile = nil
         dirtyEditorFile = nil
         dirtyNavigationWarning = nil
+        dirtyLifecycleWarning = nil
         rememberVault(vaultURL)
     }
 
@@ -103,6 +120,7 @@ public final class AppState: ObservableObject {
         selectedFile = nil
         dirtyEditorFile = nil
         dirtyNavigationWarning = nil
+        dirtyLifecycleWarning = nil
         let vaultURL = url.standardizedFileURL
         vaultSelection = .unavailable(.staleBookmark(vaultURL))
         rememberVault(vaultURL)
@@ -121,6 +139,7 @@ public final class AppState: ObservableObject {
         selectedFile = nil
         dirtyEditorFile = nil
         dirtyNavigationWarning = nil
+        dirtyLifecycleWarning = nil
     }
 
     public func removeRecentVault(_ recentVault: RecentVault) {
@@ -165,6 +184,7 @@ public final class AppState: ObservableObject {
         } else if dirtyEditorFile == file {
             dirtyEditorFile = nil
             dirtyNavigationWarning = nil
+            dirtyLifecycleWarning = nil
         }
     }
 
@@ -180,6 +200,28 @@ public final class AppState: ObservableObject {
         dirtyNavigationWarning = nil
         selectedFile = warning.requestedFile
         AppTelemetry.noteOpened(warning.requestedFile)
+    }
+
+    public func requestWindowClose() -> Bool {
+        requestLifecycleAction(.closeWindow)
+    }
+
+    public func requestAppQuit() -> Bool {
+        requestLifecycleAction(.quitApp)
+    }
+
+    public func dismissDirtyLifecycleWarning() {
+        dirtyLifecycleWarning = nil
+    }
+
+    public func discardDirtyChangesForLifecycleWarning() -> DirtyLifecycleAction? {
+        guard let warning = dirtyLifecycleWarning else {
+            return nil
+        }
+        dirtyEditorFile = nil
+        dirtyNavigationWarning = nil
+        dirtyLifecycleWarning = nil
+        return warning.action
     }
 
     public func requestSearch(query: String, mode: SearchMode) {
@@ -202,6 +244,15 @@ public final class AppState: ObservableObject {
 
     private func persistRecentVaults() {
         recentVaultStorage.saveRecentVaultURLs(recentVaults.map(\.url))
+    }
+
+    private func requestLifecycleAction(_ action: DirtyLifecycleAction) -> Bool {
+        guard let dirtyEditorFile else {
+            dirtyLifecycleWarning = nil
+            return true
+        }
+        dirtyLifecycleWarning = DirtyLifecycleWarning(dirtyFile: dirtyEditorFile, action: action)
+        return false
     }
 
     private static func normalizedRecentVaults(from urls: [URL], limit: Int) -> [RecentVault] {
