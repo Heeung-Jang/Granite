@@ -65,13 +65,7 @@ struct NativeMarkdownApp: App {
         }
         .windowStyle(.titleBar)
         .commands {
-            CommandGroup(replacing: .saveItem) {
-                Button("Save") {
-                    AppTelemetry.saveRequested(file: appState.selectedFile, available: false)
-                }
-                .keyboardShortcut("s")
-                .disabled(appState.selectedFile == nil)
-            }
+            EditorCommands()
         }
     }
 }

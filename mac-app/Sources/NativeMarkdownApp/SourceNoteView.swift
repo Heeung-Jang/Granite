@@ -6,22 +6,27 @@ struct SourceNoteView: View {
     @EnvironmentObject private var appState: AppState
     let vaultURL: URL
     let file: FileTreeItem
+    private let noteSaver: any EngineNoteSaving
 
     @State private var state: SourceNoteViewState = .loading
     @State private var text = ""
+    @State private var saveSession: EditorSaveSession?
     @State private var pendingExternalLink: PendingExternalLink?
     @State private var interactionNotice: EditorInteractionNotice?
 
+    init(
+        vaultURL: URL,
+        file: FileTreeItem,
+        noteSaver: any EngineNoteSaving = EngineSaveClient()
+    ) {
+        self.vaultURL = vaultURL
+        self.file = file
+        self.noteSaver = noteSaver
+    }
+
     var body: some View {
         VStack(spacing: 12) {
-            VStack(spacing: 4) {
-                Text(file.displayName)
-                    .font(.headline)
-                Text(file.relativePath)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
+            header
 
             switch state {
             case .loading:
@@ -31,10 +36,11 @@ struct SourceNoteView: View {
             case .loaded:
                 MarkdownEditorView(
                     text: $text,
-                    isEditable: false,
+                    isEditable: saveSession?.canEdit == true,
                     interactionHandler: handleEditorInteraction
                 )
                     .frame(minHeight: 320)
+                SaveStatusStrip(session: saveSession, save: saveCurrentNote)
             case .failed(let message):
                 VStack(spacing: 8) {
                     Image(systemName: "exclamationmark.triangle")
@@ -52,6 +58,10 @@ struct SourceNoteView: View {
         .task(id: file.id) {
             await load()
         }
+        .onChange(of: text) { _, newValue in
+            saveSession?.updateContents(newValue)
+        }
+        .focusedSceneValue(\.editorSaveAction, editorSaveAction)
         .alert("Open External Link?", isPresented: externalLinkAlertBinding) {
             Button("Open") {
                 if let url = pendingExternalLink?.url {
@@ -74,8 +84,36 @@ struct SourceNoteView: View {
         }
     }
 
+    private var header: some View {
+        VStack(spacing: 4) {
+            HStack(spacing: 8) {
+                Text(file.displayName)
+                    .font(.headline)
+
+                if saveSession?.isDirty == true {
+                    Circle()
+                        .fill(.secondary)
+                        .frame(width: 6, height: 6)
+                        .accessibilityLabel("Unsaved changes")
+                }
+            }
+
+            Text(file.relativePath)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+    }
+
+    private var editorSaveAction: EditorSaveAction {
+        EditorSaveAction(isAvailable: saveSession?.canSave == true) {
+            saveCurrentNote()
+        }
+    }
+
     private func load() async {
         state = .loading
+        saveSession = nil
         let timer = AppTelemetryTimer()
         do {
             let document = try await Task.detached(priority: .userInitiated) {
@@ -87,23 +125,87 @@ struct SourceNoteView: View {
             }
 
             text = document.contents
+            saveSession = EditorSaveSession(file: file, contents: document.contents)
             state = .loaded
             AppTelemetry.noteLoadCompleted(
                 file,
                 success: true,
                 durationMilliseconds: timer.elapsedMilliseconds()
             )
+            await captureSaveBaseline()
         } catch {
             if Task.isCancelled {
                 return
             }
             text = ""
+            saveSession = nil
             state = .failed(displayMessage(for: error))
             AppTelemetry.noteLoadCompleted(
                 file,
                 success: false,
                 durationMilliseconds: timer.elapsedMilliseconds()
             )
+        }
+    }
+
+    private func captureSaveBaseline() async {
+        do {
+            let saver = noteSaver
+            let vaultURL = vaultURL
+            let file = file
+            let baseline = try await Task.detached(priority: .userInitiated) {
+                try saver.captureBaseline(vaultURL: vaultURL, file: file)
+            }.value
+
+            if Task.isCancelled {
+                return
+            }
+            saveSession?.completeBaseline(baseline)
+        } catch {
+            if Task.isCancelled {
+                return
+            }
+            saveSession?.failBaseline(EditorSaveFailure(error: error).message)
+        }
+    }
+
+    private func saveCurrentNote() {
+        guard var session = saveSession,
+              let request = session.beginSave()
+        else {
+            AppTelemetry.saveRequested(file: file, available: false)
+            return
+        }
+
+        saveSession = session
+        AppTelemetry.saveRequested(file: file, available: true)
+
+        Task {
+            do {
+                let saver = noteSaver
+                let vaultURL = vaultURL
+                let outcome = try await Task.detached(priority: .userInitiated) {
+                    try saver.save(
+                        vaultURL: vaultURL,
+                        baseline: request.baseline,
+                        contents: request.contents
+                    )
+                }.value
+
+                if Task.isCancelled {
+                    return
+                }
+                session = saveSession ?? session
+                session.completeSave(outcome, savedContents: request.contents)
+                saveSession = session
+            } catch {
+                if Task.isCancelled {
+                    return
+                }
+                session = saveSession ?? session
+                session.failSave(error)
+                saveSession = session
+            }
         }
     }
 
@@ -197,6 +299,50 @@ struct SourceNoteView: View {
                 title: "Link Resolution Failed",
                 message: error.localizedDescription
             )
+        }
+    }
+}
+
+private struct SaveStatusStrip: View {
+    let session: EditorSaveSession?
+    let save: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            statusContent
+            Spacer(minLength: 12)
+            Button(action: save) {
+                Label("Save", systemImage: "square.and.arrow.down")
+            }
+            .disabled(session?.canSave != true)
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+    }
+
+    @ViewBuilder
+    private var statusContent: some View {
+        switch session?.status {
+        case .baselinePending:
+            ProgressView()
+                .controlSize(.small)
+            Text("Preparing safe save")
+        case .unavailable(let message):
+            Label("Read-only: \(message)", systemImage: "lock")
+                .lineLimit(1)
+        case .clean:
+            Label("Saved", systemImage: "checkmark.circle")
+        case .dirty:
+            Label("Unsaved changes", systemImage: "circle.fill")
+        case .saving:
+            ProgressView()
+                .controlSize(.small)
+            Text("Saving")
+        case .failed(let failure):
+            Label("\(failure.title): \(failure.message)", systemImage: "exclamationmark.triangle")
+                .lineLimit(1)
+        case nil:
+            EmptyView()
         }
     }
 }
