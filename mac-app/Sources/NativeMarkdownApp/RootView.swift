@@ -37,19 +37,14 @@ struct WorkspacePlaceholderView: View {
                     .font(.title2)
                     .foregroundStyle(.secondary)
             case .selected(let url):
-                Text(url.lastPathComponent)
-                    .font(.title2)
                 if let selectedFile {
-                    VStack(spacing: 4) {
-                        Text(selectedFile.displayName)
-                            .font(.headline)
-                        Text(selectedFile.relativePath)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
+                    SourceNoteView(vaultURL: url, file: selectedFile)
+                } else {
+                    Text(url.lastPathComponent)
+                        .font(.title2)
+                    MarkdownEditorView(text: $editorText, isEditable: false)
+                        .frame(minHeight: 320)
                 }
-                MarkdownEditorView(text: $editorText)
-                    .frame(minHeight: 320)
             case .unavailable(let issue):
                 Text(issue.displayTitle)
                     .font(.title2)
