@@ -2,6 +2,7 @@ import NativeMarkdownCore
 import SwiftUI
 
 @main
+@MainActor
 struct NativeMarkdownApp: App {
     @StateObject private var appState = AppState()
 
@@ -15,6 +16,11 @@ struct NativeMarkdownApp: App {
 
         if CommandLine.arguments.contains("--smoke-test") {
             print("NativeMarkdownApp smoke test")
+            Foundation.exit(0)
+        }
+
+        if CommandLine.arguments.contains("--textkit-strategy-probe") {
+            print(TextKitStrategyProbe.encodedReport())
             Foundation.exit(0)
         }
     }
