@@ -1,9 +1,15 @@
+use std::collections::{BTreeMap, BTreeSet};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedMarkdown {
     pub headings: Vec<Heading>,
     pub wikilinks: Vec<WikiLink>,
     pub embeds: Vec<WikiLink>,
     pub markdown_links: Vec<MarkdownLink>,
+    pub tags: Vec<String>,
+    pub properties: BTreeMap<String, PropertyValue>,
+    pub frontmatter: Option<FrontmatterBlock>,
+    pub warnings: Vec<ParseWarning>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,15 +33,45 @@ pub struct MarkdownLink {
     pub image: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrontmatterBlock {
+    pub raw: String,
+    pub start_line: usize,
+    pub end_line: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PropertyValue {
+    String(String),
+    Bool(bool),
+    List(Vec<String>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParseWarning {
+    MalformedFrontmatter(String),
+}
+
 pub fn parse_markdown(source: &str) -> ParsedMarkdown {
+    let frontmatter_parse = parse_frontmatter(source);
+    let body = frontmatter_parse
+        .body_start
+        .and_then(|start| source.get(start..))
+        .unwrap_or(source);
+    let tags = collect_tags(body, &frontmatter_parse.properties);
+
     let mut parsed = ParsedMarkdown {
-        headings: parse_headings(source),
+        headings: parse_headings(body),
         wikilinks: Vec::new(),
         embeds: Vec::new(),
-        markdown_links: parse_markdown_links(source),
+        markdown_links: parse_markdown_links(body),
+        tags,
+        properties: frontmatter_parse.properties,
+        frontmatter: frontmatter_parse.block,
+        warnings: frontmatter_parse.warnings,
     };
 
-    for link in parse_wikilinks(source) {
+    for link in parse_wikilinks(body) {
         if link.embed {
             parsed.embeds.push(link.link);
         } else {
@@ -44,6 +80,279 @@ pub fn parse_markdown(source: &str) -> ParsedMarkdown {
     }
 
     parsed
+}
+
+struct FrontmatterParse {
+    block: Option<FrontmatterBlock>,
+    properties: BTreeMap<String, PropertyValue>,
+    warnings: Vec<ParseWarning>,
+    body_start: Option<usize>,
+}
+
+fn parse_frontmatter(source: &str) -> FrontmatterParse {
+    let bom_len = source
+        .strip_prefix('\u{feff}')
+        .map_or(0, |_| '\u{feff}'.len_utf8());
+    let frontmatter_source = &source[bom_len..];
+    let start_delimiter_len = if frontmatter_source.starts_with("---\n") {
+        Some(4)
+    } else if frontmatter_source.starts_with("---\r\n") {
+        Some(5)
+    } else if frontmatter_source.trim() == "---" {
+        Some(3)
+    } else {
+        None
+    };
+
+    let Some(start_delimiter_len) = start_delimiter_len else {
+        return FrontmatterParse {
+            block: None,
+            properties: BTreeMap::new(),
+            warnings: Vec::new(),
+            body_start: None,
+        };
+    };
+
+    let raw_start = bom_len + start_delimiter_len;
+    let mut cursor = raw_start;
+    let mut end_line = None;
+    let mut line_index = 0;
+    while cursor < source.len() {
+        let remainder = &source[cursor..];
+        let (line, next_cursor) = if let Some(newline_offset) = remainder.find('\n') {
+            let line_end = cursor + newline_offset;
+            (&source[cursor..line_end], line_end + 1)
+        } else {
+            (remainder, source.len())
+        };
+
+        let normalized = line.trim_end_matches('\r');
+        if normalized == "---" || normalized == "..." {
+            end_line = Some((line_index + 2, cursor, next_cursor));
+            break;
+        }
+        cursor = next_cursor;
+        line_index += 1;
+    }
+
+    let Some((end_line, raw_end, body_start)) = end_line else {
+        return FrontmatterParse {
+            block: None,
+            properties: BTreeMap::new(),
+            warnings: vec![ParseWarning::MalformedFrontmatter(
+                "frontmatter is not closed".to_string(),
+            )],
+            body_start: None,
+        };
+    };
+
+    let raw = source[raw_start..raw_end].to_string();
+    let mut warnings = Vec::new();
+    let properties = parse_frontmatter_properties(&raw, &mut warnings);
+
+    FrontmatterParse {
+        block: Some(FrontmatterBlock {
+            raw,
+            start_line: 1,
+            end_line,
+        }),
+        properties,
+        warnings,
+        body_start: Some(body_start.min(source.len())),
+    }
+}
+
+fn parse_frontmatter_properties(
+    raw: &str,
+    warnings: &mut Vec<ParseWarning>,
+) -> BTreeMap<String, PropertyValue> {
+    let mut properties = BTreeMap::new();
+    let mut current_list_key: Option<String> = None;
+
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+
+        if let Some(item) = trimmed.strip_prefix("- ") {
+            if let Some(key) = current_list_key.as_deref() {
+                let value = normalize_scalar(item);
+                if let Some(PropertyValue::List(values)) = properties.get_mut(key) {
+                    values.push(value);
+                }
+            }
+            continue;
+        }
+
+        let Some((key, raw_value)) = trimmed.split_once(':') else {
+            current_list_key = None;
+            warnings.push(ParseWarning::MalformedFrontmatter(
+                "frontmatter line has no key separator".to_string(),
+            ));
+            continue;
+        };
+
+        let key = key.trim().to_string();
+        let raw_value = raw_value.trim();
+        if key.is_empty() {
+            current_list_key = None;
+            warnings.push(ParseWarning::MalformedFrontmatter(
+                "frontmatter key is empty".to_string(),
+            ));
+            continue;
+        }
+
+        if raw_value.is_empty() {
+            current_list_key = Some(key.clone());
+            properties.insert(key, PropertyValue::List(Vec::new()));
+            continue;
+        }
+
+        current_list_key = None;
+        properties.insert(key, parse_property_value(raw_value, warnings));
+    }
+
+    properties
+}
+
+fn parse_property_value(raw_value: &str, warnings: &mut Vec<ParseWarning>) -> PropertyValue {
+    if raw_value.eq_ignore_ascii_case("true") {
+        return PropertyValue::Bool(true);
+    }
+    if raw_value.eq_ignore_ascii_case("false") {
+        return PropertyValue::Bool(false);
+    }
+
+    if raw_value.starts_with('[') {
+        if !raw_value.ends_with(']') {
+            warnings.push(ParseWarning::MalformedFrontmatter(
+                "inline list is not closed".to_string(),
+            ));
+            return PropertyValue::String(raw_value.to_string());
+        }
+
+        let values = raw_value
+            .trim_matches(['[', ']'])
+            .split(',')
+            .map(normalize_scalar)
+            .filter(|value| !value.is_empty())
+            .collect();
+        return PropertyValue::List(values);
+    }
+
+    if raw_value.matches('"').count() % 2 == 1 || raw_value.matches('\'').count() % 2 == 1 {
+        warnings.push(ParseWarning::MalformedFrontmatter(
+            "quoted scalar is not closed".to_string(),
+        ));
+    }
+
+    PropertyValue::String(normalize_scalar(raw_value))
+}
+
+fn normalize_scalar(value: &str) -> String {
+    value
+        .trim()
+        .trim_matches('"')
+        .trim_matches('\'')
+        .trim()
+        .to_string()
+}
+
+fn collect_tags(body: &str, properties: &BTreeMap<String, PropertyValue>) -> Vec<String> {
+    let mut tags = BTreeSet::new();
+
+    if let Some(value) = properties.get("tags") {
+        match value {
+            PropertyValue::String(tag) => {
+                if let Some(tag) = normalize_property_tag(tag) {
+                    tags.insert(tag);
+                }
+            }
+            PropertyValue::List(values) => {
+                for tag in values {
+                    if let Some(tag) = normalize_property_tag(tag) {
+                        tags.insert(tag);
+                    }
+                }
+            }
+            PropertyValue::Bool(_) => {}
+        }
+    }
+
+    for tag in parse_inline_tags(body) {
+        tags.insert(tag);
+    }
+
+    tags.into_iter().filter(|tag| !tag.is_empty()).collect()
+}
+
+fn parse_inline_tags(source: &str) -> Vec<String> {
+    source.lines().flat_map(parse_inline_tags_in_line).collect()
+}
+
+fn parse_inline_tags_in_line(line: &str) -> Vec<String> {
+    let line = line_without_heading_marker(line);
+
+    let chars: Vec<(usize, char)> = line.char_indices().collect();
+    let mut tags = Vec::new();
+
+    for (position, (byte_index, ch)) in chars.iter().enumerate() {
+        if *ch != '#' {
+            continue;
+        }
+
+        let previous = position
+            .checked_sub(1)
+            .and_then(|index| chars.get(index))
+            .map(|(_, ch)| *ch);
+        if previous.is_some_and(|ch| ch.is_alphanumeric() || ch == '_') {
+            continue;
+        }
+
+        let tag_tail = &line[*byte_index + ch.len_utf8()..];
+        let tag: String = tag_tail
+            .chars()
+            .take_while(|ch| ch.is_alphanumeric() || matches!(ch, '_' | '-' | '/'))
+            .collect();
+        if is_valid_tag(&tag) {
+            tags.push(tag);
+        }
+    }
+
+    tags
+}
+
+fn line_without_heading_marker(line: &str) -> &str {
+    let trimmed_start = line.trim_start();
+    let level = trimmed_start.chars().take_while(|ch| *ch == '#').count();
+    if !(1..=6).contains(&level) {
+        return line;
+    }
+
+    let after_hashes = &trimmed_start[level..];
+    if !after_hashes.chars().next().is_some_and(char::is_whitespace) {
+        return line;
+    }
+
+    after_hashes.trim_start()
+}
+
+fn trim_hash(value: &str) -> String {
+    value.trim().trim_start_matches('#').to_string()
+}
+
+fn normalize_property_tag(value: &str) -> Option<String> {
+    let tag = trim_hash(value);
+    is_valid_tag(&tag).then_some(tag)
+}
+
+fn is_valid_tag(tag: &str) -> bool {
+    !tag.is_empty()
+        && tag
+            .chars()
+            .all(|ch| ch.is_alphanumeric() || matches!(ch, '_' | '-' | '/'))
+        && tag.chars().any(char::is_alphabetic)
 }
 
 fn parse_headings(source: &str) -> Vec<Heading> {
@@ -242,6 +551,16 @@ mod tests {
                 "markdown links mismatch for {path}"
             );
             assert_eq!(
+                json!(sorted_tags(&parsed.tags)),
+                json!(sorted_tags_from_json(&file["tags"])),
+                "tags mismatch for {path}"
+            );
+            assert_eq!(
+                properties_to_json(&parsed.properties),
+                file["properties"],
+                "properties mismatch for {path}"
+            );
+            assert_eq!(
                 json!(unresolved_targets(
                     &index,
                     &parsed.wikilinks,
@@ -251,6 +570,62 @@ mod tests {
                 "unresolved mismatch for {path}"
             );
         }
+    }
+
+    #[test]
+    fn parses_tag_and_frontmatter_shapes() {
+        let parsed = parse_markdown(
+            "\u{feff}---\r\naliases: [Primary, 'Secondary']\r\ntags:\r\n  - #한글/태그\r\n  - project/native\r\npublished: false\r\ncreated: 2026-05-19\r\n---\r\n# Heading #inline/tag\r\nBody #rust-lang #2026",
+        );
+
+        assert_eq!(
+            sorted_tags(&parsed.tags),
+            vec![
+                "inline/tag".to_string(),
+                "project/native".to_string(),
+                "rust-lang".to_string(),
+                "한글/태그".to_string(),
+            ]
+        );
+        assert_eq!(
+            parsed.properties.get("aliases"),
+            Some(&PropertyValue::List(vec![
+                "Primary".to_string(),
+                "Secondary".to_string()
+            ]))
+        );
+        assert_eq!(
+            parsed.properties.get("published"),
+            Some(&PropertyValue::Bool(false))
+        );
+        assert_eq!(
+            parsed.properties.get("created"),
+            Some(&PropertyValue::String("2026-05-19".to_string()))
+        );
+        let frontmatter = parsed.frontmatter.expect("frontmatter block");
+        assert_eq!(frontmatter.start_line, 1);
+        assert_eq!(frontmatter.end_line, 8);
+        assert!(frontmatter.raw.contains("aliases:"));
+    }
+
+    #[test]
+    fn malformed_frontmatter_warns_without_stopping_parse() {
+        let fixture_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("fixtures")
+            .join("adversarial-vault");
+        let source = fs::read_to_string(fixture_root.join("MalformedFrontmatter.md"))
+            .expect("malformed fixture");
+        let parsed = parse_markdown(&source);
+
+        assert!(
+            parsed
+                .warnings
+                .iter()
+                .any(|warning| matches!(warning, ParseWarning::MalformedFrontmatter(_)))
+        );
+        assert_eq!(parsed.headings[0].text, "Malformed Frontmatter");
+        assert!(parsed.tags.is_empty());
     }
 
     #[derive(Debug)]
@@ -428,6 +803,39 @@ mod tests {
             .filter(|link| index.resolve_wikilink(link) == json!(false))
             .map(|link| link.target.clone())
             .collect()
+    }
+
+    fn sorted_tags(tags: &[String]) -> Vec<String> {
+        let mut tags = tags.to_vec();
+        tags.sort();
+        tags
+    }
+
+    fn sorted_tags_from_json(value: &Value) -> Vec<String> {
+        let mut tags = value
+            .as_array()
+            .expect("tags array")
+            .iter()
+            .map(|tag| tag.as_str().expect("tag string").to_string())
+            .collect::<Vec<_>>();
+        tags.sort();
+        tags
+    }
+
+    fn properties_to_json(properties: &BTreeMap<String, PropertyValue>) -> Value {
+        let values = properties
+            .iter()
+            .map(|(key, value)| (key.clone(), property_value_to_json(value)))
+            .collect::<BTreeMap<_, _>>();
+        json!(values)
+    }
+
+    fn property_value_to_json(value: &PropertyValue) -> Value {
+        match value {
+            PropertyValue::String(value) => json!(value),
+            PropertyValue::Bool(value) => json!(value),
+            PropertyValue::List(values) => json!(values),
+        }
     }
 
     fn normalize_markdown_target(note_path: &Path, target: &str) -> Option<String> {
