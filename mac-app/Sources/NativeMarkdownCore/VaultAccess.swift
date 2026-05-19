@@ -32,6 +32,21 @@ public enum VaultAccessIssue: Equatable {
             return "Vault Read-Only"
         }
     }
+
+    public var recoveryMessage: String {
+        switch self {
+        case .denied:
+            return "Grant folder access again or choose another vault."
+        case .staleBookmark:
+            return "Reconnect this vault to refresh folder permission."
+        case .missing:
+            return "The folder is no longer available. Choose another vault or remove it from recents."
+        case .unmounted:
+            return "Mount the volume again, then reconnect this vault."
+        case .readOnly:
+            return "The vault is readable but not writable. Reconnect after restoring write permission."
+        }
+    }
 }
 
 public protocol VaultAccessValidating {
@@ -80,4 +95,3 @@ public struct FileSystemVaultAccessValidator: VaultAccessValidating {
         return !fileManager.fileExists(atPath: volumeRoot.path)
     }
 }
-

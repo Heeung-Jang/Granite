@@ -6,11 +6,12 @@ import Testing
 func appStateSelectsAndClearsVault() throws {
     let supportRoot = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let recentStorage = MemoryRecentVaultStorage()
     let state = AppState(engineHealth: EngineHealthStatus(
         state: .loaded,
         abiVersion: 1,
         message: "test"
-    ), indexDirectoryResolver: AppOwnedIndexDirectoryResolver(applicationSupportRoot: supportRoot), vaultAccessValidator: AllowingVaultAccessValidator())
+    ), indexDirectoryResolver: AppOwnedIndexDirectoryResolver(applicationSupportRoot: supportRoot), vaultAccessValidator: AllowingVaultAccessValidator(), recentVaultStorage: recentStorage)
     let url = URL(fileURLWithPath: "/tmp/example-vault", isDirectory: true)
 
     #expect(state.vaultSelection == .noVault)
@@ -18,10 +19,12 @@ func appStateSelectsAndClearsVault() throws {
     try state.selectVault(url)
     #expect(state.vaultSelection == .selected(url))
     #expect(state.indexLocation != nil)
+    #expect(state.recentVaults.map(\.url) == [url])
 
     state.clearVault()
     #expect(state.vaultSelection == .noVault)
     #expect(state.indexLocation == nil)
+    #expect(recentStorage.savedURLs == [url])
 }
 
 @Test
@@ -139,7 +142,8 @@ func missingVaultDoesNotCreateIndexDirectories() throws {
 func appStateCanRepresentStaleBookmark() {
     let state = AppState(
         engineHealth: EngineHealthStatus(state: .loaded, abiVersion: 1, message: "test"),
-        vaultAccessValidator: AllowingVaultAccessValidator()
+        vaultAccessValidator: AllowingVaultAccessValidator(),
+        recentVaultStorage: MemoryRecentVaultStorage()
     )
     let url = URL(fileURLWithPath: "/tmp/stale-vault", isDirectory: true)
 
@@ -147,6 +151,76 @@ func appStateCanRepresentStaleBookmark() {
 
     #expect(state.vaultSelection == .unavailable(.staleBookmark(url)))
     #expect(state.indexLocation == nil)
+    #expect(state.recentVaults.map(\.url) == [url])
+}
+
+@Test
+func appStatePersistsDeduplicatedRecentVaults() throws {
+    let supportRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let storage = MemoryRecentVaultStorage()
+    let state = AppState(
+        engineHealth: EngineHealthStatus(state: .loaded, abiVersion: 1, message: "test"),
+        indexDirectoryResolver: AppOwnedIndexDirectoryResolver(applicationSupportRoot: supportRoot),
+        vaultAccessValidator: AllowingVaultAccessValidator(),
+        recentVaultStorage: storage,
+        maxRecentVaults: 2
+    )
+    let first = URL(fileURLWithPath: "/tmp/first-vault", isDirectory: true)
+    let second = URL(fileURLWithPath: "/tmp/second-vault", isDirectory: true)
+    let third = URL(fileURLWithPath: "/tmp/third-vault", isDirectory: true)
+
+    try state.selectVault(first)
+    try state.selectVault(second)
+    try state.selectVault(first)
+    try state.selectVault(third)
+
+    #expect(state.recentVaults.map(\.url) == [third, first])
+    #expect(storage.savedURLs == [third, first])
+}
+
+@Test
+func openingUnavailableRecentVaultDoesNotCreateIndexAndCanRemoveIt() throws {
+    let temporaryRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let supportRoot = temporaryRoot.appendingPathComponent("support", isDirectory: true)
+    let missingVaultURL = temporaryRoot.appendingPathComponent("missing-vault", isDirectory: true)
+    let storage = MemoryRecentVaultStorage(urls: [missingVaultURL])
+    let state = AppState(
+        engineHealth: EngineHealthStatus(state: .loaded, abiVersion: 1, message: "test"),
+        indexDirectoryResolver: AppOwnedIndexDirectoryResolver(applicationSupportRoot: supportRoot),
+        vaultAccessValidator: FixedVaultAccessValidator(issue: .missing(missingVaultURL)),
+        recentVaultStorage: storage
+    )
+
+    try state.openRecentVault(state.recentVaults[0])
+
+    #expect(state.vaultSelection == .unavailable(.missing(missingVaultURL)))
+    #expect(state.indexLocation == nil)
+    #expect(!FileManager.default.fileExists(atPath: supportRoot.path))
+
+    state.removeRecentVault(at: missingVaultURL)
+
+    #expect(state.vaultSelection == .noVault)
+    #expect(state.recentVaults.isEmpty)
+    #expect(storage.savedURLs.isEmpty)
+}
+
+@Test
+func vaultAccessIssuesExposeRecoveryMessages() {
+    let url = URL(fileURLWithPath: "/tmp/vault", isDirectory: true)
+    let issues = [
+        VaultAccessIssue.denied(url),
+        VaultAccessIssue.staleBookmark(url),
+        VaultAccessIssue.missing(url),
+        VaultAccessIssue.unmounted(url),
+        VaultAccessIssue.readOnly(url)
+    ]
+
+    for issue in issues {
+        #expect(!issue.displayTitle.isEmpty)
+        #expect(!issue.recoveryMessage.isEmpty)
+    }
 }
 
 private struct AllowingVaultAccessValidator: VaultAccessValidating {
@@ -160,5 +234,21 @@ private struct FixedVaultAccessValidator: VaultAccessValidating {
 
     func validateVault(at url: URL) -> VaultAccessIssue? {
         issue
+    }
+}
+
+private final class MemoryRecentVaultStorage: RecentVaultStoring {
+    private(set) var savedURLs: [URL]
+
+    init(urls: [URL] = []) {
+        self.savedURLs = urls
+    }
+
+    func loadRecentVaultURLs() -> [URL] {
+        savedURLs
+    }
+
+    func saveRecentVaultURLs(_ urls: [URL]) {
+        savedURLs = urls
     }
 }
