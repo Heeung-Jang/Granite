@@ -42,6 +42,50 @@ public struct EngineSaveOutcome: Codable, Equatable, Sendable {
     }
 }
 
+public struct EngineQueuedSaveItem: Codable, Equatable, Sendable {
+    public let relativePath: String
+    public let generation: UInt64
+    public let reason: String
+    public let status: String
+
+    enum CodingKeys: String, CodingKey {
+        case relativePath = "relative_path"
+        case generation
+        case reason
+        case status
+    }
+}
+
+public struct EngineSaveReloadOutcome: Codable, Equatable, Sendable {
+    public let baseline: EngineSaveBaseline
+    public let contents: String
+    public let queuedItem: EngineQueuedSaveItem
+    public let dirty: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case baseline
+        case contents
+        case queuedItem = "queued_item"
+        case dirty
+    }
+}
+
+public struct EngineSaveChoiceOutcome: Codable, Equatable, Sendable {
+    public let choice: String
+    public let baseline: EngineSaveBaseline
+    public let bytesWritten: UInt64
+    public let queuedItem: EngineQueuedSaveItem
+    public let dirty: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case choice
+        case baseline
+        case bytesWritten = "bytes_written"
+        case queuedItem = "queued_item"
+        case dirty
+    }
+}
+
 public struct EngineSaveConflictSnapshot: Codable, Equatable, Sendable {
     public let fileIdentity: EngineFileIdentity
     public let sizeBytes: UInt64
@@ -113,6 +157,26 @@ public enum EngineSaveClientError: Error, Equatable {
 public protocol EngineNoteSaving: Sendable {
     func captureBaseline(vaultURL: URL, file: FileTreeItem) throws -> EngineSaveBaseline
     func save(vaultURL: URL, baseline: EngineSaveBaseline, contents: String) throws -> EngineSaveOutcome
+    func reloadAfterConflict(
+        vaultURL: URL,
+        queueURL: URL,
+        conflict: EngineSaveConflict,
+        generation: UInt64
+    ) throws -> EngineSaveReloadOutcome
+    func keepConflictAsNewNote(
+        vaultURL: URL,
+        queueURL: URL,
+        newRelativePath: String,
+        contents: String,
+        generation: UInt64
+    ) throws -> EngineSaveChoiceOutcome
+    func overwriteAfterConflict(
+        vaultURL: URL,
+        queueURL: URL,
+        conflict: EngineSaveConflict,
+        contents: String,
+        generation: UInt64
+    ) throws -> EngineSaveChoiceOutcome
 }
 
 public struct EngineSaveClient: EngineNoteSaving {
@@ -125,6 +189,28 @@ public struct EngineSaveClient: EngineNoteSaving {
         UnsafePointer<CChar>?,
         UnsafePointer<UInt8>?,
         Int
+    ) -> UnsafeMutablePointer<CChar>?
+    public typealias ReloadAfterConflictFunction = @convention(c) (
+        UnsafePointer<CChar>?,
+        UnsafePointer<CChar>?,
+        UnsafePointer<CChar>?,
+        UInt64
+    ) -> UnsafeMutablePointer<CChar>?
+    public typealias KeepConflictAsNewNoteFunction = @convention(c) (
+        UnsafePointer<CChar>?,
+        UnsafePointer<CChar>?,
+        UnsafePointer<CChar>?,
+        UnsafePointer<UInt8>?,
+        Int,
+        UInt64
+    ) -> UnsafeMutablePointer<CChar>?
+    public typealias OverwriteAfterConflictFunction = @convention(c) (
+        UnsafePointer<CChar>?,
+        UnsafePointer<CChar>?,
+        UnsafePointer<CChar>?,
+        UnsafePointer<UInt8>?,
+        Int,
+        UInt64
     ) -> UnsafeMutablePointer<CChar>?
     public typealias FreeFunction = @convention(c) (UnsafeMutablePointer<CChar>?) -> Void
 
@@ -177,6 +263,100 @@ public struct EngineSaveClient: EngineNoteSaving {
         }
     }
 
+    public func reloadAfterConflict(
+        vaultURL: URL,
+        queueURL: URL,
+        conflict: EngineSaveConflict,
+        generation: UInt64
+    ) throws -> EngineSaveReloadOutcome {
+        let conflictJSON = try Self.encodedJSONString(conflict)
+        return try withConflictSymbols { symbols in
+            let response = try vaultURL.path.withCString { vaultPath in
+                try queueURL.path.withCString { queuePath in
+                    try conflictJSON.withCString { conflictPointer in
+                        try stringResponse(
+                            symbols.reloadAfterConflict(
+                                vaultPath,
+                                queuePath,
+                                conflictPointer,
+                                generation
+                            ),
+                            free: symbols.free
+                        )
+                    }
+                }
+            }
+            return try Self.decodeEnvelope(response, as: EngineSaveReloadOutcome.self)
+        }
+    }
+
+    public func keepConflictAsNewNote(
+        vaultURL: URL,
+        queueURL: URL,
+        newRelativePath: String,
+        contents: String,
+        generation: UInt64
+    ) throws -> EngineSaveChoiceOutcome {
+        let contentsData = Data(contents.utf8)
+        return try withConflictSymbols { symbols in
+            let response = try vaultURL.path.withCString { vaultPath in
+                try queueURL.path.withCString { queuePath in
+                    try newRelativePath.withCString { newRelativePathPointer in
+                        try contentsData.withUnsafeBytes { rawBuffer in
+                            let buffer = rawBuffer.bindMemory(to: UInt8.self)
+                            return try stringResponse(
+                                symbols.keepConflictAsNewNote(
+                                    vaultPath,
+                                    queuePath,
+                                    newRelativePathPointer,
+                                    buffer.baseAddress,
+                                    buffer.count,
+                                    generation
+                                ),
+                                free: symbols.free
+                            )
+                        }
+                    }
+                }
+            }
+            return try Self.decodeEnvelope(response, as: EngineSaveChoiceOutcome.self)
+        }
+    }
+
+    public func overwriteAfterConflict(
+        vaultURL: URL,
+        queueURL: URL,
+        conflict: EngineSaveConflict,
+        contents: String,
+        generation: UInt64
+    ) throws -> EngineSaveChoiceOutcome {
+        let conflictJSON = try Self.encodedJSONString(conflict)
+        let contentsData = Data(contents.utf8)
+        return try withConflictSymbols { symbols in
+            let response = try vaultURL.path.withCString { vaultPath in
+                try queueURL.path.withCString { queuePath in
+                    try conflictJSON.withCString { conflictPointer in
+                        try contentsData.withUnsafeBytes { rawBuffer in
+                            let buffer = rawBuffer.bindMemory(to: UInt8.self)
+                            return try stringResponse(
+                                symbols.overwriteAfterConflict(
+                                    vaultPath,
+                                    queuePath,
+                                    conflictPointer,
+                                    buffer.baseAddress,
+                                    buffer.count,
+                                    generation
+                                ),
+                                free: symbols.free
+                            )
+                        }
+                    }
+                }
+            }
+            return try Self.decodeEnvelope(response, as: EngineSaveChoiceOutcome.self)
+        }
+    }
+
     public static func decodeEnvelope<Value: Codable & Equatable>(
         _ json: String,
         as type: Value.Type
@@ -201,6 +381,14 @@ public struct EngineSaveClient: EngineNoteSaving {
                 conflictKind: nil
             )
         )
+    }
+
+    private static func encodedJSONString<Value: Encodable>(_ value: Value) throws -> String {
+        let data = try JSONEncoder().encode(value)
+        guard let json = String(data: data, encoding: .utf8) else {
+            throw EngineSaveClientError.invalidResponse("encoded JSON is not UTF-8")
+        }
+        return json
     }
 
     private func withSymbols<T>(_ body: (SaveSymbols) throws -> T) throws -> T {
@@ -230,6 +418,44 @@ public struct EngineSaveClient: EngineNoteSaving {
         )
     }
 
+    private func withConflictSymbols<T>(_ body: (ConflictSaveSymbols) throws -> T) throws -> T {
+        guard let libraryPath, !libraryPath.isEmpty else {
+            throw EngineSaveClientError.missingLibrary("VAULT_ENGINE_DYLIB_PATH is not set")
+        }
+        guard let handle = dlopen(libraryPath, RTLD_NOW | RTLD_LOCAL) else {
+            throw EngineSaveClientError.missingLibrary(dynamicLoaderError())
+        }
+        defer {
+            dlclose(handle)
+        }
+
+        guard let reloadSymbol = dlsym(handle, "engine_save_reload_after_conflict"),
+              let keepSymbol = dlsym(handle, "engine_save_keep_conflict_as_new_note"),
+              let overwriteSymbol = dlsym(handle, "engine_save_overwrite_after_conflict"),
+              let freeSymbol = dlsym(handle, "engine_string_free")
+        else {
+            throw EngineSaveClientError.missingSymbol(dynamicLoaderError())
+        }
+
+        return try body(
+            ConflictSaveSymbols(
+                reloadAfterConflict: unsafeBitCast(
+                    reloadSymbol,
+                    to: ReloadAfterConflictFunction.self
+                ),
+                keepConflictAsNewNote: unsafeBitCast(
+                    keepSymbol,
+                    to: KeepConflictAsNewNoteFunction.self
+                ),
+                overwriteAfterConflict: unsafeBitCast(
+                    overwriteSymbol,
+                    to: OverwriteAfterConflictFunction.self
+                ),
+                free: unsafeBitCast(freeSymbol, to: FreeFunction.self)
+            )
+        )
+    }
+
     private func stringResponse(
         _ pointer: UnsafeMutablePointer<CChar>?,
         free: FreeFunction
@@ -253,6 +479,13 @@ public struct EngineSaveClient: EngineNoteSaving {
     private struct SaveSymbols {
         let captureBaseline: CaptureBaselineFunction
         let save: SaveFunction
+        let free: FreeFunction
+    }
+
+    private struct ConflictSaveSymbols {
+        let reloadAfterConflict: ReloadAfterConflictFunction
+        let keepConflictAsNewNote: KeepConflictAsNewNoteFunction
+        let overwriteAfterConflict: OverwriteAfterConflictFunction
         let free: FreeFunction
     }
 }

@@ -135,6 +135,78 @@ func engineSaveClientDecodesConflictPayload() {
 }
 
 @Test
+func engineSaveClientDecodesReloadOutcomeEnvelope() throws {
+    let json = """
+    {
+      "ok": true,
+      "value": {
+        "baseline": {
+          "relative_path": "Home.md",
+          "file_identity": { "device": 1, "inode": 2 },
+          "size_bytes": 16,
+          "modified": null,
+          "content_hash": "new"
+        },
+        "contents": "# External edit\\n",
+        "queued_item": {
+          "relative_path": "Home.md",
+          "generation": 7,
+          "reason": "FileChanged",
+          "status": "Pending"
+        },
+        "dirty": false
+      },
+      "error": null
+    }
+    """
+
+    let outcome = try EngineSaveClient.decodeEnvelope(json, as: EngineSaveReloadOutcome.self)
+
+    #expect(outcome.baseline.relativePath == "Home.md")
+    #expect(outcome.contents == "# External edit\n")
+    #expect(outcome.queuedItem.reason == "FileChanged")
+    #expect(outcome.queuedItem.generation == 7)
+    #expect(outcome.dirty == false)
+}
+
+@Test
+func engineSaveClientDecodesChoiceOutcomeEnvelope() throws {
+    let json = """
+    {
+      "ok": true,
+      "value": {
+        "choice": "Overwrite",
+        "baseline": {
+          "relative_path": "Home.md",
+          "file_identity": { "device": 1, "inode": 3 },
+          "size_bytes": 11,
+          "modified": { "secs_since_unix_epoch": 200, "nanos": 9 },
+          "content_hash": "saved"
+        },
+        "bytes_written": 11,
+        "queued_item": {
+          "relative_path": "Home.md",
+          "generation": 8,
+          "reason": "OwnSave",
+          "status": "Pending"
+        },
+        "dirty": false
+      },
+      "error": null
+    }
+    """
+
+    let outcome = try EngineSaveClient.decodeEnvelope(json, as: EngineSaveChoiceOutcome.self)
+
+    #expect(outcome.choice == "Overwrite")
+    #expect(outcome.baseline.fileIdentity.inode == 3)
+    #expect(outcome.bytesWritten == 11)
+    #expect(outcome.queuedItem.reason == "OwnSave")
+    #expect(outcome.queuedItem.generation == 8)
+    #expect(outcome.dirty == false)
+}
+
+@Test
 func engineSaveClientReportsMissingLibrary() throws {
     let client = EngineSaveClient(libraryPath: "/definitely/missing/libvault_engine.dylib")
 
