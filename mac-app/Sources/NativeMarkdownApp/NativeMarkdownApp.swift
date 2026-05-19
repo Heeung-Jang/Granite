@@ -28,6 +28,11 @@ struct NativeMarkdownApp: App {
             print(MarkdownEditorBridgeProbe.encodedReport())
             Foundation.exit(0)
         }
+
+        if CommandLine.arguments.contains("--markdown-decoration-probe") {
+            print(MarkdownDecorationProbe.encodedReport())
+            Foundation.exit(0)
+        }
     }
 
     var body: some Scene {

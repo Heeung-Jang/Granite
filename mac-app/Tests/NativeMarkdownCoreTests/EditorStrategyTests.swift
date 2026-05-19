@@ -82,3 +82,15 @@ func editorStrategyDegradesSlowRuntimeMetrics() {
         typingP95Milliseconds: 16.1
     )) == .degradedSource(reason: .typingTooSlow))
 }
+
+@Test
+func editorDocumentProfilerMeasuresSourceShape() {
+    let longestLine = "very long line ![[image.png]] ![alt](image.png)"
+    let text = "# Title\nshort\n\(longestLine)"
+
+    let profile = EditorDocumentProfiler.profile(text)
+
+    #expect(profile.byteCount == text.utf8.count)
+    #expect(profile.longestLineCharacters == longestLine.count)
+    #expect(profile.embedCount == 2)
+}

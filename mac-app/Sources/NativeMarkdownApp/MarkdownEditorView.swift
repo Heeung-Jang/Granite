@@ -13,6 +13,7 @@ struct MarkdownEditorView: NSViewRepresentable {
         let textView = MarkdownEditorTextViewFactory.makeTextView()
         textView.delegate = context.coordinator
         textView.string = text
+        MarkdownVisibleRangeDecorator.decorateVisibleRange(in: textView)
         context.coordinator.textView = textView
 
         let scrollView = NSScrollView()
@@ -34,6 +35,7 @@ struct MarkdownEditorView: NSViewRepresentable {
             to: textView,
             isApplyingAppKitChange: context.coordinator.isApplyingAppKitChange
         )
+        MarkdownVisibleRangeDecorator.decorateVisibleRange(in: textView)
         textView.isEditable = isEditable
     }
 
@@ -66,6 +68,7 @@ struct MarkdownEditorView: NSViewRepresentable {
 
             isApplyingAppKitChange = true
             text = textView.string
+            MarkdownVisibleRangeDecorator.decorateVisibleRange(in: textView)
             isApplyingAppKitChange = false
         }
     }

@@ -94,3 +94,44 @@ public struct EditorStrategyDecision: Equatable, Sendable {
         return .decoratedSource
     }
 }
+
+public enum EditorDocumentProfiler {
+    public static func profile(
+        _ text: String,
+        visibleDecorationP95Milliseconds: Double? = nil,
+        typingP95Milliseconds: Double? = nil
+    ) -> EditorDocumentProfile {
+        var longestLineCharacters = 0
+        var currentLineCharacters = 0
+
+        for character in text {
+            if character == "\n" {
+                longestLineCharacters = max(longestLineCharacters, currentLineCharacters)
+                currentLineCharacters = 0
+            } else {
+                currentLineCharacters += 1
+            }
+        }
+        longestLineCharacters = max(longestLineCharacters, currentLineCharacters)
+
+        return EditorDocumentProfile(
+            byteCount: text.utf8.count,
+            longestLineCharacters: longestLineCharacters,
+            embedCount: countOccurrences(of: "![", in: text),
+            visibleDecorationP95Milliseconds: visibleDecorationP95Milliseconds,
+            typingP95Milliseconds: typingP95Milliseconds
+        )
+    }
+
+    private static func countOccurrences(of needle: String, in text: String) -> Int {
+        var count = 0
+        var searchRange = text.startIndex..<text.endIndex
+
+        while let range = text.range(of: needle, range: searchRange) {
+            count += 1
+            searchRange = range.upperBound..<text.endIndex
+        }
+
+        return count
+    }
+}
