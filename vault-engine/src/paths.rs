@@ -204,7 +204,7 @@ fn url_scheme(input: &str) -> Option<&str> {
 
 impl FileIdentity {
     #[cfg(unix)]
-    fn from_metadata(metadata: &fs::Metadata) -> Self {
+    pub fn from_metadata(metadata: &fs::Metadata) -> Self {
         use std::os::unix::fs::MetadataExt;
 
         Self {
@@ -214,7 +214,7 @@ impl FileIdentity {
     }
 
     #[cfg(not(unix))]
-    fn from_metadata(_metadata: &fs::Metadata) -> Self {
+    pub fn from_metadata(_metadata: &fs::Metadata) -> Self {
         Self {
             device: 0,
             inode: 0,
