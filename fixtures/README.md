@@ -14,3 +14,15 @@ Covered behavior:
 - Inline tags, YAML tags, and frontmatter properties.
 - Excluded `.obsidian` paths.
 
+## Adversarial Vault
+
+`adversarial-vault` treats vault contents as untrusted input.
+
+The authoritative expected safety classifications are in `adversarial-vault/expected-safety-records.json`.
+
+Covered behavior:
+
+- Path traversal, absolute paths, unsafe URL schemes, and remote attachments.
+- Malformed YAML/frontmatter and oversized aliases.
+- Raw HTML/script, Dataview, Templater, plugin JavaScript, and CSS snippets.
+- Recursive embeds and symlink loops.

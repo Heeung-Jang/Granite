@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "vault": "adversarial-vault",
+  "excluded_paths": [
+    ".obsidian/plugins/fake-plugin/main.js",
+    ".obsidian/snippets/unsafe.css"
+  ],
+  "symlink_policy": {
+    "symlink-loop": "do_not_follow"
+  },
+  "expected_results": [
+    {
+      "path": "MalformedFrontmatter.md",
+      "classification": "frontmatter_error",
+      "expected_state": "note_error",
+      "dangerous_inputs": ["malformed_yaml"],
+      "expected_handling": "continue_indexing"
+    },
+    {
+      "path": "OversizedAlias.md",
+      "classification": "bounded_metadata",
+      "expected_state": "warning",
+      "dangerous_inputs": ["oversized_alias"],
+      "expected_handling": "truncate_or_drop_alias"
+    },
+    {
+      "path": "PluginSyntax.md",
+      "classification": "plugin_syntax",
+      "expected_state": "inert",
+      "dangerous_inputs": ["dataview", "templater", "inline_dataview"],
+      "expected_handling": "parse_as_text_only"
+    },
+    {
+      "path": "RawHtmlScript.md",
+      "classification": "raw_html",
+      "expected_state": "inert",
+      "dangerous_inputs": ["script", "event_handler", "iframe"],
+      "expected_handling": "escape_before_render"
+    },
+    {
+      "path": "RecursiveA.md",
+      "classification": "recursive_embed",
+      "expected_state": "bounded",
+      "dangerous_inputs": ["embed_cycle"],
+      "expected_handling": "detect_cycle"
+    },
+    {
+      "path": "RecursiveB.md",
+      "classification": "recursive_embed",
+      "expected_state": "bounded",
+      "dangerous_inputs": ["embed_cycle"],
+      "expected_handling": "detect_cycle"
+    },
+    {
+      "path": "Traversal.md",
+      "classification": "path_escape",
+      "expected_state": "unresolved",
+      "dangerous_inputs": ["relative_parent", "absolute_path", "file_url"],
+      "expected_handling": "reject_outside_vault"
+    },
+    {
+      "path": "UrlSchemes.md",
+      "classification": "unsafe_url",
+      "expected_state": "inert",
+      "dangerous_inputs": ["javascript_url", "data_url", "obsidian_url", "remote_attachment"],
+      "expected_handling": "do_not_execute_or_fetch"
+    }
+  ]
+}
+
