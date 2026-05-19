@@ -21,6 +21,9 @@ struct VaultPickerView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Vault")
                 .font(.headline)
+            Text(appState.engineHealth.displayText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
 
             switch appState.vaultSelection {
             case .noVault:
@@ -74,4 +77,3 @@ struct WorkspacePlaceholderView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
-
