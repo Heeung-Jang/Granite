@@ -136,6 +136,13 @@ struct NoteInspectorView: View {
                             }
                         }
                     }
+
+                    InspectorSection(title: "Graph") {
+                        EmptyInlineText("Graph placeholder")
+                            .onAppear {
+                                AppTelemetry.graphPlaceholderRendered(file)
+                            }
+                    }
                 }
                 .padding(12)
             }
@@ -144,6 +151,7 @@ struct NoteInspectorView: View {
 
     private func load() async {
         state = .loading
+        let timer = AppTelemetryTimer()
         do {
             let snapshot = try await Task.detached(priority: .userInitiated) {
                 try FileSystemNoteInspectorLoader().loadInspector(at: vaultURL, file: file, maxFiles: 5_000)
@@ -153,11 +161,27 @@ struct NoteInspectorView: View {
                 return
             }
             state = .loaded(snapshot)
+            AppTelemetry.inspectorRefreshCompleted(
+                state: snapshot.state,
+                outgoingCount: snapshot.outgoingLinks.count,
+                backlinkCount: snapshot.backlinks.count,
+                tagCount: snapshot.tags.count,
+                propertyCount: snapshot.properties.count,
+                durationMilliseconds: timer.elapsedMilliseconds()
+            )
         } catch {
             if Task.isCancelled {
                 return
             }
             state = .failed(error.localizedDescription)
+            AppTelemetry.inspectorRefreshCompleted(
+                state: .error,
+                outgoingCount: 0,
+                backlinkCount: 0,
+                tagCount: 0,
+                propertyCount: 0,
+                durationMilliseconds: timer.elapsedMilliseconds()
+            )
         }
     }
 

@@ -108,6 +108,7 @@ public final class AppState: ObservableObject {
 
     public func openFile(_ item: FileTreeItem) {
         selectedFile = item
+        AppTelemetry.noteOpened(item)
     }
 
     private func rememberVault(_ url: URL) {

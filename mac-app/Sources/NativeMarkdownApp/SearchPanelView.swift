@@ -123,6 +123,7 @@ struct SearchPanelView: View {
             resetSearch()
             return
         }
+        AppTelemetry.searchInputChanged(mode: mode, queryLength: trimmedQuery.count)
 
         do {
             try await Task.sleep(for: .milliseconds(250))
@@ -157,6 +158,7 @@ struct SearchPanelView: View {
         let requestID = activeRequestID
         let searchMode = mode
         let limit = pageSize
+        let timer = AppTelemetryTimer()
         if append {
             isLoadingMore = true
         } else {
@@ -185,6 +187,12 @@ struct SearchPanelView: View {
             }
 
             apply(page, append: append)
+            AppTelemetry.searchCompleted(
+                mode: searchMode,
+                state: page.state,
+                resultCount: page.items.count,
+                durationMilliseconds: timer.elapsedMilliseconds()
+            )
         } catch is CancellationError {
             guard requestID == activeRequestID else {
                 return
@@ -203,6 +211,12 @@ struct SearchPanelView: View {
             nextOffset = nil
             resultState = .error
             status = .failed(error.localizedDescription)
+            AppTelemetry.searchCompleted(
+                mode: searchMode,
+                state: .error,
+                resultCount: 0,
+                durationMilliseconds: timer.elapsedMilliseconds()
+            )
         }
 
         if requestID == activeRequestID {

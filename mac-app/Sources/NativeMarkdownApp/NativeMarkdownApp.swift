@@ -19,6 +19,28 @@ struct NativeMarkdownApp: App {
             Foundation.exit(0)
         }
 
+        if CommandLine.arguments.contains("--telemetry-smoke-test") {
+            let file = FileTreeItem(relativePath: "Telemetry/Smoke.md")
+            AppTelemetry.searchInputChanged(mode: .fileName, queryLength: 5)
+            AppTelemetry.searchCompleted(mode: .fileName, state: .complete, resultCount: 1, durationMilliseconds: 1)
+            AppTelemetry.noteOpened(file)
+            AppTelemetry.noteLoadCompleted(file, success: true, durationMilliseconds: 1)
+            AppTelemetry.sidebarRefreshCompleted(state: .complete, itemCount: 1, durationMilliseconds: 1)
+            AppTelemetry.inspectorRefreshCompleted(
+                state: .complete,
+                outgoingCount: 1,
+                backlinkCount: 1,
+                tagCount: 1,
+                propertyCount: 1,
+                durationMilliseconds: 1
+            )
+            AppTelemetry.graphPlaceholderRendered(file)
+            AppTelemetry.saveRequested(file: file, available: false)
+            AppTelemetry.editorDecorationCompleted(textLength: 128, durationMilliseconds: 1)
+            print("NativeMarkdownApp telemetry smoke test")
+            Foundation.exit(0)
+        }
+
         if CommandLine.arguments.contains("--textkit-strategy-probe") {
             print(TextKitStrategyProbe.encodedReport())
             Foundation.exit(0)
@@ -42,6 +64,15 @@ struct NativeMarkdownApp: App {
                 .frame(minWidth: 960, minHeight: 640)
         }
         .windowStyle(.titleBar)
+        .commands {
+            CommandGroup(replacing: .saveItem) {
+                Button("Save") {
+                    AppTelemetry.saveRequested(file: appState.selectedFile, available: false)
+                }
+                .keyboardShortcut("s")
+                .disabled(appState.selectedFile == nil)
+            }
+        }
     }
 }
 

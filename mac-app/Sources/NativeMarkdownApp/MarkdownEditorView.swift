@@ -1,3 +1,4 @@
+import NativeMarkdownCore
 import SwiftUI
 
 @MainActor
@@ -13,7 +14,12 @@ struct MarkdownEditorView: NSViewRepresentable {
         let textView = MarkdownEditorTextViewFactory.makeTextView()
         textView.delegate = context.coordinator
         textView.string = text
+        let decorationTimer = AppTelemetryTimer()
         MarkdownVisibleRangeDecorator.decorateVisibleRange(in: textView)
+        AppTelemetry.editorDecorationCompleted(
+            textLength: textView.string.count,
+            durationMilliseconds: decorationTimer.elapsedMilliseconds()
+        )
         context.coordinator.textView = textView
 
         let scrollView = NSScrollView()
@@ -35,7 +41,12 @@ struct MarkdownEditorView: NSViewRepresentable {
             to: textView,
             isApplyingAppKitChange: context.coordinator.isApplyingAppKitChange
         )
+        let decorationTimer = AppTelemetryTimer()
         MarkdownVisibleRangeDecorator.decorateVisibleRange(in: textView)
+        AppTelemetry.editorDecorationCompleted(
+            textLength: textView.string.count,
+            durationMilliseconds: decorationTimer.elapsedMilliseconds()
+        )
         textView.isEditable = isEditable
     }
 

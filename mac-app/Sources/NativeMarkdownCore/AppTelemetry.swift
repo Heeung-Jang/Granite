@@ -1,0 +1,102 @@
+import Foundation
+import OSLog
+
+public struct AppTelemetryTimer: Sendable {
+    private let startNanoseconds: UInt64
+
+    public init(startNanoseconds: UInt64 = DispatchTime.now().uptimeNanoseconds) {
+        self.startNanoseconds = startNanoseconds
+    }
+
+    public func elapsedMilliseconds(
+        nowNanoseconds: UInt64 = DispatchTime.now().uptimeNanoseconds
+    ) -> Double {
+        Double(nowNanoseconds.saturatingSubtracting(startNanoseconds)) / 1_000_000
+    }
+}
+
+public enum AppTelemetry {
+    private static let subsystem = Bundle.main.bundleIdentifier ?? "NativeMarkdownMacApp"
+    private static let searchLogger = Logger(subsystem: subsystem, category: "Search")
+    private static let navigationLogger = Logger(subsystem: subsystem, category: "Navigation")
+    private static let sidebarLogger = Logger(subsystem: subsystem, category: "Sidebar")
+    private static let inspectorLogger = Logger(subsystem: subsystem, category: "Inspector")
+    private static let editorLogger = Logger(subsystem: subsystem, category: "Editor")
+    private static let saveLogger = Logger(subsystem: subsystem, category: "Save")
+    private static let graphLogger = Logger(subsystem: subsystem, category: "Graph")
+
+    public static func redactedIdentifier(for value: String) -> String {
+        var hash: UInt64 = 0xcbf29ce484222325
+        for byte in value.utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 0x100000001b3
+        }
+        return String(format: "%016llx", hash)
+    }
+
+    public static func searchInputChanged(mode: SearchMode, queryLength: Int) {
+        searchLogger.debug("Search input mode=\(mode.rawValue, privacy: .public) length=\(queryLength, privacy: .public)")
+    }
+
+    public static func searchCompleted(
+        mode: SearchMode,
+        state: SearchResultState,
+        resultCount: Int,
+        durationMilliseconds: Double
+    ) {
+        searchLogger.info("Search completed mode=\(mode.rawValue, privacy: .public) state=\(state.rawValue, privacy: .public) results=\(resultCount, privacy: .public) duration_ms=\(durationMilliseconds, privacy: .public)")
+    }
+
+    public static func noteOpened(_ file: FileTreeItem) {
+        navigationLogger.info("Note opened id=\(redactedIdentifier(for: file.relativePath), privacy: .public)")
+    }
+
+    public static func noteLoadCompleted(
+        _ file: FileTreeItem,
+        success: Bool,
+        durationMilliseconds: Double
+    ) {
+        navigationLogger.info("Note load id=\(redactedIdentifier(for: file.relativePath), privacy: .public) success=\(success, privacy: .public) duration_ms=\(durationMilliseconds, privacy: .public)")
+    }
+
+    public static func sidebarRefreshCompleted(
+        state: FileTreeResultState?,
+        itemCount: Int,
+        durationMilliseconds: Double
+    ) {
+        sidebarLogger.info("Sidebar refresh state=\(state?.rawValue ?? "none", privacy: .public) items=\(itemCount, privacy: .public) duration_ms=\(durationMilliseconds, privacy: .public)")
+    }
+
+    public static func inspectorRefreshCompleted(
+        state: SearchResultState,
+        outgoingCount: Int,
+        backlinkCount: Int,
+        tagCount: Int,
+        propertyCount: Int,
+        durationMilliseconds: Double
+    ) {
+        inspectorLogger.info("Inspector refresh state=\(state.rawValue, privacy: .public) outgoing=\(outgoingCount, privacy: .public) backlinks=\(backlinkCount, privacy: .public) tags=\(tagCount, privacy: .public) properties=\(propertyCount, privacy: .public) duration_ms=\(durationMilliseconds, privacy: .public)")
+    }
+
+    public static func graphPlaceholderRendered(_ file: FileTreeItem) {
+        graphLogger.debug("Graph placeholder rendered id=\(redactedIdentifier(for: file.relativePath), privacy: .public)")
+    }
+
+    public static func saveRequested(file: FileTreeItem?, available: Bool) {
+        let fileID = file.map { redactedIdentifier(for: $0.relativePath) } ?? "none"
+        saveLogger.info("Save requested id=\(fileID, privacy: .public) available=\(available, privacy: .public)")
+    }
+
+    public static func editorDecorationCompleted(
+        textLength: Int,
+        durationMilliseconds: Double
+    ) {
+        editorLogger.debug("Editor decoration text_length=\(textLength, privacy: .public) duration_ms=\(durationMilliseconds, privacy: .public)")
+    }
+}
+
+private extension UInt64 {
+    func saturatingSubtracting(_ value: UInt64) -> UInt64 {
+        self >= value ? self - value : 0
+    }
+}

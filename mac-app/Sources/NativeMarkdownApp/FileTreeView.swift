@@ -100,6 +100,7 @@ struct FileTreeView: View {
         case .unavailable(let issue):
             state = .unavailable(issue)
         case .selected(let url):
+            let timer = AppTelemetryTimer()
             state = .loading
             do {
                 let snapshot = try await Task.detached(priority: .userInitiated) {
@@ -111,11 +112,21 @@ struct FileTreeView: View {
                 }
 
                 state = snapshot.items.isEmpty ? .empty : .loaded(snapshot)
+                AppTelemetry.sidebarRefreshCompleted(
+                    state: snapshot.state,
+                    itemCount: snapshot.items.count,
+                    durationMilliseconds: timer.elapsedMilliseconds()
+                )
             } catch {
                 if Task.isCancelled {
                     return
                 }
                 state = .failed(error.localizedDescription)
+                AppTelemetry.sidebarRefreshCompleted(
+                    state: nil,
+                    itemCount: 0,
+                    durationMilliseconds: timer.elapsedMilliseconds()
+                )
             }
         }
     }

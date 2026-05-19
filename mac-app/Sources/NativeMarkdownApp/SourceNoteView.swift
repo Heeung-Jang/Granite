@@ -48,6 +48,7 @@ struct SourceNoteView: View {
 
     private func load() async {
         state = .loading
+        let timer = AppTelemetryTimer()
         do {
             let document = try await Task.detached(priority: .userInitiated) {
                 try FileSystemNoteDocumentLoader().loadNote(at: vaultURL, file: file)
@@ -59,12 +60,22 @@ struct SourceNoteView: View {
 
             text = document.contents
             state = .loaded
+            AppTelemetry.noteLoadCompleted(
+                file,
+                success: true,
+                durationMilliseconds: timer.elapsedMilliseconds()
+            )
         } catch {
             if Task.isCancelled {
                 return
             }
             text = ""
             state = .failed(displayMessage(for: error))
+            AppTelemetry.noteLoadCompleted(
+                file,
+                success: false,
+                durationMilliseconds: timer.elapsedMilliseconds()
+            )
         }
     }
 
