@@ -59,6 +59,12 @@ pub struct QuerySample {
     pub source_hashes: Vec<String>,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub struct QueryCorpusBundle {
+    pub corpus: QueryCorpus,
+    pub private_query_lines: Vec<String>,
+}
+
 #[derive(Debug, Clone)]
 struct Candidate {
     query_class: String,
@@ -83,15 +89,31 @@ impl Candidate {
 }
 
 pub fn generate_query_corpus(options: &QueryCorpusOptions) -> io::Result<QueryCorpus> {
+    Ok(generate_query_corpus_bundle(options)?.corpus)
+}
+
+pub fn generate_query_corpus_bundle(options: &QueryCorpusOptions) -> io::Result<QueryCorpusBundle> {
     let vault_root = options.vault_root.canonicalize()?;
-    let mut collector = CorpusCollector::default();
-    visit_vault(&vault_root, &vault_root, options.seed, &mut collector)?;
+    let collector = collect_candidates(&vault_root, options.seed, options.samples_per_class)?;
 
-    for query_class in QUERY_CLASSES {
-        collector.ensure_zero_candidates(query_class, options.samples_per_class.max(10));
-        collector.finalize_class(query_class);
-    }
+    Ok(QueryCorpusBundle {
+        corpus: build_query_corpus(options, &vault_root, &collector),
+        private_query_lines: private_query_lines_from_collector(
+            &collector,
+            options.samples_per_class,
+        ),
+    })
+}
 
+pub fn generate_private_query_lines(options: &QueryCorpusOptions) -> io::Result<Vec<String>> {
+    Ok(generate_query_corpus_bundle(options)?.private_query_lines)
+}
+
+fn build_query_corpus(
+    options: &QueryCorpusOptions,
+    vault_root: &Path,
+    collector: &CorpusCollector,
+) -> QueryCorpus {
     let mut samples = Vec::new();
     let mut totals = BTreeMap::new();
     let mut coverage = BTreeMap::new();
@@ -108,7 +130,7 @@ pub fn generate_query_corpus(options: &QueryCorpusOptions) -> io::Result<QueryCo
         );
     }
 
-    Ok(QueryCorpus {
+    QueryCorpus {
         schema_version: 1,
         generator_version: env!("CARGO_PKG_VERSION").to_string(),
         vault: VaultIdentity {
@@ -130,8 +152,40 @@ pub fn generate_query_corpus(options: &QueryCorpusOptions) -> io::Result<QueryCo
         totals,
         coverage,
         samples,
-        warnings: collector.warnings,
-    })
+        warnings: collector.warnings.clone(),
+    }
+}
+
+fn private_query_lines_from_collector(
+    collector: &CorpusCollector,
+    samples_per_class: usize,
+) -> Vec<String> {
+    let mut queries = Vec::new();
+    for query_class in QUERY_CLASSES {
+        queries.extend(
+            collector
+                .select_samples(query_class, samples_per_class)
+                .into_iter()
+                .map(|candidate| candidate.raw_query),
+        );
+    }
+    queries
+}
+
+fn collect_candidates(
+    vault_root: &Path,
+    seed: u64,
+    samples_per_class: usize,
+) -> io::Result<CorpusCollector> {
+    let mut collector = CorpusCollector::default();
+    visit_vault(vault_root, vault_root, seed, &mut collector)?;
+
+    for query_class in QUERY_CLASSES {
+        collector.ensure_zero_candidates(query_class, samples_per_class.max(10));
+        collector.finalize_class(query_class);
+    }
+
+    Ok(collector)
 }
 
 #[derive(Default)]
@@ -260,10 +314,37 @@ fn visit_vault(
     seed: u64,
     collector: &mut CorpusCollector,
 ) -> io::Result<()> {
-    for entry_result in fs::read_dir(dir)? {
-        let entry = entry_result?;
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(_) if dir != vault_root => {
+            collector
+                .warnings
+                .push(format!("read_dir_failed:{}", path_hash(vault_root, dir)));
+            return Ok(());
+        }
+        Err(error) => return Err(error),
+    };
+
+    for entry_result in entries {
+        let entry = match entry_result {
+            Ok(entry) => entry,
+            Err(error) => {
+                collector
+                    .warnings
+                    .push(format!("read_dir_entry_failed:{:?}", error.kind()));
+                continue;
+            }
+        };
         let path = entry.path();
-        let metadata = fs::symlink_metadata(&path)?;
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(_) => {
+                collector
+                    .warnings
+                    .push(format!("metadata_failed:{}", path_hash(vault_root, &path)));
+                continue;
+            }
+        };
         let file_type = metadata.file_type();
 
         if file_type.is_symlink() {
@@ -339,7 +420,7 @@ fn collect_body_candidates(
     seed: u64,
     collector: &mut CorpusCollector,
 ) {
-    let tokens = tokenize(text);
+    let tokens = tokenize_limited(text, 600);
     for token in tokens.iter().take(600) {
         if should_track_body_candidate(token, seed) {
             collector.add("body", token, source_hash, BTreeSet::new(), false);
@@ -388,6 +469,14 @@ fn collect_property_candidates(text: &str, source_hash: &str, collector: &mut Co
 }
 
 fn tokenize(text: &str) -> Vec<String> {
+    tokenize_limited(text, usize::MAX)
+}
+
+fn tokenize_limited(text: &str, max_tokens: usize) -> Vec<String> {
+    if max_tokens == 0 {
+        return Vec::new();
+    }
+
     let mut tokens = Vec::new();
     let mut current = String::new();
 
@@ -396,6 +485,9 @@ fn tokenize(text: &str) -> Vec<String> {
             current.extend(ch.to_lowercase());
         } else if !current.is_empty() {
             push_token(&mut tokens, &mut current);
+            if tokens.len() >= max_tokens {
+                return tokens;
+            }
         }
     }
 
@@ -771,5 +863,60 @@ mod tests {
         assert!(!json.contains("Secret Target"));
         assert!(!json.contains("secret-tag"));
         assert!(json.contains("query_hash"));
+    }
+
+    #[test]
+    fn generates_private_query_lines_without_redaction() {
+        let dir = tempdir().expect("tempdir");
+        fs::write(
+            dir.path().join("Home Note.md"),
+            "# Home Note\nBody contains apple banana.\n#project/native",
+        )
+        .expect("note");
+
+        let queries = generate_private_query_lines(&QueryCorpusOptions {
+            vault_root: dir.path().to_path_buf(),
+            samples_per_class: 10,
+            seed: 7,
+        })
+        .expect("private queries");
+
+        assert!(queries.iter().any(|query| query == "Home Note"));
+        assert!(queries.iter().all(|query| !query.starts_with('<')));
+    }
+
+    #[test]
+    fn bundle_contains_redacted_corpus_and_private_queries() {
+        let dir = tempdir().expect("tempdir");
+        fs::write(
+            dir.path().join("Home Note.md"),
+            "# Home Note\nBody contains apple banana.\n#project/native",
+        )
+        .expect("note");
+
+        let bundle = generate_query_corpus_bundle(&QueryCorpusOptions {
+            vault_root: dir.path().to_path_buf(),
+            samples_per_class: 10,
+            seed: 7,
+        })
+        .expect("bundle");
+
+        assert_eq!(
+            bundle.private_query_lines.len(),
+            bundle.corpus.samples.len()
+        );
+        assert!(
+            bundle
+                .private_query_lines
+                .iter()
+                .any(|query| query == "Home Note")
+        );
+        assert!(
+            bundle
+                .corpus
+                .samples
+                .iter()
+                .all(|sample| sample.redacted_display.starts_with('<'))
+        );
     }
 }

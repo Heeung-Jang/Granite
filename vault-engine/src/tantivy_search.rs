@@ -65,21 +65,40 @@ impl TantivySearchIndex {
     }
 
     pub fn replace_documents(&mut self, documents: &[SearchDocument]) -> TantivySearchResult<()> {
-        let mut writer = self.index.writer(50_000_000)?;
+        self.replace_documents_from_result_iter(
+            documents
+                .iter()
+                .cloned()
+                .map(Ok::<SearchDocument, TantivySearchError>),
+        )
+    }
+
+    pub fn replace_documents_from_result_iter<I, E>(&mut self, documents: I) -> Result<(), E>
+    where
+        I: IntoIterator<Item = Result<SearchDocument, E>>,
+        E: From<TantivySearchError>,
+    {
+        let mut writer = self
+            .index
+            .writer(50_000_000)
+            .map_err(TantivySearchError::from)?;
         for document in documents {
+            let document = document?;
             writer.delete_term(Term::from_field_text(
                 self.fields.file_id,
                 &document.file_id,
             ));
-            writer.add_document(doc!(
-                self.fields.file_id => document.file_id.as_str(),
-                self.fields.path => document.path.as_str(),
-                self.fields.title => document.title.as_str(),
-                self.fields.body => document.body.as_str(),
-            ))?;
+            writer
+                .add_document(doc!(
+                    self.fields.file_id => document.file_id.as_str(),
+                    self.fields.path => document.path.as_str(),
+                    self.fields.title => document.title.as_str(),
+                    self.fields.body => document.body.as_str(),
+                ))
+                .map_err(TantivySearchError::from)?;
         }
-        writer.commit()?;
-        self.reader.reload()?;
+        writer.commit().map_err(TantivySearchError::from)?;
+        self.reader.reload().map_err(TantivySearchError::from)?;
         Ok(())
     }
 

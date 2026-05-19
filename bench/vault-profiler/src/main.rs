@@ -5,9 +5,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
 use vault_engine::benchmarks::{
-    BackendBenchmarkOptions, load_search_documents_from_vault, run_shared_backend_benchmark,
+    VaultBackendBenchmarkOptions, run_shared_backend_benchmark_from_vault,
 };
-use vault_profiler::corpus::{QueryCorpusOptions, generate_query_corpus};
+use vault_profiler::corpus::{QueryCorpusOptions, generate_query_corpus_bundle};
 use vault_profiler::synthetic::{
     SyntheticProfile, SyntheticVaultOptions, generate_synthetic_vault,
 };
@@ -37,15 +37,22 @@ fn run() -> Result<(), Box<dyn Error>> {
             )
         }
         Command::QueryCorpus(command) => {
-            let corpus = generate_query_corpus(&QueryCorpusOptions {
+            let options = QueryCorpusOptions {
                 vault_root: command.vault_root.clone(),
                 samples_per_class: command.samples_per_class,
                 seed: command.seed,
-            })?;
+            };
+            let bundle = generate_query_corpus_bundle(&options)?;
+            if let Some(private_query_output) = &command.private_query_output {
+                if is_output_inside_vault(&command.vault_root, private_query_output)? {
+                    return Err("refusing to write private query output inside the vault".into());
+                }
+                fs::write(private_query_output, bundle.private_query_lines.join("\n"))?;
+            }
             write_json(
                 &command.vault_root,
                 command.output_path,
-                &corpus,
+                &bundle.corpus,
                 command.pretty,
             )
         }
@@ -75,14 +82,14 @@ fn run() -> Result<(), Box<dyn Error>> {
                 return Err("missing at least one --query or --query-file entry".into());
             }
 
-            let documents = load_search_documents_from_vault(&command.vault_root)?;
-            let artifact = run_shared_backend_benchmark(&BackendBenchmarkOptions {
-                corpus_id: command.corpus_id,
-                documents,
-                queries,
-                result_limit: command.result_limit,
-                work_dir: command.work_dir,
-            })?;
+            let artifact =
+                run_shared_backend_benchmark_from_vault(&VaultBackendBenchmarkOptions {
+                    corpus_id: command.corpus_id,
+                    vault_root: command.vault_root.clone(),
+                    queries,
+                    result_limit: command.result_limit,
+                    work_dir: command.work_dir,
+                })?;
             write_json(
                 &command.vault_root,
                 command.output_path,
@@ -98,7 +105,7 @@ fn read_query_file(path: &Path) -> Result<Vec<String>, Box<dyn Error>> {
     Ok(text
         .lines()
         .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .filter(|line| !line.is_empty())
         .map(str::to_string)
         .collect())
 }
@@ -153,6 +160,7 @@ struct ProfileCommand {
 struct QueryCorpusCommand {
     vault_root: PathBuf,
     output_path: Option<PathBuf>,
+    private_query_output: Option<PathBuf>,
     samples_per_class: usize,
     seed: u64,
     pretty: bool,
@@ -239,6 +247,7 @@ impl QueryCorpusCommand {
         let mut parser = CommonParser::new(args);
         let mut samples_per_class = 100;
         let mut seed = 20260519;
+        let mut private_query_output = None;
 
         while let Some(arg) = parser.next_arg() {
             match arg.as_str() {
@@ -250,6 +259,10 @@ impl QueryCorpusCommand {
                     let value = parser.required_string_arg("--seed")?;
                     seed = value.parse()?;
                 }
+                "--private-query-output" => {
+                    private_query_output =
+                        Some(parser.required_path_arg("--private-query-output")?);
+                }
                 _ => parser.parse_common_arg(arg)?,
             }
         }
@@ -258,6 +271,7 @@ impl QueryCorpusCommand {
         Ok(Self {
             vault_root,
             output_path: parser.output_path,
+            private_query_output,
             samples_per_class,
             seed,
             pretty: parser.pretty,
@@ -480,6 +494,8 @@ mod tests {
                 "25",
                 "--seed",
                 "99",
+                "--private-query-output",
+                "/tmp/private-queries.txt",
                 "--pretty",
             ]
             .into_iter()
@@ -493,6 +509,7 @@ mod tests {
                 command: Command::QueryCorpus(QueryCorpusCommand {
                     vault_root: PathBuf::from("/tmp/vault"),
                     output_path: Some(PathBuf::from("/tmp/query-corpus.json")),
+                    private_query_output: Some(PathBuf::from("/tmp/private-queries.txt")),
                     samples_per_class: 25,
                     seed: 99,
                     pretty: true,
@@ -580,6 +597,22 @@ mod tests {
                     pretty: true,
                 }),
             }
+        );
+    }
+
+    #[test]
+    fn query_file_preserves_hash_tag_queries() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("queries.txt");
+        fs::write(&path, "\n#Obsidian\nHome\n#보안_검증\n").expect("queries");
+
+        assert_eq!(
+            read_query_file(&path).expect("read queries"),
+            vec![
+                "#Obsidian".to_string(),
+                "Home".to_string(),
+                "#보안_검증".to_string()
+            ]
         );
     }
 }

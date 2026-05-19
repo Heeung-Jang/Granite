@@ -20,6 +20,15 @@ pub struct BackendBenchmarkOptions {
     pub work_dir: PathBuf,
 }
 
+#[derive(Debug, Clone)]
+pub struct VaultBackendBenchmarkOptions {
+    pub corpus_id: String,
+    pub vault_root: PathBuf,
+    pub queries: Vec<String>,
+    pub result_limit: usize,
+    pub work_dir: PathBuf,
+}
+
 #[derive(Debug, Serialize)]
 pub struct BackendBenchmarkArtifact {
     pub schema_version: u32,
@@ -41,6 +50,7 @@ pub struct BackendBenchmarkResult {
     pub query_p95_micros: u64,
     pub query_p99_micros: u64,
     pub query_result_count: usize,
+    pub skipped_query_count: usize,
     pub snippet_result_count: usize,
     pub incremental_update_micros: u64,
     pub index_size_bytes: u64,
@@ -65,31 +75,13 @@ pub fn load_search_documents_from_vault(
     vault_root: impl AsRef<Path>,
 ) -> BackendBenchmarkResultType<Vec<SearchDocument>> {
     let root = VaultRoot::open(vault_root).map_err(BackendBenchmarkError::Path)?;
-    let scan = scan_vault(&root).map_err(scan_error_to_string)?;
+    let sources = load_search_document_sources(&root)?;
     let mut documents = Vec::new();
 
-    for entry in scan
-        .entries
-        .into_iter()
-        .filter(|entry| entry.kind == ScanEntryKind::Markdown)
-    {
-        let absolute_path = root.canonical_root().join(&entry.relative_path);
-        let body = fs::read_to_string(&absolute_path)?;
-        let parsed = parse_markdown(&body);
-        let title = parsed
-            .headings
-            .first()
-            .map(|heading| heading.text.clone())
-            .unwrap_or_else(|| fallback_title(&entry.relative_path));
-        documents.push(SearchDocument {
-            file_id: lookup_key(&entry.relative_path),
-            path: entry.relative_path.to_string_lossy().to_string(),
-            title,
-            body,
-        });
+    for source in &sources {
+        documents.push(read_search_document(source)?);
     }
 
-    documents.sort_by(|left, right| left.path.cmp(&right.path));
     Ok(documents)
 }
 
@@ -119,6 +111,37 @@ pub fn run_shared_backend_benchmark(
         query_count: options.queries.len(),
         total_document_bytes,
         backends: vec![sqlite, tantivy],
+    })
+}
+
+pub fn run_shared_backend_benchmark_from_vault(
+    options: &VaultBackendBenchmarkOptions,
+) -> BackendBenchmarkResultType<BackendBenchmarkArtifact> {
+    if options.queries.is_empty() {
+        return Err(BackendBenchmarkError::EmptyQueries);
+    }
+
+    let root = VaultRoot::open(&options.vault_root).map_err(BackendBenchmarkError::Path)?;
+    let sources = load_search_document_sources(&root)?;
+    if sources.is_empty() {
+        return Err(BackendBenchmarkError::EmptyDocuments);
+    }
+
+    fs::create_dir_all(&options.work_dir)?;
+    let sqlite = run_sqlite_benchmark_from_sources(options, &sources)?;
+    let tantivy = run_tantivy_benchmark_from_sources(options, &sources)?;
+
+    Ok(BackendBenchmarkArtifact {
+        schema_version: 1,
+        generated_at_unix_seconds: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs(),
+        corpus_id: options.corpus_id.clone(),
+        document_count: sources.len(),
+        query_count: options.queries.len(),
+        total_document_bytes: sqlite.total_document_bytes,
+        backends: vec![sqlite.result, tantivy.result],
     })
 }
 
@@ -181,12 +204,84 @@ impl From<serde_json::Error> for BackendBenchmarkError {
     }
 }
 
+#[derive(Debug, Clone)]
+struct SearchDocumentSource {
+    relative_path: PathBuf,
+    absolute_path: PathBuf,
+    file_id: String,
+}
+
+struct StreamingBenchmarkResult {
+    result: BackendBenchmarkResult,
+    total_document_bytes: u64,
+}
+
+#[derive(Default)]
+struct StreamingCorpusStats {
+    document_count: usize,
+    total_document_bytes: u64,
+    first_document: Option<SearchDocument>,
+}
+
+impl StreamingCorpusStats {
+    fn record(&mut self, document: &SearchDocument) {
+        self.document_count += 1;
+        self.total_document_bytes += document_bytes(document);
+        if self.first_document.is_none() {
+            self.first_document = Some(document.clone());
+        }
+    }
+
+    fn first_document(&self) -> BackendBenchmarkResultType<&SearchDocument> {
+        self.first_document
+            .as_ref()
+            .ok_or(BackendBenchmarkError::EmptyDocuments)
+    }
+}
+
+fn load_search_document_sources(
+    root: &VaultRoot,
+) -> BackendBenchmarkResultType<Vec<SearchDocumentSource>> {
+    let scan = scan_vault(root).map_err(scan_error_to_string)?;
+    Ok(scan
+        .entries
+        .into_iter()
+        .filter(|entry| entry.kind == ScanEntryKind::Markdown)
+        .map(|entry| {
+            let absolute_path = root.canonical_root().join(&entry.relative_path);
+            SearchDocumentSource {
+                file_id: lookup_key(&entry.relative_path),
+                relative_path: entry.relative_path,
+                absolute_path,
+            }
+        })
+        .collect())
+}
+
+fn read_search_document(
+    source: &SearchDocumentSource,
+) -> BackendBenchmarkResultType<SearchDocument> {
+    let body = fs::read_to_string(&source.absolute_path)?;
+    let parsed = parse_markdown(&body);
+    let title = parsed
+        .headings
+        .first()
+        .map(|heading| heading.text.clone())
+        .unwrap_or_else(|| fallback_title(&source.relative_path));
+    Ok(SearchDocument {
+        file_id: source.file_id.clone(),
+        path: source.relative_path.to_string_lossy().to_string(),
+        title,
+        body,
+    })
+}
+
 fn run_sqlite_benchmark(
     options: &BackendBenchmarkOptions,
     total_document_bytes: u64,
 ) -> BackendBenchmarkResultType<BackendBenchmarkResult> {
     let db_path = options.work_dir.join("sqlite-fts.sqlite");
-    remove_file_if_exists(&db_path)?;
+    remove_sqlite_files(&db_path)?;
     let mut index = SqliteFtsIndex::open(&db_path)?;
 
     let index_start = Instant::now();
@@ -213,6 +308,47 @@ fn run_sqlite_benchmark(
         incremental_update_micros,
         index.estimated_size_bytes()?,
     ))
+}
+
+fn run_sqlite_benchmark_from_sources(
+    options: &VaultBackendBenchmarkOptions,
+    sources: &[SearchDocumentSource],
+) -> BackendBenchmarkResultType<StreamingBenchmarkResult> {
+    let db_path = options.work_dir.join("sqlite-fts.sqlite");
+    remove_sqlite_files(&db_path)?;
+    let mut index = SqliteFtsIndex::open(&db_path)?;
+    let mut stats = StreamingCorpusStats::default();
+
+    let index_start = Instant::now();
+    for source in sources {
+        let document = read_search_document(source)?;
+        stats.record(&document);
+        index.upsert_document(&document)?;
+    }
+    index.rebuild()?;
+    index.integrity_check()?;
+    index.optimize()?;
+    let index_duration = index_start.elapsed();
+    let query_stats = measure_queries(&options.queries, |query| {
+        index
+            .search(query, options.result_limit)
+            .map_err(Into::into)
+    })?;
+    let incremental_update_micros =
+        measure_sqlite_incremental_update_doc(&mut index, stats.first_document()?)?;
+
+    Ok(StreamingBenchmarkResult {
+        result: backend_result(
+            "sqlite_fts",
+            index_duration,
+            stats.document_count,
+            stats.total_document_bytes,
+            query_stats,
+            incremental_update_micros,
+            index.estimated_size_bytes()?,
+        ),
+        total_document_bytes: stats.total_document_bytes,
+    })
 }
 
 fn run_tantivy_benchmark(
@@ -244,10 +380,49 @@ fn run_tantivy_benchmark(
     ))
 }
 
+fn run_tantivy_benchmark_from_sources(
+    options: &VaultBackendBenchmarkOptions,
+    sources: &[SearchDocumentSource],
+) -> BackendBenchmarkResultType<StreamingBenchmarkResult> {
+    let index_dir = options.work_dir.join("tantivy");
+    reset_directory(&index_dir)?;
+    let mut index = TantivySearchIndex::open_in_dir(&index_dir)?;
+    let mut stats = StreamingCorpusStats::default();
+
+    let index_start = Instant::now();
+    index.replace_documents_from_result_iter(sources.iter().map(|source| {
+        let document = read_search_document(source)?;
+        stats.record(&document);
+        Ok::<SearchDocument, BackendBenchmarkError>(document)
+    }))?;
+    let index_duration = index_start.elapsed();
+    let query_stats = measure_queries(&options.queries, |query| {
+        index
+            .search(query, options.result_limit)
+            .map_err(Into::into)
+    })?;
+    let incremental_update_micros =
+        measure_tantivy_incremental_update_doc(&mut index, stats.first_document()?)?;
+
+    Ok(StreamingBenchmarkResult {
+        result: backend_result(
+            "tantivy",
+            index_duration,
+            stats.document_count,
+            stats.total_document_bytes,
+            query_stats,
+            incremental_update_micros,
+            index.estimated_size_bytes()?,
+        ),
+        total_document_bytes: stats.total_document_bytes,
+    })
+}
+
 struct QueryStats {
     p95: Duration,
     p99: Duration,
     result_count: usize,
+    skipped_count: usize,
     snippet_count: usize,
 }
 
@@ -257,11 +432,19 @@ where
 {
     let mut durations = Vec::with_capacity(queries.len());
     let mut result_count = 0;
+    let mut skipped_count = 0;
     let mut snippet_count = 0;
 
     for query in queries {
         let start = Instant::now();
-        let results = search(query)?;
+        let results = match search(query) {
+            Ok(results) => results,
+            Err(error) if is_empty_query_error(&error) => {
+                skipped_count += 1;
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
         durations.push(start.elapsed());
         result_count += results.len();
         snippet_count += results
@@ -275,6 +458,7 @@ where
         p95: percentile_duration(&durations, 95),
         p99: percentile_duration(&durations, 99),
         result_count,
+        skipped_count,
         snippet_count,
     })
 }
@@ -283,7 +467,14 @@ fn measure_sqlite_incremental_update(
     index: &mut SqliteFtsIndex,
     options: &BackendBenchmarkOptions,
 ) -> BackendBenchmarkResultType<u64> {
-    let mut document = options.documents[0].clone();
+    measure_sqlite_incremental_update_doc(index, &options.documents[0])
+}
+
+fn measure_sqlite_incremental_update_doc(
+    index: &mut SqliteFtsIndex,
+    document: &SearchDocument,
+) -> BackendBenchmarkResultType<u64> {
+    let mut document = document.clone();
     document.body.push_str("\nIncremental benchmark update.");
     let start = Instant::now();
     index.upsert_document(&document)?;
@@ -295,7 +486,14 @@ fn measure_tantivy_incremental_update(
     index: &mut TantivySearchIndex,
     options: &BackendBenchmarkOptions,
 ) -> BackendBenchmarkResultType<u64> {
-    let mut document = options.documents[0].clone();
+    measure_tantivy_incremental_update_doc(index, &options.documents[0])
+}
+
+fn measure_tantivy_incremental_update_doc(
+    index: &mut TantivySearchIndex,
+    document: &SearchDocument,
+) -> BackendBenchmarkResultType<u64> {
+    let mut document = document.clone();
     document.body.push_str("\nIncremental benchmark update.");
     let start = Instant::now();
     index.replace_documents(&[document])?;
@@ -320,11 +518,20 @@ fn backend_result(
         query_p95_micros: duration_micros(query_stats.p95),
         query_p99_micros: duration_micros(query_stats.p99),
         query_result_count: query_stats.result_count,
+        skipped_query_count: query_stats.skipped_count,
         snippet_result_count: query_stats.snippet_count,
         incremental_update_micros,
         index_size_bytes,
         peak_rss_bytes: peak_rss_bytes(),
     }
+}
+
+fn is_empty_query_error(error: &BackendBenchmarkError) -> bool {
+    matches!(
+        error,
+        BackendBenchmarkError::Sqlite(SqliteFtsError::EmptyQuery)
+            | BackendBenchmarkError::Tantivy(TantivySearchError::EmptyQuery)
+    )
 }
 
 fn fallback_title(relative_path: &Path) -> String {
@@ -336,12 +543,11 @@ fn fallback_title(relative_path: &Path) -> String {
 }
 
 fn total_document_bytes(documents: &[SearchDocument]) -> u64 {
-    documents
-        .iter()
-        .map(|document| {
-            document.path.len() as u64 + document.title.len() as u64 + document.body.len() as u64
-        })
-        .sum()
+    documents.iter().map(document_bytes).sum()
+}
+
+fn document_bytes(document: &SearchDocument) -> u64 {
+    document.path.len() as u64 + document.title.len() as u64 + document.body.len() as u64
 }
 
 fn percentile_duration(values: &[Duration], percentile: usize) -> Duration {
@@ -365,6 +571,13 @@ fn remove_file_if_exists(path: &Path) -> std::io::Result<()> {
     if path.exists() {
         fs::remove_file(path)?;
     }
+    Ok(())
+}
+
+fn remove_sqlite_files(path: &Path) -> std::io::Result<()> {
+    remove_file_if_exists(path)?;
+    remove_file_if_exists(&path.with_extension("sqlite-wal"))?;
+    remove_file_if_exists(&path.with_extension("sqlite-shm"))?;
     Ok(())
 }
 
@@ -417,6 +630,7 @@ mod tests {
                 "Home".to_string(),
                 "Guide".to_string(),
                 "compatibility fixture".to_string(),
+                "!!!".to_string(),
             ],
             result_limit: 10,
             work_dir: temp.path().join("indexes"),
@@ -433,11 +647,47 @@ mod tests {
         assert!(artifact.backends.iter().all(|backend| {
             backend.query_p95_micros <= backend.query_p99_micros
                 && backend.index_size_bytes > 0
+                && backend.skipped_query_count == 1
                 && backend.snippet_result_count > 0
         }));
         assert!(json.contains("\"sqlite_fts\""));
         assert!(json.contains("\"tantivy\""));
         assert!(!json.contains("Welcome to the compatibility fixture vault"));
+    }
+
+    #[test]
+    fn runs_vault_benchmark_without_preloading_document_bodies() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let vault = temp.path().join("vault");
+        fs::create_dir_all(vault.join("Docs")).expect("docs dir");
+        fs::write(
+            vault.join("Home.md"),
+            "# Home\nWelcome to the streaming benchmark fixture.",
+        )
+        .expect("home");
+        fs::write(
+            vault.join("Docs").join("Guide.md"),
+            "# Guide\nGuide links back to Home.",
+        )
+        .expect("guide");
+
+        let options = VaultBackendBenchmarkOptions {
+            corpus_id: "vault-streaming-smoke".to_string(),
+            vault_root: vault,
+            queries: vec!["Home".to_string(), "Guide".to_string()],
+            result_limit: 10,
+            work_dir: temp.path().join("indexes"),
+        };
+
+        let artifact = run_shared_backend_benchmark_from_vault(&options).expect("benchmark");
+
+        assert_eq!(artifact.document_count, 2);
+        assert_eq!(artifact.query_count, 2);
+        assert_eq!(artifact.backends.len(), 2);
+        assert!(artifact.total_document_bytes > 0);
+        assert!(artifact.backends.iter().all(|backend| {
+            backend.index_size_bytes > 0 && backend.query_p95_micros <= backend.query_p99_micros
+        }));
     }
 
     fn fixture_documents() -> Vec<SearchDocument> {
