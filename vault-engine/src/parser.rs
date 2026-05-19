@@ -50,7 +50,14 @@ pub enum PropertyValue {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParseWarning {
     MalformedFrontmatter(String),
+    FrontmatterRawTruncated,
+    FrontmatterValueTruncated,
+    FrontmatterListTruncated,
 }
+
+const MAX_FRONTMATTER_RAW_CHARS: usize = 65_536;
+const MAX_PROPERTY_VALUE_CHARS: usize = 512;
+const MAX_PROPERTY_LIST_ITEMS: usize = 128;
 
 pub fn parse_markdown(source: &str) -> ParsedMarkdown {
     let frontmatter_parse = parse_frontmatter(source);
@@ -146,8 +153,8 @@ fn parse_frontmatter(source: &str) -> FrontmatterParse {
         };
     };
 
-    let raw = source[raw_start..raw_end].to_string();
     let mut warnings = Vec::new();
+    let raw = truncate_frontmatter_raw(&source[raw_start..raw_end], &mut warnings);
     let properties = parse_frontmatter_properties(&raw, &mut warnings);
 
     FrontmatterParse {
@@ -176,11 +183,15 @@ fn parse_frontmatter_properties(
         }
 
         if let Some(item) = trimmed.strip_prefix("- ") {
-            if let Some(key) = current_list_key.as_deref() {
-                let value = normalize_scalar(item);
-                if let Some(PropertyValue::List(values)) = properties.get_mut(key) {
-                    values.push(value);
+            if let Some(key) = current_list_key.as_deref()
+                && let Some(PropertyValue::List(values)) = properties.get_mut(key)
+            {
+                if values.len() >= MAX_PROPERTY_LIST_ITEMS {
+                    push_once(warnings, ParseWarning::FrontmatterListTruncated);
+                    continue;
                 }
+                let value = normalize_scalar(item, warnings);
+                values.push(value);
             }
             continue;
         }
@@ -235,9 +246,15 @@ fn parse_property_value(raw_value: &str, warnings: &mut Vec<ParseWarning>) -> Pr
         let values = raw_value
             .trim_matches(['[', ']'])
             .split(',')
-            .map(normalize_scalar)
-            .filter(|value| !value.is_empty())
+            .filter_map(|value| {
+                let value = normalize_scalar(value, warnings);
+                (!value.is_empty()).then_some(value)
+            })
+            .take(MAX_PROPERTY_LIST_ITEMS)
             .collect();
+        if raw_value.trim_matches(['[', ']']).split(',').count() > MAX_PROPERTY_LIST_ITEMS {
+            push_once(warnings, ParseWarning::FrontmatterListTruncated);
+        }
         return PropertyValue::List(values);
     }
 
@@ -247,16 +264,41 @@ fn parse_property_value(raw_value: &str, warnings: &mut Vec<ParseWarning>) -> Pr
         ));
     }
 
-    PropertyValue::String(normalize_scalar(raw_value))
+    PropertyValue::String(normalize_scalar(raw_value, warnings))
 }
 
-fn normalize_scalar(value: &str) -> String {
-    value
+fn normalize_scalar(value: &str, warnings: &mut Vec<ParseWarning>) -> String {
+    let normalized = value
         .trim()
         .trim_matches('"')
         .trim_matches('\'')
         .trim()
-        .to_string()
+        .to_string();
+    truncate_property_value(normalized, warnings)
+}
+
+fn truncate_frontmatter_raw(raw: &str, warnings: &mut Vec<ParseWarning>) -> String {
+    if raw.chars().count() <= MAX_FRONTMATTER_RAW_CHARS {
+        return raw.to_string();
+    }
+
+    push_once(warnings, ParseWarning::FrontmatterRawTruncated);
+    raw.chars().take(MAX_FRONTMATTER_RAW_CHARS).collect()
+}
+
+fn truncate_property_value(value: String, warnings: &mut Vec<ParseWarning>) -> String {
+    if value.chars().count() <= MAX_PROPERTY_VALUE_CHARS {
+        return value;
+    }
+
+    push_once(warnings, ParseWarning::FrontmatterValueTruncated);
+    value.chars().take(MAX_PROPERTY_VALUE_CHARS).collect()
+}
+
+fn push_once(warnings: &mut Vec<ParseWarning>, warning: ParseWarning) {
+    if !warnings.contains(&warning) {
+        warnings.push(warning);
+    }
 }
 
 fn collect_tags(body: &str, properties: &BTreeMap<String, PropertyValue>) -> Vec<String> {
@@ -455,10 +497,9 @@ fn parse_markdown_links(source: &str) -> Vec<MarkdownLink> {
         let image = open_relative > 0 && source[..open_relative].ends_with('!');
         let text = &source[open_relative + 1..close];
         let target_start = close + 2;
-        let Some(relative_target_end) = source[target_start..].find(')') else {
+        let Some(target_end) = find_markdown_target_end(source, target_start) else {
             break;
         };
-        let target_end = target_start + relative_target_end;
         let target = source[target_start..target_end]
             .split_whitespace()
             .next()
@@ -477,6 +518,21 @@ fn parse_markdown_links(source: &str) -> Vec<MarkdownLink> {
     }
 
     links
+}
+
+fn find_markdown_target_end(source: &str, target_start: usize) -> Option<usize> {
+    let mut depth = 0usize;
+
+    for (offset, ch) in source[target_start..].char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' if depth == 0 => return Some(target_start + offset),
+            ')' => depth -= 1,
+            _ => {}
+        }
+    }
+
+    None
 }
 
 #[cfg(test)]
@@ -626,6 +682,119 @@ mod tests {
         );
         assert_eq!(parsed.headings[0].text, "Malformed Frontmatter");
         assert!(parsed.tags.is_empty());
+    }
+
+    #[test]
+    fn parser_warnings_do_not_include_raw_frontmatter_values() {
+        let parsed = parse_markdown("---\ntags: [broken\nsecret: \"private-token\n---\n# Note");
+        let warning_text = format!("{:?}", parsed.warnings);
+
+        assert!(
+            parsed
+                .warnings
+                .iter()
+                .any(|warning| matches!(warning, ParseWarning::MalformedFrontmatter(_)))
+        );
+        assert!(!warning_text.contains("private-token"));
+        assert!(!warning_text.contains("[broken"));
+    }
+
+    #[test]
+    fn oversized_frontmatter_values_are_bounded() {
+        let fixture_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("fixtures")
+            .join("adversarial-vault");
+        let source =
+            fs::read_to_string(fixture_root.join("OversizedAlias.md")).expect("oversized fixture");
+        let parsed = parse_markdown(&source);
+
+        assert!(
+            parsed
+                .warnings
+                .contains(&ParseWarning::FrontmatterValueTruncated)
+        );
+        let Some(PropertyValue::List(aliases)) = parsed.properties.get("aliases") else {
+            panic!("aliases list");
+        };
+        assert_eq!(aliases.len(), 1);
+        assert!(aliases[0].chars().count() <= MAX_PROPERTY_VALUE_CHARS);
+    }
+
+    #[test]
+    fn frontmatter_lists_are_bounded() {
+        let tags = (0..(MAX_PROPERTY_LIST_ITEMS + 2))
+            .map(|index| format!("  - tag{index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let parsed = parse_markdown(&format!("---\ntags:\n{tags}\n---\n# Note"));
+
+        assert!(
+            parsed
+                .warnings
+                .contains(&ParseWarning::FrontmatterListTruncated)
+        );
+        let Some(PropertyValue::List(tags)) = parsed.properties.get("tags") else {
+            panic!("tags list");
+        };
+        assert_eq!(tags.len(), MAX_PROPERTY_LIST_ITEMS);
+    }
+
+    #[test]
+    fn frontmatter_raw_text_is_bounded() {
+        let large_value = "a".repeat(MAX_FRONTMATTER_RAW_CHARS + 10);
+        let parsed = parse_markdown(&format!("---\nnotes: {large_value}\n---\n# Note"));
+
+        assert!(
+            parsed
+                .warnings
+                .contains(&ParseWarning::FrontmatterRawTruncated)
+        );
+        let frontmatter = parsed.frontmatter.expect("frontmatter");
+        assert!(frontmatter.raw.chars().count() <= MAX_FRONTMATTER_RAW_CHARS);
+    }
+
+    #[test]
+    fn adversarial_html_and_plugin_syntax_remain_inert_parser_text() {
+        let fixture_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("fixtures")
+            .join("adversarial-vault");
+
+        for fixture in ["RawHtmlScript.md", "PluginSyntax.md"] {
+            let source = fs::read_to_string(fixture_root.join(fixture)).expect("fixture");
+            let parsed = parse_markdown(&source);
+
+            assert!(parsed.wikilinks.is_empty(), "{fixture} wikilinks");
+            assert!(parsed.embeds.is_empty(), "{fixture} embeds");
+            assert!(parsed.markdown_links.is_empty(), "{fixture} markdown links");
+            assert!(parsed.warnings.is_empty(), "{fixture} warnings");
+        }
+    }
+
+    #[test]
+    fn unsafe_url_scheme_fixture_is_parsed_as_plain_link_targets() {
+        let fixture_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("fixtures")
+            .join("adversarial-vault");
+        let source = fs::read_to_string(fixture_root.join("UrlSchemes.md")).expect("url fixture");
+        let parsed = parse_markdown(&source);
+        let targets = parsed
+            .markdown_links
+            .iter()
+            .map(|link| link.target.clone())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            targets,
+            vec![
+                "javascript:alert(1)".to_string(),
+                "data:text/html,<script>alert(1)</script>".to_string(),
+                "obsidian://advanced-uri?vault=Codex".to_string(),
+                "https://example.com/image.png".to_string(),
+            ]
+        );
     }
 
     #[derive(Debug)]
