@@ -6,6 +6,7 @@ pub mod index;
 pub mod parser;
 pub mod paths;
 pub mod scanner;
+pub mod sqlite_fts;
 
 pub const ENGINE_ABI_VERSION: u32 = 1;
 
@@ -27,6 +28,7 @@ pub fn health_check() -> EngineHealth {
             "ffi",
             "errors",
             "benchmarks",
+            "sqlite_fts",
         ],
     }
 }
@@ -51,6 +53,7 @@ mod tests {
                 "ffi",
                 "errors",
                 "benchmarks",
+                "sqlite_fts",
             ]
         );
     }
