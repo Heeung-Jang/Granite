@@ -7,10 +7,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 use crate::ENGINE_ABI_VERSION;
+use crate::indexing_queue::{IndexingQueue, IndexingQueueItem};
 use crate::paths::{FileIdentity, PathError, VaultRoot};
 use crate::save::{
-    SafeSaveError, SaveBaseline, SaveConflict, SaveConflictSnapshot, SaveOutcome, SaveRequest,
-    safe_save,
+    SafeSaveError, SaveBaseline, SaveChoiceOutcome, SaveConflict, SaveConflictChoiceError,
+    SaveConflictKind, SaveConflictSnapshot, SaveOutcome, SaveReloadOutcome, SaveRequest,
+    keep_conflicted_buffer_as_new_note, overwrite_after_conflict, reload_after_conflict, safe_save,
 };
 
 pub fn abi_version() -> u32 {
@@ -72,18 +74,85 @@ pub unsafe extern "C" fn engine_save_write(
         let vault_path = unsafe { read_c_string(vault_path, "vault_path") }?;
         let baseline_json = unsafe { read_c_string(baseline_json, "baseline_json") }?;
         let contents = unsafe { read_bytes(contents, contents_len, "contents") }?;
-        let baseline: FfiSaveBaseline =
-            serde_json::from_str(&baseline_json).map_err(|error| FfiError {
-                code: "invalid_json".to_string(),
-                message: error.to_string(),
-                conflict_kind: None,
-                conflict: None,
-            })?;
+        let baseline: FfiSaveBaseline = read_json(&baseline_json, "baseline_json")?;
         let baseline = SaveBaseline::from(baseline);
         let root = VaultRoot::open(&vault_path).map_err(FfiError::from_path)?;
         let outcome =
             safe_save(&root, SaveRequest::new(&baseline, contents)).map_err(FfiError::from_save)?;
         Ok(FfiSaveOutcome::from(&outcome))
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn engine_save_reload_after_conflict(
+    vault_path: *const c_char,
+    queue_path: *const c_char,
+    conflict_json: *const c_char,
+    generation: u64,
+) -> *mut c_char {
+    ffi_response(|| {
+        let vault_path = unsafe { read_c_string(vault_path, "vault_path") }?;
+        let queue_path = unsafe { read_c_string(queue_path, "queue_path") }?;
+        let conflict_json = unsafe { read_c_string(conflict_json, "conflict_json") }?;
+        let conflict: FfiSaveConflict = read_json(&conflict_json, "conflict_json")?;
+        let conflict = SaveConflict::try_from(conflict)?;
+        let root = VaultRoot::open(&vault_path).map_err(FfiError::from_path)?;
+        let mut queue = IndexingQueue::open(&queue_path).map_err(FfiError::from_queue)?;
+        let outcome = reload_after_conflict(&root, &mut queue, &conflict, generation)
+            .map_err(FfiError::from_choice)?;
+        FfiSaveReloadOutcome::try_from(&outcome)
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn engine_save_keep_conflict_as_new_note(
+    vault_path: *const c_char,
+    queue_path: *const c_char,
+    new_relative_path: *const c_char,
+    contents: *const c_uchar,
+    contents_len: usize,
+    generation: u64,
+) -> *mut c_char {
+    ffi_response(|| {
+        let vault_path = unsafe { read_c_string(vault_path, "vault_path") }?;
+        let queue_path = unsafe { read_c_string(queue_path, "queue_path") }?;
+        let new_relative_path = unsafe { read_c_string(new_relative_path, "new_relative_path") }?;
+        let contents = unsafe { read_bytes(contents, contents_len, "contents") }?;
+        let root = VaultRoot::open(&vault_path).map_err(FfiError::from_path)?;
+        let mut queue = IndexingQueue::open(&queue_path).map_err(FfiError::from_queue)?;
+        let outcome = keep_conflicted_buffer_as_new_note(
+            &root,
+            &mut queue,
+            &new_relative_path,
+            contents,
+            generation,
+        )
+        .map_err(FfiError::from_choice)?;
+        Ok(FfiSaveChoiceOutcome::from(&outcome))
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn engine_save_overwrite_after_conflict(
+    vault_path: *const c_char,
+    queue_path: *const c_char,
+    conflict_json: *const c_char,
+    contents: *const c_uchar,
+    contents_len: usize,
+    generation: u64,
+) -> *mut c_char {
+    ffi_response(|| {
+        let vault_path = unsafe { read_c_string(vault_path, "vault_path") }?;
+        let queue_path = unsafe { read_c_string(queue_path, "queue_path") }?;
+        let conflict_json = unsafe { read_c_string(conflict_json, "conflict_json") }?;
+        let contents = unsafe { read_bytes(contents, contents_len, "contents") }?;
+        let conflict: FfiSaveConflict = read_json(&conflict_json, "conflict_json")?;
+        let conflict = SaveConflict::try_from(conflict)?;
+        let root = VaultRoot::open(&vault_path).map_err(FfiError::from_path)?;
+        let mut queue = IndexingQueue::open(&queue_path).map_err(FfiError::from_queue)?;
+        let outcome = overwrite_after_conflict(&root, &mut queue, &conflict, contents, generation)
+            .map_err(FfiError::from_choice)?;
+        Ok(FfiSaveChoiceOutcome::from(&outcome))
     })
 }
 
@@ -123,7 +192,7 @@ struct FfiSaveBaseline {
     content_hash: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct FfiSaveConflictSnapshot {
     file_identity: FfiFileIdentity,
     size_bytes: u64,
@@ -131,7 +200,7 @@ struct FfiSaveConflictSnapshot {
     content_hash: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct FfiSaveConflict {
     relative_path: String,
     kind: String,
@@ -145,10 +214,53 @@ struct FfiSaveOutcome {
     bytes_written: u64,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct FfiQueuedItem {
+    relative_path: String,
+    generation: u64,
+    reason: String,
+    status: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct FfiSaveReloadOutcome {
+    baseline: FfiSaveBaseline,
+    contents: String,
+    queued_item: FfiQueuedItem,
+    dirty: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct FfiSaveChoiceOutcome {
+    choice: String,
+    baseline: FfiSaveBaseline,
+    bytes_written: u64,
+    queued_item: FfiQueuedItem,
+    dirty: bool,
+}
+
 impl FfiError {
     fn invalid_input(field: &str, message: impl Into<String>) -> Self {
         Self {
             code: "invalid_input".to_string(),
+            message: format!("{field}: {}", message.into()),
+            conflict_kind: None,
+            conflict: None,
+        }
+    }
+
+    fn invalid_json(field: &str, message: impl Into<String>) -> Self {
+        Self {
+            code: "invalid_json".to_string(),
+            message: format!("{field}: {}", message.into()),
+            conflict_kind: None,
+            conflict: None,
+        }
+    }
+
+    fn unsupported_encoding(field: &str, message: impl Into<String>) -> Self {
+        Self {
+            code: "unsupported_encoding".to_string(),
             message: format!("{field}: {}", message.into()),
             conflict_kind: None,
             conflict: None,
@@ -184,6 +296,22 @@ impl FfiError {
             message: error.to_string(),
             conflict_kind,
             conflict,
+        }
+    }
+
+    fn from_choice(error: SaveConflictChoiceError) -> Self {
+        match error {
+            SaveConflictChoiceError::Save(error) => Self::from_save(error),
+            SaveConflictChoiceError::Queue(error) => Self::from_queue(error),
+        }
+    }
+
+    fn from_queue(error: crate::indexing_queue::IndexingQueueError) -> Self {
+        Self {
+            code: "queue_error".to_string(),
+            message: error.to_string(),
+            conflict_kind: None,
+            conflict: None,
         }
     }
 
@@ -250,6 +378,17 @@ impl From<&SaveConflictSnapshot> for FfiSaveConflictSnapshot {
     }
 }
 
+impl From<FfiSaveConflictSnapshot> for SaveConflictSnapshot {
+    fn from(snapshot: FfiSaveConflictSnapshot) -> Self {
+        Self {
+            file_identity: FileIdentity::from(snapshot.file_identity),
+            size_bytes: snapshot.size_bytes,
+            modified: snapshot.modified.map(system_time),
+            content_hash: snapshot.content_hash,
+        }
+    }
+}
+
 impl From<&SaveConflict> for FfiSaveConflict {
     fn from(conflict: &SaveConflict) -> Self {
         Self {
@@ -261,11 +400,62 @@ impl From<&SaveConflict> for FfiSaveConflict {
     }
 }
 
+impl TryFrom<FfiSaveConflict> for SaveConflict {
+    type Error = FfiError;
+
+    fn try_from(conflict: FfiSaveConflict) -> Result<Self, Self::Error> {
+        Ok(Self {
+            relative_path: conflict.relative_path,
+            kind: save_conflict_kind_from_str(&conflict.kind)?,
+            expected: SaveBaseline::from(conflict.expected),
+            actual: conflict.actual.map(SaveConflictSnapshot::from),
+        })
+    }
+}
+
 impl From<&SaveOutcome> for FfiSaveOutcome {
     fn from(outcome: &SaveOutcome) -> Self {
         Self {
             baseline: FfiSaveBaseline::from(&outcome.baseline),
             bytes_written: outcome.bytes_written,
+        }
+    }
+}
+
+impl From<&IndexingQueueItem> for FfiQueuedItem {
+    fn from(item: &IndexingQueueItem) -> Self {
+        Self {
+            relative_path: item.relative_path.to_string_lossy().into_owned(),
+            generation: item.generation,
+            reason: format!("{:?}", item.reason),
+            status: format!("{:?}", item.status),
+        }
+    }
+}
+
+impl TryFrom<&SaveReloadOutcome> for FfiSaveReloadOutcome {
+    type Error = FfiError;
+
+    fn try_from(outcome: &SaveReloadOutcome) -> Result<Self, Self::Error> {
+        let contents = String::from_utf8(outcome.contents.clone())
+            .map_err(|error| FfiError::unsupported_encoding("contents", error.to_string()))?;
+        Ok(Self {
+            baseline: FfiSaveBaseline::from(&outcome.baseline),
+            contents,
+            queued_item: FfiQueuedItem::from(&outcome.queued_item),
+            dirty: outcome.dirty,
+        })
+    }
+}
+
+impl From<&SaveChoiceOutcome> for FfiSaveChoiceOutcome {
+    fn from(outcome: &SaveChoiceOutcome) -> Self {
+        Self {
+            choice: format!("{:?}", outcome.choice),
+            baseline: FfiSaveBaseline::from(&outcome.baseline),
+            bytes_written: outcome.bytes_written,
+            queued_item: FfiQueuedItem::from(&outcome.queued_item),
+            dirty: outcome.dirty,
         }
     }
 }
@@ -322,6 +512,24 @@ unsafe fn read_bytes<'a>(
         return Err(FfiError::invalid_input(field, "null pointer"));
     }
     Ok(unsafe { slice::from_raw_parts(ptr, len) })
+}
+
+fn read_json<T: for<'de> Deserialize<'de>>(json: &str, field: &str) -> Result<T, FfiError> {
+    serde_json::from_str(json).map_err(|error| FfiError::invalid_json(field, error.to_string()))
+}
+
+fn save_conflict_kind_from_str(kind: &str) -> Result<SaveConflictKind, FfiError> {
+    match kind {
+        "Deleted" => Ok(SaveConflictKind::Deleted),
+        "FileIdentityChanged" => Ok(SaveConflictKind::FileIdentityChanged),
+        "ContentChanged" => Ok(SaveConflictKind::ContentChanged),
+        "MetadataChanged" => Ok(SaveConflictKind::MetadataChanged),
+        "SymlinkChanged" => Ok(SaveConflictKind::SymlinkChanged),
+        _ => Err(FfiError::invalid_input(
+            "conflict.kind",
+            format!("unsupported save conflict kind: {kind}"),
+        )),
+    }
 }
 
 fn ffi_system_time(time: SystemTime) -> Option<FfiSystemTime> {
@@ -435,6 +643,179 @@ mod tests {
             value["error"]["conflict"]["actual"]["size_bytes"],
             b"# External edit\n".len() as u64
         );
+    }
+
+    #[test]
+    fn save_conflict_reload_ffi_reads_disk_and_queues_file_changed() {
+        let dir = tempdir().expect("tempdir");
+        let note = dir.path().join("Home.md");
+        fs::write(&note, "# Home\n").expect("note");
+        let vault = CString::new(dir.path().to_string_lossy().as_bytes()).expect("vault");
+        let conflict = CString::new(conflict_json_for(&vault, &note)).expect("conflict");
+        let queue_path = dir.path().join("indexing-queue.sqlite");
+        let queue = CString::new(queue_path.to_string_lossy().as_bytes()).expect("queue");
+
+        let response = unsafe {
+            take_response(engine_save_reload_after_conflict(
+                vault.as_ptr(),
+                queue.as_ptr(),
+                conflict.as_ptr(),
+                7,
+            ))
+        };
+        let value: Value = serde_json::from_str(&response).expect("reload json");
+
+        assert_eq!(value["ok"], true);
+        assert_eq!(value["value"]["contents"], "# External edit\n");
+        assert_eq!(value["value"]["dirty"], false);
+        assert_eq!(value["value"]["queued_item"]["relative_path"], "Home.md");
+        assert_eq!(value["value"]["queued_item"]["reason"], "FileChanged");
+        assert_eq!(value["value"]["queued_item"]["generation"], 7);
+        assert!(queue_path.exists());
+    }
+
+    #[test]
+    fn save_conflict_choice_ffi_keeps_new_and_overwrites_with_queue() {
+        let dir = tempdir().expect("tempdir");
+        let note = dir.path().join("Home.md");
+        let new_note = dir.path().join("Conflict Copy.md");
+        fs::write(&note, "# Home\n").expect("note");
+        let vault = CString::new(dir.path().to_string_lossy().as_bytes()).expect("vault");
+        let conflict = CString::new(conflict_json_for(&vault, &note)).expect("conflict");
+        let queue_path = dir.path().join("indexing-queue.sqlite");
+        let queue = CString::new(queue_path.to_string_lossy().as_bytes()).expect("queue");
+        let new_relative_path = CString::new("Conflict Copy.md").expect("new path");
+        let edited = b"# App edit\n";
+
+        let keep_response = unsafe {
+            take_response(engine_save_keep_conflict_as_new_note(
+                vault.as_ptr(),
+                queue.as_ptr(),
+                new_relative_path.as_ptr(),
+                edited.as_ptr(),
+                edited.len(),
+                8,
+            ))
+        };
+        let kept: Value = serde_json::from_str(&keep_response).expect("keep json");
+        assert_eq!(kept["ok"], true);
+        assert_eq!(kept["value"]["choice"], "KeepAsNewNote");
+        assert_eq!(
+            kept["value"]["baseline"]["relative_path"],
+            "Conflict Copy.md"
+        );
+        assert_eq!(kept["value"]["queued_item"]["reason"], "OwnSave");
+        assert_eq!(kept["value"]["queued_item"]["generation"], 8);
+        assert_eq!(
+            fs::read_to_string(&new_note).expect("new note"),
+            "# App edit\n"
+        );
+        assert_eq!(
+            fs::read_to_string(&note).expect("original"),
+            "# External edit\n"
+        );
+
+        let overwrite_response = unsafe {
+            take_response(engine_save_overwrite_after_conflict(
+                vault.as_ptr(),
+                queue.as_ptr(),
+                conflict.as_ptr(),
+                edited.as_ptr(),
+                edited.len(),
+                9,
+            ))
+        };
+        let overwritten: Value = serde_json::from_str(&overwrite_response).expect("overwrite json");
+        assert_eq!(overwritten["ok"], true);
+        assert_eq!(overwritten["value"]["choice"], "Overwrite");
+        assert_eq!(overwritten["value"]["queued_item"]["reason"], "OwnSave");
+        assert_eq!(overwritten["value"]["queued_item"]["generation"], 9);
+        assert_eq!(
+            fs::read_to_string(&note).expect("overwritten"),
+            "# App edit\n"
+        );
+    }
+
+    #[test]
+    fn save_conflict_overwrite_ffi_keeps_deleted_conflict_structured() {
+        let dir = tempdir().expect("tempdir");
+        let note = dir.path().join("Home.md");
+        fs::write(&note, "# Home\n").expect("note");
+        let vault = CString::new(dir.path().to_string_lossy().as_bytes()).expect("vault");
+        let conflict = CString::new(deleted_conflict_json_for(&vault, &note)).expect("conflict");
+        let queue_path = dir.path().join("indexing-queue.sqlite");
+        let queue = CString::new(queue_path.to_string_lossy().as_bytes()).expect("queue");
+        let edited = b"# App edit\n";
+
+        let response = unsafe {
+            take_response(engine_save_overwrite_after_conflict(
+                vault.as_ptr(),
+                queue.as_ptr(),
+                conflict.as_ptr(),
+                edited.as_ptr(),
+                edited.len(),
+                10,
+            ))
+        };
+        let value: Value = serde_json::from_str(&response).expect("deleted overwrite json");
+
+        assert_eq!(value["ok"], false);
+        assert_eq!(value["error"]["code"], "save_conflict");
+        assert_eq!(value["error"]["conflict_kind"], "Deleted");
+        assert_eq!(value["error"]["conflict"]["kind"], "Deleted");
+        assert!(!note.exists());
+    }
+
+    fn conflict_json_for(vault: &CString, note: &std::path::Path) -> String {
+        let relative_path = CString::new("Home.md").expect("relative path");
+        let baseline_response = unsafe {
+            take_response(engine_save_capture_baseline(
+                vault.as_ptr(),
+                relative_path.as_ptr(),
+            ))
+        };
+        let baseline: Value = serde_json::from_str(&baseline_response).expect("baseline json");
+        let baseline_json = CString::new(baseline["value"].to_string()).expect("baseline payload");
+
+        fs::write(note, "# External edit\n").expect("external edit");
+        let edited = b"# App edit\n";
+        let save_response = unsafe {
+            take_response(engine_save_write(
+                vault.as_ptr(),
+                baseline_json.as_ptr(),
+                edited.as_ptr(),
+                edited.len(),
+            ))
+        };
+        let value: Value = serde_json::from_str(&save_response).expect("conflict json");
+        assert_eq!(value["ok"], false);
+        value["error"]["conflict"].to_string()
+    }
+
+    fn deleted_conflict_json_for(vault: &CString, note: &std::path::Path) -> String {
+        let relative_path = CString::new("Home.md").expect("relative path");
+        let baseline_response = unsafe {
+            take_response(engine_save_capture_baseline(
+                vault.as_ptr(),
+                relative_path.as_ptr(),
+            ))
+        };
+        let baseline: Value = serde_json::from_str(&baseline_response).expect("baseline json");
+        let baseline_json = CString::new(baseline["value"].to_string()).expect("baseline payload");
+
+        fs::remove_file(note).expect("delete note");
+        let edited = b"# App edit\n";
+        let save_response = unsafe {
+            take_response(engine_save_write(
+                vault.as_ptr(),
+                baseline_json.as_ptr(),
+                edited.as_ptr(),
+                edited.len(),
+            ))
+        };
+        let value: Value = serde_json::from_str(&save_response).expect("deleted conflict json");
+        assert_eq!(value["ok"], false);
+        value["error"]["conflict"].to_string()
     }
 
     unsafe fn take_response(ptr: *mut c_char) -> String {
