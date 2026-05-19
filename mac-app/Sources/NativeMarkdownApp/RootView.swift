@@ -43,7 +43,11 @@ struct WorkspacePlaceholderView: View {
                     .foregroundStyle(.secondary)
             case .selected(let url):
                 if let selectedFile {
-                    SourceNoteView(vaultURL: url, file: selectedFile)
+                    HStack(spacing: 0) {
+                        SourceNoteView(vaultURL: url, file: selectedFile)
+                        Divider()
+                        NoteInspectorView(vaultURL: url, file: selectedFile)
+                    }
                 } else {
                     Text(url.lastPathComponent)
                         .font(.title2)
