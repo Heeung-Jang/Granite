@@ -1,3 +1,4 @@
+pub mod attachments;
 pub mod benchmarks;
 pub mod errors;
 pub mod ffi;
@@ -18,6 +19,7 @@ pub fn health_check() -> EngineHealth {
     EngineHealth {
         abi_version: ENGINE_ABI_VERSION,
         modules: &[
+            "attachments",
             "scanner",
             "parser",
             "paths",
@@ -41,6 +43,7 @@ mod tests {
         assert_eq!(
             health.modules,
             &[
+                "attachments",
                 "scanner",
                 "parser",
                 "paths",
