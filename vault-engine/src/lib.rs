@@ -2,6 +2,7 @@ pub mod attachments;
 pub mod benchmarks;
 pub mod errors;
 pub mod ffi;
+pub mod file_watcher;
 pub mod index;
 pub mod indexing_queue;
 pub mod parser;
@@ -28,6 +29,7 @@ pub fn health_check() -> EngineHealth {
             "scanner",
             "parser",
             "paths",
+            "file_watcher",
             "read_api",
             "save",
             "index",
@@ -57,6 +59,7 @@ mod tests {
                 "scanner",
                 "parser",
                 "paths",
+                "file_watcher",
                 "read_api",
                 "save",
                 "index",
