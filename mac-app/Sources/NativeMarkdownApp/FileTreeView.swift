@@ -23,7 +23,12 @@ struct FileTreeView: View {
             guard let item = item(withID: newValue) else {
                 return
             }
-            appState.openFile(item)
+            if !appState.openFile(item) {
+                selectedFileID = appState.selectedFile?.id
+            }
+        }
+        .onChange(of: appState.selectedFile?.id) { _, newValue in
+            selectedFileID = newValue
         }
     }
 

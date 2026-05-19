@@ -51,6 +51,84 @@ func appStatePublishesRequestedSearches() {
 }
 
 @Test
+func appStateBlocksCrossNoteNavigationWhileEditorIsDirty() {
+    let state = AppState()
+    let first = FileTreeItem(relativePath: "First.md")
+    let second = FileTreeItem(relativePath: "Second.md")
+
+    #expect(state.openFile(first))
+    state.updateEditorDirtyState(file: first, isDirty: true)
+
+    #expect(state.openFile(second) == false)
+    #expect(state.selectedFile == first)
+    #expect(state.dirtyNavigationWarning == DirtyNavigationWarning(
+        dirtyFile: first,
+        requestedFile: second
+    ))
+
+    state.dismissDirtyNavigationWarning()
+    #expect(state.selectedFile == first)
+    #expect(state.dirtyNavigationWarning == nil)
+}
+
+@Test
+func appStateAllowsSameDirtyNoteAndCleanNavigation() {
+    let state = AppState()
+    let first = FileTreeItem(relativePath: "First.md")
+    let second = FileTreeItem(relativePath: "Second.md")
+
+    #expect(state.openFile(first))
+    state.updateEditorDirtyState(file: first, isDirty: true)
+
+    #expect(state.openFile(first))
+    #expect(state.selectedFile == first)
+
+    state.updateEditorDirtyState(file: first, isDirty: false)
+    #expect(state.openFile(second))
+    #expect(state.selectedFile == second)
+    #expect(state.dirtyNavigationWarning == nil)
+}
+
+@Test
+func appStateCanDiscardDirtyChangesAndOpenRequestedNote() {
+    let state = AppState()
+    let first = FileTreeItem(relativePath: "First.md")
+    let second = FileTreeItem(relativePath: "Second.md")
+
+    #expect(state.openFile(first))
+    state.updateEditorDirtyState(file: first, isDirty: true)
+    #expect(state.openFile(second) == false)
+
+    state.discardDirtyChangesAndOpenRequestedFile()
+
+    #expect(state.selectedFile == second)
+    #expect(state.dirtyNavigationWarning == nil)
+    #expect(state.openFile(first))
+}
+
+@Test
+func appStateClearsDirtyNavigationStateWhenVaultBecomesUnavailable() throws {
+    let vaultURL = URL(fileURLWithPath: "/tmp/vault", isDirectory: true)
+    let first = FileTreeItem(relativePath: "First.md")
+    let second = FileTreeItem(relativePath: "Second.md")
+    let state = AppState(
+        engineHealth: EngineHealthStatus(state: .loaded, abiVersion: 1, message: "test"),
+        vaultAccessValidator: FixedVaultAccessValidator(issue: .missing(vaultURL)),
+        recentVaultStorage: MemoryRecentVaultStorage()
+    )
+
+    #expect(state.openFile(first))
+    state.updateEditorDirtyState(file: first, isDirty: true)
+    #expect(state.openFile(second) == false)
+
+    try state.selectVault(vaultURL)
+
+    #expect(state.selectedFile == nil)
+    #expect(state.dirtyNavigationWarning == nil)
+    #expect(state.openFile(second))
+}
+
+@Test
 func indexDirectoryResolverCreatesOnlyAppOwnedDirectories() throws {
     let temporaryRoot = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString, isDirectory: true)

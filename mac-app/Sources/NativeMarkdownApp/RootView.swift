@@ -26,6 +26,33 @@ struct RootView: View {
                 selectedFile: appState.selectedFile
             )
         }
+        .alert("Unsaved Changes", isPresented: dirtyNavigationAlertBinding) {
+            Button("Stay", role: .cancel) {
+                appState.dismissDirtyNavigationWarning()
+            }
+            Button("Discard and Open", role: .destructive) {
+                appState.discardDirtyChangesAndOpenRequestedFile()
+            }
+        } message: {
+            Text(dirtyNavigationMessage)
+        }
+    }
+
+    private var dirtyNavigationAlertBinding: Binding<Bool> {
+        Binding {
+            appState.dirtyNavigationWarning != nil
+        } set: { isPresented in
+            if !isPresented {
+                appState.dismissDirtyNavigationWarning()
+            }
+        }
+    }
+
+    private var dirtyNavigationMessage: String {
+        guard let warning = appState.dirtyNavigationWarning else {
+            return ""
+        }
+        return "Save or discard changes in \(warning.dirtyFile.displayName) before opening \(warning.requestedFile.displayName)."
     }
 }
 

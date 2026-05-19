@@ -69,6 +69,14 @@ struct SourceNoteView: View {
         .onChange(of: text) { _, newValue in
             saveSession?.updateContents(newValue)
         }
+        .onChange(of: saveSession) { _, newValue in
+            appState.updateEditorDirtyState(file: file, isDirty: newValue?.isDirty == true)
+        }
+        .onDisappear {
+            if saveSession?.isDirty != true {
+                appState.updateEditorDirtyState(file: file, isDirty: false)
+            }
+        }
         .focusedSceneValue(\.editorSaveAction, editorSaveAction)
         .alert("Open External Link?", isPresented: externalLinkAlertBinding) {
             Button("Open") {
@@ -292,6 +300,7 @@ struct SourceNoteView: View {
                 session = saveSession ?? session
                 session.completeChoice(outcome, savedContents: savedSnapshot)
                 saveSession = session
+                appState.updateEditorDirtyState(file: file, isDirty: session.isDirty)
                 appState.openFile(FileTreeItem(relativePath: outcome.baseline.relativePath))
             } catch {
                 if Task.isCancelled {

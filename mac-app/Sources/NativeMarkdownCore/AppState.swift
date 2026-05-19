@@ -29,6 +29,15 @@ public struct WorkspaceSearchRequest: Equatable, Sendable {
     }
 }
 
+public struct DirtyNavigationWarning: Equatable, Identifiable, Sendable {
+    public let dirtyFile: FileTreeItem
+    public let requestedFile: FileTreeItem
+
+    public var id: String {
+        "\(dirtyFile.id)->\(requestedFile.id)"
+    }
+}
+
 public final class AppState: ObservableObject {
     @Published public private(set) var vaultSelection: VaultSelectionState
     @Published public private(set) var engineHealth: EngineHealthStatus
@@ -36,12 +45,14 @@ public final class AppState: ObservableObject {
     @Published public private(set) var recentVaults: [RecentVault]
     @Published public private(set) var selectedFile: FileTreeItem?
     @Published public private(set) var requestedSearch: WorkspaceSearchRequest?
+    @Published public private(set) var dirtyNavigationWarning: DirtyNavigationWarning?
 
     private let indexDirectoryResolver: any IndexDirectoryResolving
     private let vaultAccessValidator: any VaultAccessValidating
     private let recentVaultStorage: any RecentVaultStoring
     private let maxRecentVaults: Int
     private var nextSearchRequestID: UInt64 = 0
+    private var dirtyEditorFile: FileTreeItem?
 
     public init(
         vaultSelection: VaultSelectionState = .noVault,
@@ -67,6 +78,9 @@ public final class AppState: ObservableObject {
         let vaultURL = url.standardizedFileURL
         if let issue = vaultAccessValidator.validateVault(at: vaultURL) {
             indexLocation = nil
+            selectedFile = nil
+            dirtyEditorFile = nil
+            dirtyNavigationWarning = nil
             vaultSelection = .unavailable(issue)
             rememberVault(vaultURL)
             return
@@ -75,6 +89,8 @@ public final class AppState: ObservableObject {
         indexLocation = try indexDirectoryResolver.prepareIndexLocation(forVaultAt: vaultURL)
         vaultSelection = .selected(vaultURL)
         selectedFile = nil
+        dirtyEditorFile = nil
+        dirtyNavigationWarning = nil
         rememberVault(vaultURL)
     }
 
@@ -84,6 +100,9 @@ public final class AppState: ObservableObject {
 
     public func markStaleBookmark(for url: URL) {
         indexLocation = nil
+        selectedFile = nil
+        dirtyEditorFile = nil
+        dirtyNavigationWarning = nil
         let vaultURL = url.standardizedFileURL
         vaultSelection = .unavailable(.staleBookmark(vaultURL))
         rememberVault(vaultURL)
@@ -100,6 +119,8 @@ public final class AppState: ObservableObject {
         vaultSelection = .noVault
         indexLocation = nil
         selectedFile = nil
+        dirtyEditorFile = nil
+        dirtyNavigationWarning = nil
     }
 
     public func removeRecentVault(_ recentVault: RecentVault) {
@@ -120,9 +141,45 @@ public final class AppState: ObservableObject {
         engineHealth = loader.load()
     }
 
-    public func openFile(_ item: FileTreeItem) {
+    @discardableResult
+    public func openFile(_ item: FileTreeItem) -> Bool {
+        if let dirtyEditorFile,
+           dirtyEditorFile != item,
+           selectedFile == dirtyEditorFile {
+            dirtyNavigationWarning = DirtyNavigationWarning(
+                dirtyFile: dirtyEditorFile,
+                requestedFile: item
+            )
+            return false
+        }
+
         selectedFile = item
+        dirtyNavigationWarning = nil
         AppTelemetry.noteOpened(item)
+        return true
+    }
+
+    public func updateEditorDirtyState(file: FileTreeItem, isDirty: Bool) {
+        if isDirty {
+            dirtyEditorFile = file
+        } else if dirtyEditorFile == file {
+            dirtyEditorFile = nil
+            dirtyNavigationWarning = nil
+        }
+    }
+
+    public func dismissDirtyNavigationWarning() {
+        dirtyNavigationWarning = nil
+    }
+
+    public func discardDirtyChangesAndOpenRequestedFile() {
+        guard let warning = dirtyNavigationWarning else {
+            return
+        }
+        dirtyEditorFile = nil
+        dirtyNavigationWarning = nil
+        selectedFile = warning.requestedFile
+        AppTelemetry.noteOpened(warning.requestedFile)
     }
 
     public func requestSearch(query: String, mode: SearchMode) {
