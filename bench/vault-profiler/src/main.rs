@@ -4,6 +4,9 @@ use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
+use vault_engine::benchmarks::{
+    BackendBenchmarkOptions, load_search_documents_from_vault, run_shared_backend_benchmark,
+};
 use vault_profiler::corpus::{QueryCorpusOptions, generate_query_corpus};
 use vault_profiler::synthetic::{
     SyntheticProfile, SyntheticVaultOptions, generate_synthetic_vault,
@@ -60,7 +63,44 @@ fn run() -> Result<(), Box<dyn Error>> {
             }
             Ok(())
         }
+        Command::BackendBenchmark(command) => {
+            if is_output_inside_vault(&command.vault_root, &command.work_dir)? {
+                return Err("refusing to write benchmark indexes inside the vault".into());
+            }
+            let mut queries = command.queries;
+            if let Some(query_file) = command.query_file {
+                queries.extend(read_query_file(&query_file)?);
+            }
+            if queries.is_empty() {
+                return Err("missing at least one --query or --query-file entry".into());
+            }
+
+            let documents = load_search_documents_from_vault(&command.vault_root)?;
+            let artifact = run_shared_backend_benchmark(&BackendBenchmarkOptions {
+                corpus_id: command.corpus_id,
+                documents,
+                queries,
+                result_limit: command.result_limit,
+                work_dir: command.work_dir,
+            })?;
+            write_json(
+                &command.vault_root,
+                command.output_path,
+                &artifact,
+                command.pretty,
+            )
+        }
     }
+}
+
+fn read_query_file(path: &Path) -> Result<Vec<String>, Box<dyn Error>> {
+    let text = fs::read_to_string(path)?;
+    Ok(text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(str::to_string)
+        .collect())
 }
 
 fn write_json<T: serde::Serialize>(
@@ -97,6 +137,7 @@ enum Command {
     Profile(ProfileCommand),
     QueryCorpus(QueryCorpusCommand),
     SyntheticVault(SyntheticVaultCommand),
+    BackendBenchmark(BackendBenchmarkCommand),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -126,6 +167,18 @@ struct SyntheticVaultCommand {
     pretty: bool,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct BackendBenchmarkCommand {
+    vault_root: PathBuf,
+    output_path: Option<PathBuf>,
+    work_dir: PathBuf,
+    queries: Vec<String>,
+    query_file: Option<PathBuf>,
+    corpus_id: String,
+    result_limit: usize,
+    pretty: bool,
+}
+
 impl Cli {
     fn parse<I>(mut args: I) -> Result<Self, Box<dyn Error>>
     where
@@ -139,6 +192,7 @@ impl Cli {
             "profile" => Command::Profile(ProfileCommand::parse(args)?),
             "query-corpus" => Command::QueryCorpus(QueryCorpusCommand::parse(args)?),
             "synthetic-vault" => Command::SyntheticVault(SyntheticVaultCommand::parse(args)?),
+            "backend-benchmark" => Command::BackendBenchmark(BackendBenchmarkCommand::parse(args)?),
             _ => return Err(usage().into()),
         };
 
@@ -259,6 +313,52 @@ impl SyntheticVaultCommand {
     }
 }
 
+impl BackendBenchmarkCommand {
+    fn parse<I>(args: I) -> Result<Self, Box<dyn Error>>
+    where
+        I: Iterator<Item = OsString>,
+    {
+        let mut parser = CommonParser::new(args);
+        let mut work_dir = None;
+        let mut queries = Vec::new();
+        let mut query_file = None;
+        let mut corpus_id = "manual".to_string();
+        let mut result_limit = 10;
+
+        while let Some(arg) = parser.next_arg() {
+            match arg.as_str() {
+                "--work-dir" => work_dir = Some(parser.required_path_arg("--work-dir")?),
+                "--query" => queries.push(parser.required_string_arg("--query")?),
+                "--query-file" => {
+                    query_file = Some(parser.required_path_arg("--query-file")?);
+                }
+                "--corpus-id" => corpus_id = parser.required_string_arg("--corpus-id")?,
+                "--limit" => {
+                    let value = parser.required_string_arg("--limit")?;
+                    result_limit = value.parse()?;
+                }
+                _ => parser.parse_common_arg(arg)?,
+            }
+        }
+
+        let vault_root = parser.required_vault()?;
+        let Some(work_dir) = work_dir else {
+            return Err("missing required --work-dir argument".into());
+        };
+
+        Ok(Self {
+            vault_root,
+            output_path: parser.output_path,
+            work_dir,
+            queries,
+            query_file,
+            corpus_id,
+            result_limit,
+            pretty: parser.pretty,
+        })
+    }
+}
+
 fn required_string<I>(args: &mut I, name: &str) -> Result<String, Box<dyn Error>>
 where
     I: Iterator<Item = OsString>,
@@ -327,7 +427,7 @@ where
 }
 
 fn usage() -> &'static str {
-    "usage: vault-profiler <profile|query-corpus|synthetic-vault> --vault <path> [--output <path>] [--pretty]"
+    "usage: vault-profiler <profile|query-corpus|synthetic-vault|backend-benchmark> --vault <path> [--output <path>] [--pretty]"
 }
 
 #[cfg(test)]
@@ -434,6 +534,49 @@ mod tests {
                     profile: SyntheticProfile::Double,
                     seed: 123,
                     target_markdown_count: 10,
+                    pretty: true,
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_backend_benchmark_args() {
+        let cli = Cli::parse(
+            [
+                "backend-benchmark",
+                "--vault",
+                "/tmp/vault",
+                "--output",
+                "/tmp/backend.json",
+                "--work-dir",
+                "/tmp/indexes",
+                "--query",
+                "Home",
+                "--query-file",
+                "/tmp/queries.txt",
+                "--corpus-id",
+                "fixture",
+                "--limit",
+                "5",
+                "--pretty",
+            ]
+            .into_iter()
+            .map(OsString::from),
+        )
+        .expect("cli");
+
+        assert_eq!(
+            cli,
+            Cli {
+                command: Command::BackendBenchmark(BackendBenchmarkCommand {
+                    vault_root: PathBuf::from("/tmp/vault"),
+                    output_path: Some(PathBuf::from("/tmp/backend.json")),
+                    work_dir: PathBuf::from("/tmp/indexes"),
+                    queries: vec!["Home".to_string()],
+                    query_file: Some(PathBuf::from("/tmp/queries.txt")),
+                    corpus_id: "fixture".to_string(),
+                    result_limit: 5,
                     pretty: true,
                 }),
             }
