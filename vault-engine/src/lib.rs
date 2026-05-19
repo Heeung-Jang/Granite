@@ -3,6 +3,7 @@ pub mod benchmarks;
 pub mod errors;
 pub mod ffi;
 pub mod index;
+pub mod indexing_queue;
 pub mod parser;
 pub mod paths;
 pub mod read_api;
@@ -30,6 +31,7 @@ pub fn health_check() -> EngineHealth {
             "read_api",
             "save",
             "index",
+            "indexing_queue",
             "ffi",
             "errors",
             "benchmarks",
@@ -58,6 +60,7 @@ mod tests {
                 "read_api",
                 "save",
                 "index",
+                "indexing_queue",
                 "ffi",
                 "errors",
                 "benchmarks",
