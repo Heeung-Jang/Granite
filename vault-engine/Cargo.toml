@@ -10,4 +10,5 @@ crate-type = ["rlib", "cdylib"]
 [dependencies]
 
 [dev-dependencies]
+serde_json = "1"
 tempfile = "3"
