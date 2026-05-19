@@ -4,6 +4,7 @@ pub mod errors;
 pub mod ffi;
 pub mod file_watcher;
 pub mod index;
+pub mod index_rebuild;
 pub mod indexing_queue;
 pub mod parser;
 pub mod paths;
@@ -35,6 +36,7 @@ pub fn health_check() -> EngineHealth {
             "read_api",
             "save",
             "index",
+            "index_rebuild",
             "indexing_queue",
             "ffi",
             "errors",
@@ -67,6 +69,7 @@ mod tests {
                 "read_api",
                 "save",
                 "index",
+                "index_rebuild",
                 "indexing_queue",
                 "ffi",
                 "errors",
