@@ -42,15 +42,57 @@ public struct EngineSaveOutcome: Codable, Equatable, Sendable {
     }
 }
 
+public struct EngineSaveConflictSnapshot: Codable, Equatable, Sendable {
+    public let fileIdentity: EngineFileIdentity
+    public let sizeBytes: UInt64
+    public let modified: EngineSystemTime?
+    public let contentHash: String
+
+    enum CodingKeys: String, CodingKey {
+        case fileIdentity = "file_identity"
+        case sizeBytes = "size_bytes"
+        case modified
+        case contentHash = "content_hash"
+    }
+}
+
+public struct EngineSaveConflict: Codable, Equatable, Sendable {
+    public let relativePath: String
+    public let kind: String
+    public let expected: EngineSaveBaseline
+    public let actual: EngineSaveConflictSnapshot?
+
+    enum CodingKeys: String, CodingKey {
+        case relativePath = "relative_path"
+        case kind
+        case expected
+        case actual
+    }
+}
+
 public struct EngineSaveErrorPayload: Codable, Equatable, Sendable {
     public let code: String
     public let message: String
     public let conflictKind: String?
+    public let conflict: EngineSaveConflict?
+
+    public init(
+        code: String,
+        message: String,
+        conflictKind: String?,
+        conflict: EngineSaveConflict? = nil
+    ) {
+        self.code = code
+        self.message = message
+        self.conflictKind = conflictKind
+        self.conflict = conflict
+    }
 
     enum CodingKeys: String, CodingKey {
         case code
         case message
         case conflictKind = "conflict_kind"
+        case conflict
     }
 }
 

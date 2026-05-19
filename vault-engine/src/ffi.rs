@@ -8,7 +8,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::ENGINE_ABI_VERSION;
 use crate::paths::{FileIdentity, PathError, VaultRoot};
-use crate::save::{SafeSaveError, SaveBaseline, SaveOutcome, SaveRequest, safe_save};
+use crate::save::{
+    SafeSaveError, SaveBaseline, SaveConflict, SaveConflictSnapshot, SaveOutcome, SaveRequest,
+    safe_save,
+};
 
 pub fn abi_version() -> u32 {
     ENGINE_ABI_VERSION
@@ -74,6 +77,7 @@ pub unsafe extern "C" fn engine_save_write(
                 code: "invalid_json".to_string(),
                 message: error.to_string(),
                 conflict_kind: None,
+                conflict: None,
             })?;
         let baseline = SaveBaseline::from(baseline);
         let root = VaultRoot::open(&vault_path).map_err(FfiError::from_path)?;
@@ -95,6 +99,7 @@ struct FfiError {
     code: String,
     message: String,
     conflict_kind: Option<String>,
+    conflict: Option<FfiSaveConflict>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -119,6 +124,22 @@ struct FfiSaveBaseline {
 }
 
 #[derive(Debug, Clone, Serialize)]
+struct FfiSaveConflictSnapshot {
+    file_identity: FfiFileIdentity,
+    size_bytes: u64,
+    modified: Option<FfiSystemTime>,
+    content_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct FfiSaveConflict {
+    relative_path: String,
+    kind: String,
+    expected: FfiSaveBaseline,
+    actual: Option<FfiSaveConflictSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 struct FfiSaveOutcome {
     baseline: FfiSaveBaseline,
     bytes_written: u64,
@@ -130,6 +151,7 @@ impl FfiError {
             code: "invalid_input".to_string(),
             message: format!("{field}: {}", message.into()),
             conflict_kind: None,
+            conflict: None,
         }
     }
 
@@ -138,13 +160,17 @@ impl FfiError {
             code: "path_error".to_string(),
             message: error.to_string(),
             conflict_kind: None,
+            conflict: None,
         }
     }
 
     fn from_save(error: SafeSaveError) -> Self {
-        let conflict_kind = match &error {
-            SafeSaveError::Conflict(conflict) => Some(format!("{:?}", conflict.kind)),
-            _ => None,
+        let (conflict_kind, conflict) = match &error {
+            SafeSaveError::Conflict(conflict) => (
+                Some(format!("{:?}", conflict.kind)),
+                Some(FfiSaveConflict::from(conflict.as_ref())),
+            ),
+            _ => (None, None),
         };
         Self {
             code: match &error {
@@ -157,6 +183,7 @@ impl FfiError {
             .to_string(),
             message: error.to_string(),
             conflict_kind,
+            conflict,
         }
     }
 
@@ -165,6 +192,7 @@ impl FfiError {
             code: "panic".to_string(),
             message: "vault engine FFI call panicked".to_string(),
             conflict_kind: None,
+            conflict: None,
         }
     }
 }
@@ -211,6 +239,28 @@ impl From<FfiSaveBaseline> for SaveBaseline {
     }
 }
 
+impl From<&SaveConflictSnapshot> for FfiSaveConflictSnapshot {
+    fn from(snapshot: &SaveConflictSnapshot) -> Self {
+        Self {
+            file_identity: FfiFileIdentity::from(&snapshot.file_identity),
+            size_bytes: snapshot.size_bytes,
+            modified: snapshot.modified.and_then(ffi_system_time),
+            content_hash: snapshot.content_hash.clone(),
+        }
+    }
+}
+
+impl From<&SaveConflict> for FfiSaveConflict {
+    fn from(conflict: &SaveConflict) -> Self {
+        Self {
+            relative_path: conflict.relative_path.clone(),
+            kind: format!("{:?}", conflict.kind),
+            expected: FfiSaveBaseline::from(&conflict.expected),
+            actual: conflict.actual.as_ref().map(FfiSaveConflictSnapshot::from),
+        }
+    }
+}
+
 impl From<&SaveOutcome> for FfiSaveOutcome {
     fn from(outcome: &SaveOutcome) -> Self {
         Self {
@@ -240,7 +290,7 @@ where
     };
     let json = serde_json::to_string(&response).unwrap_or_else(|error| {
         format!(
-            r#"{{"ok":false,"value":null,"error":{{"code":"serialization_error","message":"{}","conflict_kind":null}}}}"#,
+            r#"{{"ok":false,"value":null,"error":{{"code":"serialization_error","message":"{}","conflict_kind":null,"conflict":null}}}}"#,
             error
         )
     });
@@ -340,6 +390,51 @@ mod tests {
 
         assert_eq!(value["ok"], false);
         assert_eq!(value["error"]["code"], "invalid_input");
+        assert_eq!(value["error"]["conflict"], Value::Null);
+    }
+
+    #[test]
+    fn save_ffi_returns_conflict_payload() {
+        let dir = tempdir().expect("tempdir");
+        let note = dir.path().join("Home.md");
+        fs::write(&note, "# Home\n").expect("note");
+        let vault = CString::new(dir.path().to_string_lossy().as_bytes()).expect("vault");
+        let relative_path = CString::new("Home.md").expect("relative path");
+
+        let baseline_response = unsafe {
+            take_response(engine_save_capture_baseline(
+                vault.as_ptr(),
+                relative_path.as_ptr(),
+            ))
+        };
+        let baseline: Value = serde_json::from_str(&baseline_response).expect("baseline json");
+        let baseline_json = CString::new(baseline["value"].to_string()).expect("baseline payload");
+
+        fs::write(&note, "# External edit\n").expect("external edit");
+        let edited = b"# App edit\n";
+        let save_response = unsafe {
+            take_response(engine_save_write(
+                vault.as_ptr(),
+                baseline_json.as_ptr(),
+                edited.as_ptr(),
+                edited.len(),
+            ))
+        };
+        let value: Value = serde_json::from_str(&save_response).expect("conflict json");
+
+        assert_eq!(value["ok"], false);
+        assert_eq!(value["error"]["code"], "save_conflict");
+        assert_eq!(value["error"]["conflict_kind"], "ContentChanged");
+        assert_eq!(value["error"]["conflict"]["relative_path"], "Home.md");
+        assert_eq!(value["error"]["conflict"]["kind"], "ContentChanged");
+        assert_eq!(
+            value["error"]["conflict"]["expected"]["relative_path"],
+            "Home.md"
+        );
+        assert_eq!(
+            value["error"]["conflict"]["actual"]["size_bytes"],
+            b"# External edit\n".len() as u64
+        );
     }
 
     unsafe fn take_response(ptr: *mut c_char) -> String {

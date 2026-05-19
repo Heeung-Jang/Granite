@@ -96,11 +96,18 @@ public struct EditorSaveFailure: Equatable, Sendable {
     public let title: String
     public let message: String
     public let conflictKind: String?
+    public let conflict: EngineSaveConflict?
 
-    public init(title: String, message: String, conflictKind: String? = nil) {
+    public init(
+        title: String,
+        message: String,
+        conflictKind: String? = nil,
+        conflict: EngineSaveConflict? = nil
+    ) {
         self.title = title
         self.message = message
         self.conflictKind = conflictKind
+        self.conflict = conflict
     }
 
     public init(error: Error) {
@@ -110,7 +117,8 @@ public struct EditorSaveFailure: Equatable, Sendable {
                 self.init(
                     title: "External Change Detected",
                     message: payload.message,
-                    conflictKind: payload.conflictKind
+                    conflictKind: payload.conflictKind,
+                    conflict: payload.conflict
                 )
             } else {
                 self.init(title: "Save Failed", message: payload.message)

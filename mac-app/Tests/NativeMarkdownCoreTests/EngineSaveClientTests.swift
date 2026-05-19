@@ -78,6 +78,63 @@ func engineSaveClientDecodesStructuredErrorEnvelope() {
 }
 
 @Test
+func engineSaveClientDecodesConflictPayload() {
+    let json = """
+    {
+      "ok": false,
+      "value": null,
+      "error": {
+        "code": "save_conflict",
+        "message": "changed",
+        "conflict_kind": "ContentChanged",
+        "conflict": {
+          "relative_path": "Home.md",
+          "kind": "ContentChanged",
+          "expected": {
+            "relative_path": "Home.md",
+            "file_identity": { "device": 1, "inode": 2 },
+            "size_bytes": 7,
+            "modified": { "secs_since_unix_epoch": 100, "nanos": 5 },
+            "content_hash": "old"
+          },
+          "actual": {
+            "file_identity": { "device": 1, "inode": 2 },
+            "size_bytes": 16,
+            "modified": { "secs_since_unix_epoch": 101, "nanos": 6 },
+            "content_hash": "new"
+          }
+        }
+      }
+    }
+    """
+
+    #expect(throws: EngineSaveClientError.engine(EngineSaveErrorPayload(
+        code: "save_conflict",
+        message: "changed",
+        conflictKind: "ContentChanged",
+        conflict: EngineSaveConflict(
+            relativePath: "Home.md",
+            kind: "ContentChanged",
+            expected: EngineSaveBaseline(
+                relativePath: "Home.md",
+                fileIdentity: EngineFileIdentity(device: 1, inode: 2),
+                sizeBytes: 7,
+                modified: EngineSystemTime(secsSinceUnixEpoch: 100, nanos: 5),
+                contentHash: "old"
+            ),
+            actual: EngineSaveConflictSnapshot(
+                fileIdentity: EngineFileIdentity(device: 1, inode: 2),
+                sizeBytes: 16,
+                modified: EngineSystemTime(secsSinceUnixEpoch: 101, nanos: 6),
+                contentHash: "new"
+            )
+        )
+    ))) {
+        try EngineSaveClient.decodeEnvelope(json, as: EngineSaveOutcome.self)
+    }
+}
+
+@Test
 func engineSaveClientReportsMissingLibrary() throws {
     let client = EngineSaveClient(libraryPath: "/definitely/missing/libvault_engine.dylib")
 
