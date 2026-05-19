@@ -69,6 +69,26 @@ func indexDirectoryResolverCreatesOnlyAppOwnedDirectories() throws {
 }
 
 @Test
+func indexDirectoryResolverRejectsSupportRootInsideVault() throws {
+    let temporaryRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let vaultURL = temporaryRoot.appendingPathComponent("vault", isDirectory: true)
+    try FileManager.default.createDirectory(at: vaultURL, withIntermediateDirectories: true)
+    let badSupportRoot = vaultURL.appendingPathComponent(".native-index", isDirectory: true)
+    let resolver = AppOwnedIndexDirectoryResolver(applicationSupportRoot: badSupportRoot)
+
+    var rejected = false
+    do {
+        _ = try resolver.prepareIndexLocation(forVaultAt: vaultURL)
+    } catch IndexDirectoryError.applicationSupportInsideVault {
+        rejected = true
+    }
+
+    #expect(rejected)
+    #expect(try FileManager.default.contentsOfDirectory(atPath: vaultURL.path).isEmpty)
+}
+
+@Test
 func inaccessibleVaultStatesDoNotCreateIndexDirectories() throws {
     let temporaryRoot = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString, isDirectory: true)

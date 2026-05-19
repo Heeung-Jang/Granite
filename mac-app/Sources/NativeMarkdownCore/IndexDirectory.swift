@@ -29,6 +29,10 @@ public protocol IndexDirectoryResolving {
     func prepareIndexLocation(forVaultAt vaultURL: URL) throws -> AppOwnedIndexLocation
 }
 
+public enum IndexDirectoryError: Error, Equatable {
+    case applicationSupportInsideVault(applicationSupportRoot: URL, vaultURL: URL)
+}
+
 public struct AppOwnedIndexDirectoryResolver: IndexDirectoryResolving {
     private let fileManager: FileManager
     private let applicationSupportRoot: URL
@@ -45,6 +49,8 @@ public struct AppOwnedIndexDirectoryResolver: IndexDirectoryResolving {
     }
 
     public func prepareIndexLocation(forVaultAt vaultURL: URL) throws -> AppOwnedIndexLocation {
+        try validateApplicationSupportRootOutsideVault(vaultURL)
+
         let identityHash = vaultIdentityHash(for: vaultURL)
         let rootDirectory = applicationSupportRoot
             .appendingPathComponent("Indexes", isDirectory: true)
@@ -69,6 +75,18 @@ public struct AppOwnedIndexDirectoryResolver: IndexDirectoryResolving {
         )
     }
 
+    private func validateApplicationSupportRootOutsideVault(_ vaultURL: URL) throws {
+        let vaultPath = canonicalDirectoryPath(vaultURL)
+        let supportPath = canonicalDirectoryPath(applicationSupportRoot)
+
+        if supportPath == vaultPath || supportPath.hasPrefix("\(vaultPath)/") {
+            throw IndexDirectoryError.applicationSupportInsideVault(
+                applicationSupportRoot: applicationSupportRoot,
+                vaultURL: vaultURL
+            )
+        }
+    }
+
     private static func defaultApplicationSupportRoot() -> URL {
         let base = FileManager.default.urls(
             for: .applicationSupportDirectory,
@@ -79,11 +97,15 @@ public struct AppOwnedIndexDirectoryResolver: IndexDirectoryResolving {
     }
 
     private func vaultIdentityHash(for vaultURL: URL) -> String {
-        let canonicalPath = vaultURL
-            .standardizedFileURL
-            .resolvingSymlinksInPath()
-            .path
-        return stableHash(canonicalPath)
+        stableHash(canonicalDirectoryPath(vaultURL))
+    }
+
+    private func canonicalDirectoryPath(_ url: URL) -> String {
+        let path = url.standardizedFileURL.resolvingSymlinksInPath().path
+        if path.count > 1, path.hasSuffix("/") {
+            return String(path.dropLast())
+        }
+        return path
     }
 
     private func safePathComponent(_ value: String) -> String {
@@ -104,4 +126,3 @@ public struct AppOwnedIndexDirectoryResolver: IndexDirectoryResolving {
         return String(format: "%016llx", hash)
     }
 }
-
