@@ -27,15 +27,35 @@ struct VaultPickerView: View {
 
             switch appState.vaultSelection {
             case .noVault:
-                Button("Open Vault") {
+                Button {
                     openVaultPanel()
+                } label: {
+                    Label("Open Vault", systemImage: "folder")
                 }
                 .buttonStyle(.borderedProminent)
             case .selected(let url):
                 Text(url.lastPathComponent)
                     .font(.body)
-                Button("Close Vault") {
+                Button {
                     appState.clearVault()
+                } label: {
+                    Label("Close Vault", systemImage: "xmark.circle")
+                }
+            case .unavailable(let issue):
+                Text(issue.displayTitle)
+                    .font(.body)
+                Text(issue.url.lastPathComponent)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button {
+                    try? appState.reconnectVault()
+                } label: {
+                    Label("Reconnect", systemImage: "arrow.clockwise")
+                }
+                Button {
+                    openVaultPanel()
+                } label: {
+                    Label("Choose Other", systemImage: "folder")
                 }
             }
 
@@ -72,6 +92,10 @@ struct WorkspacePlaceholderView: View {
                     .font(.title2)
                 AppKitEditorBridgePlaceholder()
                     .frame(minHeight: 320)
+            case .unavailable(let issue):
+                Text(issue.displayTitle)
+                    .font(.title2)
+                    .foregroundStyle(.secondary)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
