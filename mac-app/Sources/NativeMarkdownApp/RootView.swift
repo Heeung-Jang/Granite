@@ -79,6 +79,7 @@ struct VaultPickerView: View {
 
 struct WorkspacePlaceholderView: View {
     let vaultSelection: VaultSelectionState
+    @State private var editorText = "# Native Markdown\n\n"
 
     var body: some View {
         VStack(spacing: 16) {
@@ -90,7 +91,7 @@ struct WorkspacePlaceholderView: View {
             case .selected(let url):
                 Text(url.lastPathComponent)
                     .font(.title2)
-                AppKitEditorBridgePlaceholder()
+                MarkdownEditorView(text: $editorText)
                     .frame(minHeight: 320)
             case .unavailable(let issue):
                 Text(issue.displayTitle)

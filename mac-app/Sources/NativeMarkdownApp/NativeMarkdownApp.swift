@@ -23,6 +23,11 @@ struct NativeMarkdownApp: App {
             print(TextKitStrategyProbe.encodedReport())
             Foundation.exit(0)
         }
+
+        if CommandLine.arguments.contains("--editor-bridge-probe") {
+            print(MarkdownEditorBridgeProbe.encodedReport())
+            Foundation.exit(0)
+        }
     }
 
     var body: some Scene {
