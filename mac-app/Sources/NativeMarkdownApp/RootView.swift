@@ -8,7 +8,12 @@ struct RootView: View {
         NavigationSplitView {
             VStack(spacing: 0) {
                 VaultPickerView()
-                    .frame(minHeight: 220, idealHeight: 300, maxHeight: 360)
+                    .frame(minHeight: 180, idealHeight: 240, maxHeight: 300)
+
+                Divider()
+
+                SearchPanelView()
+                    .frame(minHeight: 180, idealHeight: 260, maxHeight: 340)
 
                 Divider()
 
