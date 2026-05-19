@@ -1,4 +1,5 @@
 pub mod corpus;
+pub mod synthetic;
 
 use serde::Serialize;
 use std::cmp::Reverse;

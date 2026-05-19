@@ -5,6 +5,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
 use vault_profiler::corpus::{QueryCorpusOptions, generate_query_corpus};
+use vault_profiler::synthetic::{
+    SyntheticProfile, SyntheticVaultOptions, generate_synthetic_vault,
+};
 use vault_profiler::{ProfileOptions, is_output_inside_vault, profile_vault};
 
 fn main() {
@@ -43,6 +46,20 @@ fn run() -> Result<(), Box<dyn Error>> {
                 command.pretty,
             )
         }
+        Command::SyntheticVault(command) => {
+            let manifest = generate_synthetic_vault(&SyntheticVaultOptions {
+                output_root: command.output_root,
+                profile: command.profile,
+                seed: command.seed,
+                target_markdown_count: command.target_markdown_count,
+            })?;
+            if command.pretty {
+                println!("{}", serde_json::to_string_pretty(&manifest)?);
+            } else {
+                println!("{}", serde_json::to_string(&manifest)?);
+            }
+            Ok(())
+        }
     }
 }
 
@@ -79,6 +96,7 @@ struct Cli {
 enum Command {
     Profile(ProfileCommand),
     QueryCorpus(QueryCorpusCommand),
+    SyntheticVault(SyntheticVaultCommand),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -99,6 +117,15 @@ struct QueryCorpusCommand {
     pretty: bool,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct SyntheticVaultCommand {
+    output_root: PathBuf,
+    profile: SyntheticProfile,
+    seed: u64,
+    target_markdown_count: u64,
+    pretty: bool,
+}
+
 impl Cli {
     fn parse<I>(mut args: I) -> Result<Self, Box<dyn Error>>
     where
@@ -111,6 +138,7 @@ impl Cli {
         let command = match command.to_string_lossy().as_ref() {
             "profile" => Command::Profile(ProfileCommand::parse(args)?),
             "query-corpus" => Command::QueryCorpus(QueryCorpusCommand::parse(args)?),
+            "synthetic-vault" => Command::SyntheticVault(SyntheticVaultCommand::parse(args)?),
             _ => return Err(usage().into()),
         };
 
@@ -183,6 +211,64 @@ impl QueryCorpusCommand {
     }
 }
 
+impl SyntheticVaultCommand {
+    fn parse<I>(mut args: I) -> Result<Self, Box<dyn Error>>
+    where
+        I: Iterator<Item = OsString>,
+    {
+        let mut output_root = None;
+        let mut profile = SyntheticProfile::Small;
+        let mut seed = 20260519;
+        let mut target_markdown_count = 64_306;
+        let mut pretty = false;
+
+        while let Some(arg) = args.next() {
+            match arg.to_string_lossy().as_ref() {
+                "--output" => {
+                    output_root = Some(PathBuf::from(required_string(&mut args, "--output")?));
+                }
+                "--profile" => {
+                    let value = required_string(&mut args, "--profile")?;
+                    profile = SyntheticProfile::parse(&value)
+                        .ok_or_else(|| format!("unknown synthetic profile: {value}"))?;
+                }
+                "--seed" => {
+                    let value = required_string(&mut args, "--seed")?;
+                    seed = value.parse()?;
+                }
+                "--target-markdown-count" => {
+                    let value = required_string(&mut args, "--target-markdown-count")?;
+                    target_markdown_count = value.parse()?;
+                }
+                "--pretty" => pretty = true,
+                _ => return Err(usage().into()),
+            }
+        }
+
+        let Some(output_root) = output_root else {
+            return Err("missing required --output argument".into());
+        };
+
+        Ok(Self {
+            output_root,
+            profile,
+            seed,
+            target_markdown_count,
+            pretty,
+        })
+    }
+}
+
+fn required_string<I>(args: &mut I, name: &str) -> Result<String, Box<dyn Error>>
+where
+    I: Iterator<Item = OsString>,
+{
+    let Some(value) = args.next() else {
+        return Err(format!("missing value for {name}").into());
+    };
+    Ok(value.to_string_lossy().to_string())
+}
+
 struct CommonParser<I>
 where
     I: Iterator<Item = OsString>,
@@ -241,7 +327,7 @@ where
 }
 
 fn usage() -> &'static str {
-    "usage: vault-profiler <profile|query-corpus> --vault <path> [--output <path>] [--pretty]"
+    "usage: vault-profiler <profile|query-corpus|synthetic-vault> --vault <path> [--output <path>] [--pretty]"
 }
 
 #[cfg(test)]
@@ -318,5 +404,39 @@ mod tests {
     #[test]
     fn rejects_missing_vault_arg() {
         assert!(Cli::parse([OsString::from("profile")].into_iter()).is_err());
+    }
+
+    #[test]
+    fn parses_synthetic_vault_args() {
+        let cli = Cli::parse(
+            [
+                "synthetic-vault",
+                "--output",
+                "/tmp/synthetic",
+                "--profile",
+                "2x",
+                "--target-markdown-count",
+                "10",
+                "--seed",
+                "123",
+                "--pretty",
+            ]
+            .into_iter()
+            .map(OsString::from),
+        )
+        .expect("cli");
+
+        assert_eq!(
+            cli,
+            Cli {
+                command: Command::SyntheticVault(SyntheticVaultCommand {
+                    output_root: PathBuf::from("/tmp/synthetic"),
+                    profile: SyntheticProfile::Double,
+                    seed: 123,
+                    target_markdown_count: 10,
+                    pretty: true,
+                }),
+            }
+        );
     }
 }
