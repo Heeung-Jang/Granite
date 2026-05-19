@@ -27,6 +27,7 @@ pub struct IndexingQueueItem {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IndexingQueueReason {
     InitialScan,
+    FileCreated,
     FileChanged,
     FileDeleted,
     Rebuild,
@@ -410,6 +411,7 @@ fn scan_kind_from_str(kind: &str) -> Result<ScanEntryKind, ()> {
 fn queue_reason_to_str(reason: IndexingQueueReason) -> &'static str {
     match reason {
         IndexingQueueReason::InitialScan => "initial_scan",
+        IndexingQueueReason::FileCreated => "file_created",
         IndexingQueueReason::FileChanged => "file_changed",
         IndexingQueueReason::FileDeleted => "file_deleted",
         IndexingQueueReason::Rebuild => "rebuild",
@@ -420,6 +422,7 @@ fn queue_reason_to_str(reason: IndexingQueueReason) -> &'static str {
 fn queue_reason_from_str(reason: &str) -> Result<IndexingQueueReason, ()> {
     match reason {
         "initial_scan" => Ok(IndexingQueueReason::InitialScan),
+        "file_created" => Ok(IndexingQueueReason::FileCreated),
         "file_changed" => Ok(IndexingQueueReason::FileChanged),
         "file_deleted" => Ok(IndexingQueueReason::FileDeleted),
         "rebuild" => Ok(IndexingQueueReason::Rebuild),
