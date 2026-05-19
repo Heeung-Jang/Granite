@@ -565,6 +565,28 @@ mod tests {
         assert_no_temp_files(&fixture.root_path);
     }
 
+    #[test]
+    fn atomic_replace_failure_cleans_temp_file() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let temp_file = temp.path().join(".Home.md.native-markdown-save.test.tmp");
+        let target_directory = temp.path().join("Home.md");
+        fs::write(&temp_file, "# App edit\n").expect("temp file");
+        fs::create_dir(&target_directory).expect("target directory");
+
+        let error = rename_temp_file(&temp_file, &target_directory, Path::new("Home.md"))
+            .expect_err("rename failure");
+
+        match error {
+            SafeSaveError::Io {
+                operation: SaveIoOperation::RenameTemp,
+                ..
+            } => {}
+            other => panic!("expected rename temp error, got {other:?}"),
+        }
+        assert!(!temp_file.exists());
+        assert!(target_directory.is_dir());
+    }
+
     fn copied_save_fixture() -> SaveFixture {
         let temp = tempfile::tempdir().expect("tempdir");
         let root_path = temp.path().join("copied-save-vault");
