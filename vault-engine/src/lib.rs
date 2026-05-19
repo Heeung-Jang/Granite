@@ -5,6 +5,7 @@ pub mod ffi;
 pub mod index;
 pub mod parser;
 pub mod paths;
+pub mod read_api;
 pub mod scanner;
 pub mod sqlite_fts;
 pub mod tantivy_search;
@@ -25,6 +26,7 @@ pub fn health_check() -> EngineHealth {
             "scanner",
             "parser",
             "paths",
+            "read_api",
             "index",
             "ffi",
             "errors",
@@ -51,6 +53,7 @@ mod tests {
                 "scanner",
                 "parser",
                 "paths",
+                "read_api",
                 "index",
                 "ffi",
                 "errors",

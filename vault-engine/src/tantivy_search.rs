@@ -103,6 +103,15 @@ impl TantivySearchIndex {
     }
 
     pub fn search(&self, query: &str, limit: usize) -> TantivySearchResult<Vec<SearchResult>> {
+        self.search_page(query, 0, limit.clamp(1, 100))
+    }
+
+    pub fn search_page(
+        &self,
+        query: &str,
+        offset: usize,
+        limit: usize,
+    ) -> TantivySearchResult<Vec<SearchResult>> {
         let Some(query_text) = safe_tantivy_query(query) else {
             return Err(TantivySearchError::EmptyQuery);
         };
@@ -112,13 +121,15 @@ impl TantivySearchIndex {
             vec![self.fields.path, self.fields.title, self.fields.body],
         );
         let query = parser.parse_query(&query_text)?;
-        let top_docs = searcher.search(&query, &TopDocs::with_limit(limit.clamp(1, 100)))?;
+        let limit = limit.clamp(1, 1_000);
+        let window = offset.saturating_add(limit).clamp(1, 1_000);
+        let top_docs = searcher.search(&query, &TopDocs::with_limit(window))?;
         let mut snippet_generator =
             SnippetGenerator::create(&searcher, query.as_ref(), self.fields.body)?;
         snippet_generator.set_max_num_chars(160);
 
-        let mut results = Vec::with_capacity(top_docs.len());
-        for (score, address) in top_docs {
+        let mut results = Vec::with_capacity(limit.min(top_docs.len()));
+        for (score, address) in top_docs.into_iter().skip(offset).take(limit) {
             let document = searcher.doc::<TantivyDocument>(address)?;
             let snippet = snippet_generator.snippet_from_doc(&document).to_html();
             results.push(SearchResult {

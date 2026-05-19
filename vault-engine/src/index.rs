@@ -278,6 +278,113 @@ impl MetadataStore {
             .map_err(Into::into)
     }
 
+    pub fn list_files(&self, offset: usize, limit: usize) -> MetadataStoreResult<Vec<FileRecord>> {
+        let mut statement = self.connection.prepare(
+            "SELECT file_id, relative_path, kind, size_bytes, modified_unix_ms, \
+             file_device, file_inode, content_hash, generation, status, last_error \
+             FROM files ORDER BY relative_path LIMIT ?1 OFFSET ?2",
+        )?;
+        let rows = statement.query_map(params![limit as i64, offset as i64], row_to_file_record)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn outgoing_links(
+        &self,
+        file_id: &str,
+        offset: usize,
+        limit: usize,
+    ) -> MetadataStoreResult<Vec<LinkEdgeRecord>> {
+        let mut statement = self.connection.prepare(
+            "SELECT source_file_id, target_text, resolved_target_file_id, heading, alias, is_embed \
+             FROM links WHERE source_file_id = ?1 ORDER BY target_text, id LIMIT ?2 OFFSET ?3",
+        )?;
+        let rows =
+            statement.query_map(params![file_id, limit as i64, offset as i64], row_to_link)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn backlinks(
+        &self,
+        file_id: &str,
+        offset: usize,
+        limit: usize,
+    ) -> MetadataStoreResult<Vec<LinkEdgeRecord>> {
+        let mut statement = self.connection.prepare(
+            "SELECT source_file_id, target_text, resolved_target_file_id, heading, alias, is_embed \
+             FROM links WHERE resolved_target_file_id = ?1 \
+             ORDER BY source_file_id, target_text, id LIMIT ?2 OFFSET ?3",
+        )?;
+        let rows =
+            statement.query_map(params![file_id, limit as i64, offset as i64], row_to_link)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn tags(
+        &self,
+        file_id: &str,
+        offset: usize,
+        limit: usize,
+    ) -> MetadataStoreResult<Vec<TagRecord>> {
+        let mut statement = self.connection.prepare(
+            "SELECT file_id, tag, source FROM tags \
+             WHERE file_id = ?1 ORDER BY tag, source, id LIMIT ?2 OFFSET ?3",
+        )?;
+        let rows =
+            statement.query_map(params![file_id, limit as i64, offset as i64], row_to_tag)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn properties(
+        &self,
+        file_id: &str,
+        offset: usize,
+        limit: usize,
+    ) -> MetadataStoreResult<Vec<PropertyRecord>> {
+        let mut statement = self.connection.prepare(
+            "SELECT file_id, key, value_kind, value_json FROM properties \
+             WHERE file_id = ?1 ORDER BY key, id LIMIT ?2 OFFSET ?3",
+        )?;
+        let rows = statement.query_map(
+            params![file_id, limit as i64, offset as i64],
+            row_to_property,
+        )?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn headings(
+        &self,
+        file_id: &str,
+        offset: usize,
+        limit: usize,
+    ) -> MetadataStoreResult<Vec<HeadingRecord>> {
+        let mut statement = self.connection.prepare(
+            "SELECT file_id, slug, title, level, byte_offset FROM headings \
+             WHERE file_id = ?1 ORDER BY byte_offset, id LIMIT ?2 OFFSET ?3",
+        )?;
+        let rows = statement.query_map(
+            params![file_id, limit as i64, offset as i64],
+            row_to_heading,
+        )?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn attachments(
+        &self,
+        file_id: &str,
+        offset: usize,
+        limit: usize,
+    ) -> MetadataStoreResult<Vec<AttachmentRecord>> {
+        let mut statement = self.connection.prepare(
+            "SELECT source_file_id, source, raw_target, state, state_detail FROM attachments \
+             WHERE source_file_id = ?1 ORDER BY raw_target, id LIMIT ?2 OFFSET ?3",
+        )?;
+        let rows = statement.query_map(
+            params![file_id, limit as i64, offset as i64],
+            row_to_attachment,
+        )?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
     pub fn delete_file(&mut self, file_id: &str) -> MetadataStoreResult<()> {
         let transaction = self.connection.transaction()?;
         delete_child_records(&transaction, file_id)?;
@@ -631,6 +738,60 @@ fn row_to_file_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<FileRecord> {
     })
 }
 
+fn row_to_link(row: &rusqlite::Row<'_>) -> rusqlite::Result<LinkEdgeRecord> {
+    Ok(LinkEdgeRecord {
+        source_file_id: row.get(0)?,
+        target_text: row.get(1)?,
+        resolved_target_file_id: row.get(2)?,
+        heading: row.get(3)?,
+        alias: row.get(4)?,
+        is_embed: row.get::<_, i64>(5)? == 1,
+    })
+}
+
+fn row_to_tag(row: &rusqlite::Row<'_>) -> rusqlite::Result<TagRecord> {
+    let source: String = row.get(2)?;
+    Ok(TagRecord {
+        file_id: row.get(0)?,
+        tag: row.get(1)?,
+        source: tag_source_from_str(&source).map_err(|_| rusqlite::Error::InvalidQuery)?,
+    })
+}
+
+fn row_to_property(row: &rusqlite::Row<'_>) -> rusqlite::Result<PropertyRecord> {
+    let kind: String = row.get(2)?;
+    let json: String = row.get(3)?;
+    Ok(PropertyRecord {
+        file_id: row.get(0)?,
+        key: row.get(1)?,
+        value: property_value_from_storage(&kind, &json)
+            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+    })
+}
+
+fn row_to_heading(row: &rusqlite::Row<'_>) -> rusqlite::Result<HeadingRecord> {
+    Ok(HeadingRecord {
+        file_id: row.get(0)?,
+        slug: row.get(1)?,
+        title: row.get(2)?,
+        level: row.get::<_, i64>(3)? as u8,
+        byte_offset: row.get::<_, Option<i64>>(4)?.map(|offset| offset as u64),
+    })
+}
+
+fn row_to_attachment(row: &rusqlite::Row<'_>) -> rusqlite::Result<AttachmentRecord> {
+    let source: String = row.get(1)?;
+    let state: String = row.get(3)?;
+    let detail: Option<String> = row.get(4)?;
+    Ok(AttachmentRecord {
+        source_file_id: row.get(0)?,
+        source: attachment_source_from_str(&source).map_err(|_| rusqlite::Error::InvalidQuery)?,
+        raw_target: row.get(2)?,
+        state: attachment_state_from_storage(&state, detail.as_deref())
+            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+    })
+}
+
 fn property_value_to_storage(
     value: &IndexPropertyValue,
 ) -> MetadataStoreResult<(&'static str, String)> {
@@ -645,6 +806,21 @@ fn property_value_to_storage(
             .1
             .map_err(|_| MetadataStoreError::InvalidStoredValue("property"))?,
     ))
+}
+
+fn property_value_from_storage(kind: &str, json: &str) -> MetadataStoreResult<IndexPropertyValue> {
+    match kind {
+        "string" => serde_json::from_str(json)
+            .map(IndexPropertyValue::String)
+            .map_err(|_| MetadataStoreError::InvalidStoredValue("property")),
+        "bool" => serde_json::from_str(json)
+            .map(IndexPropertyValue::Bool)
+            .map_err(|_| MetadataStoreError::InvalidStoredValue("property")),
+        "list" => serde_json::from_str(json)
+            .map(IndexPropertyValue::List)
+            .map_err(|_| MetadataStoreError::InvalidStoredValue("property")),
+        _ => Err(MetadataStoreError::InvalidStoredValue("property")),
+    }
 }
 
 fn attachment_state_to_storage(
@@ -673,6 +849,39 @@ fn attachment_state_to_storage(
         }
         AttachmentResolutionState::Unsupported => Ok(("unsupported", None)),
     }
+}
+
+fn attachment_state_from_storage(
+    state: &str,
+    detail: Option<&str>,
+) -> MetadataStoreResult<AttachmentResolutionState> {
+    match state {
+        "resolved" => Ok(AttachmentResolutionState::Resolved {
+            relative_path: PathBuf::from(required_detail(detail, "attachment")?),
+        }),
+        "missing" => Ok(AttachmentResolutionState::Missing),
+        "duplicate" => {
+            let values: Vec<String> = serde_json::from_str(required_detail(detail, "attachment")?)
+                .map_err(|_| MetadataStoreError::InvalidStoredValue("attachment"))?;
+            Ok(AttachmentResolutionState::Duplicate {
+                candidates: values.into_iter().map(PathBuf::from).collect(),
+            })
+        }
+        "remote" => Ok(AttachmentResolutionState::Remote),
+        "rejected" => Ok(AttachmentResolutionState::Rejected(
+            reject_reason_from_str(required_detail(detail, "attachment")?)
+                .ok_or(MetadataStoreError::InvalidStoredValue("attachment"))?,
+        )),
+        "unsupported" => Ok(AttachmentResolutionState::Unsupported),
+        _ => Err(MetadataStoreError::InvalidStoredValue("attachment")),
+    }
+}
+
+fn required_detail<'a>(
+    detail: Option<&'a str>,
+    field: &'static str,
+) -> MetadataStoreResult<&'a str> {
+    detail.ok_or(MetadataStoreError::InvalidStoredValue(field))
 }
 
 fn path_to_string(path: &Path) -> String {
@@ -740,11 +949,41 @@ fn tag_source_to_str(source: TagSource) -> &'static str {
     }
 }
 
+fn tag_source_from_str(source: &str) -> Result<TagSource, ()> {
+    match source {
+        "inline" => Ok(TagSource::Inline),
+        "frontmatter" => Ok(TagSource::Frontmatter),
+        _ => Err(()),
+    }
+}
+
 fn attachment_source_to_str(source: AttachmentReferenceSource) -> &'static str {
     match source {
         AttachmentReferenceSource::WikiEmbed => "wiki_embed",
         AttachmentReferenceSource::MarkdownImage => "markdown_image",
         AttachmentReferenceSource::MarkdownLink => "markdown_link",
+    }
+}
+
+fn attachment_source_from_str(source: &str) -> Result<AttachmentReferenceSource, ()> {
+    match source {
+        "wiki_embed" => Ok(AttachmentReferenceSource::WikiEmbed),
+        "markdown_image" => Ok(AttachmentReferenceSource::MarkdownImage),
+        "markdown_link" => Ok(AttachmentReferenceSource::MarkdownLink),
+        _ => Err(()),
+    }
+}
+
+fn reject_reason_from_str(reason: &str) -> Option<crate::attachments::AttachmentRejectReason> {
+    match reason {
+        "ContainsNul" => Some(crate::attachments::AttachmentRejectReason::ContainsNul),
+        "UrlScheme" => Some(crate::attachments::AttachmentRejectReason::UrlScheme),
+        "TildePrefix" => Some(crate::attachments::AttachmentRejectReason::TildePrefix),
+        "AbsolutePath" => Some(crate::attachments::AttachmentRejectReason::AbsolutePath),
+        "OutsideVault" => Some(crate::attachments::AttachmentRejectReason::OutsideVault),
+        "SymlinkEscape" => Some(crate::attachments::AttachmentRejectReason::SymlinkEscape),
+        "InvalidRoot" => Some(crate::attachments::AttachmentRejectReason::InvalidRoot),
+        _ => None,
     }
 }
 
