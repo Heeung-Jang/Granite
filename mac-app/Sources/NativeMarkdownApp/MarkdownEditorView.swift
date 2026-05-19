@@ -1,3 +1,4 @@
+import AppKit
 import NativeMarkdownCore
 import SwiftUI
 
@@ -5,14 +6,18 @@ import SwiftUI
 struct MarkdownEditorView: NSViewRepresentable {
     @Binding var text: String
     var isEditable = true
+    var interactionHandler: ((MarkdownEditorInteraction) -> Void)?
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(text: $text)
+        Coordinator(text: $text, interactionHandler: interactionHandler)
     }
 
     func makeNSView(context: Context) -> NSScrollView {
         let textView = MarkdownEditorTextViewFactory.makeTextView()
         textView.delegate = context.coordinator
+        if let textView = textView as? MarkdownInteractionTextView {
+            textView.interactionDelegate = context.coordinator
+        }
         textView.string = text
         let decorationTimer = AppTelemetryTimer()
         MarkdownVisibleRangeDecorator.decorateVisibleRange(in: textView)
@@ -31,7 +36,7 @@ struct MarkdownEditorView: NSViewRepresentable {
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
-        context.coordinator.update(text: $text)
+        context.coordinator.update(text: $text, interactionHandler: interactionHandler)
         guard let textView = scrollView.documentView as? NSTextView else {
             return
         }
@@ -55,21 +60,28 @@ struct MarkdownEditorView: NSViewRepresentable {
            textView.delegate === coordinator {
             textView.delegate = nil
         }
+        if let textView = scrollView.documentView as? MarkdownInteractionTextView,
+           textView.interactionDelegate === coordinator {
+            textView.interactionDelegate = nil
+        }
         coordinator.textView = nil
     }
 
     @MainActor
-    final class Coordinator: NSObject, NSTextViewDelegate {
+    final class Coordinator: NSObject, NSTextViewDelegate, MarkdownInteractionTextViewDelegate {
         @Binding private var text: String
+        private var interactionHandler: ((MarkdownEditorInteraction) -> Void)?
         weak var textView: NSTextView?
         var isApplyingAppKitChange = false
 
-        init(text: Binding<String>) {
+        init(text: Binding<String>, interactionHandler: ((MarkdownEditorInteraction) -> Void)? = nil) {
             _text = text
+            self.interactionHandler = interactionHandler
         }
 
-        func update(text: Binding<String>) {
+        func update(text: Binding<String>, interactionHandler: ((MarkdownEditorInteraction) -> Void)?) {
             _text = text
+            self.interactionHandler = interactionHandler
         }
 
         func textDidChange(_ notification: Notification) {
@@ -82,13 +94,28 @@ struct MarkdownEditorView: NSViewRepresentable {
             MarkdownVisibleRangeDecorator.decorateVisibleRange(in: textView)
             isApplyingAppKitChange = false
         }
+
+        func textView(_ textView: MarkdownInteractionTextView, handleMouseDown event: NSEvent) -> Bool {
+            guard !textView.isEditable || event.modifierFlags.contains(.command),
+                  let utf16Offset = textView.utf16Offset(for: event),
+                  let interaction = MarkdownEditorInteractionResolver.interaction(
+                    in: textView.string,
+                    utf16Offset: utf16Offset
+                  )
+            else {
+                return false
+            }
+
+            interactionHandler?(interaction)
+            return true
+        }
     }
 }
 
 @MainActor
 enum MarkdownEditorTextViewFactory {
     static func makeTextView() -> NSTextView {
-        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 900, height: 700))
+        let textView = MarkdownInteractionTextView(frame: NSRect(x: 0, y: 0, width: 900, height: 700))
         textView.isRichText = false
         textView.importsGraphics = false
         textView.allowsUndo = true
@@ -98,6 +125,40 @@ enum MarkdownEditorTextViewFactory {
         textView.textContainerInset = NSSize(width: 12, height: 12)
         textView.textContainer?.widthTracksTextView = true
         return textView
+    }
+}
+
+@MainActor
+protocol MarkdownInteractionTextViewDelegate: AnyObject {
+    func textView(_ textView: MarkdownInteractionTextView, handleMouseDown event: NSEvent) -> Bool
+}
+
+@MainActor
+final class MarkdownInteractionTextView: NSTextView {
+    weak var interactionDelegate: MarkdownInteractionTextViewDelegate?
+
+    override func mouseDown(with event: NSEvent) {
+        if interactionDelegate?.textView(self, handleMouseDown: event) == true {
+            return
+        }
+        super.mouseDown(with: event)
+    }
+
+    func utf16Offset(for event: NSEvent) -> Int? {
+        guard let layoutManager, let textContainer else {
+            return nil
+        }
+
+        var point = convert(event.locationInWindow, from: nil)
+        point.x -= textContainerOrigin.x
+        point.y -= textContainerOrigin.y
+        guard point.x >= 0, point.y >= 0 else {
+            return nil
+        }
+
+        let glyphIndex = layoutManager.glyphIndex(for: point, in: textContainer)
+        let characterIndex = layoutManager.characterIndexForGlyph(at: glyphIndex)
+        return min(characterIndex, (string as NSString).length - 1)
     }
 }
 

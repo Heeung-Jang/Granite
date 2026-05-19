@@ -17,17 +17,31 @@ public enum VaultSelectionState: Equatable {
     }
 }
 
+public struct WorkspaceSearchRequest: Equatable, Sendable {
+    public let id: UInt64
+    public let query: String
+    public let mode: SearchMode
+
+    public init(id: UInt64, query: String, mode: SearchMode) {
+        self.id = id
+        self.query = query
+        self.mode = mode
+    }
+}
+
 public final class AppState: ObservableObject {
     @Published public private(set) var vaultSelection: VaultSelectionState
     @Published public private(set) var engineHealth: EngineHealthStatus
     @Published public private(set) var indexLocation: AppOwnedIndexLocation?
     @Published public private(set) var recentVaults: [RecentVault]
     @Published public private(set) var selectedFile: FileTreeItem?
+    @Published public private(set) var requestedSearch: WorkspaceSearchRequest?
 
     private let indexDirectoryResolver: any IndexDirectoryResolving
     private let vaultAccessValidator: any VaultAccessValidating
     private let recentVaultStorage: any RecentVaultStoring
     private let maxRecentVaults: Int
+    private var nextSearchRequestID: UInt64 = 0
 
     public init(
         vaultSelection: VaultSelectionState = .noVault,
@@ -109,6 +123,15 @@ public final class AppState: ObservableObject {
     public func openFile(_ item: FileTreeItem) {
         selectedFile = item
         AppTelemetry.noteOpened(item)
+    }
+
+    public func requestSearch(query: String, mode: SearchMode) {
+        nextSearchRequestID &+= 1
+        requestedSearch = WorkspaceSearchRequest(
+            id: nextSearchRequestID,
+            query: query,
+            mode: mode
+        )
     }
 
     private func rememberVault(_ url: URL) {

@@ -40,6 +40,17 @@ func engineHealthDetectsAbiMismatch() {
 }
 
 @Test
+func appStatePublishesRequestedSearches() {
+    let state = AppState()
+
+    state.requestSearch(query: "#project/native", mode: .body)
+
+    #expect(state.requestedSearch?.id == 1)
+    #expect(state.requestedSearch?.query == "#project/native")
+    #expect(state.requestedSearch?.mode == .body)
+}
+
+@Test
 func indexDirectoryResolverCreatesOnlyAppOwnedDirectories() throws {
     let temporaryRoot = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString, isDirectory: true)

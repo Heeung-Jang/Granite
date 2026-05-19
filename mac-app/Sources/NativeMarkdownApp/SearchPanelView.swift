@@ -10,6 +10,7 @@ struct SearchPanelView: View {
     @State private var resultState: SearchResultState = .complete
     @State private var nextOffset: Int?
     @State private var activeRequestID: UInt64 = 0
+    @State private var handledSearchRequestID: UInt64?
     @State private var isLoadingMore = false
 
     private let pageSize = 20
@@ -27,9 +28,13 @@ struct SearchPanelView: View {
         .task(id: SearchTaskKey(
             vaultPath: appState.vaultSelection.url?.path,
             query: query,
-            mode: mode
+            mode: mode,
+            requestID: handledSearchRequestID
         )) {
             await runDebouncedSearch()
+        }
+        .onReceive(appState.$requestedSearch.compactMap { $0 }) { request in
+            apply(request)
         }
     }
 
@@ -247,12 +252,22 @@ struct SearchPanelView: View {
         resultState = .complete
         isLoadingMore = false
     }
+
+    private func apply(_ request: WorkspaceSearchRequest) {
+        guard handledSearchRequestID != request.id else {
+            return
+        }
+        handledSearchRequestID = request.id
+        mode = request.mode
+        query = request.query
+    }
 }
 
 private struct SearchTaskKey: Hashable {
     let vaultPath: String?
     let query: String
     let mode: SearchMode
+    let requestID: UInt64?
 }
 
 private enum SearchPanelStatus: Equatable {
