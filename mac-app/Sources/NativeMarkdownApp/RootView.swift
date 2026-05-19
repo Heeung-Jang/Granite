@@ -6,16 +6,27 @@ struct RootView: View {
 
     var body: some View {
         NavigationSplitView {
-            VaultPickerView()
-                .navigationSplitViewColumnWidth(min: 240, ideal: 280, max: 360)
+            VStack(spacing: 0) {
+                VaultPickerView()
+                    .frame(minHeight: 220, idealHeight: 300, maxHeight: 360)
+
+                Divider()
+
+                FileTreeView()
+            }
+            .navigationSplitViewColumnWidth(min: 260, ideal: 320, max: 420)
         } detail: {
-            WorkspacePlaceholderView(vaultSelection: appState.vaultSelection)
+            WorkspacePlaceholderView(
+                vaultSelection: appState.vaultSelection,
+                selectedFile: appState.selectedFile
+            )
         }
     }
 }
 
 struct WorkspacePlaceholderView: View {
     let vaultSelection: VaultSelectionState
+    let selectedFile: FileTreeItem?
     @State private var editorText = "# Native Markdown\n\n"
 
     var body: some View {
@@ -28,6 +39,15 @@ struct WorkspacePlaceholderView: View {
             case .selected(let url):
                 Text(url.lastPathComponent)
                     .font(.title2)
+                if let selectedFile {
+                    VStack(spacing: 4) {
+                        Text(selectedFile.displayName)
+                            .font(.headline)
+                        Text(selectedFile.relativePath)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
                 MarkdownEditorView(text: $editorText)
                     .frame(minHeight: 320)
             case .unavailable(let issue):

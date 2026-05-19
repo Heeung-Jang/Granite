@@ -22,6 +22,7 @@ public final class AppState: ObservableObject {
     @Published public private(set) var engineHealth: EngineHealthStatus
     @Published public private(set) var indexLocation: AppOwnedIndexLocation?
     @Published public private(set) var recentVaults: [RecentVault]
+    @Published public private(set) var selectedFile: FileTreeItem?
 
     private let indexDirectoryResolver: any IndexDirectoryResolving
     private let vaultAccessValidator: any VaultAccessValidating
@@ -59,6 +60,7 @@ public final class AppState: ObservableObject {
 
         indexLocation = try indexDirectoryResolver.prepareIndexLocation(forVaultAt: vaultURL)
         vaultSelection = .selected(vaultURL)
+        selectedFile = nil
         rememberVault(vaultURL)
     }
 
@@ -83,6 +85,7 @@ public final class AppState: ObservableObject {
     public func clearVault() {
         vaultSelection = .noVault
         indexLocation = nil
+        selectedFile = nil
     }
 
     public func removeRecentVault(_ recentVault: RecentVault) {
@@ -101,6 +104,10 @@ public final class AppState: ObservableObject {
 
     public func refreshEngineHealth(using loader: EngineHealthLoading = EngineHealthClient()) {
         engineHealth = loader.load()
+    }
+
+    public func openFile(_ item: FileTreeItem) {
+        selectedFile = item
     }
 
     private func rememberVault(_ url: URL) {
