@@ -52,7 +52,7 @@ struct VaultPickerView: View {
         panel.prompt = "Open"
 
         if panel.runModal() == .OK, let url = panel.url {
-            appState.selectVault(url)
+            try? appState.selectVault(url)
         }
     }
 }
