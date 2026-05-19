@@ -7,6 +7,7 @@ pub mod parser;
 pub mod paths;
 pub mod scanner;
 pub mod sqlite_fts;
+pub mod tantivy_search;
 
 pub const ENGINE_ABI_VERSION: u32 = 1;
 
@@ -29,6 +30,7 @@ pub fn health_check() -> EngineHealth {
             "errors",
             "benchmarks",
             "sqlite_fts",
+            "tantivy_search",
         ],
     }
 }
@@ -54,6 +56,7 @@ mod tests {
                 "errors",
                 "benchmarks",
                 "sqlite_fts",
+                "tantivy_search",
             ]
         );
     }
