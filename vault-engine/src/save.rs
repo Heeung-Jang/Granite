@@ -5,7 +5,12 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 
+use crate::index::FileRecord;
+use crate::indexing_queue::{
+    IndexingQueue, IndexingQueueError, IndexingQueueItem, IndexingQueueReason,
+};
 use crate::paths::{FileIdentity, PathError, VaultRoot};
+use crate::scanner::{ScanEntry, classify_file};
 
 const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
 const FNV_PRIME: u64 = 0x100000001b3;
@@ -34,6 +39,23 @@ pub struct SaveOutcome {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SaveReloadOutcome {
+    pub baseline: SaveBaseline,
+    pub contents: Vec<u8>,
+    pub queued_item: IndexingQueueItem,
+    pub dirty: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SaveChoiceOutcome {
+    pub choice: SaveConflictChoice,
+    pub baseline: SaveBaseline,
+    pub bytes_written: u64,
+    pub queued_item: IndexingQueueItem,
+    pub dirty: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SaveConflict {
     pub relative_path: String,
     pub kind: SaveConflictKind,
@@ -59,6 +81,12 @@ pub enum SaveConflictKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SaveConflictChoice {
+    KeepAsNewNote,
+    Overwrite,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SaveIoOperation {
     CreateTemp,
     WriteTemp,
@@ -68,6 +96,8 @@ pub enum SaveIoOperation {
     SyncParent,
     ReadFile,
     ReadMetadata,
+    CreateNewNote,
+    LinkNewNote,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,6 +118,14 @@ pub enum SafeSaveError {
 }
 
 pub type SafeSaveResult<T> = Result<T, SafeSaveError>;
+
+#[derive(Debug)]
+pub enum SaveConflictChoiceError {
+    Save(SafeSaveError),
+    Queue(IndexingQueueError),
+}
+
+pub type SaveConflictChoiceResult<T> = Result<T, SaveConflictChoiceError>;
 
 #[derive(Debug, Clone)]
 struct FileSnapshot {
@@ -128,6 +166,87 @@ pub fn safe_save(root: &VaultRoot, request: SaveRequest<'_>) -> SafeSaveResult<S
     Ok(SaveOutcome {
         baseline,
         bytes_written: request.contents.len() as u64,
+    })
+}
+
+pub fn reload_after_conflict(
+    root: &VaultRoot,
+    queue: &mut IndexingQueue,
+    conflict: &SaveConflict,
+    generation: u64,
+) -> SaveConflictChoiceResult<SaveReloadOutcome> {
+    let current = current_snapshot(root, &conflict.expected)?;
+    let contents = fs::read(&current.absolute_path).map_err(|error| SafeSaveError::Io {
+        operation: SaveIoOperation::ReadFile,
+        path: PathBuf::from(&current.baseline.relative_path),
+        kind: error.kind(),
+    })?;
+    let queued_item = enqueue_saved_file(
+        queue,
+        &current.baseline,
+        generation,
+        IndexingQueueReason::FileChanged,
+    )?;
+
+    Ok(SaveReloadOutcome {
+        baseline: current.baseline,
+        contents,
+        queued_item,
+        dirty: false,
+    })
+}
+
+pub fn keep_conflicted_buffer_as_new_note(
+    root: &VaultRoot,
+    queue: &mut IndexingQueue,
+    relative_path: &str,
+    contents: &[u8],
+    generation: u64,
+) -> SaveConflictChoiceResult<SaveChoiceOutcome> {
+    write_new_note(root, relative_path, contents)?;
+    let baseline = SaveBaseline::capture(root, relative_path)?;
+    let queued_item =
+        enqueue_saved_file(queue, &baseline, generation, IndexingQueueReason::OwnSave)?;
+
+    Ok(SaveChoiceOutcome {
+        choice: SaveConflictChoice::KeepAsNewNote,
+        bytes_written: contents.len() as u64,
+        baseline,
+        queued_item,
+        dirty: false,
+    })
+}
+
+pub fn overwrite_after_conflict(
+    root: &VaultRoot,
+    queue: &mut IndexingQueue,
+    conflict: &SaveConflict,
+    contents: &[u8],
+    generation: u64,
+) -> SaveConflictChoiceResult<SaveChoiceOutcome> {
+    let current = current_snapshot(root, &conflict.expected)?;
+    if current.readonly {
+        return Err(SafeSaveError::ReadOnly {
+            relative_path: conflict.relative_path.clone(),
+        }
+        .into());
+    }
+
+    let temp_path = write_temp_file(&current, contents)?;
+    let display_path = Path::new(&current.baseline.relative_path);
+    rename_temp_file(&temp_path, &current.absolute_path, display_path)?;
+    sync_parent(&current.absolute_path, display_path)?;
+
+    let baseline = SaveBaseline::capture(root, &current.baseline.relative_path)?;
+    let queued_item =
+        enqueue_saved_file(queue, &baseline, generation, IndexingQueueReason::OwnSave)?;
+
+    Ok(SaveChoiceOutcome {
+        choice: SaveConflictChoice::Overwrite,
+        baseline,
+        bytes_written: contents.len() as u64,
+        queued_item,
+        dirty: false,
     })
 }
 
@@ -180,6 +299,62 @@ fn capture_snapshot(root: &VaultRoot, relative_path: &str) -> SafeSaveResult<Fil
         permissions,
         readonly,
     })
+}
+
+fn write_new_note(root: &VaultRoot, relative_path: &str, contents: &[u8]) -> SafeSaveResult<()> {
+    let relative_path =
+        crate::paths::normalize_relative_path(relative_path).map_err(SafeSaveError::Path)?;
+    let absolute_path = root.canonical_root().join(&relative_path);
+    let display_path = relative_path.as_path();
+    if absolute_path.exists() {
+        return Err(SafeSaveError::Io {
+            operation: SaveIoOperation::CreateNewNote,
+            path: relative_path,
+            kind: std::io::ErrorKind::AlreadyExists,
+        });
+    }
+
+    let Some(parent) = absolute_path.parent() else {
+        return Err(SafeSaveError::Path(PathError::OutsideVault(relative_path)));
+    };
+    let canonical_parent = fs::canonicalize(parent).map_err(|error| SafeSaveError::Io {
+        operation: SaveIoOperation::ReadMetadata,
+        path: relative_path.clone(),
+        kind: error.kind(),
+    })?;
+    if !canonical_parent.starts_with(root.canonical_root()) {
+        return Err(SafeSaveError::Path(PathError::SymlinkEscape {
+            input: relative_path.clone(),
+            canonical: canonical_parent,
+        }));
+    }
+
+    let temp_path = temp_path_for(&absolute_path);
+    let mut temp = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp_path)
+        .map_err(|error| io_error(SaveIoOperation::CreateTemp, display_path, error))?;
+    if let Err(error) = temp.write_all(contents) {
+        cleanup_temp_file(&temp_path);
+        return Err(io_error(SaveIoOperation::WriteTemp, display_path, error));
+    }
+    if let Err(error) = temp.sync_all() {
+        cleanup_temp_file(&temp_path);
+        return Err(io_error(SaveIoOperation::SyncTemp, display_path, error));
+    }
+    drop(temp);
+
+    match fs::hard_link(&temp_path, &absolute_path) {
+        Ok(()) => {
+            cleanup_temp_file(&temp_path);
+            sync_parent(&absolute_path, display_path)
+        }
+        Err(error) => {
+            cleanup_temp_file(&temp_path);
+            Err(io_error(SaveIoOperation::LinkNewNote, display_path, error))
+        }
+    }
 }
 
 fn current_snapshot(root: &VaultRoot, expected: &SaveBaseline) -> SafeSaveResult<FileSnapshot> {
@@ -344,6 +519,23 @@ fn stable_content_hash(contents: &[u8]) -> String {
     format!("{hash:016x}")
 }
 
+fn enqueue_saved_file(
+    queue: &mut IndexingQueue,
+    baseline: &SaveBaseline,
+    generation: u64,
+    reason: IndexingQueueReason,
+) -> Result<IndexingQueueItem, IndexingQueueError> {
+    let entry = ScanEntry {
+        relative_path: PathBuf::from(&baseline.relative_path),
+        kind: classify_file(Path::new(&baseline.relative_path)),
+        size_bytes: baseline.size_bytes,
+        modified: baseline.modified,
+        file_identity: baseline.file_identity.clone(),
+    };
+    let file = FileRecord::from_scan_entry(&entry, generation);
+    queue.enqueue_file(&file, reason)
+}
+
 impl From<&SaveBaseline> for SaveConflictSnapshot {
     fn from(baseline: &SaveBaseline) -> Self {
         Self {
@@ -390,9 +582,33 @@ impl fmt::Display for SafeSaveError {
 
 impl std::error::Error for SafeSaveError {}
 
+impl fmt::Display for SaveConflictChoiceError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Save(error) => write!(formatter, "save conflict choice error: {error}"),
+            Self::Queue(error) => write!(formatter, "save conflict queue error: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for SaveConflictChoiceError {}
+
+impl From<SafeSaveError> for SaveConflictChoiceError {
+    fn from(error: SafeSaveError) -> Self {
+        Self::Save(error)
+    }
+}
+
+impl From<IndexingQueueError> for SaveConflictChoiceError {
+    fn from(error: IndexingQueueError) -> Self {
+        Self::Queue(error)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::indexing_queue::{IndexingQueue, IndexingQueueReason};
     use std::fs;
     #[cfg(unix)]
     use std::os::unix::fs::{PermissionsExt, symlink};
@@ -587,6 +803,148 @@ mod tests {
         assert!(target_directory.is_dir());
     }
 
+    #[test]
+    fn reload_after_conflict_updates_buffer_baseline_and_queues_changed_file() {
+        let fixture = copied_save_fixture();
+        let target = fixture.root_path.join("Home.md");
+        let baseline = SaveBaseline::capture(&fixture.root, "Home.md").expect("baseline");
+        fs::write(&target, "# External edit\n").expect("external edit");
+        let conflict = save_conflict(
+            safe_save(&fixture.root, SaveRequest::new(&baseline, b"# App edit\n"))
+                .expect_err("conflict"),
+        );
+        let mut queue = IndexingQueue::open_in_memory().expect("queue");
+
+        let outcome =
+            reload_after_conflict(&fixture.root, &mut queue, &conflict, 2).expect("reload");
+
+        assert_eq!(outcome.contents, b"# External edit\n");
+        assert_eq!(outcome.baseline.relative_path, "Home.md");
+        assert_eq!(
+            outcome.baseline.content_hash,
+            stable_content_hash(b"# External edit\n")
+        );
+        assert!(!outcome.dirty);
+        assert_eq!(outcome.queued_item.reason, IndexingQueueReason::FileChanged);
+        assert_eq!(outcome.queued_item.generation, 2);
+    }
+
+    #[test]
+    fn keep_conflicted_buffer_as_new_note_preserves_original_and_queues_own_save() {
+        let fixture = copied_save_fixture();
+        let target = fixture.root_path.join("Home.md");
+        let new_note = fixture.root_path.join("Conflict Copy.md");
+        let baseline = SaveBaseline::capture(&fixture.root, "Home.md").expect("baseline");
+        fs::write(&target, "# External edit\n").expect("external edit");
+        let _conflict = save_conflict(
+            safe_save(&fixture.root, SaveRequest::new(&baseline, b"# App edit\n"))
+                .expect_err("conflict"),
+        );
+        let mut queue = IndexingQueue::open_in_memory().expect("queue");
+
+        let outcome = keep_conflicted_buffer_as_new_note(
+            &fixture.root,
+            &mut queue,
+            "Conflict Copy.md",
+            b"# App edit\n",
+            2,
+        )
+        .expect("keep as new");
+
+        assert_eq!(
+            fs::read_to_string(&target).expect("target"),
+            "# External edit\n"
+        );
+        assert_eq!(
+            fs::read_to_string(new_note).expect("new note"),
+            "# App edit\n"
+        );
+        assert_eq!(outcome.choice, SaveConflictChoice::KeepAsNewNote);
+        assert_eq!(outcome.baseline.relative_path, "Conflict Copy.md");
+        assert_eq!(outcome.bytes_written, b"# App edit\n".len() as u64);
+        assert!(!outcome.dirty);
+        assert_eq!(outcome.queued_item.reason, IndexingQueueReason::OwnSave);
+        assert_eq!(outcome.queued_item.generation, 2);
+    }
+
+    #[test]
+    fn keep_as_new_note_refuses_existing_target_without_overwriting() {
+        let fixture = copied_save_fixture();
+        let target = fixture.root_path.join("Home.md");
+        let original = fs::read_to_string(&target).expect("original");
+        let mut queue = IndexingQueue::open_in_memory().expect("queue");
+
+        let error = keep_conflicted_buffer_as_new_note(
+            &fixture.root,
+            &mut queue,
+            "Home.md",
+            b"# New buffer\n",
+            2,
+        )
+        .expect_err("existing target");
+
+        match error {
+            SaveConflictChoiceError::Save(SafeSaveError::Io {
+                operation: SaveIoOperation::CreateNewNote,
+                kind: std::io::ErrorKind::AlreadyExists,
+                ..
+            }) => {}
+            other => panic!("expected create new note already exists error, got {other:?}"),
+        }
+        assert_eq!(fs::read_to_string(&target).expect("target"), original);
+        assert_eq!(queue.summary().expect("queue").pending, 0);
+    }
+
+    #[test]
+    fn overwrite_after_conflict_replaces_regular_file_and_queues_own_save() {
+        let fixture = copied_save_fixture();
+        let target = fixture.root_path.join("Home.md");
+        let baseline = SaveBaseline::capture(&fixture.root, "Home.md").expect("baseline");
+        fs::write(&target, "# External edit\n").expect("external edit");
+        let conflict = save_conflict(
+            safe_save(&fixture.root, SaveRequest::new(&baseline, b"# App edit\n"))
+                .expect_err("conflict"),
+        );
+        let mut queue = IndexingQueue::open_in_memory().expect("queue");
+
+        let outcome =
+            overwrite_after_conflict(&fixture.root, &mut queue, &conflict, b"# App edit\n", 2)
+                .expect("overwrite");
+
+        assert_eq!(fs::read_to_string(&target).expect("target"), "# App edit\n");
+        assert_eq!(outcome.choice, SaveConflictChoice::Overwrite);
+        assert_eq!(outcome.bytes_written, b"# App edit\n".len() as u64);
+        assert!(!outcome.dirty);
+        assert_eq!(outcome.queued_item.reason, IndexingQueueReason::OwnSave);
+        assert_eq!(outcome.queued_item.generation, 2);
+    }
+
+    #[test]
+    fn overwrite_after_deleted_conflict_is_not_safe() {
+        let fixture = copied_save_fixture();
+        let target = fixture.root_path.join("Home.md");
+        let baseline = SaveBaseline::capture(&fixture.root, "Home.md").expect("baseline");
+        fs::remove_file(&target).expect("delete");
+        let conflict = save_conflict(
+            safe_save(&fixture.root, SaveRequest::new(&baseline, b"# App edit\n"))
+                .expect_err("deleted conflict"),
+        );
+        let mut queue = IndexingQueue::open_in_memory().expect("queue");
+
+        let error =
+            overwrite_after_conflict(&fixture.root, &mut queue, &conflict, b"# App edit\n", 2)
+                .expect_err("unsafe overwrite");
+
+        match error {
+            SaveConflictChoiceError::Save(SafeSaveError::Conflict(conflict)) => {
+                assert_eq!(conflict.kind, SaveConflictKind::Deleted);
+            }
+            other => panic!("expected deleted conflict, got {other:?}"),
+        }
+        assert!(!target.exists());
+        assert_eq!(queue.summary().expect("queue").pending, 0);
+    }
+
     fn copied_save_fixture() -> SaveFixture {
         let temp = tempfile::tempdir().expect("tempdir");
         let root_path = temp.path().join("copied-save-vault");
@@ -633,6 +991,13 @@ mod tests {
         match error {
             SafeSaveError::Conflict(conflict) => assert_eq!(conflict.kind, expected),
             other => panic!("expected conflict {expected:?}, got {other:?}"),
+        }
+    }
+
+    fn save_conflict(error: SafeSaveError) -> SaveConflict {
+        match error {
+            SafeSaveError::Conflict(conflict) => *conflict,
+            other => panic!("expected save conflict, got {other:?}"),
         }
     }
 
