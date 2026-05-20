@@ -63,6 +63,13 @@ pub struct LocalGraphRequest {
     pub request_id: u64,
     pub max_nodes: usize,
     pub max_edges: usize,
+    pub depth: LocalGraphDepth,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalGraphDepth {
+    OneHop,
+    TwoHop,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -94,6 +101,7 @@ pub struct LocalGraphEdge {
     pub target_text: String,
     pub direction: LocalGraphEdgeDirection,
     pub is_embed: bool,
+    pub hop: u8,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -144,10 +152,20 @@ impl LocalGraphRequest {
     }
 
     pub fn with_request_id(request_id: u64, max_nodes: usize, max_edges: usize) -> Self {
+        Self::with_depth(request_id, max_nodes, max_edges, LocalGraphDepth::OneHop)
+    }
+
+    pub fn with_depth(
+        request_id: u64,
+        max_nodes: usize,
+        max_edges: usize,
+        depth: LocalGraphDepth,
+    ) -> Self {
         Self {
             request_id,
             max_nodes,
             max_edges,
+            depth,
         }
     }
 
@@ -370,6 +388,7 @@ impl VaultReadApi {
             kind: LocalGraphNodeKind::Center,
         });
 
+        let mut frontier_file_ids = Vec::new();
         let outgoing = self
             .metadata
             .outgoing_links(file_id, 0, edge_limit.saturating_add(1))?;
@@ -377,6 +396,9 @@ impl VaultReadApi {
             if index >= edge_limit {
                 builder.mark_partial();
                 break;
+            }
+            if let Some(target_file_id) = link.resolved_target_file_id.as_deref() {
+                push_frontier_file(&mut frontier_file_ids, file_id, target_file_id);
             }
             let target_node = match link.resolved_target_file_id.as_deref() {
                 Some(target_file_id) => self.resolved_graph_node(target_file_id)?,
@@ -394,11 +416,16 @@ impl VaultReadApi {
                     target_text: link.target_text,
                     direction: LocalGraphEdgeDirection::Outgoing,
                     is_embed: link.is_embed,
+                    hop: 1,
                 },
             );
         }
 
-        if !builder.edge_limit_reached() {
+        if builder.edge_limit_reached() {
+            if !builder.is_partial() && !self.metadata.backlinks(file_id, 0, 1)?.is_empty() {
+                builder.mark_partial();
+            }
+        } else {
             let remaining = edge_limit.saturating_sub(builder.edges.len());
             let backlinks = self
                 .metadata
@@ -408,6 +435,7 @@ impl VaultReadApi {
                     builder.mark_partial();
                     break;
                 }
+                push_frontier_file(&mut frontier_file_ids, file_id, &link.source_file_id);
                 let source_node = self.resolved_graph_node(&link.source_file_id)?;
                 builder.add_edge(
                     source_node,
@@ -417,8 +445,54 @@ impl VaultReadApi {
                         target_text: link.target_text,
                         direction: LocalGraphEdgeDirection::Backlink,
                         is_embed: link.is_embed,
+                        hop: 1,
                     },
                 );
+            }
+        }
+
+        if request.depth == LocalGraphDepth::TwoHop && !builder.edge_limit_reached() {
+            frontier_file_ids.sort();
+            frontier_file_ids.dedup();
+            let frontier_count = frontier_file_ids.len();
+            for (source_index, source_file_id) in frontier_file_ids.into_iter().enumerate() {
+                if builder.edge_limit_reached() {
+                    if source_index < frontier_count {
+                        builder.mark_partial();
+                    }
+                    break;
+                }
+                let remaining = edge_limit.saturating_sub(builder.edges.len());
+                let outgoing = self.metadata.outgoing_links(
+                    &source_file_id,
+                    0,
+                    remaining.saturating_add(1),
+                )?;
+                for (index, link) in outgoing.into_iter().enumerate() {
+                    if index >= remaining {
+                        builder.mark_partial();
+                        break;
+                    }
+                    let target_node = match link.resolved_target_file_id.as_deref() {
+                        Some(target_file_id) => self.resolved_graph_node(target_file_id)?,
+                        None => unresolved_graph_node(&link.target_text),
+                    };
+                    builder.add_edge(
+                        target_node,
+                        LocalGraphEdge {
+                            source_node_id: graph_file_node_id(&source_file_id),
+                            target_node_id: link
+                                .resolved_target_file_id
+                                .as_deref()
+                                .map(graph_file_node_id)
+                                .unwrap_or_else(|| graph_unresolved_node_id(&link.target_text)),
+                            target_text: link.target_text,
+                            direction: LocalGraphEdgeDirection::Outgoing,
+                            is_embed: link.is_embed,
+                            hop: 2,
+                        },
+                    );
+                }
             }
         }
 
@@ -495,6 +569,10 @@ impl LocalGraphBuilder {
         self.edges.len() >= self.edge_limit
     }
 
+    fn is_partial(&self) -> bool {
+        self.partial
+    }
+
     fn mark_partial(&mut self) {
         self.partial = true;
     }
@@ -525,6 +603,12 @@ fn unresolved_graph_node(target_text: &str) -> LocalGraphNode {
         file_id: None,
         label: target_text.to_string(),
         kind: LocalGraphNodeKind::Unresolved,
+    }
+}
+
+fn push_frontier_file(frontier: &mut Vec<String>, center_file_id: &str, file_id: &str) {
+    if file_id != center_file_id {
+        frontier.push(file_id.to_string());
     }
 }
 
@@ -590,6 +674,9 @@ mod tests {
         let mut target =
             crate::index::FileRecord::from_scan_entry(&fixture_entry("Folder/Target.md"), 1);
         target.mark_search_indexed();
+        let mut guide =
+            crate::index::FileRecord::from_scan_entry(&fixture_entry("Docs/Guide.md"), 1);
+        guide.mark_search_indexed();
 
         let link = crate::index::LinkEdgeRecord {
             source_file_id: home.file_id.clone(),
@@ -614,6 +701,14 @@ mod tests {
             heading: None,
             alias: Some("Home alias".to_string()),
             is_embed: true,
+        };
+        let deep_link = crate::index::LinkEdgeRecord {
+            source_file_id: target.file_id.clone(),
+            target_text: "Docs/Guide".to_string(),
+            resolved_target_file_id: Some(guide.file_id.clone()),
+            heading: None,
+            alias: None,
+            is_embed: false,
         };
         let tag = TagRecord {
             file_id: home.file_id.clone(),
@@ -652,8 +747,18 @@ mod tests {
             )
             .expect("home records");
         store
-            .replace_file_records(&target, std::slice::from_ref(&backlink), &[], &[], &[], &[])
+            .replace_file_records(
+                &target,
+                &[deep_link.clone(), backlink.clone()],
+                &[],
+                &[],
+                &[],
+                &[],
+            )
             .expect("target records");
+        store
+            .replace_file_records(&guide, &[], &[], &[], &[], &[])
+            .expect("guide records");
         search
             .replace_documents(&[
                 SearchDocument {
@@ -667,6 +772,12 @@ mod tests {
                     path: "Folder/Target.md".to_string(),
                     title: "Target".to_string(),
                     body: "Target body receives backlinks.".to_string(),
+                },
+                SearchDocument {
+                    file_id: guide.file_id.clone(),
+                    path: "Docs/Guide.md".to_string(),
+                    title: "Guide".to_string(),
+                    body: "Guide body is a second hop target.".to_string(),
                 },
             ])
             .expect("index");
@@ -784,16 +895,39 @@ mod tests {
             edge.direction == LocalGraphEdgeDirection::Outgoing
                 && edge.source_node_id == graph_file_node_id(&home.file_id)
                 && edge.target_node_id == graph_file_node_id(&target.file_id)
+                && edge.hop == 1
         }));
         assert!(graph.value.edges.iter().any(|edge| {
             edge.direction == LocalGraphEdgeDirection::Outgoing
                 && edge.target_node_id == graph_unresolved_node_id("Missing Note")
+                && edge.hop == 1
         }));
         assert!(graph.value.edges.iter().any(|edge| {
             edge.direction == LocalGraphEdgeDirection::Backlink
                 && edge.source_node_id == graph_file_node_id(&target.file_id)
                 && edge.target_node_id == graph_file_node_id(&home.file_id)
                 && edge.is_embed
+                && edge.hop == 1
+        }));
+
+        let two_hop_graph = api
+            .local_graph(
+                &home.file_id,
+                LocalGraphRequest::with_depth(61, 10, 10, LocalGraphDepth::TwoHop),
+            )
+            .expect("two hop graph");
+        assert_eq!(two_hop_graph.request_id, 61);
+        assert_eq!(two_hop_graph.state, ReadState::Complete);
+        assert!(two_hop_graph.value.nodes.iter().any(|node| {
+            node.node_id == graph_file_node_id(&guide.file_id)
+                && node.kind == LocalGraphNodeKind::Resolved
+                && node.label == "Docs/Guide.md"
+        }));
+        assert!(two_hop_graph.value.edges.iter().any(|edge| {
+            edge.direction == LocalGraphEdgeDirection::Outgoing
+                && edge.source_node_id == graph_file_node_id(&target.file_id)
+                && edge.target_node_id == graph_file_node_id(&guide.file_id)
+                && edge.hop == 2
         }));
 
         let node_capped = api
