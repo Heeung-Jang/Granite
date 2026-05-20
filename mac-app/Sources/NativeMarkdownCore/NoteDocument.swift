@@ -34,7 +34,12 @@ public struct FileSystemNoteDocumentLoader: NoteDocumentLoading {
         guard FileManager.default.isReadableFile(atPath: fileURL.path) else {
             throw NoteDocumentLoadError.unreadable(file.relativePath)
         }
-        guard let contents = try? String(contentsOf: fileURL, encoding: .utf8) else {
+        guard let data = try? Data(contentsOf: fileURL) else {
+            throw NoteDocumentLoadError.unreadable(file.relativePath)
+        }
+
+        let contents = String(decoding: data, as: UTF8.self)
+        guard Data(contents.utf8) == data else {
             throw NoteDocumentLoadError.unsupportedEncoding(file.relativePath)
         }
 
