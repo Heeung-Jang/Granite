@@ -216,7 +216,11 @@ public struct EngineSaveClient: EngineNoteSaving {
 
     private let libraryPath: String?
 
-    public init(libraryPath: String? = ProcessInfo.processInfo.environment["VAULT_ENGINE_DYLIB_PATH"]) {
+    public init() {
+        self.init(libraryPath: EngineLibraryPath.defaultPath())
+    }
+
+    public init(libraryPath: String?) {
         self.libraryPath = libraryPath
     }
 
@@ -393,7 +397,7 @@ public struct EngineSaveClient: EngineNoteSaving {
 
     private func withSymbols<T>(_ body: (SaveSymbols) throws -> T) throws -> T {
         guard let libraryPath, !libraryPath.isEmpty else {
-            throw EngineSaveClientError.missingLibrary("VAULT_ENGINE_DYLIB_PATH is not set")
+            throw EngineSaveClientError.missingLibrary(EngineLibraryPath.missingMessage)
         }
         guard let handle = dlopen(libraryPath, RTLD_NOW | RTLD_LOCAL) else {
             throw EngineSaveClientError.missingLibrary(dynamicLoaderError())
@@ -420,7 +424,7 @@ public struct EngineSaveClient: EngineNoteSaving {
 
     private func withConflictSymbols<T>(_ body: (ConflictSaveSymbols) throws -> T) throws -> T {
         guard let libraryPath, !libraryPath.isEmpty else {
-            throw EngineSaveClientError.missingLibrary("VAULT_ENGINE_DYLIB_PATH is not set")
+            throw EngineSaveClientError.missingLibrary(EngineLibraryPath.missingMessage)
         }
         guard let handle = dlopen(libraryPath, RTLD_NOW | RTLD_LOCAL) else {
             throw EngineSaveClientError.missingLibrary(dynamicLoaderError())

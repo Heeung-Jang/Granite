@@ -3,5 +3,6 @@
 .build/
 .swiftpm/
 target/
+dist/
 docs/benchmarks/private/
 fixtures/generated/

@@ -3,6 +3,39 @@ import Testing
 @testable import NativeMarkdownCore
 
 @Test
+func engineLibraryPathPrefersEnvironment() {
+    let path = EngineLibraryPath.defaultPath(
+        environment: [EngineLibraryPath.environmentKey: "/tmp/custom/libvault_engine.dylib"],
+        bundledFrameworkPath: "/tmp/bundle/libvault_engine.dylib",
+        executableSiblingPath: "/tmp/bin/libvault_engine.dylib"
+    )
+
+    #expect(path == "/tmp/custom/libvault_engine.dylib")
+}
+
+@Test
+func engineLibraryPathFallsBackToBundledFramework() {
+    let path = EngineLibraryPath.defaultPath(
+        environment: [:],
+        bundledFrameworkPath: "/tmp/bundle/libvault_engine.dylib",
+        executableSiblingPath: "/tmp/bin/libvault_engine.dylib"
+    )
+
+    #expect(path == "/tmp/bundle/libvault_engine.dylib")
+}
+
+@Test
+func engineLibraryPathFallsBackToExecutableSibling() {
+    let path = EngineLibraryPath.defaultPath(
+        environment: [:],
+        bundledFrameworkPath: nil,
+        executableSiblingPath: "/tmp/bin/libvault_engine.dylib"
+    )
+
+    #expect(path == "/tmp/bin/libvault_engine.dylib")
+}
+
+@Test
 func engineSaveClientDecodesBaselineEnvelope() throws {
     let json = """
     {

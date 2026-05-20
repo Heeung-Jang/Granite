@@ -69,7 +69,13 @@ public struct EngineHealthClient: EngineHealthLoading {
     private let expectedAbiVersion: UInt32
 
     public init(
-        libraryPath: String? = ProcessInfo.processInfo.environment["VAULT_ENGINE_DYLIB_PATH"],
+        expectedAbiVersion: UInt32 = 1
+    ) {
+        self.init(libraryPath: EngineLibraryPath.defaultPath(), expectedAbiVersion: expectedAbiVersion)
+    }
+
+    public init(
+        libraryPath: String?,
         expectedAbiVersion: UInt32 = 1
     ) {
         self.libraryPath = libraryPath
@@ -81,7 +87,7 @@ public struct EngineHealthClient: EngineHealthLoading {
             return EngineHealthStatus(
                 state: .missingLibrary,
                 abiVersion: nil,
-                message: "VAULT_ENGINE_DYLIB_PATH is not set"
+                message: EngineLibraryPath.missingMessage
             )
         }
 
@@ -138,4 +144,3 @@ public struct EngineHealthClient: EngineHealthLoading {
         return String(cString: error)
     }
 }
-
