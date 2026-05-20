@@ -12,6 +12,7 @@ struct SearchPanelView: View {
     @State private var activeRequestID: UInt64 = 0
     @State private var handledSearchRequestID: UInt64?
     @State private var isLoadingMore = false
+    @FocusState private var isSearchFocused: Bool
 
     private let pageSize = 20
 
@@ -36,6 +37,8 @@ struct SearchPanelView: View {
         .onReceive(appState.$requestedSearch.compactMap { $0 }) { request in
             apply(request)
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Search panel")
     }
 
     private var controls: some View {
@@ -54,10 +57,14 @@ struct SearchPanelView: View {
                 .labelsHidden()
                 .pickerStyle(.segmented)
                 .frame(width: 120)
+                .accessibilityLabel("Search mode")
             }
 
             TextField("Search vault", text: $query)
                 .textFieldStyle(.roundedBorder)
+                .focused($isSearchFocused)
+                .accessibilityLabel("Search vault")
+                .accessibilityHint("Search by file name or note body")
                 .onSubmit {
                     Task {
                         await performSearch(offset: 0, append: false)
@@ -115,9 +122,11 @@ struct SearchPanelView: View {
                             }
                         }
                         .disabled(isLoadingMore)
+                        .accessibilityLabel(isLoadingMore ? "Loading more search results" : "Load more search results")
                     }
                 }
                 .listStyle(.sidebar)
+                .accessibilityLabel("Search results")
             }
         }
     }
@@ -260,6 +269,7 @@ struct SearchPanelView: View {
         handledSearchRequestID = request.id
         mode = request.mode
         query = request.query
+        isSearchFocused = true
     }
 }
 
@@ -294,6 +304,8 @@ private struct SearchStateBanner: View {
         .foregroundStyle(.secondary)
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Search results state: \(title)")
     }
 
     private var title: String {
@@ -346,6 +358,9 @@ private struct SearchResultRow: View {
                     .lineLimit(2)
             }
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Search result \(hit.title)")
+        .accessibilityHint(hit.snippet)
     }
 }
 
@@ -365,5 +380,7 @@ private struct EmptySearchState: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(16)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(title)
     }
 }

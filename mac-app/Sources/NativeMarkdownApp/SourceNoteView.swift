@@ -44,6 +44,7 @@ struct SourceNoteView: View {
                     interactionHandler: handleEditorInteraction
                 )
                     .frame(minHeight: 320)
+                    .accessibilityLabel("Markdown editor for \(file.displayName)")
                 SaveStatusStrip(
                     session: saveSession,
                     save: saveCurrentNote,
@@ -139,6 +140,8 @@ struct SourceNoteView: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Current note \(file.displayName)")
     }
 
     private var editorSaveAction: EditorSaveAction {
@@ -616,6 +619,8 @@ private struct SaveStatusStrip: View {
         }
         .font(.caption)
         .foregroundStyle(.secondary)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Save status")
     }
 
     @ViewBuilder

@@ -23,6 +23,8 @@ struct NoteInspectorView: View {
         .task(id: file.id) {
             await load()
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Inspector")
     }
 
     private var header: some View {
@@ -89,6 +91,7 @@ struct NoteInspectorView: View {
                                     }
                                 }
                                 .buttonStyle(.plain)
+                                .accessibilityLabel("Open backlink \(backlink.file.displayName)")
                             }
                         }
                     }
@@ -113,6 +116,7 @@ struct NoteInspectorView: View {
                                             }
                                             .buttonStyle(.plain)
                                             .font(.caption)
+                                            .accessibilityLabel("Open tagged note \(taggedFile.displayName)")
                                         }
                                     }
                                 }
@@ -154,6 +158,7 @@ struct NoteInspectorView: View {
                 }
                 .padding(12)
             }
+            .accessibilityLabel("Note inspector")
         }
     }
 
@@ -227,6 +232,8 @@ private struct InspectorSection<Content: View>: View {
             content
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(title)
     }
 }
 
@@ -244,6 +251,7 @@ private struct OutgoingLinkRow: View {
                     .lineLimit(1)
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Open outgoing link \(link.label)")
         case .missing:
             Label("\(link.label) missing", systemImage: "questionmark")
                 .foregroundStyle(.secondary)
@@ -260,6 +268,7 @@ private struct OutgoingLinkRow: View {
                             .lineLimit(1)
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("Open duplicate link target \(file.displayName)")
                 }
             }
         case .missingHeading(let file, let heading):
@@ -271,6 +280,7 @@ private struct OutgoingLinkRow: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
+            .accessibilityLabel("Open \(link.label), missing heading \(heading)")
         }
     }
 }
@@ -306,6 +316,8 @@ private struct AttachmentReferenceRow: View {
         .task(id: reference.id) {
             await loadPreviewInfo()
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Attachment \(reference.rawTarget), \(statusText)")
     }
 
     private var systemImage: String {
@@ -388,6 +400,7 @@ private struct AttachmentImagePreview: View {
         }
         .frame(maxWidth: .infinity, minHeight: 72, maxHeight: 120)
         .clipShape(RoundedRectangle(cornerRadius: 6))
+        .accessibilityLabel("Attachment image preview")
         .task(id: info.url) {
             await loadImage()
         }
@@ -450,6 +463,7 @@ private struct LocalGraphSection: View {
             .labelsHidden()
             .pickerStyle(.segmented)
             .controlSize(.small)
+            .accessibilityLabel("Graph depth")
 
             switch state {
             case .loading:
@@ -563,6 +577,7 @@ private struct LocalGraphNodeStrip: View {
                 }
             }
         }
+        .accessibilityLabel("Graph nodes")
     }
 }
 
@@ -579,9 +594,22 @@ private struct LocalGraphNodeChip: View {
                     label
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Open graph note \(node.label)")
             } else {
                 label
+                    .accessibilityLabel(accessibilityLabel)
             }
+        }
+    }
+
+    private var accessibilityLabel: String {
+        switch node.kind {
+        case .center:
+            "Current graph note \(node.label)"
+        case .resolved:
+            "Graph note \(node.label)"
+        case .unresolved:
+            "Unresolved graph link \(node.label)"
         }
     }
 
@@ -623,6 +651,15 @@ private struct LocalGraphEdgeRow: View {
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(accessibilityLabel)
+    }
+
+    private var accessibilityLabel: String {
+        let source = nodesByID[edge.sourceNodeID]?.label ?? edge.sourceNodeID
+        let target = nodesByID[edge.targetNodeID]?.label ?? edge.targetText
+        let direction = edge.direction == .backlink ? "backlink" : "outgoing link"
+        return "\(direction) from \(source) to \(target), hop \(edge.hop)"
     }
 
     @ViewBuilder
@@ -656,6 +693,7 @@ private struct EmptyInlineText: View {
         Text(text)
             .font(.caption)
             .foregroundStyle(.tertiary)
+            .accessibilityLabel(text)
     }
 }
 
@@ -675,5 +713,7 @@ private struct EmptyInspectorState: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(16)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(title)
     }
 }

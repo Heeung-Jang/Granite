@@ -52,6 +52,8 @@ struct RootView: View {
         .onAppear {
             AppLifecycleController.shared.appState = appState
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Workspace")
     }
 
     private var dirtyNavigationAlertBinding: Binding<Bool> {
@@ -137,5 +139,7 @@ struct WorkspacePlaceholderView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Workspace detail")
     }
 }

@@ -32,6 +32,8 @@ struct VaultPickerView: View {
             }
             .listStyle(.sidebar)
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Vault picker")
     }
 
     private var currentVaultSection: some View {
@@ -49,6 +51,7 @@ struct VaultPickerView: View {
                 }
                 .buttonStyle(.borderless)
                 .help("Choose Other")
+                .accessibilityLabel("Choose other vault")
             }
 
             Text(appState.engineHealth.displayText)
@@ -246,12 +249,15 @@ private struct RecentVaultRow: View {
                 }
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Open vault \(recentVault.displayName)")
+            .accessibilityHint(recentVault.displayPath)
 
             Button(action: remove) {
                 Image(systemName: "xmark.circle")
             }
             .buttonStyle(.borderless)
             .help("Remove Recent Vault")
+            .accessibilityLabel("Remove recent vault \(recentVault.displayName)")
         }
         .contextMenu {
             Button("Open", action: open)

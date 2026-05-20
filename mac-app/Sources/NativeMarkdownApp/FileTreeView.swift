@@ -30,6 +30,8 @@ struct FileTreeView: View {
         .onChange(of: appState.selectedFile?.id) { _, newValue in
             selectedFileID = newValue
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("File browser")
     }
 
     private var header: some View {
@@ -52,6 +54,7 @@ struct FileTreeView: View {
                 }
                 .buttonStyle(.borderless)
                 .help("Refresh Files")
+                .accessibilityLabel("Refresh files")
             }
         }
     }
@@ -81,6 +84,8 @@ struct FileTreeView: View {
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel(snapshot.state == .stale ? "File list is stale" : "File list is partial")
 
                     Divider()
                 }
@@ -92,6 +97,7 @@ struct FileTreeView: View {
                     }
                 }
                 .listStyle(.sidebar)
+                .accessibilityLabel("Markdown files")
             }
         }
     }
@@ -174,6 +180,12 @@ private struct FileTreeRow: View {
                 }
             }
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(accessibilityLabel)
+    }
+
+    private var accessibilityLabel: String {
+        item.parentPath.isEmpty ? item.displayName : "\(item.displayName), \(item.parentPath)"
     }
 }
 
@@ -193,5 +205,7 @@ private struct EmptyFileTreeState: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(16)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(title)
     }
 }

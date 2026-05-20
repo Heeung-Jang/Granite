@@ -53,6 +53,7 @@ struct MarkdownEditorView: NSViewRepresentable {
             durationMilliseconds: decorationTimer.elapsedMilliseconds()
         )
         textView.isEditable = isEditable
+        textView.setAccessibilityLabel(isEditable ? "Markdown editor" : "Markdown viewer")
     }
 
     static func dismantleNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {
@@ -124,6 +125,8 @@ enum MarkdownEditorTextViewFactory {
         textView.font = .monospacedSystemFont(ofSize: 14, weight: .regular)
         textView.textContainerInset = NSSize(width: 12, height: 12)
         textView.textContainer?.widthTracksTextView = true
+        textView.setAccessibilityLabel("Markdown editor")
+        textView.setAccessibilityIdentifier("markdown-editor")
         return textView
     }
 }
