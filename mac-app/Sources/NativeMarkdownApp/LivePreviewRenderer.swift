@@ -76,7 +76,6 @@ enum LivePreviewRenderer {
             plan.apply(to: storage, changes: &changes)
             return changes
         }
-        textView.setSelectedRange(clamped(selection, length: text.length))
 
         return MarkdownDecorationResult(
             mode: "live-preview",
@@ -109,13 +108,11 @@ enum LivePreviewRenderer {
             )
         }
 
-        let selection = textView.selectedRange()
         let changes = storage.withPreservedSelection(textView: textView, textLength: text.length) {
             var changes = AttributeChangeCounter()
             changes.replace(sourceAttributes(), to: storage, range: visibleRange)
             return changes
         }
-        textView.setSelectedRange(clamped(selection, length: text.length))
 
         return MarkdownDecorationResult(
             mode: resultMode(for: mode),
@@ -579,7 +576,7 @@ enum LivePreviewRenderer {
             case .wikiLink:
                 return wikiLinkConcealmentRanges(span, source: source)
             case .markdownLink:
-                return markdownLinkDelimiterRanges(in: span.sourceRange.nsRange, source: source)
+                return markdownLinkConcealmentRanges(span, source: source)
             case .tag:
                 let range = span.sourceRange.nsRange
                 return range.length > 1 ? [NSRange(location: range.location, length: 1)] : []
@@ -609,6 +606,28 @@ enum LivePreviewRenderer {
         guard !NSEqualRanges(sourceRange, displayRange) else {
             return matches(in: source, range: sourceRange, regex: wikiLinkTokenRegex)
         }
+        return displayOnlyConcealmentRanges(sourceRange: sourceRange, displayRange: displayRange)
+    }
+
+    private static func markdownLinkConcealmentRanges(
+        _ span: LivePreviewInlineSpan,
+        source: String
+    ) -> [NSRange] {
+        let sourceRange = span.sourceRange.nsRange
+        guard !span.isInert,
+              let displayRange = span.displayRange?.nsRange,
+              let target = markdownLinkTarget(in: sourceRange, source: source),
+              shouldConcealMarkdownLinkTarget(target)
+        else {
+            return markdownLinkDelimiterRanges(in: sourceRange, source: source)
+        }
+        return displayOnlyConcealmentRanges(sourceRange: sourceRange, displayRange: displayRange)
+    }
+
+    private static func displayOnlyConcealmentRanges(
+        sourceRange: NSRange,
+        displayRange: NSRange
+    ) -> [NSRange] {
         let displayEnd = displayRange.location + displayRange.length
         let sourceEnd = sourceRange.location + sourceRange.length
         return [
@@ -667,6 +686,72 @@ enum LivePreviewRenderer {
             NSRange(location: range.location + opening.location, length: opening.length),
             NSRange(location: range.location + closing.location, length: 1)
         ]
+    }
+
+    private static func markdownLinkTarget(in range: NSRange, source: String) -> String? {
+        let text = (source as NSString).substring(with: range) as NSString
+        let labelEnd = text.range(of: "](")
+        guard labelEnd.location != NSNotFound,
+              text.length > labelEnd.location + labelEnd.length + 1
+        else {
+            return nil
+        }
+        let targetStart = labelEnd.location + labelEnd.length
+        let targetLength = text.length - targetStart - 1
+        guard targetLength > 0 else {
+            return nil
+        }
+        return text.substring(with: NSRange(location: targetStart, length: targetLength))
+    }
+
+    private static func shouldConcealMarkdownLinkTarget(_ target: String) -> Bool {
+        let trimmed = target.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              !trimmed.hasPrefix("/"),
+              !trimmed.contains(".."),
+              !trimmed.contains("["),
+              !trimmed.contains("]")
+        else {
+            return false
+        }
+        guard let scheme = targetScheme(trimmed)?.lowercased() else {
+            return true
+        }
+        return ["http", "https", "mailto", "obsidian"].contains(scheme)
+    }
+
+    private static func targetScheme(_ target: String) -> String? {
+        guard let colon = target.firstIndex(of: ":") else {
+            return nil
+        }
+        let colonDistance = target.distance(from: target.startIndex, to: colon)
+        let slashDistance = target
+            .firstIndex(of: "/")
+            .map { target.distance(from: target.startIndex, to: $0) } ?? Int.max
+        guard colonDistance <= slashDistance else {
+            return nil
+        }
+
+        let scheme = String(target[..<colon])
+        guard let first = scheme.unicodeScalars.first,
+              isASCIIAlpha(first),
+              scheme.unicodeScalars.allSatisfy(isSchemeScalar)
+        else {
+            return nil
+        }
+        return scheme
+    }
+
+    private static func isASCIIAlpha(_ scalar: UnicodeScalar) -> Bool {
+        (65...90).contains(Int(scalar.value)) || (97...122).contains(Int(scalar.value))
+    }
+
+    private static func isSchemeScalar(_ scalar: UnicodeScalar) -> Bool {
+        isASCIIAlpha(scalar)
+            || (48...57).contains(Int(scalar.value))
+            || scalar == "+"
+            || scalar == "-"
+            || scalar == "."
     }
 
     private static func regex(_ pattern: String) -> NSRegularExpression {
@@ -839,10 +924,13 @@ private extension NSTextStorage {
         beginEditing()
         let value = body()
         endEditing()
-        textView.setSelectedRange(NSRange(
+        let restoredSelection = NSRange(
             location: min(selection.location, textLength),
             length: min(selection.length, max(0, textLength - min(selection.location, textLength)))
-        ))
+        )
+        if !NSEqualRanges(textView.selectedRange(), restoredSelection) {
+            textView.setSelectedRange(restoredSelection)
+        }
         return value
     }
 }

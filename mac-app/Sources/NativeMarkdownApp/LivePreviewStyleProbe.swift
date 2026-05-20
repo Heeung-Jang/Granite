@@ -47,7 +47,7 @@ struct LivePreviewStyleProbeReport: Codable, Equatable {
     var duplicateLinkStateStyled: Bool
     var missingHeadingLinkStateStyled: Bool
     var markdownLinkLabelVisible: Bool
-    var markdownLinkDestinationVisible: Bool
+    var markdownLinkDestinationConcealed: Bool
     var markdownLinkRenderPreservesSource: Bool
     var nestedTagStyled: Bool
     var koreanTagStyled: Bool
@@ -318,7 +318,7 @@ enum LivePreviewStyleProbe {
             missingHeadingLinkStateStyled: missingHeadingLinkColor == LivePreviewTheme.missingHeadingLinkColor
                 && underlineStyle(in: textView, source: source, marker: "Heading Target") == NSUnderlineStyle.single.rawValue,
             markdownLinkLabelVisible: markdownLinkLabelColor == LivePreviewTheme.linkColor,
-            markdownLinkDestinationVisible: markdownLinkDestinationColor != LivePreviewTheme.concealedColor,
+            markdownLinkDestinationConcealed: markdownLinkDestinationColor == LivePreviewTheme.concealedColor,
             markdownLinkRenderPreservesSource: textView.string.contains("[Label](https://example.com/path)"),
             nestedTagStyled: nestedTagAttributes?[.foregroundColor] as? NSColor == LivePreviewTheme.tagColor
                 && nestedTagAttributes?[.backgroundColor] as? NSColor == LivePreviewTheme.tagBackgroundColor,

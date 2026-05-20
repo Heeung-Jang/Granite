@@ -24,7 +24,9 @@ struct MarkdownEditorBridgeProbeReport: Codable, Equatable {
     var sourceModeClearsLivePreviewAttributes: Bool
     var sourceEquivalentSelectionText: Bool
     var markdownImageEmbedDelimitersConcealed: Bool
+    var safeMarkdownLinkTargetsConcealed: Bool
     var embedPreviewMapUpdatePreservesSelection: Bool
+    var selectionChangeDecorationDoesNotReenter: Bool
     var unsafeMarkdownLinkTargetsRemainVisible: Bool
     var unsafeWikiLinkTargetsRemainVisible: Bool
     var plainTextPastePolicy: Bool
@@ -56,6 +58,7 @@ enum MarkdownEditorBridgeProbe {
         let coordinatorProbe = probeCoordinatorBinding()
         let modeProbe = probeModeTransitions()
         let renderProbe = probeLivePreviewRendering()
+        let selectionChangeProbe = probeSelectionChangeDecorationDoesNotReenter()
         let checkboxProbe = probeCheckboxToggle()
         let tableCellProbe = probeTableCellEdit()
         let accessibilityProbe = probeEditorAccessibility()
@@ -81,7 +84,9 @@ enum MarkdownEditorBridgeProbe {
             sourceModeClearsLivePreviewAttributes: renderProbe.sourceModeClearsLivePreviewAttributes,
             sourceEquivalentSelectionText: renderProbe.sourceEquivalentSelectionText,
             markdownImageEmbedDelimitersConcealed: renderProbe.markdownImageEmbedDelimitersConcealed,
+            safeMarkdownLinkTargetsConcealed: renderProbe.safeMarkdownLinkTargetsConcealed,
             embedPreviewMapUpdatePreservesSelection: renderProbe.embedPreviewMapUpdatePreservesSelection,
+            selectionChangeDecorationDoesNotReenter: selectionChangeProbe,
             unsafeMarkdownLinkTargetsRemainVisible: renderProbe.unsafeMarkdownLinkTargetsRemainVisible,
             unsafeWikiLinkTargetsRemainVisible: renderProbe.unsafeWikiLinkTargetsRemainVisible,
             plainTextPastePolicy: renderProbe.plainTextPastePolicy,
@@ -208,6 +213,7 @@ enum MarkdownEditorBridgeProbe {
         sourceModeClearsLivePreviewAttributes: Bool,
         sourceEquivalentSelectionText: Bool,
         markdownImageEmbedDelimitersConcealed: Bool,
+        safeMarkdownLinkTargetsConcealed: Bool,
         embedPreviewMapUpdatePreservesSelection: Bool,
         unsafeMarkdownLinkTargetsRemainVisible: Bool,
         unsafeWikiLinkTargetsRemainVisible: Bool,
@@ -329,6 +335,21 @@ enum MarkdownEditorBridgeProbe {
             && foregroundColor(in: unsafeTextView, text: unsafeText, marker: "Private/Payroll") != LivePreviewTheme.concealedColor
             && foregroundColor(in: unsafeTextView, text: unsafeText, marker: "../Secrets") != LivePreviewTheme.concealedColor
             && foregroundColor(in: unsafeTextView, text: unsafeText, marker: "http://[::1") != LivePreviewTheme.concealedColor
+        let safeText = "[Alpha](Targets/Alpha.md) [Site](https://obsidian.md)\n"
+        let safeTextView = MarkdownEditorTextViewFactory.makeTextView()
+        safeTextView.string = safeText
+        safeTextView.setSelectedRange(NSRange(location: (safeText as NSString).length, length: 0))
+        MarkdownVisibleRangeDecorator.decorateVisibleRange(
+            in: safeTextView,
+            livePreviewMode: .livePreview,
+            revealRange: safeTextView.selectedRange()
+        )
+        let safeMarkdownLinkTargetsConcealed = foregroundColor(
+            in: safeTextView,
+            text: safeText,
+            marker: "Targets/Alpha.md"
+        ) == LivePreviewTheme.concealedColor
+            && foregroundColor(in: safeTextView, text: safeText, marker: "https://obsidian.md") == LivePreviewTheme.concealedColor
         let embedPreviewMapUpdatePreservesSelection = probeEmbedPreviewMapUpdatePreservesSelection()
 
         return (
@@ -341,6 +362,7 @@ enum MarkdownEditorBridgeProbe {
             sourceModeClearsLivePreviewAttributes,
             selectedSource == "Heading",
             markdownImageEmbedDelimitersConcealed,
+            safeMarkdownLinkTargetsConcealed,
             embedPreviewMapUpdatePreservesSelection,
             unsafeMarkdownLinkTargetsRemainVisible,
             unsafeWikiLinkTargetsRemainVisible,
@@ -405,6 +427,39 @@ enum MarkdownEditorBridgeProbe {
         return NSEqualRanges(textView.selectedRange(), selection)
             && textView.string == text
             && foregroundColor(in: textView, text: text, marker: "image.png") == LivePreviewTheme.embedImageColor
+    }
+
+    private static func probeSelectionChangeDecorationDoesNotReenter() -> Bool {
+        var modelText = "# Heading\n\n**Strong** and [[Link]]\n"
+        let binding = Binding<String>(
+            get: { modelText },
+            set: { modelText = $0 }
+        )
+        let coordinator = MarkdownEditorView.Coordinator(text: binding)
+        let textView = MarkdownEditorTextViewFactory.makeTextView()
+        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 900, height: 700))
+        scrollView.documentView = textView
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 900, height: 700),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: true
+        )
+        window.contentView = scrollView
+        window.makeFirstResponder(textView)
+        textView.delegate = coordinator
+        coordinator.textView = textView
+        textView.string = modelText
+        let selection = NSRange(location: 2, length: 0)
+        textView.setSelectedRange(selection)
+        coordinator.textViewDidChangeSelection(Notification(
+            name: NSTextView.didChangeSelectionNotification,
+            object: textView
+        ))
+        window.close()
+
+        return modelText == textView.string
+            && NSEqualRanges(textView.selectedRange(), selection)
     }
 
     private static func font(in textView: NSTextView, text: String, marker: String) -> NSFont? {

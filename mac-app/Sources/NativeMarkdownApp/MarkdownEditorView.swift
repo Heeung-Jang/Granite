@@ -23,27 +23,23 @@ struct MarkdownEditorView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> NSScrollView {
         let textView = MarkdownEditorTextViewFactory.makeTextView()
-        textView.delegate = context.coordinator
-        if let textView = textView as? MarkdownInteractionTextView {
-            textView.interactionDelegate = context.coordinator
-            textView.livePreviewMode = livePreviewMode
-        }
         textView.string = text
         textView.isEditable = isEditable
+        if let textView = textView as? MarkdownInteractionTextView {
+            textView.livePreviewMode = livePreviewMode
+        }
         let decorationTimer = AppTelemetryTimer()
-        MarkdownVisibleRangeDecorator.decorateVisibleRange(
-            in: textView,
-            livePreviewMode: livePreviewMode,
-            revealRange: textView.selectedRange(),
-            linkStyleMap: linkStyleMap,
-            embedPreviewMap: embedPreviewMap
-        )
+        context.coordinator.decorateVisibleRange(in: textView)
         AppTelemetry.editorDecorationCompleted(
             textLength: textView.string.count,
             durationMilliseconds: decorationTimer.elapsedMilliseconds()
         )
         MarkdownEditorAccessibility.apply(to: textView, isEditable: isEditable, mode: livePreviewMode)
         context.coordinator.textView = textView
+        textView.delegate = context.coordinator
+        if let textView = textView as? MarkdownInteractionTextView {
+            textView.interactionDelegate = context.coordinator
+        }
 
         let scrollView = NSScrollView()
         scrollView.hasVerticalScroller = true
@@ -71,13 +67,7 @@ struct MarkdownEditorView: NSViewRepresentable {
             isApplyingAppKitChange: context.coordinator.isApplyingAppKitChange
         )
         let decorationTimer = AppTelemetryTimer()
-        MarkdownVisibleRangeDecorator.decorateVisibleRange(
-            in: textView,
-            livePreviewMode: livePreviewMode,
-            revealRange: textView.selectedRange(),
-            linkStyleMap: linkStyleMap,
-            embedPreviewMap: embedPreviewMap
-        )
+        context.coordinator.decorateVisibleRange(in: textView)
         AppTelemetry.editorDecorationCompleted(
             textLength: textView.string.count,
             durationMilliseconds: decorationTimer.elapsedMilliseconds()
@@ -108,6 +98,7 @@ struct MarkdownEditorView: NSViewRepresentable {
         private var livePreviewMode: LivePreviewMode
         private var linkStyleMap: LivePreviewLinkStyleMap
         private var embedPreviewMap: LivePreviewEmbedPreviewMap
+        private var isDecoratingLivePreview = false
         weak var textView: NSTextView?
         var isApplyingAppKitChange = false
 
@@ -140,6 +131,9 @@ struct MarkdownEditorView: NSViewRepresentable {
         }
 
         func textDidChange(_ notification: Notification) {
+            guard !isDecoratingLivePreview else {
+                return
+            }
             guard let textView = notification.object as? NSTextView else {
                 return
             }
@@ -151,6 +145,9 @@ struct MarkdownEditorView: NSViewRepresentable {
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {
+            guard !isDecoratingLivePreview else {
+                return
+            }
             guard let textView = notification.object as? NSTextView else {
                 return
             }
@@ -178,7 +175,13 @@ struct MarkdownEditorView: NSViewRepresentable {
             return true
         }
 
-        private func renderCurrentSelection(in textView: NSTextView) {
+        func decorateVisibleRange(in textView: NSTextView) {
+            guard !isDecoratingLivePreview else {
+                return
+            }
+
+            isDecoratingLivePreview = true
+            defer { isDecoratingLivePreview = false }
             MarkdownVisibleRangeDecorator.decorateVisibleRange(
                 in: textView,
                 livePreviewMode: livePreviewMode,
@@ -186,6 +189,10 @@ struct MarkdownEditorView: NSViewRepresentable {
                 linkStyleMap: linkStyleMap,
                 embedPreviewMap: embedPreviewMap
             )
+        }
+
+        private func renderCurrentSelection(in textView: NSTextView) {
+            decorateVisibleRange(in: textView)
         }
     }
 }

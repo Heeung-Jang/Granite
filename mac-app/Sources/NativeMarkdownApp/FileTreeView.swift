@@ -102,6 +102,7 @@ struct FileTreeView: View {
         }
     }
 
+    @MainActor
     private func reload(for selection: VaultSelectionState) async {
         selectedFileID = nil
 
