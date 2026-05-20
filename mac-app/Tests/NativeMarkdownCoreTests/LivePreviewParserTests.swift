@@ -123,14 +123,74 @@ func livePreviewParserClassifiesEmbedsAsInertCandidates() throws {
 
 @Test
 func livePreviewParserClassifiesLinksTagsAndInertInlineEmbeds() {
-    let source = "Text [[Target#Heading|Alias]] [Label](https://example.com) #상태/검토 ![[image.png]]\n"
+    let source = "Text [[Target#Heading|Alias]] [Label](https://example.com) #project/native #상태/검토 ![[image.png]]\n"
     let result = LivePreviewParser.parse(source)
     let inlineSpans = result.blocks.flatMap(\.inlineSpans)
 
     #expect(inlineSpans.contains { $0.kind == .wikiLink && !$0.isInert })
     #expect(inlineSpans.contains { $0.kind == .markdownLink && !$0.isInert })
-    #expect(inlineSpans.contains { $0.kind == .tag })
+    #expect(inlineSpans.filter { $0.kind == .tag }.count == 2)
     #expect(inlineSpans.contains { $0.kind == .wikiLink && $0.isInert })
+    let aliasedWikiLink = try! #require(inlineSpans.first { $0.kind == .wikiLink && !$0.isInert })
+    let markdownLink = try! #require(inlineSpans.first { $0.kind == .markdownLink && !$0.isInert })
+    let nestedTag = try! #require(inlineSpans.first { string(for: $0.sourceRange, in: source) == "#project/native" })
+    let koreanTag = try! #require(inlineSpans.first { string(for: $0.sourceRange, in: source) == "#상태/검토" })
+    #expect(string(for: aliasedWikiLink.displayRange, in: source) == "Alias")
+    #expect(string(for: markdownLink.displayRange, in: source) == "Label")
+    #expect(string(for: nestedTag.displayRange, in: source) == "project/native")
+    #expect(string(for: koreanTag.displayRange, in: source) == "상태/검토")
+}
+
+@Test
+func livePreviewLinkStyleMapAdaptsCoreResolutionStates() {
+    let source = "[[Target]] [[Missing]]"
+    let result = LivePreviewParser.parse(source)
+    let links = result.blocks.flatMap(\.inlineSpans).filter { $0.kind == .wikiLink }
+    let map = LivePreviewLinkStyleMap(source: source, outgoingLinks: [
+        OutgoingLinkItem(
+            id: "0-Target",
+            label: "Target",
+            target: "Target",
+            heading: nil,
+            state: .resolved(FileTreeItem(relativePath: "Target.md"))
+        ),
+        OutgoingLinkItem(
+            id: "1-Missing",
+            label: "Missing",
+            target: "Missing",
+            heading: nil,
+            state: .missing
+        )
+    ])
+
+    #expect(map.state(for: links[0]) == .resolved)
+    #expect(map.state(for: links[1]) == .missing)
+}
+
+@Test
+func livePreviewParserKeepsUnsafeWikiTargetsVisibleThroughAliases() {
+    let source = """
+    [[file:///private/wiki|Open]]
+    [[data:text/plain,value|Open]]
+    [[javascript:alert(1)|Open]]
+    [[/private/wiki|Open]]
+    [[Private/Payroll|Open]]
+    [[../Secrets|Open]]
+    [[http://[::1|Open]]
+    """
+    let result = LivePreviewParser.parse(source)
+    let displayValues = result.blocks
+        .flatMap(\.inlineSpans)
+        .filter { $0.kind == .wikiLink }
+        .compactMap { string(for: $0.displayRange, in: source) }
+
+    #expect(displayValues.contains("file:///private/wiki|Open"))
+    #expect(displayValues.contains("data:text/plain,value|Open"))
+    #expect(displayValues.contains("javascript:alert(1)|Open"))
+    #expect(displayValues.contains("/private/wiki|Open"))
+    #expect(displayValues.contains("Private/Payroll|Open"))
+    #expect(displayValues.contains("../Secrets|Open"))
+    #expect(displayValues.contains("http://[::1|Open"))
 }
 
 @Test
@@ -210,6 +270,15 @@ private func fixture(_ name: String) throws -> String {
         .appendingPathComponent("fixtures/live-preview-vault", isDirectory: true)
         .appendingPathComponent(name, isDirectory: false)
     return try String(contentsOf: fileURL, encoding: .utf8)
+}
+
+private func string(for sourceRange: LivePreviewSourceRange?, in source: String) -> String? {
+    guard let sourceRange,
+          let range = LivePreviewRangeMapper.stringRange(for: sourceRange, in: source)
+    else {
+        return nil
+    }
+    return String(source[range])
 }
 
 private extension Array where Element == LivePreviewBlockSpan {

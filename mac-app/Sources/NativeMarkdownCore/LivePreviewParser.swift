@@ -258,12 +258,8 @@ public enum LivePreviewParser {
         spans += matches(in: source, range: range, regex: inlineCodeRegex, kind: .inlineCode)
         spans += matches(in: source, range: range, regex: strongRegex, kind: .strong)
         spans += matches(in: source, range: range, regex: emphasisRegex, kind: .emphasis)
-        spans += matches(in: source, range: range, regex: wikiLinkRegex, kind: .wikiLink) { matchText in
-            matchText.hasPrefix("!")
-        }
-        spans += matches(in: source, range: range, regex: markdownLinkRegex, kind: .markdownLink) { matchText in
-            matchText.hasPrefix("!")
-        }
+        spans += wikiLinkMatches(in: source, range: range)
+        spans += markdownLinkMatches(in: source, range: range)
         spans += tagMatches(in: source, range: range)
         return spans.sorted {
             if $0.sourceRange.location == $1.sourceRange.location {
@@ -271,6 +267,56 @@ public enum LivePreviewParser {
             }
             return $0.sourceRange.location < $1.sourceRange.location
         }
+    }
+
+    private static func wikiLinkMatches(in source: String, range: NSRange) -> [LivePreviewInlineSpan] {
+        wikiLinkRegex.matches(in: source, range: range).map { match in
+            let matchText = (source as NSString).substring(with: match.range)
+            let contentRange = match.range(at: 1)
+            return LivePreviewInlineSpan(
+                kind: .wikiLink,
+                sourceRange: LivePreviewSourceRange(location: match.range.location, length: match.range.length),
+                displayRange: wikiLinkDisplayRange(in: source, contentRange: contentRange),
+                isInert: matchText.hasPrefix("!")
+            )
+        }
+    }
+
+    private static func markdownLinkMatches(in source: String, range: NSRange) -> [LivePreviewInlineSpan] {
+        markdownLinkRegex.matches(in: source, range: range).map { match in
+            let matchText = (source as NSString).substring(with: match.range)
+            let labelRange = match.range(at: 1)
+            return LivePreviewInlineSpan(
+                kind: .markdownLink,
+                sourceRange: LivePreviewSourceRange(location: match.range.location, length: match.range.length),
+                displayRange: LivePreviewSourceRange(location: labelRange.location, length: labelRange.length),
+                isInert: matchText.hasPrefix("!")
+            )
+        }
+    }
+
+    private static func wikiLinkDisplayRange(in source: String, contentRange: NSRange) -> LivePreviewSourceRange {
+        let content = (source as NSString).substring(with: contentRange) as NSString
+        let aliasSeparator = content.range(of: "|", options: .backwards)
+        guard aliasSeparator.location != NSNotFound else {
+            return LivePreviewSourceRange(location: contentRange.location, length: contentRange.length)
+        }
+        let target = content.substring(to: aliasSeparator.location)
+        guard !keepsWikiTargetVisible(target) else {
+            return LivePreviewSourceRange(location: contentRange.location, length: contentRange.length)
+        }
+
+        let displayLocation = contentRange.location + aliasSeparator.location + aliasSeparator.length
+        let displayLength = max(0, contentRange.location + contentRange.length - displayLocation)
+        return LivePreviewSourceRange(location: displayLocation, length: displayLength)
+    }
+
+    private static func keepsWikiTargetVisible(_ target: String) -> Bool {
+        let trimmed = target.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.contains("/") ||
+            trimmed.contains("\\") ||
+            trimmed.contains("[") ||
+            targetScheme(trimmed) != nil
     }
 
     private static func matches(
@@ -297,9 +343,14 @@ public enum LivePreviewParser {
                 return nil
             }
             tagRange.length = min(tagRange.length, (source as NSString).length - tagRange.location)
+            let displayRange = LivePreviewSourceRange(
+                location: tagRange.location + 1,
+                length: max(0, tagRange.length - 1)
+            )
             return LivePreviewInlineSpan(
                 kind: .tag,
-                sourceRange: LivePreviewSourceRange(location: tagRange.location, length: tagRange.length)
+                sourceRange: LivePreviewSourceRange(location: tagRange.location, length: tagRange.length),
+                displayRange: displayRange
             )
         }
     }
@@ -398,13 +449,47 @@ public enum LivePreviewParser {
     private static let inlineCodeRegex = regex("`[^`\\n]+`")
     private static let strongRegex = regex("\\*\\*[^*\\n]+\\*\\*|__[^_\\n]+__")
     private static let emphasisRegex = regex("(?<!\\*)\\*[^*\\n]+\\*(?!\\*)|_[^_\\n]+_")
-    private static let wikiLinkRegex = regex("!?\\[\\[[^\\]\\n]+\\]\\]")
-    private static let markdownLinkRegex = regex("!?\\[[^\\]\\n]+\\]\\([^\\)\\n]+\\)")
+    private static let wikiLinkRegex = regex("!?\\[\\[([^\\]\\n]+)\\]\\]")
+    private static let markdownLinkRegex = regex("!?\\[([^\\]\\n]+)\\]\\([^\\)\\n]+\\)")
     private static let tagRegex = regex("(^|\\s)(#[\\p{L}\\p{N}_/-]+)")
 
     private static func regex(_ pattern: String) -> NSRegularExpression {
         try! NSRegularExpression(pattern: pattern, options: [.anchorsMatchLines])
     }
+}
+
+private func targetScheme(_ target: String) -> String? {
+    guard let colon = target.firstIndex(of: ":") else {
+        return nil
+    }
+    let colonDistance = target.distance(from: target.startIndex, to: colon)
+    let slashDistance = target
+        .firstIndex(of: "/")
+        .map { target.distance(from: target.startIndex, to: $0) } ?? Int.max
+    guard colonDistance <= slashDistance else {
+        return nil
+    }
+
+    let scheme = String(target[..<colon])
+    guard let first = scheme.unicodeScalars.first,
+          isASCIIAlpha(first),
+          scheme.unicodeScalars.allSatisfy(isSchemeScalar)
+    else {
+        return nil
+    }
+    return scheme
+}
+
+private func isASCIIAlpha(_ scalar: UnicodeScalar) -> Bool {
+    (65...90).contains(Int(scalar.value)) || (97...122).contains(Int(scalar.value))
+}
+
+private func isSchemeScalar(_ scalar: UnicodeScalar) -> Bool {
+    isASCIIAlpha(scalar)
+        || (48...57).contains(Int(scalar.value))
+        || scalar == "+"
+        || scalar == "-"
+        || scalar == "."
 }
 
 private enum LineIndex {

@@ -21,7 +21,8 @@ enum LivePreviewRenderer {
         in textView: NSTextView,
         range requestedRange: NSRange? = nil,
         mode: LivePreviewMode = .livePreview,
-        revealRange: NSRange? = nil
+        revealRange: NSRange? = nil,
+        linkStyleMap: LivePreviewLinkStyleMap = LivePreviewLinkStyleMap()
     ) -> MarkdownDecorationResult {
         let start = DispatchTime.now().uptimeNanoseconds
         if textView.hasMarkedText() {
@@ -65,7 +66,8 @@ enum LivePreviewRenderer {
             source: textView.string,
             plan: plan,
             visibleRange: visibleRange,
-            revealRange: resolvedRevealRange
+            revealRange: resolvedRevealRange,
+            linkStyleMap: linkStyleMap
         )
         let result = storage.withPreservedSelection(textView: textView, textLength: text.length) {
             var changes = AttributeChangeCounter()
@@ -128,7 +130,8 @@ enum LivePreviewRenderer {
         source: String,
         plan: LivePreviewAttributePlan,
         visibleRange: NSRange,
-        revealRange: NSRange
+        revealRange: NSRange,
+        linkStyleMap: LivePreviewLinkStyleMap
     ) {
         let parseWindow = LivePreviewVisibleParseWindow.window(
             in: source,
@@ -144,7 +147,13 @@ enum LivePreviewRenderer {
             }
             applyBlockAttributes(block, plan: plan, range: blockRange)
             applyBlockTokenAttributes(block, source: source, plan: plan, visibleRange: visibleRange)
-            applyInlineAttributes(block, source: source, plan: plan, visibleRange: visibleRange)
+            applyInlineAttributes(
+                block,
+                source: source,
+                plan: plan,
+                visibleRange: visibleRange,
+                linkStyleMap: linkStyleMap
+            )
             concealTokens(block, source: source, plan: plan, visibleRange: visibleRange, revealRange: revealRange)
         }
     }
@@ -225,7 +234,8 @@ enum LivePreviewRenderer {
         _ block: LivePreviewBlockSpan,
         source: String,
         plan: LivePreviewAttributePlan,
-        visibleRange: NSRange
+        visibleRange: NSRange,
+        linkStyleMap: LivePreviewLinkStyleMap
     ) {
         for inline in block.inlineSpans {
             let range = NSIntersectionRange(inline.sourceRange.nsRange, visibleRange)
@@ -244,13 +254,49 @@ enum LivePreviewRenderer {
                     .backgroundColor: LivePreviewTheme.inlineCodeBackgroundColor
                 ], range: range)
             case .wikiLink:
-                plan.addAttributes([.foregroundColor: LivePreviewTheme.linkColor], range: range)
+                plan.addAttributes(
+                    linkAttributes(for: linkStyleMap.state(for: inline)),
+                    range: inlineDisplayRange(inline, visibleRange: visibleRange)
+                )
             case .markdownLink:
-                plan.addAttributes([.foregroundColor: LivePreviewTheme.linkColor], range: range)
+                plan.addAttributes(
+                    linkAttributes(for: linkStyleMap.state(for: inline)),
+                    range: inlineDisplayRange(inline, visibleRange: visibleRange)
+                )
             case .tag:
-                plan.addAttributes([.foregroundColor: LivePreviewTheme.tagColor], range: range)
+                plan.addAttributes(tagAttributes(), range: inlineDisplayRange(inline, visibleRange: visibleRange))
             }
         }
+    }
+
+    private static func linkAttributes(
+        for state: LivePreviewLinkStyleState
+    ) -> [NSAttributedString.Key: Any] {
+        let color: NSColor
+        switch state {
+        case .unknown, .resolved:
+            color = LivePreviewTheme.linkColor
+        case .missing:
+            color = LivePreviewTheme.missingLinkColor
+        case .duplicate:
+            color = LivePreviewTheme.duplicateLinkColor
+        case .missingHeading:
+            color = LivePreviewTheme.missingHeadingLinkColor
+        }
+
+        var attributes: [NSAttributedString.Key: Any] = [.foregroundColor: color]
+        if state != .unknown && state != .resolved {
+            attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
+            attributes[.underlineColor] = color
+        }
+        return attributes
+    }
+
+    private static func tagAttributes() -> [NSAttributedString.Key: Any] {
+        [
+            .foregroundColor: LivePreviewTheme.tagColor,
+            .backgroundColor: LivePreviewTheme.tagBackgroundColor
+        ]
     }
 
     private static func concealTokens(
@@ -351,7 +397,7 @@ enum LivePreviewRenderer {
             case .emphasis, .inlineCode:
                 return edgeRanges(span.sourceRange.nsRange, tokenLength: 1)
             case .wikiLink:
-                return matches(in: source, range: span.sourceRange.nsRange, regex: wikiLinkTokenRegex)
+                return wikiLinkConcealmentRanges(span, source: source)
             case .markdownLink:
                 return markdownLinkDelimiterRanges(in: span.sourceRange.nsRange, source: source)
             case .tag:
@@ -369,6 +415,26 @@ enum LivePreviewRenderer {
             NSRange(location: range.location, length: tokenLength),
             NSRange(location: range.location + range.length - tokenLength, length: tokenLength)
         ]
+    }
+
+    private static func inlineDisplayRange(_ span: LivePreviewInlineSpan, visibleRange: NSRange) -> NSRange {
+        NSIntersectionRange(span.displayRange?.nsRange ?? span.sourceRange.nsRange, visibleRange)
+    }
+
+    private static func wikiLinkConcealmentRanges(_ span: LivePreviewInlineSpan, source: String) -> [NSRange] {
+        guard let displayRange = span.displayRange?.nsRange else {
+            return matches(in: source, range: span.sourceRange.nsRange, regex: wikiLinkTokenRegex)
+        }
+        let sourceRange = span.sourceRange.nsRange
+        guard !NSEqualRanges(sourceRange, displayRange) else {
+            return matches(in: source, range: sourceRange, regex: wikiLinkTokenRegex)
+        }
+        let displayEnd = displayRange.location + displayRange.length
+        let sourceEnd = sourceRange.location + sourceRange.length
+        return [
+            NSRange(location: sourceRange.location, length: max(0, displayRange.location - sourceRange.location)),
+            NSRange(location: displayEnd, length: max(0, sourceEnd - displayEnd))
+        ].filter { $0.length > 0 }
     }
 
     private static func prefixMatches(

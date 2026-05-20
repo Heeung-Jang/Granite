@@ -25,10 +25,12 @@ struct MarkdownEditorBridgeProbeReport: Codable, Equatable {
     var sourceEquivalentSelectionText: Bool
     var markdownImageEmbedDelimitersConcealed: Bool
     var unsafeMarkdownLinkTargetsRemainVisible: Bool
+    var unsafeWikiLinkTargetsRemainVisible: Bool
     var plainTextPastePolicy: Bool
     var checkboxToggleChangesOnlyToken: Bool
     var checkboxToggleUndoRestoresToken: Bool
     var checkboxToggleReadOnlyPreservesBuffer: Bool
+    var editorAccessibilityHelpMentionsInteractions: Bool
 }
 
 @MainActor
@@ -49,6 +51,7 @@ enum MarkdownEditorBridgeProbe {
         let modeProbe = probeModeTransitions()
         let renderProbe = probeLivePreviewRendering()
         let checkboxProbe = probeCheckboxToggle()
+        let accessibilityProbe = probeEditorAccessibility()
 
         return MarkdownEditorBridgeProbeReport(
             sameTextSkippedUpdate: sameTextProbe.skipped,
@@ -72,10 +75,12 @@ enum MarkdownEditorBridgeProbe {
             sourceEquivalentSelectionText: renderProbe.sourceEquivalentSelectionText,
             markdownImageEmbedDelimitersConcealed: renderProbe.markdownImageEmbedDelimitersConcealed,
             unsafeMarkdownLinkTargetsRemainVisible: renderProbe.unsafeMarkdownLinkTargetsRemainVisible,
+            unsafeWikiLinkTargetsRemainVisible: renderProbe.unsafeWikiLinkTargetsRemainVisible,
             plainTextPastePolicy: renderProbe.plainTextPastePolicy,
             checkboxToggleChangesOnlyToken: checkboxProbe.changesOnlyToken,
             checkboxToggleUndoRestoresToken: checkboxProbe.undoRestoresToken,
-            checkboxToggleReadOnlyPreservesBuffer: checkboxProbe.readOnlyPreservesBuffer
+            checkboxToggleReadOnlyPreservesBuffer: checkboxProbe.readOnlyPreservesBuffer,
+            editorAccessibilityHelpMentionsInteractions: accessibilityProbe
         )
     }
 
@@ -191,6 +196,7 @@ enum MarkdownEditorBridgeProbe {
         sourceEquivalentSelectionText: Bool,
         markdownImageEmbedDelimitersConcealed: Bool,
         unsafeMarkdownLinkTargetsRemainVisible: Bool,
+        unsafeWikiLinkTargetsRemainVisible: Bool,
         plainTextPastePolicy: Bool
     ) {
         let text = "# **Heading**\n\n**Strong** and `code` with [[Link]] #tag/native\n"
@@ -274,6 +280,9 @@ enum MarkdownEditorBridgeProbe {
         ![Data](data:text/plain,a[b])
         ![File](file:///private/a]b)
         ![WikiText](data:text/plain,![[x]])
+        [[file:///private/wiki|Open]] [[data:text/plain,value|Open]]
+        [[javascript:alert(1)|Open]] [[/private/wiki|Open]]
+        [[Private/Payroll|Open]] [[../Secrets|Open]] [[http://[::1|Open]]
         """
         let unsafeTextView = MarkdownEditorTextViewFactory.makeTextView()
         unsafeTextView.string = unsafeText
@@ -295,6 +304,17 @@ enum MarkdownEditorBridgeProbe {
             text: unsafeText,
             marker: "![Data"
         ) == LivePreviewTheme.concealedColor
+        let unsafeWikiLinkTargetsRemainVisible = foregroundColor(
+            in: unsafeTextView,
+            text: unsafeText,
+            marker: "file:///private/wiki"
+        ) != LivePreviewTheme.concealedColor
+            && foregroundColor(in: unsafeTextView, text: unsafeText, marker: "data:text/plain,value") != LivePreviewTheme.concealedColor
+            && foregroundColor(in: unsafeTextView, text: unsafeText, marker: "javascript:alert") != LivePreviewTheme.concealedColor
+            && foregroundColor(in: unsafeTextView, text: unsafeText, marker: "/private/wiki") != LivePreviewTheme.concealedColor
+            && foregroundColor(in: unsafeTextView, text: unsafeText, marker: "Private/Payroll") != LivePreviewTheme.concealedColor
+            && foregroundColor(in: unsafeTextView, text: unsafeText, marker: "../Secrets") != LivePreviewTheme.concealedColor
+            && foregroundColor(in: unsafeTextView, text: unsafeText, marker: "http://[::1") != LivePreviewTheme.concealedColor
 
         return (
             hiddenResult.changedRangeCount > 0 && hiddenResult.changedUTF16Length > 0,
@@ -307,6 +327,7 @@ enum MarkdownEditorBridgeProbe {
             selectedSource == "Heading",
             markdownImageEmbedDelimitersConcealed,
             unsafeMarkdownLinkTargetsRemainVisible,
+            unsafeWikiLinkTargetsRemainVisible,
             !textView.isRichText && !textView.importsGraphics
         )
     }
@@ -370,5 +391,23 @@ enum MarkdownEditorBridgeProbe {
             && readOnlyTextView.string == text
 
         return (changesOnlyToken, undoRestoresToken, readOnlyPreservesBuffer)
+    }
+
+    private static func probeEditorAccessibility() -> Bool {
+        let textView = MarkdownEditorTextViewFactory.makeTextView()
+        let livePreviewHelp = textView.accessibilityHelp() ?? ""
+
+        MarkdownEditorAccessibility.apply(to: textView, isEditable: false, mode: .livePreview)
+        let viewerHelp = textView.accessibilityHelp() ?? ""
+
+        MarkdownEditorAccessibility.apply(to: textView, isEditable: true, mode: .source)
+        let sourceHelp = textView.accessibilityHelp() ?? ""
+
+        return livePreviewHelp.contains("links")
+            && livePreviewHelp.contains("tags")
+            && livePreviewHelp.contains("checkboxes")
+            && viewerHelp.contains("links")
+            && viewerHelp.contains("tags")
+            && sourceHelp.contains("Markdown syntax")
     }
 }

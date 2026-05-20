@@ -23,9 +23,64 @@ public enum LivePreviewInlineKind: Equatable, Sendable {
     case tag
 }
 
+public enum LivePreviewLinkStyleState: Equatable, Sendable {
+    case unknown
+    case resolved
+    case missing
+    case duplicate
+    case missingHeading
+
+    public init(_ state: LinkResolutionState) {
+        switch state {
+        case .resolved:
+            self = .resolved
+        case .missing:
+            self = .missing
+        case .duplicate:
+            self = .duplicate
+        case .missingHeading:
+            self = .missingHeading
+        }
+    }
+}
+
+public struct LivePreviewLinkStyleMap: Equatable, Sendable {
+    private var statesByRange: [LivePreviewSourceRange: LivePreviewLinkStyleState]
+
+    public init(statesByRange: [LivePreviewSourceRange: LivePreviewLinkStyleState] = [:]) {
+        self.statesByRange = statesByRange
+    }
+
+    public init(source: String, outgoingLinks: [OutgoingLinkItem]) {
+        let wikiSpans = LivePreviewParser.parse(source)
+            .blocks
+            .flatMap(\.inlineSpans)
+            .filter { $0.kind == .wikiLink }
+        var statesByRange: [LivePreviewSourceRange: LivePreviewLinkStyleState] = [:]
+        for (span, link) in zip(wikiSpans, outgoingLinks) {
+            statesByRange[span.sourceRange] = LivePreviewLinkStyleState(link.state)
+        }
+        self.init(statesByRange: statesByRange)
+    }
+
+    public var isEmpty: Bool {
+        statesByRange.isEmpty
+    }
+
+    public func state(for span: LivePreviewInlineSpan) -> LivePreviewLinkStyleState {
+        switch span.kind {
+        case .wikiLink, .markdownLink:
+            statesByRange[span.sourceRange] ?? .unknown
+        case .inlineCode, .strong, .emphasis, .tag:
+            .unknown
+        }
+    }
+}
+
 public struct LivePreviewInlineSpan: Equatable, Sendable {
     public var kind: LivePreviewInlineKind
     public var sourceRange: LivePreviewSourceRange
+    public var displayRange: LivePreviewSourceRange?
     public var tokenRanges: [LivePreviewSourceRange]
     public var isInert: Bool
     public var isEditable: Bool
@@ -33,12 +88,14 @@ public struct LivePreviewInlineSpan: Equatable, Sendable {
     public init(
         kind: LivePreviewInlineKind,
         sourceRange: LivePreviewSourceRange,
+        displayRange: LivePreviewSourceRange? = nil,
         tokenRanges: [LivePreviewSourceRange] = [],
         isInert: Bool = false,
         isEditable: Bool = true
     ) {
         self.kind = kind
         self.sourceRange = sourceRange
+        self.displayRange = displayRange
         self.tokenRanges = tokenRanges
         self.isInert = isInert
         self.isEditable = isEditable

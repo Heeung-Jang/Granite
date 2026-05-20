@@ -20,8 +20,10 @@ struct SourceNoteView: View {
     @State private var pendingExternalLink: PendingExternalLink?
     @State private var interactionNotice: EditorInteractionNotice?
     @State private var pendingRecoverySnapshot: EditorRecoverySnapshot?
+    @State private var livePreviewLinkStyleMap = LivePreviewLinkStyleMap()
     @State private var recoveryTask: Task<Void, Never>?
     @State private var fallbackProfileTask: Task<Void, Never>?
+    @State private var linkStyleTask: Task<Void, Never>?
 
     init(
         vaultURL: URL,
@@ -47,6 +49,7 @@ struct SourceNoteView: View {
                     text: $text,
                     isEditable: saveSession?.canEdit == true,
                     livePreviewMode: livePreviewMode,
+                    linkStyleMap: livePreviewLinkStyleMap,
                     interactionHandler: handleEditorInteraction
                 )
                     .frame(minHeight: 320)
@@ -81,6 +84,7 @@ struct SourceNoteView: View {
         }
         .onChange(of: text) { _, newValue in
             saveSession?.updateContents(newValue)
+            clearLivePreviewLinkStyles()
             updateAutomaticFallbackAfterTextChange(for: newValue)
             scheduleRecoverySnapshot(contents: newValue)
         }
@@ -93,6 +97,7 @@ struct SourceNoteView: View {
         .onDisappear {
             recoveryTask?.cancel()
             fallbackProfileTask?.cancel()
+            linkStyleTask?.cancel()
             if saveSession?.isDirty == true, appState.isEditorDirty(file: file) {
                 writeRecoverySnapshot(contents: text)
             } else {
@@ -242,6 +247,8 @@ struct SourceNoteView: View {
         saveSession = nil
         pendingRecoverySnapshot = nil
         fallbackProfileTask?.cancel()
+        linkStyleTask?.cancel()
+        livePreviewLinkStyleMap = LivePreviewLinkStyleMap()
         fallbackController = LivePreviewFallbackController()
         lastFallbackProfileByteCount = 0
         let timer = AppTelemetryTimer()
@@ -258,6 +265,7 @@ struct SourceNoteView: View {
             saveSession = EditorSaveSession(file: file, contents: document.contents)
             updateAutomaticFallback(for: document.contents)
             state = .loaded
+            refreshLivePreviewLinkStyles(contents: document.contents)
             AppTelemetry.noteLoadCompleted(
                 file,
                 success: true,
@@ -331,6 +339,7 @@ struct SourceNoteView: View {
                 session = saveSession ?? session
                 session.completeSave(outcome, savedContents: request.contents)
                 saveSession = session
+                refreshLivePreviewLinkStyles(contents: request.contents)
             } catch {
                 if Task.isCancelled {
                     return
@@ -373,6 +382,7 @@ struct SourceNoteView: View {
                 session = saveSession ?? session
                 session.completeReload(outcome)
                 saveSession = session
+                refreshLivePreviewLinkStyles(contents: outcome.contents)
             } catch {
                 if Task.isCancelled {
                     return
@@ -417,6 +427,7 @@ struct SourceNoteView: View {
                 session = saveSession ?? session
                 session.completeChoice(outcome, savedContents: savedSnapshot)
                 saveSession = session
+                refreshLivePreviewLinkStyles(contents: savedSnapshot)
                 appState.updateEditorDirtyState(file: file, isDirty: session.isDirty)
                 appState.openFile(FileTreeItem(relativePath: outcome.baseline.relativePath))
             } catch {
@@ -462,6 +473,7 @@ struct SourceNoteView: View {
                 session = saveSession ?? session
                 session.completeChoice(outcome, savedContents: savedSnapshot)
                 saveSession = session
+                refreshLivePreviewLinkStyles(contents: savedSnapshot)
             } catch {
                 if Task.isCancelled {
                     return
@@ -572,6 +584,7 @@ struct SourceNoteView: View {
         saveSession?.updateContents(snapshot.contents)
         appState.updateEditorDirtyState(file: file, isDirty: saveSession?.isDirty == true)
         pendingRecoverySnapshot = nil
+        clearLivePreviewLinkStyles()
         scheduleRecoverySnapshot(contents: snapshot.contents)
     }
 
@@ -624,6 +637,34 @@ struct SourceNoteView: View {
             return nil
         }
         return EditorRecoveryStore(dataDirectory: dataDirectory)
+    }
+
+    private func clearLivePreviewLinkStyles() {
+        linkStyleTask?.cancel()
+        if !livePreviewLinkStyleMap.isEmpty {
+            livePreviewLinkStyleMap = LivePreviewLinkStyleMap()
+        }
+    }
+
+    private func refreshLivePreviewLinkStyles(contents: String) {
+        linkStyleTask?.cancel()
+        let vaultURL = vaultURL
+        let file = file
+        linkStyleTask = Task {
+            let map = try? await Task.detached(priority: .utility) {
+                let snapshot = try FileSystemNoteInspectorLoader().loadInspector(
+                    at: vaultURL,
+                    file: file,
+                    maxFiles: 5_000
+                )
+                return LivePreviewLinkStyleMap(source: contents, outgoingLinks: snapshot.outgoingLinks)
+            }.value
+
+            if Task.isCancelled || contents != text {
+                return
+            }
+            livePreviewLinkStyleMap = map ?? LivePreviewLinkStyleMap()
+        }
     }
 
     private func handleEditorInteraction(_ interaction: MarkdownEditorInteraction) {

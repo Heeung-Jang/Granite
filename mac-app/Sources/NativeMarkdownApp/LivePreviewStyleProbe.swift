@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import NativeMarkdownCore
 
 struct LivePreviewStyleProbeReport: Codable, Equatable {
     var headingFontScaleApplied: Bool
@@ -24,6 +25,19 @@ struct LivePreviewStyleProbeReport: Codable, Equatable {
     var calloutSyntaxConcealedOutsideReveal: Bool
     var calloutSyntaxRevealedInsideBlock: Bool
     var calloutRenderPreservesSource: Bool
+    var wikiLinkAliasVisible: Bool
+    var wikiLinkSourceConcealedOutsideReveal: Bool
+    var wikiLinkRenderPreservesSource: Bool
+    var missingLinkStateStyled: Bool
+    var duplicateLinkStateStyled: Bool
+    var missingHeadingLinkStateStyled: Bool
+    var markdownLinkLabelVisible: Bool
+    var markdownLinkDestinationVisible: Bool
+    var markdownLinkRenderPreservesSource: Bool
+    var nestedTagStyled: Bool
+    var koreanTagStyled: Bool
+    var tagMarkerConcealedOutsideReveal: Bool
+    var tagRenderPreservesSource: Bool
     var headingRenderPreservesSource: Bool
 }
 
@@ -55,6 +69,11 @@ enum LivePreviewStyleProbe {
         > Quote line
         > [!note] Callout body
 
+        [[Target#Heading|Alias]] and [[Missing Target]]
+        [[Duplicate Target]] and [[Heading Target#Absent]]
+        [Label](https://example.com/path)
+        #project/native #상태/검토
+
         ## Heading 2
         ### Heading 3
         #### Heading 4
@@ -64,11 +83,13 @@ enum LivePreviewStyleProbe {
         let textView = MarkdownEditorTextViewFactory.makeTextView()
         textView.string = source
         textView.setSelectedRange(NSRange(location: (source as NSString).length, length: 0))
+        let linkStyleMap = linkStyleMap(for: source)
 
         MarkdownVisibleRangeDecorator.decorateVisibleRange(
             in: textView,
             livePreviewMode: .livePreview,
-            revealRange: textView.selectedRange()
+            revealRange: textView.selectedRange(),
+            linkStyleMap: linkStyleMap
         )
 
         let fonts = (1...6).compactMap { font(in: textView, source: source, marker: "Heading \($0)") }
@@ -87,13 +108,24 @@ enum LivePreviewStyleProbe {
         let blockquoteMarkerColor = foregroundColor(in: textView, source: source, marker: "> Quote")
         let calloutAttributes = attributes(in: textView, source: source, marker: "Callout body")
         let hiddenCalloutSyntaxColor = foregroundColor(in: textView, source: source, marker: "> [!note]")
+        let wikiAliasColor = foregroundColor(in: textView, source: source, marker: "Alias")
+        let hiddenWikiSourceColor = foregroundColor(in: textView, source: source, marker: "[[Target#Heading|")
+        let missingLinkColor = foregroundColor(in: textView, source: source, marker: "Missing Target")
+        let duplicateLinkColor = foregroundColor(in: textView, source: source, marker: "Duplicate Target")
+        let missingHeadingLinkColor = foregroundColor(in: textView, source: source, marker: "Heading Target")
+        let markdownLinkLabelColor = foregroundColor(in: textView, source: source, marker: "Label")
+        let markdownLinkDestinationColor = foregroundColor(in: textView, source: source, marker: "https://example.com/path")
+        let nestedTagAttributes = attributes(in: textView, source: source, marker: "project/native")
+        let koreanTagAttributes = attributes(in: textView, source: source, marker: "상태/검토")
+        let hiddenTagMarkerColor = foregroundColor(in: textView, source: source, marker: "#project")
 
         if let codeOffset = utf16Offset(of: "let value", in: source) {
             textView.setSelectedRange(NSRange(location: codeOffset, length: 0))
             MarkdownVisibleRangeDecorator.decorateVisibleRange(
                 in: textView,
                 livePreviewMode: .livePreview,
-                revealRange: textView.selectedRange()
+                revealRange: textView.selectedRange(),
+                linkStyleMap: linkStyleMap
             )
         }
         let revealedFenceColor = foregroundColor(in: textView, source: source, marker: "```swift")
@@ -103,7 +135,8 @@ enum LivePreviewStyleProbe {
             MarkdownVisibleRangeDecorator.decorateVisibleRange(
                 in: textView,
                 livePreviewMode: .livePreview,
-                revealRange: textView.selectedRange()
+                revealRange: textView.selectedRange(),
+                linkStyleMap: linkStyleMap
             )
         }
         let revealedListMarkerColor = foregroundColor(in: textView, source: source, marker: "- Bullet")
@@ -113,7 +146,8 @@ enum LivePreviewStyleProbe {
             MarkdownVisibleRangeDecorator.decorateVisibleRange(
                 in: textView,
                 livePreviewMode: .livePreview,
-                revealRange: textView.selectedRange()
+                revealRange: textView.selectedRange(),
+                linkStyleMap: linkStyleMap
             )
         }
         let revealedCalloutSyntaxColor = foregroundColor(in: textView, source: source, marker: "> [!note]")
@@ -156,8 +190,48 @@ enum LivePreviewStyleProbe {
             calloutSyntaxConcealedOutsideReveal: hiddenCalloutSyntaxColor == LivePreviewTheme.concealedColor,
             calloutSyntaxRevealedInsideBlock: revealedCalloutSyntaxColor != LivePreviewTheme.concealedColor,
             calloutRenderPreservesSource: textView.string.contains("> [!note] Callout body"),
+            wikiLinkAliasVisible: wikiAliasColor == LivePreviewTheme.linkColor,
+            wikiLinkSourceConcealedOutsideReveal: hiddenWikiSourceColor == LivePreviewTheme.concealedColor,
+            wikiLinkRenderPreservesSource: textView.string.contains("[[Target#Heading|Alias]]"),
+            missingLinkStateStyled: missingLinkColor == LivePreviewTheme.missingLinkColor
+                && underlineStyle(in: textView, source: source, marker: "Missing Target") == NSUnderlineStyle.single.rawValue,
+            duplicateLinkStateStyled: duplicateLinkColor == LivePreviewTheme.duplicateLinkColor
+                && underlineStyle(in: textView, source: source, marker: "Duplicate Target") == NSUnderlineStyle.single.rawValue,
+            missingHeadingLinkStateStyled: missingHeadingLinkColor == LivePreviewTheme.missingHeadingLinkColor
+                && underlineStyle(in: textView, source: source, marker: "Heading Target") == NSUnderlineStyle.single.rawValue,
+            markdownLinkLabelVisible: markdownLinkLabelColor == LivePreviewTheme.linkColor,
+            markdownLinkDestinationVisible: markdownLinkDestinationColor != LivePreviewTheme.concealedColor,
+            markdownLinkRenderPreservesSource: textView.string.contains("[Label](https://example.com/path)"),
+            nestedTagStyled: nestedTagAttributes?[.foregroundColor] as? NSColor == LivePreviewTheme.tagColor
+                && nestedTagAttributes?[.backgroundColor] as? NSColor == LivePreviewTheme.tagBackgroundColor,
+            koreanTagStyled: koreanTagAttributes?[.foregroundColor] as? NSColor == LivePreviewTheme.tagColor
+                && koreanTagAttributes?[.backgroundColor] as? NSColor == LivePreviewTheme.tagBackgroundColor,
+            tagMarkerConcealedOutsideReveal: hiddenTagMarkerColor == LivePreviewTheme.concealedColor,
+            tagRenderPreservesSource: textView.string.contains("#project/native #상태/검토"),
             headingRenderPreservesSource: textView.string == source
         )
+    }
+
+    private static func linkStyleMap(for source: String) -> LivePreviewLinkStyleMap {
+        var states: [LivePreviewSourceRange: LivePreviewLinkStyleState] = [:]
+        record("[[Target#Heading|Alias]]", state: .resolved, in: source, states: &states)
+        record("[[Missing Target]]", state: .missing, in: source, states: &states)
+        record("[[Duplicate Target]]", state: .duplicate, in: source, states: &states)
+        record("[[Heading Target#Absent]]", state: .missingHeading, in: source, states: &states)
+        return LivePreviewLinkStyleMap(statesByRange: states)
+    }
+
+    private static func record(
+        _ marker: String,
+        state: LivePreviewLinkStyleState,
+        in source: String,
+        states: inout [LivePreviewSourceRange: LivePreviewLinkStyleState]
+    ) {
+        guard let range = source.range(of: marker) else {
+            return
+        }
+        let nsRange = NSRange(range, in: source)
+        states[LivePreviewSourceRange(location: nsRange.location, length: nsRange.length)] = state
     }
 
     private static func font(in textView: NSTextView, source: String, marker: String) -> NSFont? {
@@ -194,6 +268,13 @@ enum LivePreviewStyleProbe {
             return nil
         }
         return textView.textStorage?.attribute(.foregroundColor, at: offset, effectiveRange: nil) as? NSColor
+    }
+
+    private static func underlineStyle(in textView: NSTextView, source: String, marker: String) -> Int? {
+        guard let offset = utf16Offset(of: marker, in: source) else {
+            return nil
+        }
+        return textView.textStorage?.attribute(.underlineStyle, at: offset, effectiveRange: nil) as? Int
     }
 
     private static func utf16Offset(of marker: String, in source: String) -> Int? {

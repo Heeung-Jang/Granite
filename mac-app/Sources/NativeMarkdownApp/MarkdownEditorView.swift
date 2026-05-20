@@ -7,10 +7,16 @@ struct MarkdownEditorView: NSViewRepresentable {
     @Binding var text: String
     var isEditable = true
     var livePreviewMode: LivePreviewMode = .livePreview
+    var linkStyleMap = LivePreviewLinkStyleMap()
     var interactionHandler: ((MarkdownEditorInteraction) -> Void)?
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(text: $text, interactionHandler: interactionHandler, livePreviewMode: livePreviewMode)
+        Coordinator(
+            text: $text,
+            interactionHandler: interactionHandler,
+            livePreviewMode: livePreviewMode,
+            linkStyleMap: linkStyleMap
+        )
     }
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -20,16 +26,19 @@ struct MarkdownEditorView: NSViewRepresentable {
             textView.interactionDelegate = context.coordinator
         }
         textView.string = text
+        textView.isEditable = isEditable
         let decorationTimer = AppTelemetryTimer()
         MarkdownVisibleRangeDecorator.decorateVisibleRange(
             in: textView,
             livePreviewMode: livePreviewMode,
-            revealRange: textView.selectedRange()
+            revealRange: textView.selectedRange(),
+            linkStyleMap: linkStyleMap
         )
         AppTelemetry.editorDecorationCompleted(
             textLength: textView.string.count,
             durationMilliseconds: decorationTimer.elapsedMilliseconds()
         )
+        MarkdownEditorAccessibility.apply(to: textView, isEditable: isEditable, mode: livePreviewMode)
         context.coordinator.textView = textView
 
         let scrollView = NSScrollView()
@@ -44,7 +53,8 @@ struct MarkdownEditorView: NSViewRepresentable {
         context.coordinator.update(
             text: $text,
             interactionHandler: interactionHandler,
-            livePreviewMode: livePreviewMode
+            livePreviewMode: livePreviewMode,
+            linkStyleMap: linkStyleMap
         )
         guard let textView = scrollView.documentView as? NSTextView else {
             return
@@ -59,14 +69,15 @@ struct MarkdownEditorView: NSViewRepresentable {
         MarkdownVisibleRangeDecorator.decorateVisibleRange(
             in: textView,
             livePreviewMode: livePreviewMode,
-            revealRange: textView.selectedRange()
+            revealRange: textView.selectedRange(),
+            linkStyleMap: linkStyleMap
         )
         AppTelemetry.editorDecorationCompleted(
             textLength: textView.string.count,
             durationMilliseconds: decorationTimer.elapsedMilliseconds()
         )
         textView.isEditable = isEditable
-        textView.setAccessibilityLabel(isEditable ? "Markdown editor" : "Markdown viewer")
+        MarkdownEditorAccessibility.apply(to: textView, isEditable: isEditable, mode: livePreviewMode)
     }
 
     static func dismantleNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {
@@ -86,27 +97,32 @@ struct MarkdownEditorView: NSViewRepresentable {
         @Binding private var text: String
         private var interactionHandler: ((MarkdownEditorInteraction) -> Void)?
         private var livePreviewMode: LivePreviewMode
+        private var linkStyleMap: LivePreviewLinkStyleMap
         weak var textView: NSTextView?
         var isApplyingAppKitChange = false
 
         init(
             text: Binding<String>,
             interactionHandler: ((MarkdownEditorInteraction) -> Void)? = nil,
-            livePreviewMode: LivePreviewMode = .livePreview
+            livePreviewMode: LivePreviewMode = .livePreview,
+            linkStyleMap: LivePreviewLinkStyleMap = LivePreviewLinkStyleMap()
         ) {
             _text = text
             self.interactionHandler = interactionHandler
             self.livePreviewMode = livePreviewMode
+            self.linkStyleMap = linkStyleMap
         }
 
         func update(
             text: Binding<String>,
             interactionHandler: ((MarkdownEditorInteraction) -> Void)?,
-            livePreviewMode: LivePreviewMode
+            livePreviewMode: LivePreviewMode,
+            linkStyleMap: LivePreviewLinkStyleMap
         ) {
             _text = text
             self.interactionHandler = interactionHandler
             self.livePreviewMode = livePreviewMode
+            self.linkStyleMap = linkStyleMap
         }
 
         func textDidChange(_ notification: Notification) {
@@ -152,7 +168,8 @@ struct MarkdownEditorView: NSViewRepresentable {
             MarkdownVisibleRangeDecorator.decorateVisibleRange(
                 in: textView,
                 livePreviewMode: livePreviewMode,
-                revealRange: textView.selectedRange()
+                revealRange: textView.selectedRange(),
+                linkStyleMap: linkStyleMap
             )
         }
     }
@@ -170,9 +187,30 @@ enum MarkdownEditorTextViewFactory {
         textView.font = .monospacedSystemFont(ofSize: 14, weight: .regular)
         textView.textContainerInset = NSSize(width: 12, height: 12)
         textView.textContainer?.widthTracksTextView = true
-        textView.setAccessibilityLabel("Markdown editor")
+        MarkdownEditorAccessibility.apply(to: textView, isEditable: true, mode: .livePreview)
         textView.setAccessibilityIdentifier("markdown-editor")
         return textView
+    }
+}
+
+@MainActor
+enum MarkdownEditorAccessibility {
+    static func apply(to textView: NSTextView, isEditable: Bool, mode: LivePreviewMode) {
+        textView.setAccessibilityLabel(isEditable ? "Markdown editor" : "Markdown viewer")
+        textView.setAccessibilityHelp(help(isEditable: isEditable, mode: mode))
+    }
+
+    private static func help(isEditable: Bool, mode: LivePreviewMode) -> String {
+        switch mode {
+        case .livePreview:
+            isEditable
+                ? "Live Preview editor. Command-click links and tags, click task checkboxes to toggle them."
+                : "Live Preview viewer. Click links and tags to open or search."
+        case .source:
+            "Source editor. Markdown syntax is shown as plain text."
+        case .fallbackSource:
+            "Fallback source editor. Live Preview is disabled for this note."
+        }
     }
 }
 

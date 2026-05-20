@@ -16,7 +16,11 @@ enum LivePreviewTheme {
     static let textColor = NSColor.labelColor
     static let secondaryTextColor = NSColor.secondaryLabelColor
     static let linkColor = NSColor.linkColor
+    static let missingLinkColor = NSColor.systemRed
+    static let duplicateLinkColor = NSColor.systemOrange
+    static let missingHeadingLinkColor = NSColor.systemPink
     static let tagColor = NSColor.systemPurple
+    static let tagBackgroundColor = NSColor.systemPurple.withAlphaComponent(0.12)
     static let codeColor = NSColor.systemBrown
     static let inlineCodeBackgroundColor = NSColor.controlBackgroundColor
     static let codeBlockBackgroundColor = NSColor.controlBackgroundColor

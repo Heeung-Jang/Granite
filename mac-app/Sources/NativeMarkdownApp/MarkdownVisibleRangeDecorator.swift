@@ -19,13 +19,15 @@ enum MarkdownVisibleRangeDecorator {
         in textView: NSTextView,
         range requestedRange: NSRange? = nil,
         livePreviewMode: LivePreviewMode = .livePreview,
-        revealRange: NSRange? = nil
+        revealRange: NSRange? = nil,
+        linkStyleMap: LivePreviewLinkStyleMap = LivePreviewLinkStyleMap()
     ) -> MarkdownDecorationResult {
         LivePreviewRenderer.render(
             in: textView,
             range: requestedRange,
             mode: livePreviewMode,
-            revealRange: revealRange
+            revealRange: revealRange,
+            linkStyleMap: linkStyleMap
         )
     }
 }
