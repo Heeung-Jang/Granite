@@ -16,9 +16,15 @@ struct MarkdownEditorBridgeProbeReport: Codable, Equatable {
     var modeTransitionsPreservedDirtyState: Bool
     var modeTransitionsKeptUndoEnabled: Bool
     var livePreviewReportsChangedRanges: Bool
+    var livePreviewNoOpRenderSkipsChanges: Bool
     var caretRevealRestoresHiddenSyntaxColor: Bool
+    var inlineConcealmentAppliesBeyondParagraph: Bool
+    var tagMarkersConcealed: Bool
     var markedTextRenderDeferred: Bool
+    var sourceModeClearsLivePreviewAttributes: Bool
     var sourceEquivalentSelectionText: Bool
+    var markdownImageEmbedDelimitersConcealed: Bool
+    var unsafeMarkdownLinkTargetsRemainVisible: Bool
     var plainTextPastePolicy: Bool
 }
 
@@ -53,9 +59,15 @@ enum MarkdownEditorBridgeProbe {
             modeTransitionsPreservedDirtyState: modeProbe.dirtyStatePreserved,
             modeTransitionsKeptUndoEnabled: modeProbe.undoEnabled,
             livePreviewReportsChangedRanges: renderProbe.reportsChangedRanges,
+            livePreviewNoOpRenderSkipsChanges: renderProbe.noOpRenderSkipsChanges,
             caretRevealRestoresHiddenSyntaxColor: renderProbe.caretRevealRestoresHiddenSyntaxColor,
+            inlineConcealmentAppliesBeyondParagraph: renderProbe.inlineConcealmentAppliesBeyondParagraph,
+            tagMarkersConcealed: renderProbe.tagMarkersConcealed,
             markedTextRenderDeferred: renderProbe.markedTextRenderDeferred,
+            sourceModeClearsLivePreviewAttributes: renderProbe.sourceModeClearsLivePreviewAttributes,
             sourceEquivalentSelectionText: renderProbe.sourceEquivalentSelectionText,
+            markdownImageEmbedDelimitersConcealed: renderProbe.markdownImageEmbedDelimitersConcealed,
+            unsafeMarkdownLinkTargetsRemainVisible: renderProbe.unsafeMarkdownLinkTargetsRemainVisible,
             plainTextPastePolicy: renderProbe.plainTextPastePolicy
         )
     }
@@ -163,12 +175,18 @@ enum MarkdownEditorBridgeProbe {
 
     private static func probeLivePreviewRendering() -> (
         reportsChangedRanges: Bool,
+        noOpRenderSkipsChanges: Bool,
         caretRevealRestoresHiddenSyntaxColor: Bool,
+        inlineConcealmentAppliesBeyondParagraph: Bool,
+        tagMarkersConcealed: Bool,
         markedTextRenderDeferred: Bool,
+        sourceModeClearsLivePreviewAttributes: Bool,
         sourceEquivalentSelectionText: Bool,
+        markdownImageEmbedDelimitersConcealed: Bool,
+        unsafeMarkdownLinkTargetsRemainVisible: Bool,
         plainTextPastePolicy: Bool
     ) {
-        let text = "# Heading\n\n**Strong** and `code` with [[Link]]\n"
+        let text = "# **Heading**\n\n**Strong** and `code` with [[Link]] #tag/native\n"
         let textView = MarkdownEditorTextViewFactory.makeTextView()
         textView.string = text
         textView.setSelectedRange(NSRange(location: (text as NSString).length, length: 0))
@@ -183,6 +201,13 @@ enum MarkdownEditorBridgeProbe {
             at: 0,
             effectiveRange: nil
         ) as? NSColor
+        let hiddenHeadingInlineTokenColor = foregroundColor(in: textView, text: text, marker: "**Heading")
+        let hiddenTagMarkerColor = foregroundColor(in: textView, text: text, marker: "#tag")
+        let noOpResult = MarkdownVisibleRangeDecorator.decorateVisibleRange(
+            in: textView,
+            livePreviewMode: .livePreview,
+            revealRange: textView.selectedRange()
+        )
 
         textView.setSelectedRange(NSRange(location: 2, length: 0))
         MarkdownVisibleRangeDecorator.decorateVisibleRange(
@@ -195,6 +220,18 @@ enum MarkdownEditorBridgeProbe {
             at: 0,
             effectiveRange: nil
         ) as? NSColor
+
+        MarkdownVisibleRangeDecorator.decorateVisibleRange(in: textView, livePreviewMode: .source)
+        let sourceHeadingColor = textView.textStorage?.attribute(
+            .foregroundColor,
+            at: 0,
+            effectiveRange: nil
+        ) as? NSColor
+        let sourceHeadingFont = textView.textStorage?.attribute(.font, at: 0, effectiveRange: nil) as? NSFont
+        let sourceStrongFont = font(in: textView, text: text, marker: "Strong")
+        let sourceModeClearsLivePreviewAttributes = sourceHeadingColor != LivePreviewTheme.concealedColor
+            && sourceHeadingFont == LivePreviewTheme.sourceFont
+            && sourceStrongFont == LivePreviewTheme.sourceFont
 
         let markedTextView = MarkdownEditorTextViewFactory.makeTextView()
         let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 900, height: 700))
@@ -221,16 +258,70 @@ enum MarkdownEditorBridgeProbe {
         let markedTextWasActive = markedTextView.hasMarkedText()
         markedTextView.unmarkText()
 
-        let selection = NSRange(location: 2, length: 7)
+        let selection = NSRange(location: 4, length: 7)
         textView.setSelectedRange(selection)
         let selectedSource = (textView.string as NSString).substring(with: selection)
 
+        let unsafeText = """
+        [bad](javascript:alert(1)) [file](file:///private/a]b) [ok](http://[::1]/)
+        ![Data](data:text/plain,a[b])
+        ![File](file:///private/a]b)
+        ![WikiText](data:text/plain,![[x]])
+        """
+        let unsafeTextView = MarkdownEditorTextViewFactory.makeTextView()
+        unsafeTextView.string = unsafeText
+        unsafeTextView.setSelectedRange(NSRange(location: (unsafeText as NSString).length, length: 0))
+        MarkdownVisibleRangeDecorator.decorateVisibleRange(
+            in: unsafeTextView,
+            livePreviewMode: .livePreview,
+            revealRange: unsafeTextView.selectedRange()
+        )
+        let unsafeMarkdownLinkTargetsRemainVisible = foregroundColor(in: unsafeTextView, text: unsafeText, marker: "javascript") != LivePreviewTheme.concealedColor
+            && foregroundColor(in: unsafeTextView, text: unsafeText, marker: "data:text") != LivePreviewTheme.concealedColor
+            && foregroundColor(in: unsafeTextView, text: unsafeText, marker: "file:///") != LivePreviewTheme.concealedColor
+            && foregroundColor(in: unsafeTextView, text: unsafeText, marker: "[::1]") != LivePreviewTheme.concealedColor
+            && foregroundColor(in: unsafeTextView, text: unsafeText, marker: "]b") != LivePreviewTheme.concealedColor
+            && foregroundColor(in: unsafeTextView, text: unsafeText, marker: "[b]") != LivePreviewTheme.concealedColor
+            && foregroundColor(in: unsafeTextView, text: unsafeText, marker: "![[x]]") != LivePreviewTheme.concealedColor
+        let markdownImageEmbedDelimitersConcealed = foregroundColor(
+            in: unsafeTextView,
+            text: unsafeText,
+            marker: "![Data"
+        ) == LivePreviewTheme.concealedColor
+
         return (
             hiddenResult.changedRangeCount > 0 && hiddenResult.changedUTF16Length > 0,
+            noOpResult.changedRangeCount == 0 && noOpResult.changedUTF16Length == 0,
             hiddenHeadingColor == LivePreviewTheme.concealedColor && revealedHeadingColor != LivePreviewTheme.concealedColor,
+            hiddenHeadingInlineTokenColor == LivePreviewTheme.concealedColor,
+            hiddenTagMarkerColor == LivePreviewTheme.concealedColor,
             markedTextWasActive && markedResult.mode == "marked-text-deferred",
+            sourceModeClearsLivePreviewAttributes,
             selectedSource == "Heading",
+            markdownImageEmbedDelimitersConcealed,
+            unsafeMarkdownLinkTargetsRemainVisible,
             !textView.isRichText && !textView.importsGraphics
         )
+    }
+
+    private static func foregroundColor(in textView: NSTextView, text: String, marker: String) -> NSColor? {
+        guard let offset = utf16Offset(of: marker, in: text) else {
+            return nil
+        }
+        return textView.textStorage?.attribute(.foregroundColor, at: offset, effectiveRange: nil) as? NSColor
+    }
+
+    private static func font(in textView: NSTextView, text: String, marker: String) -> NSFont? {
+        guard let offset = utf16Offset(of: marker, in: text) else {
+            return nil
+        }
+        return textView.textStorage?.attribute(.font, at: offset, effectiveRange: nil) as? NSFont
+    }
+
+    private static func utf16Offset(of marker: String, in text: String) -> Int? {
+        guard let range = text.range(of: marker) else {
+            return nil
+        }
+        return NSRange(range, in: text).location
     }
 }

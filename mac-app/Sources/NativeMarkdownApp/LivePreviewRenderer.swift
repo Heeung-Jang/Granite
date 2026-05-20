@@ -4,6 +4,16 @@ import NativeMarkdownCore
 
 @MainActor
 enum LivePreviewRenderer {
+    private static let headingPrefixRegex = regex(#"^#{1,6}\s"#)
+    private static let unorderedListPrefixRegex = regex(#"^\s*[-*+]\s"#)
+    private static let orderedListPrefixRegex = regex(#"^\s*\d+[.)]\s"#)
+    private static let taskListPrefixRegex = regex(#"^\s*[-*+]\s+\[[ xX]\]\s"#)
+    private static let blockquotePrefixRegex = regex(#"^\s*>\s?"#)
+    private static let calloutPrefixRegex = regex(#"^\s*>\s?\[![^\]\n]+\]\s?"#)
+    private static let tablePipeRegex = regex(#"\|"#)
+    private static let wikiEmbedTokenRegex = regex(#"!\[\[|\]\]"#)
+    private static let wikiLinkTokenRegex = regex(#"!?\[\[|\]\]"#)
+
     @discardableResult
     static func render(
         in textView: NSTextView,
@@ -44,20 +54,20 @@ enum LivePreviewRenderer {
 
         let selection = textView.selectedRange()
         let resolvedRevealRange = revealRange ?? selection
+        let plan = LivePreviewAttributePlan(
+            source: textView.string,
+            visibleRange: visibleRange,
+            baseAttributes: baseAttributes()
+        )
+        renderBlocks(
+            source: textView.string,
+            plan: plan,
+            visibleRange: visibleRange,
+            revealRange: resolvedRevealRange
+        )
         let result = storage.withPreservedSelection(textView: textView, textLength: text.length) {
             var changes = AttributeChangeCounter()
-            changes.apply(
-                baseAttributes(),
-                to: storage,
-                range: visibleRange
-            )
-            renderBlocks(
-                source: textView.string,
-                storage: storage,
-                visibleRange: visibleRange,
-                revealRange: resolvedRevealRange,
-                changes: &changes
-            )
+            plan.apply(to: storage, changes: &changes)
             return changes
         }
         textView.setSelectedRange(clamped(selection, length: text.length))
@@ -96,7 +106,7 @@ enum LivePreviewRenderer {
         let selection = textView.selectedRange()
         let changes = storage.withPreservedSelection(textView: textView, textLength: text.length) {
             var changes = AttributeChangeCounter()
-            changes.apply(sourceAttributes(), to: storage, range: visibleRange)
+            changes.replace(sourceAttributes(), to: storage, range: visibleRange)
             return changes
         }
         textView.setSelectedRange(clamped(selection, length: text.length))
@@ -114,10 +124,9 @@ enum LivePreviewRenderer {
 
     private static func renderBlocks(
         source: String,
-        storage: NSTextStorage,
+        plan: LivePreviewAttributePlan,
         visibleRange: NSRange,
-        revealRange: NSRange,
-        changes: inout AttributeChangeCounter
+        revealRange: NSRange
     ) {
         let parseWindow = LivePreviewVisibleParseWindow.window(
             in: source,
@@ -131,41 +140,40 @@ enum LivePreviewRenderer {
             guard blockRange.length > 0 else {
                 continue
             }
-            applyBlockAttributes(block, storage: storage, range: blockRange, changes: &changes)
-            applyInlineAttributes(block, storage: storage, visibleRange: visibleRange, changes: &changes)
-            concealTokens(block, source: source, storage: storage, visibleRange: visibleRange, revealRange: revealRange, changes: &changes)
+            applyBlockAttributes(block, plan: plan, range: blockRange)
+            applyInlineAttributes(block, source: source, plan: plan, visibleRange: visibleRange)
+            concealTokens(block, source: source, plan: plan, visibleRange: visibleRange, revealRange: revealRange)
         }
     }
 
     private static func applyBlockAttributes(
         _ block: LivePreviewBlockSpan,
-        storage: NSTextStorage,
-        range: NSRange,
-        changes: inout AttributeChangeCounter
+        plan: LivePreviewAttributePlan,
+        range: NSRange
     ) {
         switch block.kind {
         case .heading(let level):
-            changes.apply([
+            plan.addAttributes([
                 .font: LivePreviewTheme.headingFont(level: level),
                 .foregroundColor: LivePreviewTheme.textColor
-            ], to: storage, range: range)
+            ], range: range)
         case .blockquote:
-            changes.apply([.foregroundColor: LivePreviewTheme.quoteColor], to: storage, range: range)
+            plan.addAttributes([.foregroundColor: LivePreviewTheme.quoteColor], range: range)
         case .callout:
-            changes.apply([.foregroundColor: LivePreviewTheme.quoteColor], to: storage, range: range)
+            plan.addAttributes([.foregroundColor: LivePreviewTheme.quoteColor], range: range)
         case .fencedCode:
-            changes.apply([
+            plan.addAttributes([
                 .font: LivePreviewTheme.codeFont,
                 .foregroundColor: LivePreviewTheme.codeColor
-            ], to: storage, range: range)
+            ], range: range)
         case .table:
-            changes.apply([.font: LivePreviewTheme.codeFont], to: storage, range: range)
+            plan.addAttributes([.font: LivePreviewTheme.codeFont], range: range)
         case .embed:
-            changes.apply([.foregroundColor: LivePreviewTheme.secondaryTextColor], to: storage, range: range)
+            plan.addAttributes([.foregroundColor: LivePreviewTheme.secondaryTextColor], range: range)
         case .unorderedList, .orderedList, .taskList:
-            changes.apply([.foregroundColor: LivePreviewTheme.textColor], to: storage, range: range)
+            plan.addAttributes([.foregroundColor: LivePreviewTheme.textColor], range: range)
         case .frontmatter:
-            changes.apply([.foregroundColor: LivePreviewTheme.secondaryTextColor], to: storage, range: range)
+            plan.addAttributes([.foregroundColor: LivePreviewTheme.secondaryTextColor], range: range)
         case .paragraph:
             break
         }
@@ -173,9 +181,9 @@ enum LivePreviewRenderer {
 
     private static func applyInlineAttributes(
         _ block: LivePreviewBlockSpan,
-        storage: NSTextStorage,
-        visibleRange: NSRange,
-        changes: inout AttributeChangeCounter
+        source: String,
+        plan: LivePreviewAttributePlan,
+        visibleRange: NSRange
     ) {
         for inline in block.inlineSpans {
             let range = NSIntersectionRange(inline.sourceRange.nsRange, visibleRange)
@@ -184,18 +192,20 @@ enum LivePreviewRenderer {
             }
             switch inline.kind {
             case .strong:
-                changes.apply([.font: LivePreviewTheme.strongFont], to: storage, range: range)
+                plan.addAttributes([.font: LivePreviewTheme.strongFont], range: range)
             case .emphasis:
-                changes.apply([.obliqueness: 0.12], to: storage, range: range)
+                plan.addAttributes([.obliqueness: 0.12], range: range)
             case .inlineCode:
-                changes.apply([
+                plan.addAttributes([
                     .font: LivePreviewTheme.codeFont,
                     .foregroundColor: LivePreviewTheme.codeColor
-                ], to: storage, range: range)
-            case .wikiLink, .markdownLink:
-                changes.apply([.foregroundColor: LivePreviewTheme.linkColor], to: storage, range: range)
+                ], range: range)
+            case .wikiLink:
+                plan.addAttributes([.foregroundColor: LivePreviewTheme.linkColor], range: range)
+            case .markdownLink:
+                plan.addAttributes([.foregroundColor: LivePreviewTheme.linkColor], range: range)
             case .tag:
-                changes.apply([.foregroundColor: LivePreviewTheme.tagColor], to: storage, range: range)
+                plan.addAttributes([.foregroundColor: LivePreviewTheme.tagColor], range: range)
             }
         }
     }
@@ -203,10 +213,9 @@ enum LivePreviewRenderer {
     private static func concealTokens(
         _ block: LivePreviewBlockSpan,
         source: String,
-        storage: NSTextStorage,
+        plan: LivePreviewAttributePlan,
         visibleRange: NSRange,
-        revealRange: NSRange,
-        changes: inout AttributeChangeCounter
+        revealRange: NSRange
     ) {
         guard !block.sourceRange.nsRange.intersects(revealRange) else {
             return
@@ -217,35 +226,38 @@ enum LivePreviewRenderer {
             guard range.length > 0 else {
                 continue
             }
-            changes.apply([
+            plan.addAttributes([
                 .foregroundColor: LivePreviewTheme.concealedColor
-            ], to: storage, range: range)
+            ], range: range)
         }
     }
 
     private static func concealmentRanges(for block: LivePreviewBlockSpan, source: String) -> [NSRange] {
+        var ranges: [NSRange]
         switch block.kind {
         case .heading:
-            return prefixMatches(in: source, block: block, pattern: #"^#{1,6}\s"#)
+            ranges = prefixMatches(in: source, block: block, regex: headingPrefixRegex)
         case .unorderedList:
-            return prefixMatches(in: source, block: block, pattern: #"^\s*[-*+]\s"#)
+            ranges = prefixMatches(in: source, block: block, regex: unorderedListPrefixRegex)
         case .orderedList:
-            return prefixMatches(in: source, block: block, pattern: #"^\s*\d+[.)]\s"#)
+            ranges = prefixMatches(in: source, block: block, regex: orderedListPrefixRegex)
         case .taskList:
-            return prefixMatches(in: source, block: block, pattern: #"^\s*[-*+]\s+\[[ xX]\]\s"#)
+            ranges = prefixMatches(in: source, block: block, regex: taskListPrefixRegex)
         case .blockquote:
-            return prefixMatches(in: source, block: block, pattern: #"^\s*>\s?"#)
+            ranges = prefixMatches(in: source, block: block, regex: blockquotePrefixRegex)
         case .callout:
-            return prefixMatches(in: source, block: block, pattern: #"^\s*>\s?\[![^\]\n]+\]\s?"#)
+            ranges = prefixMatches(in: source, block: block, regex: calloutPrefixRegex)
         case .table:
-            return matches(in: source, range: block.sourceRange.nsRange, pattern: #"\|"#)
+            return matches(in: source, range: block.sourceRange.nsRange, regex: tablePipeRegex)
         case .embed:
-            return matches(in: source, range: block.sourceRange.nsRange, pattern: #"!\[\[|\]\]|!\[|\]\([^\)\n]+\)"#)
+            return embedTokenRanges(for: block, source: source)
         case .paragraph:
-            return inlineTokenRanges(block.inlineSpans, source: source)
+            ranges = []
         case .frontmatter, .fencedCode:
             return []
         }
+        ranges += inlineTokenRanges(block.inlineSpans, source: source)
+        return ranges
     }
 
     private static func inlineTokenRanges(_ inlineSpans: [LivePreviewInlineSpan], source: String) -> [NSRange] {
@@ -256,11 +268,12 @@ enum LivePreviewRenderer {
             case .emphasis, .inlineCode:
                 return edgeRanges(span.sourceRange.nsRange, tokenLength: 1)
             case .wikiLink:
-                return matches(in: source, range: span.sourceRange.nsRange, pattern: #"!?\[\[|\]\]"#)
+                return matches(in: source, range: span.sourceRange.nsRange, regex: wikiLinkTokenRegex)
             case .markdownLink:
-                return matches(in: source, range: span.sourceRange.nsRange, pattern: #"!?\[|\]\([^\)\n]+\)"#)
+                return markdownLinkDelimiterRanges(in: span.sourceRange.nsRange, source: source)
             case .tag:
-                return []
+                let range = span.sourceRange.nsRange
+                return range.length > 1 ? [NSRange(location: range.location, length: 1)] : []
             }
         }
     }
@@ -275,13 +288,53 @@ enum LivePreviewRenderer {
         ]
     }
 
-    private static func prefixMatches(in source: String, block: LivePreviewBlockSpan, pattern: String) -> [NSRange] {
-        matches(in: source, range: block.sourceRange.nsRange, pattern: pattern)
+    private static func prefixMatches(
+        in source: String,
+        block: LivePreviewBlockSpan,
+        regex: NSRegularExpression
+    ) -> [NSRange] {
+        matches(in: source, range: block.sourceRange.nsRange, regex: regex)
     }
 
-    private static func matches(in source: String, range: NSRange, pattern: String) -> [NSRange] {
-        let regex = try! NSRegularExpression(pattern: pattern, options: [.anchorsMatchLines])
+    private static func matches(in source: String, range: NSRange, regex: NSRegularExpression) -> [NSRange] {
         return regex.matches(in: source, range: range).map(\.range)
+    }
+
+    private static func embedTokenRanges(for block: LivePreviewBlockSpan, source: String) -> [NSRange] {
+        let range = block.sourceRange.nsRange
+        let blockText = (source as NSString).substring(with: range)
+        if blockText.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("![[") {
+            return matches(in: source, range: range, regex: wikiEmbedTokenRegex)
+        }
+        return markdownLinkDelimiterRanges(in: range, source: source)
+    }
+
+    private static func markdownLinkDelimiterRanges(in range: NSRange, source: String) -> [NSRange] {
+        let text = (source as NSString).substring(with: range) as NSString
+        let imageOpening = text.range(of: "![")
+        let normalOpening = text.range(of: "[")
+        let usesImageOpening = imageOpening.location != NSNotFound
+            && (normalOpening.location == NSNotFound || imageOpening.location <= normalOpening.location)
+        let opening = usesImageOpening ? imageOpening : normalOpening
+        guard opening.location != NSNotFound else {
+            return []
+        }
+
+        let closeSearchStart = opening.location + opening.length
+        let closeSearchRange = NSRange(location: closeSearchStart, length: max(0, text.length - closeSearchStart))
+        let closing = text.range(of: "](", options: [], range: closeSearchRange)
+        guard closing.location != NSNotFound else {
+            return []
+        }
+
+        return [
+            NSRange(location: range.location + opening.location, length: opening.length),
+            NSRange(location: range.location + closing.location, length: 1)
+        ]
+    }
+
+    private static func regex(_ pattern: String) -> NSRegularExpression {
+        try! NSRegularExpression(pattern: pattern, options: [.anchorsMatchLines])
     }
 
     private static func baseAttributes() -> [NSAttributedString.Key: Any] {
@@ -340,12 +393,46 @@ enum LivePreviewRenderer {
     }
 }
 
+private final class LivePreviewAttributePlan {
+    private let visibleRange: NSRange
+    private let attributedString: NSMutableAttributedString
+
+    init(source: String, visibleRange: NSRange, baseAttributes: [NSAttributedString.Key: Any]) {
+        self.visibleRange = visibleRange
+        let visibleText = (source as NSString).substring(with: visibleRange)
+        self.attributedString = NSMutableAttributedString(string: visibleText, attributes: baseAttributes)
+    }
+
+    func addAttributes(_ attributes: [NSAttributedString.Key: Any], range: NSRange) {
+        let localRange = NSIntersectionRange(range, visibleRange)
+        guard localRange.length > 0 else {
+            return
+        }
+        attributedString.addAttributes(attributes, range: toLocalRange(localRange))
+    }
+
+    func apply(to storage: NSTextStorage, changes: inout AttributeChangeCounter) {
+        let fullRange = NSRange(location: 0, length: attributedString.length)
+        attributedString.enumerateAttributes(in: fullRange) { attributes, localRange, _ in
+            changes.replace(attributes, to: storage, range: toSourceRange(localRange))
+        }
+    }
+
+    private func toLocalRange(_ range: NSRange) -> NSRange {
+        NSRange(location: range.location - visibleRange.location, length: range.length)
+    }
+
+    private func toSourceRange(_ range: NSRange) -> NSRange {
+        NSRange(location: range.location + visibleRange.location, length: range.length)
+    }
+}
+
 private struct AttributeChangeCounter {
     var appliedRuns = 0
     var changedRangeCount = 0
     var changedUTF16Length = 0
 
-    mutating func apply(
+    mutating func replace(
         _ attributes: [NSAttributedString.Key: Any],
         to storage: NSTextStorage,
         range: NSRange
@@ -353,10 +440,54 @@ private struct AttributeChangeCounter {
         guard range.length > 0 else {
             return
         }
-        storage.addAttributes(attributes, range: range)
+        let changedRanges = rangesNeedingReplacement(attributes, in: storage, range: range)
+        for changedRange in changedRanges {
+            storage.setAttributes(attributes, range: changedRange)
+            record(changedRange)
+        }
+    }
+
+    private mutating func record(_ range: NSRange) {
         appliedRuns += 1
         changedRangeCount += 1
         changedUTF16Length += range.length
+    }
+
+    private func rangesNeedingReplacement(
+        _ attributes: [NSAttributedString.Key: Any],
+        in storage: NSTextStorage,
+        range: NSRange
+    ) -> [NSRange] {
+        var ranges: [NSRange] = []
+        storage.enumerateAttributes(in: range) { existing, subrange, _ in
+            if !attributeDictionariesEqual(existing, attributes) {
+                ranges.append(subrange)
+            }
+        }
+        return ranges
+    }
+
+    private func attributeDictionariesEqual(
+        _ lhs: [NSAttributedString.Key: Any],
+        _ rhs: [NSAttributedString.Key: Any]
+    ) -> Bool {
+        guard lhs.count == rhs.count else {
+            return false
+        }
+        return lhs.allSatisfy { key, value in
+            attributeValueEquals(value, rhs[key])
+        }
+    }
+
+    private func attributeValueEquals(_ lhs: Any?, _ rhs: Any?) -> Bool {
+        switch (lhs, rhs) {
+        case (nil, nil):
+            return true
+        case let (lhs as NSObject, rhs as NSObject):
+            return lhs == rhs
+        default:
+            return false
+        }
     }
 }
 

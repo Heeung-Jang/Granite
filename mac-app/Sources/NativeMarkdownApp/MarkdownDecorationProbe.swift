@@ -60,7 +60,20 @@ enum MarkdownDecorationProbe {
         }
 
         var samples: [Double] = []
-        var result = MarkdownDecorationResult(
+        var firstResult: MarkdownDecorationResult?
+        for _ in 0..<20 {
+            let start = DispatchTime.now().uptimeNanoseconds
+            let result = MarkdownVisibleRangeDecorator.decorateVisibleRange(
+                in: textView,
+                range: range
+            )
+            let end = DispatchTime.now().uptimeNanoseconds
+            if firstResult == nil {
+                firstResult = result
+            }
+            samples.append((Double(end - start) / 1_000_000).rounded(toPlaces: 3))
+        }
+        let result = firstResult ?? MarkdownDecorationResult(
             mode: "decorated-source",
             reason: nil,
             rangeLength: 0,
@@ -69,15 +82,6 @@ enum MarkdownDecorationProbe {
             changedUTF16Length: 0,
             elapsedMilliseconds: 0
         )
-        for _ in 0..<20 {
-            let start = DispatchTime.now().uptimeNanoseconds
-            result = MarkdownVisibleRangeDecorator.decorateVisibleRange(
-                in: textView,
-                range: range
-            )
-            let end = DispatchTime.now().uptimeNanoseconds
-            samples.append((Double(end - start) / 1_000_000).rounded(toPlaces: 3))
-        }
 
         return MarkdownDecorationMeasurement(
             label: label,
