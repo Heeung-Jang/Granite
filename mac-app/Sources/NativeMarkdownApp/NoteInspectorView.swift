@@ -1,3 +1,4 @@
+import AppKit
 import NativeMarkdownCore
 import SwiftUI
 
@@ -142,7 +143,7 @@ struct NoteInspectorView: View {
                             EmptyInlineText("No attachments")
                         } else {
                             ForEach(snapshot.attachments) { attachment in
-                                AttachmentReferenceRow(reference: attachment)
+                                AttachmentReferenceRow(vaultURL: vaultURL, reference: attachment)
                             }
                         }
                     }
@@ -278,7 +279,9 @@ private struct OutgoingLinkRow: View {
 }
 
 private struct AttachmentReferenceRow: View {
+    let vaultURL: URL
     let reference: AttachmentReferenceItem
+    @State private var previewInfo: AttachmentPreviewInfo?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
@@ -298,6 +301,13 @@ private struct AttachmentReferenceRow: View {
                         .lineLimit(1)
                 }
             }
+
+            if let previewInfo {
+                AttachmentImagePreview(info: previewInfo)
+            }
+        }
+        .task(id: reference.id) {
+            await loadPreviewInfo()
         }
     }
 
@@ -348,6 +358,74 @@ private struct AttachmentReferenceRow: View {
         case .markdownLink:
             "Markdown link"
         }
+    }
+
+    private func loadPreviewInfo() async {
+        previewInfo = nil
+        let vaultURL = vaultURL
+        let reference = reference
+        let state = await Task.detached(priority: .utility) {
+            FileSystemAttachmentPreviewGate().previewState(vaultURL: vaultURL, reference: reference)
+        }.value
+
+        if Task.isCancelled {
+            return
+        }
+        if case .eligible(let info) = state {
+            previewInfo = info
+        }
+    }
+}
+
+private struct AttachmentImagePreview: View {
+    let info: AttachmentPreviewInfo
+    @State private var image: NSImage?
+    @State private var didFail = false
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 6)
+                .fill(.quaternary.opacity(0.4))
+            previewContent
+                .padding(4)
+        }
+        .frame(maxWidth: .infinity, minHeight: 72, maxHeight: 120)
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .task(id: info.url) {
+            await loadImage()
+        }
+    }
+
+    @ViewBuilder
+    private var previewContent: some View {
+        if let image {
+            Image(nsImage: image)
+                .resizable()
+                .scaledToFit()
+        } else if didFail {
+            EmptyView()
+        } else {
+            ProgressView()
+                .controlSize(.small)
+        }
+    }
+
+    private func loadImage() async {
+        didFail = false
+        image = nil
+        let url = info.url
+        let data = try? await Task.detached(priority: .utility) {
+            try Data(contentsOf: url)
+        }.value
+
+        if Task.isCancelled {
+            return
+        }
+        guard let data, let loadedImage = NSImage(data: data) else {
+            didFail = true
+            return
+        }
+        image = loadedImage
     }
 }
 
