@@ -1,13 +1,16 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::env;
 use std::error::Error;
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
+use std::time::Instant;
 use vault_engine::benchmarks::{
     VaultBackendBenchmarkOptions, run_shared_backend_benchmark_from_vault,
 };
+use vault_engine::tantivy_search::{TantivySearchError, TantivySearchIndex};
 use vault_profiler::corpus::{QueryCorpusOptions, generate_query_corpus_bundle};
 use vault_profiler::synthetic::{
     SyntheticProfile, SyntheticVaultOptions, generate_synthetic_vault,
@@ -99,6 +102,7 @@ fn run() -> Result<(), Box<dyn Error>> {
             )
         }
         Command::ObsidianRunbook(command) => write_obsidian_runbook(&command),
+        Command::TantivyQueryBenchmark(command) => run_tantivy_query_benchmark(&command),
     }
 }
 
@@ -148,6 +152,7 @@ enum Command {
     SyntheticVault(SyntheticVaultCommand),
     BackendBenchmark(BackendBenchmarkCommand),
     ObsidianRunbook(ObsidianRunbookCommand),
+    TantivyQueryBenchmark(TantivyQueryBenchmarkCommand),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -198,6 +203,15 @@ struct ObsidianRunbookCommand {
     pretty: bool,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct TantivyQueryBenchmarkCommand {
+    index_dir: PathBuf,
+    runbook_path: PathBuf,
+    output_path: PathBuf,
+    result_limit: usize,
+    pretty: bool,
+}
+
 #[derive(Debug, Deserialize)]
 struct RunbookCorpus {
     samples: Vec<RunbookSample>,
@@ -212,7 +226,7 @@ struct RunbookSample {
     expected_result_shape: String,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
 struct ObsidianRunbookEntry {
     sample_id: String,
     query_class: String,
@@ -224,6 +238,46 @@ struct ObsidianRunbookEntry {
     raw_query: String,
     duration_ms: Option<f64>,
     excluded: bool,
+    notes: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct TantivyQueryBenchmarkArtifact {
+    schema_version: u32,
+    tool: String,
+    runbook_source: String,
+    index_source: String,
+    result_limit: usize,
+    sample_count: usize,
+    measured_sample_count: usize,
+    summaries: Vec<TantivyQueryClassSummary>,
+    samples: Vec<TantivyQuerySample>,
+    notes: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct TantivyQueryClassSummary {
+    query_class: String,
+    sample_count: usize,
+    measured_sample_count: usize,
+    skipped_sample_count: usize,
+    error_sample_count: usize,
+    median_ms: Option<f64>,
+    p90_ms: Option<f64>,
+    p95_ms: Option<f64>,
+    p99_ms: Option<f64>,
+}
+
+#[derive(Debug, Serialize)]
+struct TantivyQuerySample {
+    sample_id: String,
+    query_class: String,
+    query_hash: String,
+    redacted_display: String,
+    expected_result_shape: String,
+    duration_ms: Option<f64>,
+    result_count: Option<usize>,
+    state: String,
     notes: Vec<String>,
 }
 
@@ -242,6 +296,9 @@ impl Cli {
             "synthetic-vault" => Command::SyntheticVault(SyntheticVaultCommand::parse(args)?),
             "backend-benchmark" => Command::BackendBenchmark(BackendBenchmarkCommand::parse(args)?),
             "obsidian-runbook" => Command::ObsidianRunbook(ObsidianRunbookCommand::parse(args)?),
+            "tantivy-query-benchmark" => {
+                Command::TantivyQueryBenchmark(TantivyQueryBenchmarkCommand::parse(args)?)
+            }
             _ => return Err(usage().into()),
         };
 
@@ -462,6 +519,57 @@ impl ObsidianRunbookCommand {
     }
 }
 
+impl TantivyQueryBenchmarkCommand {
+    fn parse<I>(mut args: I) -> Result<Self, Box<dyn Error>>
+    where
+        I: Iterator<Item = OsString>,
+    {
+        let mut index_dir = None;
+        let mut runbook_path = None;
+        let mut output_path = None;
+        let mut result_limit = 10;
+        let mut pretty = false;
+
+        while let Some(arg) = args.next() {
+            match arg.to_string_lossy().as_ref() {
+                "--index-dir" => {
+                    index_dir = Some(PathBuf::from(required_string(&mut args, "--index-dir")?))
+                }
+                "--runbook" => {
+                    runbook_path = Some(PathBuf::from(required_string(&mut args, "--runbook")?))
+                }
+                "--output" => {
+                    output_path = Some(PathBuf::from(required_string(&mut args, "--output")?))
+                }
+                "--limit" => {
+                    let value = required_string(&mut args, "--limit")?;
+                    result_limit = value.parse()?;
+                }
+                "--pretty" => pretty = true,
+                _ => return Err(usage().into()),
+            }
+        }
+
+        let Some(index_dir) = index_dir else {
+            return Err("missing required --index-dir argument".into());
+        };
+        let Some(runbook_path) = runbook_path else {
+            return Err("missing required --runbook argument".into());
+        };
+        let Some(output_path) = output_path else {
+            return Err("missing required --output argument".into());
+        };
+
+        Ok(Self {
+            index_dir,
+            runbook_path,
+            output_path,
+            result_limit,
+            pretty,
+        })
+    }
+}
+
 fn write_obsidian_runbook(command: &ObsidianRunbookCommand) -> Result<(), Box<dyn Error>> {
     if !has_private_path_component(&command.output_path) {
         return Err("raw Obsidian runbook output must be written under a private directory".into());
@@ -478,6 +586,133 @@ fn write_obsidian_runbook(command: &ObsidianRunbookCommand) -> Result<(), Box<dy
     }
     fs::write(&command.output_path, json)?;
     Ok(())
+}
+
+fn run_tantivy_query_benchmark(
+    command: &TantivyQueryBenchmarkCommand,
+) -> Result<(), Box<dyn Error>> {
+    let runbook: Vec<ObsidianRunbookEntry> =
+        serde_json::from_str(&fs::read_to_string(&command.runbook_path)?)?;
+    let index = TantivySearchIndex::open_existing_dir(&command.index_dir)?;
+    let mut samples = Vec::with_capacity(runbook.len());
+
+    for entry in &runbook {
+        let start = Instant::now();
+        let sample = match index.search(&entry.raw_query, command.result_limit) {
+            Ok(results) => TantivyQuerySample {
+                sample_id: entry.sample_id.clone(),
+                query_class: entry.query_class.clone(),
+                query_hash: entry.query_hash.clone(),
+                redacted_display: entry.redacted_display.clone(),
+                expected_result_shape: entry.expected_result_shape.clone(),
+                duration_ms: Some(start.elapsed().as_secs_f64() * 1_000.0),
+                result_count: Some(results.len()),
+                state: "measured".to_string(),
+                notes: Vec::new(),
+            },
+            Err(TantivySearchError::EmptyQuery) => TantivyQuerySample {
+                sample_id: entry.sample_id.clone(),
+                query_class: entry.query_class.clone(),
+                query_hash: entry.query_hash.clone(),
+                redacted_display: entry.redacted_display.clone(),
+                expected_result_shape: entry.expected_result_shape.clone(),
+                duration_ms: None,
+                result_count: None,
+                state: "skipped".to_string(),
+                notes: vec!["query is empty after Tantivy sanitization".to_string()],
+            },
+            Err(error) => TantivyQuerySample {
+                sample_id: entry.sample_id.clone(),
+                query_class: entry.query_class.clone(),
+                query_hash: entry.query_hash.clone(),
+                redacted_display: entry.redacted_display.clone(),
+                expected_result_shape: entry.expected_result_shape.clone(),
+                duration_ms: None,
+                result_count: None,
+                state: "error".to_string(),
+                notes: vec![error.to_string()],
+            },
+        };
+        samples.push(sample);
+    }
+
+    let summaries = tantivy_query_summaries(&samples);
+    let measured_sample_count = samples
+        .iter()
+        .filter(|sample| sample.state == "measured")
+        .count();
+    let artifact = TantivyQueryBenchmarkArtifact {
+        schema_version: 1,
+        tool: "vault-profiler tantivy-query-benchmark".to_string(),
+        runbook_source: command.runbook_path.display().to_string(),
+        index_source: command.index_dir.display().to_string(),
+        result_limit: command.result_limit,
+        sample_count: samples.len(),
+        measured_sample_count,
+        summaries,
+        samples,
+        notes: vec![
+            "Raw query text was read from the ignored private runbook and is not included in this artifact.".to_string(),
+            "This measures the selected Tantivy native search backend against the same query classes used for the Obsidian baseline.".to_string(),
+        ],
+    };
+
+    let json = if command.pretty {
+        serde_json::to_string_pretty(&artifact)?
+    } else {
+        serde_json::to_string(&artifact)?
+    };
+    if let Some(parent) = command.output_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(&command.output_path, json)?;
+    Ok(())
+}
+
+fn tantivy_query_summaries(samples: &[TantivyQuerySample]) -> Vec<TantivyQueryClassSummary> {
+    let mut grouped: BTreeMap<&str, Vec<&TantivyQuerySample>> = BTreeMap::new();
+    for sample in samples {
+        grouped
+            .entry(sample.query_class.as_str())
+            .or_default()
+            .push(sample);
+    }
+
+    grouped
+        .into_iter()
+        .map(|(query_class, samples)| {
+            let mut durations = samples
+                .iter()
+                .filter_map(|sample| sample.duration_ms)
+                .collect::<Vec<_>>();
+            durations.sort_by(f64::total_cmp);
+            TantivyQueryClassSummary {
+                query_class: query_class.to_string(),
+                sample_count: samples.len(),
+                measured_sample_count: durations.len(),
+                skipped_sample_count: samples
+                    .iter()
+                    .filter(|sample| sample.state == "skipped")
+                    .count(),
+                error_sample_count: samples
+                    .iter()
+                    .filter(|sample| sample.state == "error")
+                    .count(),
+                median_ms: percentile_f64(&durations, 50),
+                p90_ms: percentile_f64(&durations, 90),
+                p95_ms: percentile_f64(&durations, 95),
+                p99_ms: percentile_f64(&durations, 99),
+            }
+        })
+        .collect()
+}
+
+fn percentile_f64(values: &[f64], percentile: usize) -> Option<f64> {
+    if values.is_empty() {
+        return None;
+    }
+    let index = ((values.len() * percentile).div_ceil(100)).saturating_sub(1);
+    Some(values[index.min(values.len() - 1)])
 }
 
 fn obsidian_runbook_entries(
@@ -614,7 +849,7 @@ where
 }
 
 fn usage() -> &'static str {
-    "usage: vault-profiler <profile|query-corpus|synthetic-vault|backend-benchmark|obsidian-runbook> [options]"
+    "usage: vault-profiler <profile|query-corpus|synthetic-vault|backend-benchmark|obsidian-runbook|tantivy-query-benchmark> [options]"
 }
 
 #[cfg(test)]
@@ -805,6 +1040,40 @@ mod tests {
     }
 
     #[test]
+    fn parses_tantivy_query_benchmark_args() {
+        let cli = Cli::parse(
+            [
+                "tantivy-query-benchmark",
+                "--index-dir",
+                "/tmp/tantivy",
+                "--runbook",
+                "/tmp/private/runbook.json",
+                "--output",
+                "/tmp/native.json",
+                "--limit",
+                "25",
+                "--pretty",
+            ]
+            .into_iter()
+            .map(OsString::from),
+        )
+        .expect("cli");
+
+        assert_eq!(
+            cli,
+            Cli {
+                command: Command::TantivyQueryBenchmark(TantivyQueryBenchmarkCommand {
+                    index_dir: PathBuf::from("/tmp/tantivy"),
+                    runbook_path: PathBuf::from("/tmp/private/runbook.json"),
+                    output_path: PathBuf::from("/tmp/native.json"),
+                    result_limit: 25,
+                    pretty: true,
+                }),
+            }
+        );
+    }
+
+    #[test]
     fn obsidian_runbook_pairs_redacted_samples_with_private_queries() {
         let dir = tempfile::tempdir().expect("tempdir");
         let corpus = dir.path().join("corpus.json");
@@ -871,6 +1140,78 @@ mod tests {
         };
 
         assert!(write_obsidian_runbook(&command).is_err());
+    }
+
+    #[test]
+    fn tantivy_query_benchmark_writes_redacted_class_summaries() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let index_dir = dir.path().join("tantivy");
+        let runbook_path = dir.path().join("runbook.json");
+        let output_path = dir.path().join("native.json");
+        let mut index = TantivySearchIndex::open_in_dir(&index_dir).expect("index");
+        index
+            .replace_documents(&[
+                vault_engine::sqlite_fts::SearchDocument {
+                    file_id: "alpha".to_string(),
+                    path: "Alpha.md".to_string(),
+                    title: "Alpha".to_string(),
+                    body: "body token".to_string(),
+                },
+                vault_engine::sqlite_fts::SearchDocument {
+                    file_id: "beta".to_string(),
+                    path: "Beta.md".to_string(),
+                    title: "Beta".to_string(),
+                    body: "tagged note".to_string(),
+                },
+            ])
+            .expect("documents");
+        fs::write(
+            &runbook_path,
+            r#"[
+              {
+                "sample_id": "file_name-0001",
+                "query_class": "file_name",
+                "query_hash": "hash-a",
+                "redacted_display": "<hash-a:english:single>",
+                "expected_result_shape": "single",
+                "obsidian_surface": "Quick Switcher",
+                "timing_stop_condition": "stable",
+                "raw_query": "Alpha",
+                "duration_ms": null,
+                "excluded": false,
+                "notes": []
+              },
+              {
+                "sample_id": "body-0001",
+                "query_class": "body",
+                "query_hash": "hash-b",
+                "redacted_display": "<hash-b:english:single>",
+                "expected_result_shape": "single",
+                "obsidian_surface": "Search panel",
+                "timing_stop_condition": "stable",
+                "raw_query": "body",
+                "duration_ms": null,
+                "excluded": false,
+                "notes": []
+              }
+            ]"#,
+        )
+        .expect("runbook");
+
+        let command = TantivyQueryBenchmarkCommand {
+            index_dir,
+            runbook_path,
+            output_path: output_path.clone(),
+            result_limit: 10,
+            pretty: true,
+        };
+        run_tantivy_query_benchmark(&command).expect("benchmark");
+
+        let artifact = fs::read_to_string(output_path).expect("artifact");
+        assert!(artifact.contains("\"query_class\": \"file_name\""));
+        assert!(artifact.contains("\"measured_sample_count\": 1"));
+        assert!(!artifact.contains("\"raw_query\""));
+        assert!(!artifact.contains("\"Alpha\""));
     }
 
     #[test]

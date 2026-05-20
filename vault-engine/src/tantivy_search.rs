@@ -50,6 +50,12 @@ impl TantivySearchIndex {
         Self::from_index(index, fields, Some(path.as_ref().to_path_buf()))
     }
 
+    pub fn open_existing_dir(path: impl AsRef<Path>) -> TantivySearchResult<Self> {
+        let (_, fields) = search_schema();
+        let index = Index::open_in_dir(path.as_ref())?;
+        Self::from_index(index, fields, Some(path.as_ref().to_path_buf()))
+    }
+
     fn from_index(
         index: Index,
         fields: TantivyFields,
