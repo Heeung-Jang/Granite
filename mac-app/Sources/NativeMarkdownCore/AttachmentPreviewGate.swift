@@ -28,6 +28,20 @@ public struct AttachmentPreviewInfo: Equatable, Sendable {
     public let byteSize: Int
     public let pixelWidth: Int
     public let pixelHeight: Int
+
+    public init(
+        file: FileTreeItem,
+        url: URL,
+        byteSize: Int,
+        pixelWidth: Int,
+        pixelHeight: Int
+    ) {
+        self.file = file
+        self.url = url
+        self.byteSize = byteSize
+        self.pixelWidth = pixelWidth
+        self.pixelHeight = pixelHeight
+    }
 }
 
 public enum AttachmentPreviewBlockReason: Equatable, Sendable {
@@ -48,6 +62,18 @@ public enum AttachmentPreviewBlockReason: Equatable, Sendable {
 public enum AttachmentPreviewState: Equatable, Sendable {
     case eligible(AttachmentPreviewInfo)
     case blocked(AttachmentPreviewBlockReason)
+}
+
+public enum AttachmentPreviewImageDecoder {
+    public static func canDecode(_ info: AttachmentPreviewInfo) -> Bool {
+        let options = [kCGImageSourceShouldCache: false] as CFDictionary
+        guard let source = CGImageSourceCreateWithURL(info.url as CFURL, options),
+              CGImageSourceCreateImageAtIndex(source, 0, options) != nil
+        else {
+            return false
+        }
+        return true
+    }
 }
 
 public struct FileSystemAttachmentPreviewGate: Sendable {

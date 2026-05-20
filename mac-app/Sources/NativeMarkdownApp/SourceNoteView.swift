@@ -21,9 +21,10 @@ struct SourceNoteView: View {
     @State private var interactionNotice: EditorInteractionNotice?
     @State private var pendingRecoverySnapshot: EditorRecoverySnapshot?
     @State private var livePreviewLinkStyleMap = LivePreviewLinkStyleMap()
+    @State private var livePreviewEmbedPreviewMap = LivePreviewEmbedPreviewMap()
     @State private var recoveryTask: Task<Void, Never>?
     @State private var fallbackProfileTask: Task<Void, Never>?
-    @State private var linkStyleTask: Task<Void, Never>?
+    @State private var livePreviewMetadataTask: Task<Void, Never>?
 
     init(
         vaultURL: URL,
@@ -50,6 +51,7 @@ struct SourceNoteView: View {
                     isEditable: saveSession?.canEdit == true,
                     livePreviewMode: livePreviewMode,
                     linkStyleMap: livePreviewLinkStyleMap,
+                    embedPreviewMap: livePreviewEmbedPreviewMap,
                     interactionHandler: handleEditorInteraction
                 )
                     .frame(minHeight: 320)
@@ -84,7 +86,7 @@ struct SourceNoteView: View {
         }
         .onChange(of: text) { _, newValue in
             saveSession?.updateContents(newValue)
-            clearLivePreviewLinkStyles()
+            clearLivePreviewMetadata()
             updateAutomaticFallbackAfterTextChange(for: newValue)
             scheduleRecoverySnapshot(contents: newValue)
         }
@@ -97,7 +99,7 @@ struct SourceNoteView: View {
         .onDisappear {
             recoveryTask?.cancel()
             fallbackProfileTask?.cancel()
-            linkStyleTask?.cancel()
+            livePreviewMetadataTask?.cancel()
             if saveSession?.isDirty == true, appState.isEditorDirty(file: file) {
                 writeRecoverySnapshot(contents: text)
             } else {
@@ -184,6 +186,7 @@ struct SourceNoteView: View {
             var controller = fallbackController
             controller.selectSourceMode()
             fallbackController = controller
+            clearLivePreviewMetadata()
         }
     }
 
@@ -192,6 +195,7 @@ struct SourceNoteView: View {
         controller.retryLivePreview()
         fallbackController = controller
         updateAutomaticFallback(for: text)
+        refreshLivePreviewMetadataIfNeeded(contents: text)
     }
 
     private func updateAutomaticFallbackAfterTextChange(for contents: String) {
@@ -218,6 +222,9 @@ struct SourceNoteView: View {
         let profile = EditorDocumentProfiler.profile(contents)
         controller.observe(EditorStrategyDecision().renderingMode(for: profile))
         fallbackController = controller
+        if livePreviewMode.rendersSourceOnly {
+            clearLivePreviewMetadata()
+        }
     }
 
     private func scheduleFallbackProfile(contents: String) {
@@ -247,8 +254,9 @@ struct SourceNoteView: View {
         saveSession = nil
         pendingRecoverySnapshot = nil
         fallbackProfileTask?.cancel()
-        linkStyleTask?.cancel()
+        livePreviewMetadataTask?.cancel()
         livePreviewLinkStyleMap = LivePreviewLinkStyleMap()
+        livePreviewEmbedPreviewMap = LivePreviewEmbedPreviewMap()
         fallbackController = LivePreviewFallbackController()
         lastFallbackProfileByteCount = 0
         let timer = AppTelemetryTimer()
@@ -265,7 +273,7 @@ struct SourceNoteView: View {
             saveSession = EditorSaveSession(file: file, contents: document.contents)
             updateAutomaticFallback(for: document.contents)
             state = .loaded
-            refreshLivePreviewLinkStyles(contents: document.contents)
+            refreshLivePreviewMetadataIfNeeded(contents: document.contents)
             AppTelemetry.noteLoadCompleted(
                 file,
                 success: true,
@@ -339,7 +347,7 @@ struct SourceNoteView: View {
                 session = saveSession ?? session
                 session.completeSave(outcome, savedContents: request.contents)
                 saveSession = session
-                refreshLivePreviewLinkStyles(contents: request.contents)
+                refreshLivePreviewMetadataIfNeeded(contents: request.contents)
             } catch {
                 if Task.isCancelled {
                     return
@@ -382,7 +390,7 @@ struct SourceNoteView: View {
                 session = saveSession ?? session
                 session.completeReload(outcome)
                 saveSession = session
-                refreshLivePreviewLinkStyles(contents: outcome.contents)
+                refreshLivePreviewMetadataIfNeeded(contents: outcome.contents)
             } catch {
                 if Task.isCancelled {
                     return
@@ -427,7 +435,7 @@ struct SourceNoteView: View {
                 session = saveSession ?? session
                 session.completeChoice(outcome, savedContents: savedSnapshot)
                 saveSession = session
-                refreshLivePreviewLinkStyles(contents: savedSnapshot)
+                refreshLivePreviewMetadataIfNeeded(contents: savedSnapshot)
                 appState.updateEditorDirtyState(file: file, isDirty: session.isDirty)
                 appState.openFile(FileTreeItem(relativePath: outcome.baseline.relativePath))
             } catch {
@@ -473,7 +481,7 @@ struct SourceNoteView: View {
                 session = saveSession ?? session
                 session.completeChoice(outcome, savedContents: savedSnapshot)
                 saveSession = session
-                refreshLivePreviewLinkStyles(contents: savedSnapshot)
+                refreshLivePreviewMetadataIfNeeded(contents: savedSnapshot)
             } catch {
                 if Task.isCancelled {
                     return
@@ -584,7 +592,7 @@ struct SourceNoteView: View {
         saveSession?.updateContents(snapshot.contents)
         appState.updateEditorDirtyState(file: file, isDirty: saveSession?.isDirty == true)
         pendingRecoverySnapshot = nil
-        clearLivePreviewLinkStyles()
+        clearLivePreviewMetadata()
         scheduleRecoverySnapshot(contents: snapshot.contents)
     }
 
@@ -639,31 +647,53 @@ struct SourceNoteView: View {
         return EditorRecoveryStore(dataDirectory: dataDirectory)
     }
 
-    private func clearLivePreviewLinkStyles() {
-        linkStyleTask?.cancel()
-        if !livePreviewLinkStyleMap.isEmpty {
+    private func clearLivePreviewMetadata() {
+        livePreviewMetadataTask?.cancel()
+        if !livePreviewLinkStyleMap.isEmpty || !livePreviewEmbedPreviewMap.isEmpty {
             livePreviewLinkStyleMap = LivePreviewLinkStyleMap()
+            livePreviewEmbedPreviewMap = LivePreviewEmbedPreviewMap()
         }
     }
 
-    private func refreshLivePreviewLinkStyles(contents: String) {
-        linkStyleTask?.cancel()
+    private func refreshLivePreviewMetadataIfNeeded(contents: String) {
+        guard livePreviewMode == .livePreview else {
+            clearLivePreviewMetadata()
+            return
+        }
+        refreshLivePreviewMetadata(contents: contents)
+    }
+
+    private func refreshLivePreviewMetadata(contents: String) {
+        livePreviewMetadataTask?.cancel()
         let vaultURL = vaultURL
         let file = file
-        linkStyleTask = Task {
-            let map = try? await Task.detached(priority: .utility) {
+        livePreviewMetadataTask = Task {
+            let maps = try? await Task.detached(priority: .utility) {
                 let snapshot = try FileSystemNoteInspectorLoader().loadInspector(
                     at: vaultURL,
                     file: file,
                     maxFiles: 5_000
                 )
-                return LivePreviewLinkStyleMap(source: contents, outgoingLinks: snapshot.outgoingLinks)
+                let embedPreviewPlan = LivePreviewEmbedPreviewPlan(
+                    source: contents,
+                    references: snapshot.attachments
+                )
+                let previewStates = livePreviewStates(
+                    vaultURL: vaultURL,
+                    references: snapshot.attachments.filter { embedPreviewPlan.referenceIDs.contains($0.id) }
+                )
+                return (
+                    LivePreviewLinkStyleMap(source: contents, outgoingLinks: snapshot.outgoingLinks),
+                    embedPreviewPlan.previewMap(previewStatesByID: previewStates)
+                )
             }.value
 
-            if Task.isCancelled || contents != text {
+            if Task.isCancelled ||
+                !LivePreviewMetadataFreshness.accepts(candidateContents: contents, currentContents: text) {
                 return
             }
-            livePreviewLinkStyleMap = map ?? LivePreviewLinkStyleMap()
+            livePreviewLinkStyleMap = maps?.0 ?? LivePreviewLinkStyleMap()
+            livePreviewEmbedPreviewMap = maps?.1 ?? LivePreviewEmbedPreviewMap()
         }
     }
 
@@ -720,6 +750,24 @@ struct SourceNoteView: View {
             )
         }
     }
+}
+
+private func livePreviewStates(
+    vaultURL: URL,
+    references: [AttachmentReferenceItem]
+) -> [String: AttachmentPreviewState] {
+    let gate = FileSystemAttachmentPreviewGate()
+    var states: [String: AttachmentPreviewState] = [:]
+    for reference in references where reference.source == .wikiEmbed || reference.source == .markdownImage {
+        let state = gate.previewState(vaultURL: vaultURL, reference: reference)
+        if case .eligible(let info) = state,
+           !AttachmentPreviewImageDecoder.canDecode(info) {
+            states[reference.id] = .blocked(.invalidImage)
+        } else {
+            states[reference.id] = state
+        }
+    }
+    return states
 }
 
 private struct LivePreviewStatusStrip: View {

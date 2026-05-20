@@ -23,6 +23,7 @@ func attachmentPreviewGateAllowsSmallResolvedImagesInsideVault() throws {
     #expect(info.byteSize > 0)
     #expect(info.pixelWidth == 1)
     #expect(info.pixelHeight == 1)
+    #expect(AttachmentPreviewImageDecoder.canDecode(info))
 }
 
 @Test

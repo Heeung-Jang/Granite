@@ -8,6 +8,7 @@ struct MarkdownEditorView: NSViewRepresentable {
     var isEditable = true
     var livePreviewMode: LivePreviewMode = .livePreview
     var linkStyleMap = LivePreviewLinkStyleMap()
+    var embedPreviewMap = LivePreviewEmbedPreviewMap()
     var interactionHandler: ((MarkdownEditorInteraction) -> Void)?
 
     func makeCoordinator() -> Coordinator {
@@ -15,7 +16,8 @@ struct MarkdownEditorView: NSViewRepresentable {
             text: $text,
             interactionHandler: interactionHandler,
             livePreviewMode: livePreviewMode,
-            linkStyleMap: linkStyleMap
+            linkStyleMap: linkStyleMap,
+            embedPreviewMap: embedPreviewMap
         )
     }
 
@@ -32,7 +34,8 @@ struct MarkdownEditorView: NSViewRepresentable {
             in: textView,
             livePreviewMode: livePreviewMode,
             revealRange: textView.selectedRange(),
-            linkStyleMap: linkStyleMap
+            linkStyleMap: linkStyleMap,
+            embedPreviewMap: embedPreviewMap
         )
         AppTelemetry.editorDecorationCompleted(
             textLength: textView.string.count,
@@ -54,7 +57,8 @@ struct MarkdownEditorView: NSViewRepresentable {
             text: $text,
             interactionHandler: interactionHandler,
             livePreviewMode: livePreviewMode,
-            linkStyleMap: linkStyleMap
+            linkStyleMap: linkStyleMap,
+            embedPreviewMap: embedPreviewMap
         )
         guard let textView = scrollView.documentView as? NSTextView else {
             return
@@ -70,7 +74,8 @@ struct MarkdownEditorView: NSViewRepresentable {
             in: textView,
             livePreviewMode: livePreviewMode,
             revealRange: textView.selectedRange(),
-            linkStyleMap: linkStyleMap
+            linkStyleMap: linkStyleMap,
+            embedPreviewMap: embedPreviewMap
         )
         AppTelemetry.editorDecorationCompleted(
             textLength: textView.string.count,
@@ -98,6 +103,7 @@ struct MarkdownEditorView: NSViewRepresentable {
         private var interactionHandler: ((MarkdownEditorInteraction) -> Void)?
         private var livePreviewMode: LivePreviewMode
         private var linkStyleMap: LivePreviewLinkStyleMap
+        private var embedPreviewMap: LivePreviewEmbedPreviewMap
         weak var textView: NSTextView?
         var isApplyingAppKitChange = false
 
@@ -105,24 +111,28 @@ struct MarkdownEditorView: NSViewRepresentable {
             text: Binding<String>,
             interactionHandler: ((MarkdownEditorInteraction) -> Void)? = nil,
             livePreviewMode: LivePreviewMode = .livePreview,
-            linkStyleMap: LivePreviewLinkStyleMap = LivePreviewLinkStyleMap()
+            linkStyleMap: LivePreviewLinkStyleMap = LivePreviewLinkStyleMap(),
+            embedPreviewMap: LivePreviewEmbedPreviewMap = LivePreviewEmbedPreviewMap()
         ) {
             _text = text
             self.interactionHandler = interactionHandler
             self.livePreviewMode = livePreviewMode
             self.linkStyleMap = linkStyleMap
+            self.embedPreviewMap = embedPreviewMap
         }
 
         func update(
             text: Binding<String>,
             interactionHandler: ((MarkdownEditorInteraction) -> Void)?,
             livePreviewMode: LivePreviewMode,
-            linkStyleMap: LivePreviewLinkStyleMap
+            linkStyleMap: LivePreviewLinkStyleMap,
+            embedPreviewMap: LivePreviewEmbedPreviewMap
         ) {
             _text = text
             self.interactionHandler = interactionHandler
             self.livePreviewMode = livePreviewMode
             self.linkStyleMap = linkStyleMap
+            self.embedPreviewMap = embedPreviewMap
         }
 
         func textDidChange(_ notification: Notification) {
@@ -169,7 +179,8 @@ struct MarkdownEditorView: NSViewRepresentable {
                 in: textView,
                 livePreviewMode: livePreviewMode,
                 revealRange: textView.selectedRange(),
-                linkStyleMap: linkStyleMap
+                linkStyleMap: linkStyleMap,
+                embedPreviewMap: embedPreviewMap
             )
         }
     }
@@ -204,8 +215,8 @@ enum MarkdownEditorAccessibility {
         switch mode {
         case .livePreview:
             isEditable
-                ? "Live Preview editor. Edit properties as source, command-click links and tags, click task checkboxes to toggle them."
-                : "Live Preview viewer. Review properties, click links and tags to open or search."
+                ? "Live Preview editor. Edit properties and embeds as source, command-click links and tags, click task checkboxes to toggle them."
+                : "Live Preview viewer. Review properties and embeds, click links and tags to open or search."
         case .source:
             "Source editor. Markdown syntax is shown as plain text."
         case .fallbackSource:

@@ -24,6 +24,10 @@ enum LivePreviewTheme {
     static let propertyBackgroundColor = NSColor.controlBackgroundColor
     static let propertyKeyColor = NSColor.secondaryLabelColor
     static let propertyValueColor = NSColor.labelColor
+    static let embedBackgroundColor = NSColor.controlBackgroundColor
+    static let embedImageColor = NSColor.systemGreen
+    static let embedBlockedColor = NSColor.systemRed
+    static let embedFallbackColor = NSColor.secondaryLabelColor
     static let codeColor = NSColor.systemBrown
     static let inlineCodeBackgroundColor = NSColor.controlBackgroundColor
     static let codeBlockBackgroundColor = NSColor.controlBackgroundColor
@@ -109,6 +113,16 @@ enum LivePreviewTheme {
         style.headIndent = 18
         style.paragraphSpacingBefore = 2
         style.paragraphSpacing = 2
+        return style.copy() as! NSParagraphStyle
+    }
+
+    static var embedParagraphStyle: NSParagraphStyle {
+        let style = NSMutableParagraphStyle()
+        style.lineHeightMultiple = 1.1
+        style.firstLineHeadIndent = 0
+        style.headIndent = 18
+        style.paragraphSpacingBefore = 4
+        style.paragraphSpacing = 4
         return style.copy() as! NSParagraphStyle
     }
 }

@@ -22,7 +22,8 @@ enum LivePreviewRenderer {
         range requestedRange: NSRange? = nil,
         mode: LivePreviewMode = .livePreview,
         revealRange: NSRange? = nil,
-        linkStyleMap: LivePreviewLinkStyleMap = LivePreviewLinkStyleMap()
+        linkStyleMap: LivePreviewLinkStyleMap = LivePreviewLinkStyleMap(),
+        embedPreviewMap: LivePreviewEmbedPreviewMap = LivePreviewEmbedPreviewMap()
     ) -> MarkdownDecorationResult {
         let start = DispatchTime.now().uptimeNanoseconds
         if textView.hasMarkedText() {
@@ -67,7 +68,8 @@ enum LivePreviewRenderer {
             plan: plan,
             visibleRange: visibleRange,
             revealRange: resolvedRevealRange,
-            linkStyleMap: linkStyleMap
+            linkStyleMap: linkStyleMap,
+            embedPreviewMap: embedPreviewMap
         )
         let result = storage.withPreservedSelection(textView: textView, textLength: text.length) {
             var changes = AttributeChangeCounter()
@@ -131,7 +133,8 @@ enum LivePreviewRenderer {
         plan: LivePreviewAttributePlan,
         visibleRange: NSRange,
         revealRange: NSRange,
-        linkStyleMap: LivePreviewLinkStyleMap
+        linkStyleMap: LivePreviewLinkStyleMap,
+        embedPreviewMap: LivePreviewEmbedPreviewMap
     ) {
         let parseWindow = LivePreviewVisibleParseWindow.window(
             in: source,
@@ -146,9 +149,11 @@ enum LivePreviewRenderer {
                 continue
             }
             let properties = frontmatterProperties(for: block, source: source)
+            let embedPreview = embedPreviewMap.preview(for: block)
             applyBlockAttributes(block, plan: plan, range: blockRange)
             applyBlockTokenAttributes(block, source: source, plan: plan, visibleRange: visibleRange)
             applyPropertyAttributes(properties, plan: plan, visibleRange: visibleRange)
+            applyEmbedAttributes(embedPreview, plan: plan, visibleRange: visibleRange)
             applyInlineAttributes(
                 block,
                 source: source,
@@ -160,6 +165,7 @@ enum LivePreviewRenderer {
                 block,
                 source: source,
                 properties: properties,
+                embedPreview: embedPreview,
                 plan: plan,
                 visibleRange: visibleRange,
                 revealRange: revealRange
@@ -200,7 +206,11 @@ enum LivePreviewRenderer {
         case .table:
             plan.addAttributes([.font: LivePreviewTheme.codeFont], range: range)
         case .embed:
-            plan.addAttributes([.foregroundColor: LivePreviewTheme.secondaryTextColor], range: range)
+            plan.addAttributes([
+                .foregroundColor: LivePreviewTheme.embedFallbackColor,
+                .backgroundColor: LivePreviewTheme.embedBackgroundColor,
+                .paragraphStyle: LivePreviewTheme.embedParagraphStyle
+            ], range: range)
         case .unorderedList, .orderedList, .taskList:
             plan.addAttributes([
                 .foregroundColor: LivePreviewTheme.textColor,
@@ -286,6 +296,44 @@ enum LivePreviewRenderer {
         }
     }
 
+    private static func applyEmbedAttributes(
+        _ preview: LivePreviewEmbedPreview?,
+        plan: LivePreviewAttributePlan,
+        visibleRange: NSRange
+    ) {
+        guard let preview else {
+            return
+        }
+
+        let targetRange = NSIntersectionRange(preview.span.targetRange.nsRange, visibleRange)
+        guard targetRange.length > 0 else {
+            return
+        }
+
+        plan.addAttributes(embedAttributes(for: preview.status), range: targetRange)
+    }
+
+    private static func embedAttributes(
+        for status: LivePreviewEmbedPreviewStatus
+    ) -> [NSAttributedString.Key: Any] {
+        let color: NSColor
+        switch status {
+        case .pending:
+            color = LivePreviewTheme.embedFallbackColor
+        case .imageReady:
+            color = LivePreviewTheme.embedImageColor
+        case .blocked:
+            color = LivePreviewTheme.embedBlockedColor
+        case .nonImage:
+            color = LivePreviewTheme.embedFallbackColor
+        }
+        return [
+            .font: LivePreviewTheme.strongFont,
+            .foregroundColor: color,
+            .backgroundColor: LivePreviewTheme.embedBackgroundColor
+        ]
+    }
+
     private static func applyInlineAttributes(
         _ block: LivePreviewBlockSpan,
         source: String,
@@ -359,6 +407,7 @@ enum LivePreviewRenderer {
         _ block: LivePreviewBlockSpan,
         source: String,
         properties: LivePreviewPropertyBlock?,
+        embedPreview: LivePreviewEmbedPreview?,
         plan: LivePreviewAttributePlan,
         visibleRange: NSRange,
         revealRange: NSRange
@@ -367,7 +416,12 @@ enum LivePreviewRenderer {
             return
         }
 
-        for range in concealmentRanges(for: block, source: source, properties: properties) {
+        for range in concealmentRanges(
+            for: block,
+            source: source,
+            properties: properties,
+            embedPreview: embedPreview
+        ) {
             let range = NSIntersectionRange(range, visibleRange)
             guard range.length > 0 else {
                 continue
@@ -381,7 +435,8 @@ enum LivePreviewRenderer {
     private static func concealmentRanges(
         for block: LivePreviewBlockSpan,
         source: String,
-        properties: LivePreviewPropertyBlock?
+        properties: LivePreviewPropertyBlock?,
+        embedPreview: LivePreviewEmbedPreview?
     ) -> [NSRange] {
         var ranges: [NSRange]
         switch block.kind {
@@ -400,7 +455,7 @@ enum LivePreviewRenderer {
         case .table:
             return matches(in: source, range: block.sourceRange.nsRange, regex: tablePipeRegex)
         case .embed:
-            return embedTokenRanges(for: block, source: source)
+            return embedTokenRanges(for: block, source: source, preview: embedPreview)
         case .paragraph:
             ranges = []
         case .fencedCode:
@@ -510,7 +565,14 @@ enum LivePreviewRenderer {
         return regex.matches(in: source, range: range).map(\.range)
     }
 
-    private static func embedTokenRanges(for block: LivePreviewBlockSpan, source: String) -> [NSRange] {
+    private static func embedTokenRanges(
+        for block: LivePreviewBlockSpan,
+        source: String,
+        preview: LivePreviewEmbedPreview?
+    ) -> [NSRange] {
+        if let preview {
+            return preview.span.tokenRanges.map(\.nsRange)
+        }
         let range = block.sourceRange.nsRange
         let blockText = (source as NSString).substring(with: range)
         if blockText.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("![[") {
