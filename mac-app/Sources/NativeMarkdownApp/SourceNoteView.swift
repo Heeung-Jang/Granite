@@ -5,6 +5,7 @@ import SwiftUI
 struct SourceNoteView: View {
     private static let conflictActionGeneration: UInt64 = 0
     private static let fallbackProfileMinimumByteDelta = 4_096
+    private static let fallbackProfileSmallDocumentByteLimit = 256 * 1024
 
     @EnvironmentObject private var appState: AppState
     let vaultURL: URL
@@ -16,6 +17,7 @@ struct SourceNoteView: View {
     @State private var saveSession: EditorSaveSession?
     @State private var fallbackController = LivePreviewFallbackController()
     @State private var lastFallbackProfileByteCount = 0
+    @State private var lastFallbackProfileEmbedCount = 0
     @State private var pendingExternalLink: PendingExternalLink?
     @State private var interactionNotice: EditorInteractionNotice?
     @State private var pendingRecoverySnapshot: EditorRecoverySnapshot?
@@ -193,8 +195,12 @@ struct SourceNoteView: View {
         let byteCount = contents.utf8.count
         let thresholds = EditorDegradationThresholds()
         let byteDelta = abs(byteCount - lastFallbackProfileByteCount)
-        guard byteCount > thresholds.maxDecoratedFileBytes ||
-              byteDelta >= Self.fallbackProfileMinimumByteDelta
+        let embedCount = countOccurrences(of: "![", in: contents)
+        guard byteCount <= Self.fallbackProfileSmallDocumentByteLimit ||
+              byteCount > thresholds.maxDecoratedFileBytes ||
+              byteDelta >= Self.fallbackProfileMinimumByteDelta ||
+              embedCount != lastFallbackProfileEmbedCount ||
+              embedCount > thresholds.maxEmbedCount
         else {
             return
         }
@@ -208,8 +214,20 @@ struct SourceNoteView: View {
         lastFallbackProfileByteCount = contents.utf8.count
         var controller = fallbackController
         let profile = EditorDocumentProfiler.profile(contents)
+        lastFallbackProfileEmbedCount = profile.embedCount
         controller.observe(EditorStrategyDecision().renderingMode(for: profile))
         fallbackController = controller
+    }
+
+    private func countOccurrences(of needle: String, in contents: String) -> Int {
+        var count = 0
+        var searchRange = contents.startIndex..<contents.endIndex
+
+        while let range = contents.range(of: needle, range: searchRange) {
+            count += 1
+            searchRange = range.upperBound..<contents.endIndex
+        }
+        return count
     }
 
     private var editorSaveAction: EditorSaveAction {
@@ -224,6 +242,7 @@ struct SourceNoteView: View {
         pendingRecoverySnapshot = nil
         fallbackController = LivePreviewFallbackController()
         lastFallbackProfileByteCount = 0
+        lastFallbackProfileEmbedCount = 0
         let timer = AppTelemetryTimer()
         do {
             let document = try await Task.detached(priority: .userInitiated) {
