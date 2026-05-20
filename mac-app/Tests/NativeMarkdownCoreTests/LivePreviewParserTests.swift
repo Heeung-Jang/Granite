@@ -54,10 +54,17 @@ func livePreviewParserClassifiesBasicFormattingFixture() throws {
 }
 
 @Test
-func livePreviewParserKeepsMalformedFenceBounded() {
-    let source = "Before\n```swift\nlet value = 1\n"
+func livePreviewParserKeepsMalformedFenceBounded() throws {
+    let source = "Before\n```swift\nlet value = `not inline`\n"
     let result = LivePreviewParser.parse(source)
 
+    let fence = try #require(result.blocks.first {
+        if case .fencedCode = $0.kind {
+            return true
+        }
+        return false
+    })
+    #expect(fence.inlineSpans.isEmpty)
     #expect(result.blocks.containsBlock {
         if case .fencedCode(fence: "```", info: "swift", isClosed: false) = $0 {
             true
@@ -74,6 +81,7 @@ func livePreviewParserClassifiesFrontmatterWithoutInterpretingValues() throws {
     let parsedProperties = LivePreviewParser.parse(properties)
     #expect(parsedProperties.blocks.first?.kind == .frontmatter(isClosed: true))
     #expect(parsedProperties.blocks.first?.isInert == true)
+    #expect(parsedProperties.blocks.first?.inlineSpans.isEmpty == true)
 
     let malformed = "---\ntitle: Missing close\n# Body\n"
     let parsedMalformed = LivePreviewParser.parse(malformed)
@@ -145,10 +153,12 @@ func livePreviewVisibleParseWindowExpandsAndCapsRange() {
 func livePreviewSpanCacheInvalidatesEditedRangesWithNeighbors() {
     var cache = LivePreviewSpanCache()
     let first = LivePreviewParseResult(
+        sourceVersion: 1,
         sourceRange: LivePreviewSourceRange(location: 0, length: 10),
         blocks: []
     )
     let second = LivePreviewParseResult(
+        sourceVersion: 1,
         sourceRange: LivePreviewSourceRange(location: 30, length: 10),
         blocks: []
     )
@@ -161,8 +171,16 @@ func livePreviewSpanCacheInvalidatesEditedRangesWithNeighbors() {
         documentUTF16Length: 100
     )
 
-    #expect(cache.entries[first.sourceRange] == nil)
-    #expect(cache.entries[second.sourceRange] == second)
+    #expect(cache.result(for: first.sourceRange, sourceVersion: 1) == nil)
+    #expect(cache.result(for: second.sourceRange, sourceVersion: 1) == nil)
+
+    cache.store(LivePreviewParseResult(
+        sourceVersion: 2,
+        sourceRange: second.sourceRange,
+        blocks: []
+    ))
+    #expect(cache.result(for: second.sourceRange, sourceVersion: 1) == nil)
+    #expect(cache.result(for: second.sourceRange, sourceVersion: 2)?.sourceVersion == 2)
 }
 
 @Test
@@ -170,9 +188,15 @@ func livePreviewRenderVersionGateRejectsStaleWork() {
     var gate = LivePreviewRenderVersionGate()
     let first = gate.nextVersion()
     let second = gate.nextVersion()
+    let result = LivePreviewParseResult(
+        sourceVersion: second,
+        sourceRange: LivePreviewSourceRange(location: 0, length: 1),
+        blocks: []
+    )
 
     #expect(!gate.accepts(first))
     #expect(gate.accepts(second))
+    #expect(gate.accepts(result))
 }
 
 private func fixture(_ name: String) throws -> String {

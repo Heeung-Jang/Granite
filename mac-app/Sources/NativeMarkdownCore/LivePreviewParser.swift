@@ -1,18 +1,24 @@
 import Foundation
 
 public enum LivePreviewParser {
-    public static func parse(_ source: String) -> LivePreviewParseResult {
+    public static func parse(_ source: String, sourceVersion: UInt64 = 0) -> LivePreviewParseResult {
         let fullRange = LivePreviewSourceRange(location: 0, length: (source as NSString).length)
-        return parse(source, in: fullRange)
+        return parse(source, in: fullRange, sourceVersion: sourceVersion)
     }
 
     public static func parse(
         _ source: String,
-        in requestedRange: LivePreviewSourceRange
+        in requestedRange: LivePreviewSourceRange,
+        sourceVersion: UInt64 = 0
     ) -> LivePreviewParseResult {
         let sourceRange = LivePreviewRangeMapper.clamped(requestedRange, in: source)
         guard let stringRange = LivePreviewRangeMapper.stringRange(for: sourceRange, in: source) else {
-            return LivePreviewParseResult(sourceRange: sourceRange, blocks: [], isPartial: true)
+            return LivePreviewParseResult(
+                sourceVersion: sourceVersion,
+                sourceRange: sourceRange,
+                blocks: [],
+                isPartial: true
+            )
         }
 
         let lines = LineIndex.lines(in: source, range: stringRange)
@@ -48,6 +54,7 @@ public enum LivePreviewParser {
         }
 
         return LivePreviewParseResult(
+            sourceVersion: sourceVersion,
             sourceRange: sourceRange,
             blocks: blocks,
             isPartial: sourceRange.location != 0 || sourceRange.length != (source as NSString).length
@@ -220,14 +227,26 @@ public enum LivePreviewParser {
             for: lines[start].contentRange.lowerBound..<lines[end - 1].contentRange.upperBound,
             in: source
         )
+        let inlineSpans = parsesInlineSpans(for: kind)
+            ? parseInlineSpans(source, in: contentRange)
+            : []
         return LivePreviewBlockSpan(
             kind: kind,
             sourceRange: sourceRange,
             contentRange: contentRange,
-            inlineSpans: parseInlineSpans(source, in: contentRange),
+            inlineSpans: inlineSpans,
             isInert: isInert,
             isEditable: true
         )
+    }
+
+    private static func parsesInlineSpans(for kind: LivePreviewBlockKind) -> Bool {
+        switch kind {
+        case .heading, .paragraph, .unorderedList, .orderedList, .taskList, .blockquote, .callout:
+            return true
+        case .frontmatter, .fencedCode, .table, .embed:
+            return false
+        }
     }
 
     private static func parseInlineSpans(

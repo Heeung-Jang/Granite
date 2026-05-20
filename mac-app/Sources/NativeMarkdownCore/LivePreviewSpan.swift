@@ -74,15 +74,18 @@ public struct LivePreviewBlockSpan: Equatable, Sendable {
 }
 
 public struct LivePreviewParseResult: Equatable, Sendable {
+    public var sourceVersion: UInt64
     public var sourceRange: LivePreviewSourceRange
     public var blocks: [LivePreviewBlockSpan]
     public var isPartial: Bool
 
     public init(
+        sourceVersion: UInt64 = 0,
         sourceRange: LivePreviewSourceRange,
         blocks: [LivePreviewBlockSpan],
         isPartial: Bool = false
     ) {
+        self.sourceVersion = sourceVersion
         self.sourceRange = sourceRange
         self.blocks = blocks
         self.isPartial = isPartial
@@ -98,6 +101,17 @@ public enum LivePreviewVisibleParseWindow {
     ) -> LivePreviewSourceRange {
         let sourceLength = (source as NSString).length
         let clampedVisible = LivePreviewRangeMapper.clamped(visibleRange, in: source)
+        if sourceLength > maxUTF16Length {
+            let visibleLength = min(clampedVisible.length, maxUTF16Length)
+            let beforeBudget = max(0, (maxUTF16Length - visibleLength) / 2)
+            var lower = max(0, clampedVisible.location - beforeBudget)
+            var upper = min(sourceLength, lower + maxUTF16Length)
+            if upper < clampedVisible.endLocation {
+                upper = min(sourceLength, clampedVisible.endLocation)
+                lower = max(0, upper - maxUTF16Length)
+            }
+            return LivePreviewSourceRange(location: lower, length: upper - lower)
+        }
         guard let visibleStringRange = LivePreviewRangeMapper.stringRange(for: clampedVisible, in: source) else {
             return LivePreviewSourceRange(location: 0, length: min(sourceLength, maxUTF16Length))
         }
@@ -124,14 +138,24 @@ public enum LivePreviewVisibleParseWindow {
 }
 
 public struct LivePreviewSpanCache: Equatable, Sendable {
-    public private(set) var entries: [LivePreviewSourceRange: LivePreviewParseResult]
+    public private(set) var entries: [LivePreviewSpanCacheKey: LivePreviewParseResult]
 
-    public init(entries: [LivePreviewSourceRange: LivePreviewParseResult] = [:]) {
+    public init(entries: [LivePreviewSpanCacheKey: LivePreviewParseResult] = [:]) {
         self.entries = entries
     }
 
     public mutating func store(_ result: LivePreviewParseResult) {
-        entries[result.sourceRange] = result
+        entries[LivePreviewSpanCacheKey(
+            sourceVersion: result.sourceVersion,
+            sourceRange: result.sourceRange
+        )] = result
+    }
+
+    public func result(
+        for sourceRange: LivePreviewSourceRange,
+        sourceVersion: UInt64
+    ) -> LivePreviewParseResult? {
+        entries[LivePreviewSpanCacheKey(sourceVersion: sourceVersion, sourceRange: sourceRange)]
     }
 
     public mutating func invalidate(
@@ -143,7 +167,20 @@ public struct LivePreviewSpanCache: Equatable, Sendable {
             by: neighborUTF16Padding,
             limit: documentUTF16Length
         )
-        entries = entries.filter { !$0.key.intersects(invalidatedRange) }
+        entries = entries.filter { key, _ in
+            !key.sourceRange.intersects(invalidatedRange) &&
+                key.sourceRange.location < editedRange.location
+        }
+    }
+}
+
+public struct LivePreviewSpanCacheKey: Equatable, Hashable, Sendable {
+    public var sourceVersion: UInt64
+    public var sourceRange: LivePreviewSourceRange
+
+    public init(sourceVersion: UInt64, sourceRange: LivePreviewSourceRange) {
+        self.sourceVersion = sourceVersion
+        self.sourceRange = sourceRange
     }
 }
 
@@ -162,5 +199,9 @@ public struct LivePreviewRenderVersionGate: Equatable, Sendable {
 
     public func accepts(_ version: UInt64) -> Bool {
         version == currentVersion
+    }
+
+    public func accepts(_ result: LivePreviewParseResult) -> Bool {
+        accepts(result.sourceVersion)
     }
 }
