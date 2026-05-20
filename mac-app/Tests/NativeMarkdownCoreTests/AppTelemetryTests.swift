@@ -13,6 +13,18 @@ func telemetryRedactsRawRelativePaths() {
 }
 
 @Test
+func telemetryRedactionOmitsContentLikeValues() {
+    let sensitiveValue = "/Users/example/Vault/Private/Secret Note.md\napiKey: private-token"
+    let identifier = AppTelemetry.redactedIdentifier(for: sensitiveValue)
+
+    #expect(identifier.count == 16)
+    #expect(!identifier.contains("Users"))
+    #expect(!identifier.contains("Secret"))
+    #expect(!identifier.contains("private-token"))
+    #expect(identifier == AppTelemetry.redactedIdentifier(for: sensitiveValue))
+}
+
+@Test
 func telemetryTimerReportsMilliseconds() {
     let timer = AppTelemetryTimer(startNanoseconds: 1_000_000)
 

@@ -108,6 +108,31 @@ func vaultSearchSkipsVaultMetadataDirectories() throws {
 }
 
 @Test
+func vaultSearchSkipsObsidianPluginAndSnippetPayloads() throws {
+    let vaultURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try write("eval('private-plugin-token')", to: vaultURL.appendingPathComponent(".obsidian/plugins/fake-plugin/main.js"))
+    try write(".unsafe { background: url(https://example.com/track) }", to: vaultURL.appendingPathComponent(".obsidian/snippets/unsafe.css"))
+    try write("Visible text", to: vaultURL.appendingPathComponent("Visible.md"))
+
+    let pluginPage = try FileSystemVaultSearchLoader().search(
+        at: vaultURL,
+        query: "private-plugin-token",
+        mode: .body,
+        page: SearchPageRequest(requestID: 14, offset: 0, limit: 10)
+    )
+    let snippetPage = try FileSystemVaultSearchLoader().search(
+        at: vaultURL,
+        query: "https://example.com/track",
+        mode: .body,
+        page: SearchPageRequest(requestID: 15, offset: 0, limit: 10)
+    )
+
+    #expect(pluginPage.items.isEmpty)
+    #expect(snippetPage.items.isEmpty)
+}
+
+@Test
 func vaultSearchRejectsEmptyQuery() throws {
     let vaultURL = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString, isDirectory: true)

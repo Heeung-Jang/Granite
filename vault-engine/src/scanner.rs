@@ -226,6 +226,33 @@ mod tests {
         assert_eq!(summary.skipped_directories, 1);
     }
 
+    #[test]
+    fn adversarial_fixture_excludes_obsidian_plugin_payloads() {
+        let root_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("fixtures")
+            .join("adversarial-vault");
+        let root = VaultRoot::open(root_path).expect("root");
+        let summary = scan_vault(&root).expect("scan");
+        let scanned_paths = summary
+            .entries
+            .iter()
+            .map(|entry| entry.relative_path.to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+
+        assert!(summary.skipped_directories >= 1);
+        assert!(
+            !scanned_paths
+                .iter()
+                .any(|path| path.starts_with(".obsidian"))
+        );
+        assert!(
+            !scanned_paths
+                .iter()
+                .any(|path| path.contains("fake-plugin") || path.contains("unsafe.css"))
+        );
+    }
+
     #[ignore]
     #[test]
     fn scans_real_benchmark_vault_metadata_only() {

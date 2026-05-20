@@ -690,6 +690,34 @@ mod tests {
         }));
     }
 
+    #[test]
+    fn benchmark_artifact_omits_queries_paths_and_note_snippets() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let artifact_path = temp.path().join("privacy-benchmark.json");
+        let options = BackendBenchmarkOptions {
+            corpus_id: "privacy-smoke".to_string(),
+            documents: vec![SearchDocument {
+                file_id: "private-file-id".to_string(),
+                path: "Private/Secret Note.md".to_string(),
+                title: "Secret Note".to_string(),
+                body: "private body phrase should not be serialized".to_string(),
+            }],
+            queries: vec!["private body phrase".to_string()],
+            result_limit: 10,
+            work_dir: temp.path().join("indexes"),
+        };
+
+        let artifact = run_shared_backend_benchmark(&options).expect("benchmark");
+        write_backend_benchmark_artifact(&artifact_path, &artifact, true).expect("artifact");
+        let json = fs::read_to_string(&artifact_path).expect("json");
+
+        assert!(!json.contains("private body phrase"));
+        assert!(!json.contains("Private/Secret Note.md"));
+        assert!(!json.contains("Secret Note"));
+        assert!(!json.contains("private-file-id"));
+        assert!(json.contains("\"snippet_result_count\""));
+    }
+
     fn fixture_documents() -> Vec<SearchDocument> {
         vec![
             SearchDocument {
