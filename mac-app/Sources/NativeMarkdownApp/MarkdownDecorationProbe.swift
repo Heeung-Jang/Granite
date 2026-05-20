@@ -13,6 +13,8 @@ struct MarkdownDecorationMeasurement: Codable, Equatable {
     var reason: String?
     var rangeLength: Int
     var appliedRuns: Int
+    var changedRangeCount: Int
+    var changedUTF16Length: Int
     var iterations: Int
     var p95Milliseconds: Double?
 }
@@ -50,6 +52,8 @@ enum MarkdownDecorationProbe {
                 reason: reason.rawValue,
                 rangeLength: 0,
                 appliedRuns: 0,
+                changedRangeCount: 0,
+                changedUTF16Length: 0,
                 iterations: 0,
                 p95Milliseconds: nil
             )
@@ -60,7 +64,10 @@ enum MarkdownDecorationProbe {
             mode: "decorated-source",
             reason: nil,
             rangeLength: 0,
-            appliedRuns: 0
+            appliedRuns: 0,
+            changedRangeCount: 0,
+            changedUTF16Length: 0,
+            elapsedMilliseconds: 0
         )
         for _ in 0..<20 {
             let start = DispatchTime.now().uptimeNanoseconds
@@ -79,6 +86,8 @@ enum MarkdownDecorationProbe {
             reason: result.reason,
             rangeLength: result.rangeLength,
             appliedRuns: result.appliedRuns,
+            changedRangeCount: result.changedRangeCount,
+            changedUTF16Length: result.changedUTF16Length,
             iterations: samples.count,
             p95Milliseconds: percentile95(samples)
         )

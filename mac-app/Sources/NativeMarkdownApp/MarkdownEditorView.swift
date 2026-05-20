@@ -21,7 +21,11 @@ struct MarkdownEditorView: NSViewRepresentable {
         }
         textView.string = text
         let decorationTimer = AppTelemetryTimer()
-        MarkdownVisibleRangeDecorator.decorateVisibleRange(in: textView, livePreviewMode: livePreviewMode)
+        MarkdownVisibleRangeDecorator.decorateVisibleRange(
+            in: textView,
+            livePreviewMode: livePreviewMode,
+            revealRange: textView.selectedRange()
+        )
         AppTelemetry.editorDecorationCompleted(
             textLength: textView.string.count,
             durationMilliseconds: decorationTimer.elapsedMilliseconds()
@@ -52,7 +56,11 @@ struct MarkdownEditorView: NSViewRepresentable {
             isApplyingAppKitChange: context.coordinator.isApplyingAppKitChange
         )
         let decorationTimer = AppTelemetryTimer()
-        MarkdownVisibleRangeDecorator.decorateVisibleRange(in: textView, livePreviewMode: livePreviewMode)
+        MarkdownVisibleRangeDecorator.decorateVisibleRange(
+            in: textView,
+            livePreviewMode: livePreviewMode,
+            revealRange: textView.selectedRange()
+        )
         AppTelemetry.editorDecorationCompleted(
             textLength: textView.string.count,
             durationMilliseconds: decorationTimer.elapsedMilliseconds()
@@ -108,8 +116,15 @@ struct MarkdownEditorView: NSViewRepresentable {
 
             isApplyingAppKitChange = true
             text = textView.string
-            MarkdownVisibleRangeDecorator.decorateVisibleRange(in: textView, livePreviewMode: livePreviewMode)
+            renderCurrentSelection(in: textView)
             isApplyingAppKitChange = false
+        }
+
+        func textViewDidChangeSelection(_ notification: Notification) {
+            guard let textView = notification.object as? NSTextView else {
+                return
+            }
+            renderCurrentSelection(in: textView)
         }
 
         func textView(_ textView: MarkdownInteractionTextView, handleMouseDown event: NSEvent) -> Bool {
@@ -125,6 +140,14 @@ struct MarkdownEditorView: NSViewRepresentable {
 
             interactionHandler?(interaction)
             return true
+        }
+
+        private func renderCurrentSelection(in textView: NSTextView) {
+            MarkdownVisibleRangeDecorator.decorateVisibleRange(
+                in: textView,
+                livePreviewMode: livePreviewMode,
+                revealRange: textView.selectedRange()
+            )
         }
     }
 }
@@ -161,6 +184,18 @@ final class MarkdownInteractionTextView: NSTextView {
             return
         }
         super.mouseDown(with: event)
+    }
+
+    override func paste(_ sender: Any?) {
+        guard let pasted = NSPasteboard.general.string(forType: .string) else {
+            return
+        }
+        let range = selectedRange()
+        guard shouldChangeText(in: range, replacementString: pasted) else {
+            return
+        }
+        replaceCharacters(in: range, with: pasted)
+        didChangeText()
     }
 
     func utf16Offset(for event: NSEvent) -> Int? {

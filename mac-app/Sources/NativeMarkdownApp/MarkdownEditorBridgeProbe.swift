@@ -15,6 +15,11 @@ struct MarkdownEditorBridgeProbeReport: Codable, Equatable {
     var modeTransitionsPreservedSelection: Bool
     var modeTransitionsPreservedDirtyState: Bool
     var modeTransitionsKeptUndoEnabled: Bool
+    var livePreviewReportsChangedRanges: Bool
+    var caretRevealRestoresHiddenSyntaxColor: Bool
+    var markedTextRenderDeferred: Bool
+    var sourceEquivalentSelectionText: Bool
+    var plainTextPastePolicy: Bool
 }
 
 @MainActor
@@ -33,6 +38,7 @@ enum MarkdownEditorBridgeProbe {
         let appKitChangeProbe = probeAppKitChangeSkip()
         let coordinatorProbe = probeCoordinatorBinding()
         let modeProbe = probeModeTransitions()
+        let renderProbe = probeLivePreviewRendering()
 
         return MarkdownEditorBridgeProbeReport(
             sameTextSkippedUpdate: sameTextProbe.skipped,
@@ -45,7 +51,12 @@ enum MarkdownEditorBridgeProbe {
             modeTransitionsPreservedText: modeProbe.textPreserved,
             modeTransitionsPreservedSelection: modeProbe.selectionPreserved,
             modeTransitionsPreservedDirtyState: modeProbe.dirtyStatePreserved,
-            modeTransitionsKeptUndoEnabled: modeProbe.undoEnabled
+            modeTransitionsKeptUndoEnabled: modeProbe.undoEnabled,
+            livePreviewReportsChangedRanges: renderProbe.reportsChangedRanges,
+            caretRevealRestoresHiddenSyntaxColor: renderProbe.caretRevealRestoresHiddenSyntaxColor,
+            markedTextRenderDeferred: renderProbe.markedTextRenderDeferred,
+            sourceEquivalentSelectionText: renderProbe.sourceEquivalentSelectionText,
+            plainTextPastePolicy: renderProbe.plainTextPastePolicy
         )
     }
 
@@ -147,6 +158,79 @@ enum MarkdownEditorBridgeProbe {
             NSEqualRanges(textView.selectedRange(), selection),
             saveSession == saveSessionBefore && saveSession.isDirty,
             textView.allowsUndo
+        )
+    }
+
+    private static func probeLivePreviewRendering() -> (
+        reportsChangedRanges: Bool,
+        caretRevealRestoresHiddenSyntaxColor: Bool,
+        markedTextRenderDeferred: Bool,
+        sourceEquivalentSelectionText: Bool,
+        plainTextPastePolicy: Bool
+    ) {
+        let text = "# Heading\n\n**Strong** and `code` with [[Link]]\n"
+        let textView = MarkdownEditorTextViewFactory.makeTextView()
+        textView.string = text
+        textView.setSelectedRange(NSRange(location: (text as NSString).length, length: 0))
+
+        let hiddenResult = MarkdownVisibleRangeDecorator.decorateVisibleRange(
+            in: textView,
+            livePreviewMode: .livePreview,
+            revealRange: textView.selectedRange()
+        )
+        let hiddenHeadingColor = textView.textStorage?.attribute(
+            .foregroundColor,
+            at: 0,
+            effectiveRange: nil
+        ) as? NSColor
+
+        textView.setSelectedRange(NSRange(location: 2, length: 0))
+        MarkdownVisibleRangeDecorator.decorateVisibleRange(
+            in: textView,
+            livePreviewMode: .livePreview,
+            revealRange: textView.selectedRange()
+        )
+        let revealedHeadingColor = textView.textStorage?.attribute(
+            .foregroundColor,
+            at: 0,
+            effectiveRange: nil
+        ) as? NSColor
+
+        let markedTextView = MarkdownEditorTextViewFactory.makeTextView()
+        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 900, height: 700))
+        scrollView.documentView = markedTextView
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 900, height: 700),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: true
+        )
+        window.contentView = scrollView
+        window.makeFirstResponder(markedTextView)
+        markedTextView.string = text
+        markedTextView.setMarkedText(
+            "한글",
+            selectedRange: NSRange(location: 2, length: 0),
+            replacementRange: NSRange(location: NSNotFound, length: 0)
+        )
+        let markedResult = MarkdownVisibleRangeDecorator.decorateVisibleRange(
+            in: markedTextView,
+            livePreviewMode: .livePreview,
+            revealRange: markedTextView.selectedRange()
+        )
+        let markedTextWasActive = markedTextView.hasMarkedText()
+        markedTextView.unmarkText()
+
+        let selection = NSRange(location: 2, length: 7)
+        textView.setSelectedRange(selection)
+        let selectedSource = (textView.string as NSString).substring(with: selection)
+
+        return (
+            hiddenResult.changedRangeCount > 0 && hiddenResult.changedUTF16Length > 0,
+            hiddenHeadingColor == LivePreviewTheme.concealedColor && revealedHeadingColor != LivePreviewTheme.concealedColor,
+            markedTextWasActive && markedResult.mode == "marked-text-deferred",
+            selectedSource == "Heading",
+            !textView.isRichText && !textView.importsGraphics
         )
     }
 }
