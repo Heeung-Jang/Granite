@@ -290,6 +290,14 @@ mod tests {
     use super::*;
     use std::collections::BTreeMap;
     use tempfile::tempdir;
+    use vault_engine::benchmarks::{
+        VaultBackendBenchmarkOptions, run_shared_backend_benchmark_from_vault,
+    };
+
+    const ALLOWED_REGRESSION: f64 = 0.10;
+    const QUERY_P95_BASELINE_MICROS: u64 = 4_500_000;
+    const MIN_DOCS_PER_SECOND_BASELINE: f64 = 1.0;
+    const PEAK_RSS_BASELINE_BYTES: u64 = 6 * 1024 * 1024 * 1024;
 
     #[test]
     fn generates_deterministic_vault_from_seed() {
@@ -368,6 +376,74 @@ mod tests {
         assert_eq!(SyntheticProfile::Double.note_count(64_306), 128_612);
         assert_eq!(SyntheticProfile::Quintuple.note_count(64_306), 321_530);
         assert_eq!(SyntheticProfile::Small.note_count(64_306), 200);
+    }
+
+    #[test]
+    fn synthetic_vault_backend_benchmark_meets_smoke_budgets() {
+        let dir = tempdir().expect("tempdir");
+        let vault = dir.path().join("synthetic");
+        let manifest = generate_synthetic_vault(&SyntheticVaultOptions {
+            output_root: vault.clone(),
+            profile: SyntheticProfile::Small,
+            seed: 20260520,
+            target_markdown_count: 50,
+        })
+        .expect("synthetic vault");
+
+        let artifact = run_shared_backend_benchmark_from_vault(&VaultBackendBenchmarkOptions {
+            corpus_id: "synthetic-performance-smoke".to_string(),
+            vault_root: vault,
+            queries: vec![
+                "Synthetic Note".to_string(),
+                "deterministic phrase".to_string(),
+                "한국어".to_string(),
+                "workflow/benchmark".to_string(),
+            ],
+            result_limit: 10,
+            work_dir: dir.path().join("indexes"),
+        })
+        .expect("benchmark");
+
+        assert_eq!(artifact.document_count, manifest.note_count as usize);
+        assert_eq!(artifact.query_count, 4);
+        assert_eq!(artifact.backends.len(), 2);
+
+        for backend in &artifact.backends {
+            assert!(
+                backend.query_p95_micros <= upper_regression_limit(QUERY_P95_BASELINE_MICROS),
+                "{} query p95 exceeded smoke budget: {}us",
+                backend.backend,
+                backend.query_p95_micros
+            );
+            assert!(
+                backend.docs_per_second >= lower_regression_limit(MIN_DOCS_PER_SECOND_BASELINE),
+                "{} indexing throughput regressed: {:.2} docs/s",
+                backend.backend,
+                backend.docs_per_second
+            );
+            assert!(
+                backend.index_size_bytes > 0,
+                "{} index size",
+                backend.backend
+            );
+
+            if let Some(peak_rss_bytes) = backend.peak_rss_bytes {
+                assert!(
+                    peak_rss_bytes <= upper_regression_limit(PEAK_RSS_BASELINE_BYTES),
+                    "{} peak RSS exceeded smoke budget: {} bytes",
+                    backend.backend,
+                    peak_rss_bytes
+                );
+            }
+        }
+    }
+
+    fn upper_regression_limit(baseline: u64) -> u64 {
+        ((baseline as f64) * (1.0 + ALLOWED_REGRESSION)) as u64
+    }
+
+    fn lower_regression_limit(baseline: f64) -> f64 {
+        baseline * (1.0 - ALLOWED_REGRESSION)
     }
 
     fn snapshot_without_root(root: &Path) -> BTreeMap<String, String> {
