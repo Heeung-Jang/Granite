@@ -717,7 +717,7 @@ enum LivePreviewRenderer {
         guard let scheme = targetScheme(trimmed)?.lowercased() else {
             return true
         }
-        return ["http", "https", "mailto", "obsidian"].contains(scheme)
+        return ["http", "https", "mailto"].contains(scheme)
     }
 
     private static func targetScheme(_ target: String) -> String? {

@@ -300,6 +300,7 @@ enum MarkdownEditorBridgeProbe {
         ![Data](data:text/plain,a[b])
         ![File](file:///private/a]b)
         ![WikiText](data:text/plain,![[x]])
+        [Obsidian](obsidian://open?vault=Private&file=Secret)
         [[file:///private/wiki|Open]] [[data:text/plain,value|Open]]
         [[javascript:alert(1)|Open]] [[/private/wiki|Open]]
         [[Private/Payroll|Open]] [[../Secrets|Open]] [[http://[::1|Open]]
@@ -315,6 +316,7 @@ enum MarkdownEditorBridgeProbe {
         let unsafeMarkdownLinkTargetsRemainVisible = foregroundColor(in: unsafeTextView, text: unsafeText, marker: "javascript") != LivePreviewTheme.concealedColor
             && foregroundColor(in: unsafeTextView, text: unsafeText, marker: "data:text") != LivePreviewTheme.concealedColor
             && foregroundColor(in: unsafeTextView, text: unsafeText, marker: "file:///") != LivePreviewTheme.concealedColor
+            && foregroundColor(in: unsafeTextView, text: unsafeText, marker: "obsidian://open") != LivePreviewTheme.concealedColor
             && foregroundColor(in: unsafeTextView, text: unsafeText, marker: "[::1]") != LivePreviewTheme.concealedColor
             && foregroundColor(in: unsafeTextView, text: unsafeText, marker: "]b") != LivePreviewTheme.concealedColor
             && foregroundColor(in: unsafeTextView, text: unsafeText, marker: "[b]") != LivePreviewTheme.concealedColor
