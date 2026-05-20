@@ -35,7 +35,13 @@ struct NativeMarkdownApp: App {
                 propertyCount: 1,
                 durationMilliseconds: 1
             )
-            AppTelemetry.graphPlaceholderRendered(file)
+            AppTelemetry.graphRendered(
+                file,
+                state: .complete,
+                nodeCount: 1,
+                edgeCount: 0,
+                durationMilliseconds: 1
+            )
             AppTelemetry.saveRequested(file: file, available: false)
             AppTelemetry.editorDecorationCompleted(textLength: 128, durationMilliseconds: 1)
             print("NativeMarkdownApp telemetry smoke test")

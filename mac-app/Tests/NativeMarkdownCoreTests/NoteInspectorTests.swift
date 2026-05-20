@@ -182,6 +182,69 @@ func noteInspectorReportsUnreadableAttachmentWhenFilesystemDoes() throws {
     #expect(snapshot.attachments.first?.state == .unreadable(FileTreeItem(relativePath: "secret.png")))
 }
 
+@Test
+func localGraphLoaderBuildsOneHopAndTwoHopGraph() throws {
+    let vaultURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try write("# Home\n[[Target]] [[Missing]]", to: vaultURL.appendingPathComponent("Home.md"))
+    try write("# Target\n[[Home]] [[Guide]]", to: vaultURL.appendingPathComponent("Target.md"))
+    try write("# Guide\n", to: vaultURL.appendingPathComponent("Guide.md"))
+
+    let loader = FileSystemLocalGraphLoader()
+    let oneHop = try loader.loadGraph(
+        at: vaultURL,
+        file: FileTreeItem(relativePath: "Home.md"),
+        request: LocalGraphRequest(depth: .oneHop, maxNodes: 10, maxEdges: 10),
+        maxFiles: 20
+    )
+
+    #expect(oneHop.state == .complete)
+    #expect(oneHop.nodes.contains(LocalGraphNode(
+        id: "file:Home.md",
+        file: FileTreeItem(relativePath: "Home.md"),
+        label: "Home.md",
+        kind: .center
+    )))
+    #expect(oneHop.nodes.contains { $0.id == "file:Target.md" && $0.kind == .resolved })
+    #expect(oneHop.nodes.contains { $0.id == "unresolved:missing" && $0.kind == .unresolved })
+    #expect(!oneHop.nodes.contains { $0.id == "file:Guide.md" })
+    #expect(oneHop.edges.count == 3)
+    #expect(oneHop.edges.allSatisfy { $0.hop == 1 })
+
+    let twoHop = try loader.loadGraph(
+        at: vaultURL,
+        file: FileTreeItem(relativePath: "Home.md"),
+        request: LocalGraphRequest(depth: .twoHop, maxNodes: 10, maxEdges: 10),
+        maxFiles: 20
+    )
+
+    #expect(twoHop.nodes.contains { $0.id == "file:Guide.md" && $0.kind == .resolved })
+    #expect(twoHop.edges.contains {
+        $0.sourceNodeID == "file:Target.md"
+            && $0.targetNodeID == "file:Guide.md"
+            && $0.hop == 2
+    })
+}
+
+@Test
+func localGraphLoaderReportsPartialWhenCapsAreReached() throws {
+    let vaultURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try write("# Home\n[[One]] [[Two]]", to: vaultURL.appendingPathComponent("Home.md"))
+    try write("# One\n", to: vaultURL.appendingPathComponent("One.md"))
+    try write("# Two\n", to: vaultURL.appendingPathComponent("Two.md"))
+
+    let snapshot = try FileSystemLocalGraphLoader().loadGraph(
+        at: vaultURL,
+        file: FileTreeItem(relativePath: "Home.md"),
+        request: LocalGraphRequest(depth: .oneHop, maxNodes: 2, maxEdges: 10),
+        maxFiles: 20
+    )
+
+    #expect(snapshot.state == .partial)
+    #expect(snapshot.nodes.count == 2)
+}
+
 private func write(_ contents: String, to url: URL) throws {
     try FileManager.default.createDirectory(
         at: url.deletingLastPathComponent(),

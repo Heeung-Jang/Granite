@@ -71,6 +71,101 @@ public struct TagNoteGroup: Identifiable, Equatable, Sendable {
     }
 }
 
+public enum LocalGraphDepth: String, CaseIterable, Equatable, Sendable {
+    case oneHop
+    case twoHop
+
+    public var displayName: String {
+        switch self {
+        case .oneHop:
+            "1-hop"
+        case .twoHop:
+            "2-hop"
+        }
+    }
+}
+
+public struct LocalGraphRequest: Equatable, Sendable {
+    public let depth: LocalGraphDepth
+    public let maxNodes: Int
+    public let maxEdges: Int
+
+    public init(depth: LocalGraphDepth = .oneHop, maxNodes: Int = 80, maxEdges: Int = 160) {
+        self.depth = depth
+        self.maxNodes = max(1, maxNodes)
+        self.maxEdges = max(1, maxEdges)
+    }
+}
+
+public struct LocalGraphSnapshot: Equatable, Sendable {
+    public let centerNodeID: String
+    public let nodes: [LocalGraphNode]
+    public let edges: [LocalGraphEdge]
+    public let state: SearchResultState
+
+    public init(
+        centerNodeID: String,
+        nodes: [LocalGraphNode],
+        edges: [LocalGraphEdge],
+        state: SearchResultState
+    ) {
+        self.centerNodeID = centerNodeID
+        self.nodes = nodes
+        self.edges = edges
+        self.state = state
+    }
+}
+
+public struct LocalGraphNode: Identifiable, Equatable, Sendable {
+    public let id: String
+    public let file: FileTreeItem?
+    public let label: String
+    public let kind: LocalGraphNodeKind
+
+    public init(id: String, file: FileTreeItem?, label: String, kind: LocalGraphNodeKind) {
+        self.id = id
+        self.file = file
+        self.label = label
+        self.kind = kind
+    }
+}
+
+public enum LocalGraphNodeKind: Equatable, Sendable {
+    case center
+    case resolved
+    case unresolved
+}
+
+public struct LocalGraphEdge: Identifiable, Equatable, Sendable {
+    public let id: String
+    public let sourceNodeID: String
+    public let targetNodeID: String
+    public let targetText: String
+    public let direction: LocalGraphEdgeDirection
+    public let hop: Int
+
+    public init(
+        id: String,
+        sourceNodeID: String,
+        targetNodeID: String,
+        targetText: String,
+        direction: LocalGraphEdgeDirection,
+        hop: Int
+    ) {
+        self.id = id
+        self.sourceNodeID = sourceNodeID
+        self.targetNodeID = targetNodeID
+        self.targetText = targetText
+        self.direction = direction
+        self.hop = hop
+    }
+}
+
+public enum LocalGraphEdgeDirection: Equatable, Sendable {
+    case outgoing
+    case backlink
+}
+
 public struct NoteInspectorSnapshot: Equatable, Sendable {
     public let file: FileTreeItem
     public let outgoingLinks: [OutgoingLinkItem]
@@ -107,6 +202,15 @@ public struct NoteInspectorSnapshot: Equatable, Sendable {
 
 public protocol NoteInspectorLoading: Sendable {
     func loadInspector(at vaultURL: URL, file: FileTreeItem, maxFiles: Int) throws -> NoteInspectorSnapshot
+}
+
+public protocol LocalGraphLoading: Sendable {
+    func loadGraph(
+        at vaultURL: URL,
+        file: FileTreeItem,
+        request: LocalGraphRequest,
+        maxFiles: Int
+    ) throws -> LocalGraphSnapshot
 }
 
 public struct FileSystemNoteInspectorLoader: NoteInspectorLoading {
@@ -237,6 +341,250 @@ public struct FileSystemNoteInspectorLoader: NoteInspectorLoading {
             .replacingOccurrences(of: "\n", with: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
+}
+
+public struct FileSystemLocalGraphLoader: LocalGraphLoading {
+    public init() {}
+
+    public func loadGraph(
+        at vaultURL: URL,
+        file: FileTreeItem,
+        request: LocalGraphRequest = LocalGraphRequest(),
+        maxFiles: Int = 5_000
+    ) throws -> LocalGraphSnapshot {
+        let tree = try FileSystemFileTreeLoader().loadFileTree(at: vaultURL, maxItems: maxFiles)
+        let files = tree.items
+        let titleIndex = titleIndex(for: files)
+        let centerNodeID = localGraphNodeID(for: file)
+        var builder = LocalGraphBuilder(
+            centerNodeID: centerNodeID,
+            maxNodes: request.maxNodes,
+            maxEdges: request.maxEdges,
+            isPartial: tree.state == .partial
+        )
+
+        builder.addNode(LocalGraphNode(
+            id: centerNodeID,
+            file: file,
+            label: file.displayName,
+            kind: .center
+        ))
+
+        let outgoing = outgoingGraphLinks(from: file, vaultURL: vaultURL, titleIndex: titleIndex)
+        var frontier: [FileTreeItem] = []
+        for link in outgoing {
+            if case .resolved(let target) = link.target, target != file {
+                appendUnique(target, to: &frontier)
+            }
+            builder.addEdge(link.edge(from: centerNodeID, hop: 1), target: link.target)
+        }
+
+        let backlinks = backlinkGraphLinks(to: file, files: files, vaultURL: vaultURL, titleIndex: titleIndex)
+        for backlink in backlinks {
+            appendUnique(backlink.source, to: &frontier)
+            builder.addEdge(
+                LocalGraphEdge(
+                    id: "\(localGraphNodeID(for: backlink.source))->\(centerNodeID)-backlink-\(backlink.targetText)",
+                    sourceNodeID: localGraphNodeID(for: backlink.source),
+                    targetNodeID: centerNodeID,
+                    targetText: backlink.targetText,
+                    direction: .backlink,
+                    hop: 1
+                ),
+                target: .resolved(backlink.source)
+            )
+        }
+
+        if request.depth == .twoHop {
+            for source in frontier.sorted(by: { $0.relativePath < $1.relativePath }) {
+                guard !builder.isEdgeLimitReached else {
+                    builder.markPartial()
+                    break
+                }
+                let links = outgoingGraphLinks(from: source, vaultURL: vaultURL, titleIndex: titleIndex)
+                for link in links {
+                    builder.addEdge(link.edge(from: localGraphNodeID(for: source), hop: 2), target: link.target)
+                }
+            }
+        }
+
+        return builder.snapshot()
+    }
+
+    private func titleIndex(for files: [FileTreeItem]) -> [String: [FileTreeItem]] {
+        Dictionary(grouping: files) { file in
+            (file.displayName as NSString).deletingPathExtension.lowercased()
+        }
+    }
+
+    private func outgoingGraphLinks(
+        from file: FileTreeItem,
+        vaultURL: URL,
+        titleIndex: [String: [FileTreeItem]]
+    ) -> [ResolvedGraphLink] {
+        guard let document = try? FileSystemNoteDocumentLoader().loadNote(at: vaultURL, file: file) else {
+            return []
+        }
+        return parseNote(document.contents).links.enumerated().map { index, link in
+            ResolvedGraphLink(
+                id: "\(file.id)-out-\(index)-\(link.raw)",
+                targetText: link.target,
+                target: graphTarget(for: link, titleIndex: titleIndex)
+            )
+        }
+    }
+
+    private func backlinkGraphLinks(
+        to file: FileTreeItem,
+        files: [FileTreeItem],
+        vaultURL: URL,
+        titleIndex: [String: [FileTreeItem]]
+    ) -> [BacklinkGraphLink] {
+        files.compactMap { candidate in
+            guard candidate != file,
+                  let document = try? FileSystemNoteDocumentLoader().loadNote(at: vaultURL, file: candidate)
+            else {
+                return nil
+            }
+
+            let links = parseNote(document.contents).links
+            guard let link = links.first(where: { graphTarget(for: $0, titleIndex: titleIndex) == .resolved(file) }) else {
+                return nil
+            }
+            return BacklinkGraphLink(source: candidate, targetText: link.target)
+        }
+    }
+
+    private func graphTarget(
+        for link: ParsedWikiLink,
+        titleIndex: [String: [FileTreeItem]]
+    ) -> LocalGraphTarget {
+        let candidates = titleIndex[link.target.lowercased()] ?? []
+        if candidates.count == 1 {
+            return .resolved(candidates[0])
+        }
+        return .unresolved(link.target)
+    }
+}
+
+private struct ResolvedGraphLink {
+    let id: String
+    let targetText: String
+    let target: LocalGraphTarget
+
+    func edge(from sourceNodeID: String, hop: Int) -> LocalGraphEdge {
+        LocalGraphEdge(
+            id: "\(sourceNodeID)->\(target.nodeID)-\(id)-hop-\(hop)",
+            sourceNodeID: sourceNodeID,
+            targetNodeID: target.nodeID,
+            targetText: targetText,
+            direction: .outgoing,
+            hop: hop
+        )
+    }
+}
+
+private struct BacklinkGraphLink {
+    let source: FileTreeItem
+    let targetText: String
+}
+
+private enum LocalGraphTarget: Equatable {
+    case resolved(FileTreeItem)
+    case unresolved(String)
+
+    var nodeID: String {
+        switch self {
+        case .resolved(let file):
+            return localGraphNodeID(for: file)
+        case .unresolved(let target):
+            return localGraphUnresolvedNodeID(for: target)
+        }
+    }
+
+    var node: LocalGraphNode {
+        switch self {
+        case .resolved(let file):
+            LocalGraphNode(id: nodeID, file: file, label: file.displayName, kind: .resolved)
+        case .unresolved(let target):
+            LocalGraphNode(id: nodeID, file: nil, label: target, kind: .unresolved)
+        }
+    }
+}
+
+private struct LocalGraphBuilder {
+    let centerNodeID: String
+    let maxNodes: Int
+    let maxEdges: Int
+    private var nodes: [LocalGraphNode] = []
+    private var edges: [LocalGraphEdge] = []
+    private var isPartial: Bool
+
+    init(centerNodeID: String, maxNodes: Int, maxEdges: Int, isPartial: Bool) {
+        self.centerNodeID = centerNodeID
+        self.maxNodes = maxNodes
+        self.maxEdges = maxEdges
+        self.isPartial = isPartial
+    }
+
+    var isEdgeLimitReached: Bool {
+        edges.count >= maxEdges
+    }
+
+    mutating func addNode(_ node: LocalGraphNode) {
+        guard !nodes.contains(where: { $0.id == node.id }) else {
+            return
+        }
+        guard nodes.count < maxNodes else {
+            markPartial()
+            return
+        }
+        nodes.append(node)
+    }
+
+    mutating func addEdge(_ edge: LocalGraphEdge, target: LocalGraphTarget) {
+        guard edges.count < maxEdges else {
+            markPartial()
+            return
+        }
+        let previousNodeCount = nodes.count
+        addNode(target.node)
+        guard nodes.contains(where: { $0.id == target.nodeID }) else {
+            if nodes.count == previousNodeCount {
+                markPartial()
+            }
+            return
+        }
+        edges.append(edge)
+    }
+
+    mutating func markPartial() {
+        isPartial = true
+    }
+
+    func snapshot() -> LocalGraphSnapshot {
+        LocalGraphSnapshot(
+            centerNodeID: centerNodeID,
+            nodes: nodes,
+            edges: edges,
+            state: isPartial ? .partial : .complete
+        )
+    }
+}
+
+private func localGraphNodeID(for file: FileTreeItem) -> String {
+    "file:\(file.relativePath)"
+}
+
+private func localGraphUnresolvedNodeID(for target: String) -> String {
+    "unresolved:\(target.lowercased())"
+}
+
+private func appendUnique(_ file: FileTreeItem, to files: inout [FileTreeItem]) {
+    guard !files.contains(file) else {
+        return
+    }
+    files.append(file)
 }
 
 private struct ParsedNote {

@@ -149,10 +149,7 @@ struct NoteInspectorView: View {
                     }
 
                     InspectorSection(title: "Graph") {
-                        EmptyInlineText("Graph placeholder")
-                            .onAppear {
-                                AppTelemetry.graphPlaceholderRendered(file)
-                            }
+                        LocalGraphSection(vaultURL: vaultURL, file: file, open: open)
                     }
                 }
                 .padding(12)
@@ -426,6 +423,225 @@ private struct AttachmentImagePreview: View {
             return
         }
         image = loadedImage
+    }
+}
+
+private enum LocalGraphViewState {
+    case loading
+    case loaded(LocalGraphSnapshot)
+    case failed(String)
+}
+
+private struct LocalGraphSection: View {
+    let vaultURL: URL
+    let file: FileTreeItem
+    let open: (FileTreeItem) -> Void
+
+    @State private var depth: LocalGraphDepth = .oneHop
+    @State private var state: LocalGraphViewState = .loading
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Picker("Depth", selection: $depth) {
+                ForEach(LocalGraphDepth.allCases, id: \.self) { depth in
+                    Text(depth.displayName).tag(depth)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.segmented)
+            .controlSize(.small)
+
+            switch state {
+            case .loading:
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    EmptyInlineText("Loading graph")
+                }
+            case .failed(let message):
+                Label(message, systemImage: "xmark.octagon")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            case .loaded(let snapshot):
+                LocalGraphContent(snapshot: snapshot, open: open)
+            }
+        }
+        .task(id: "\(file.id)-\(depth.rawValue)") {
+            await loadGraph()
+        }
+    }
+
+    private func loadGraph() async {
+        state = .loading
+        let timer = AppTelemetryTimer()
+        let vaultURL = vaultURL
+        let file = file
+        let depth = depth
+
+        do {
+            let snapshot = try await Task.detached(priority: .userInitiated) {
+                try FileSystemLocalGraphLoader().loadGraph(
+                    at: vaultURL,
+                    file: file,
+                    request: LocalGraphRequest(depth: depth),
+                    maxFiles: 5_000
+                )
+            }.value
+
+            if Task.isCancelled {
+                return
+            }
+            state = .loaded(snapshot)
+            AppTelemetry.graphRendered(
+                file,
+                state: snapshot.state,
+                nodeCount: snapshot.nodes.count,
+                edgeCount: snapshot.edges.count,
+                durationMilliseconds: timer.elapsedMilliseconds()
+            )
+        } catch {
+            if Task.isCancelled {
+                return
+            }
+            state = .failed(error.localizedDescription)
+            AppTelemetry.graphRendered(
+                file,
+                state: .error,
+                nodeCount: 0,
+                edgeCount: 0,
+                durationMilliseconds: timer.elapsedMilliseconds()
+            )
+        }
+    }
+}
+
+private struct LocalGraphContent: View {
+    let snapshot: LocalGraphSnapshot
+    let open: (FileTreeItem) -> Void
+
+    private var nodesByID: [String: LocalGraphNode] {
+        Dictionary(uniqueKeysWithValues: snapshot.nodes.map { ($0.id, $0) })
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if snapshot.state != .complete {
+                Label("Partial graph", systemImage: "ellipsis")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if snapshot.edges.isEmpty {
+                EmptyInlineText("No graph links")
+            } else {
+                LocalGraphNodeStrip(nodes: snapshot.nodes, open: open)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(snapshot.edges.prefix(12)) { edge in
+                        LocalGraphEdgeRow(edge: edge, nodesByID: nodesByID, open: open)
+                    }
+                    if snapshot.edges.count > 12 {
+                        Text("+ \(snapshot.edges.count - 12) more")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct LocalGraphNodeStrip: View {
+    let nodes: [LocalGraphNode]
+    let open: (FileTreeItem) -> Void
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(nodes) { node in
+                    LocalGraphNodeChip(node: node, open: open)
+                }
+            }
+        }
+    }
+}
+
+private struct LocalGraphNodeChip: View {
+    let node: LocalGraphNode
+    let open: (FileTreeItem) -> Void
+
+    var body: some View {
+        Group {
+            if let file = node.file, node.kind != .center {
+                Button {
+                    open(file)
+                } label: {
+                    label
+                }
+                .buttonStyle(.plain)
+            } else {
+                label
+            }
+        }
+    }
+
+    private var label: some View {
+        Label(node.label, systemImage: systemImage)
+            .font(.caption2)
+            .lineLimit(1)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(.quaternary.opacity(node.kind == .center ? 0.9 : 0.45))
+            .clipShape(Capsule())
+    }
+
+    private var systemImage: String {
+        switch node.kind {
+        case .center:
+            "smallcircle.filled.circle"
+        case .resolved:
+            "doc.text"
+        case .unresolved:
+            "questionmark"
+        }
+    }
+}
+
+private struct LocalGraphEdgeRow: View {
+    let edge: LocalGraphEdge
+    let nodesByID: [String: LocalGraphNode]
+    let open: (FileTreeItem) -> Void
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            nodeLabel(nodesByID[edge.sourceNodeID])
+            Image(systemName: edge.direction == .backlink ? "arrow.left" : "arrow.right")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+            nodeLabel(nodesByID[edge.targetNodeID])
+            Text("h\(edge.hop)")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+        }
+    }
+
+    @ViewBuilder
+    private func nodeLabel(_ node: LocalGraphNode?) -> some View {
+        if let file = node?.file, node?.kind != .center {
+            Button {
+                open(file)
+            } label: {
+                Text(node?.label ?? "")
+                    .lineLimit(1)
+            }
+            .buttonStyle(.plain)
+            .font(.caption)
+        } else {
+            Text(node?.label ?? edge.targetText)
+                .font(.caption)
+                .foregroundStyle(node == nil ? .secondary : .primary)
+                .lineLimit(1)
+        }
     }
 }
 

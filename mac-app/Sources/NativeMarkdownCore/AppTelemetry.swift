@@ -78,8 +78,14 @@ public enum AppTelemetry {
         inspectorLogger.info("Inspector refresh state=\(state.rawValue, privacy: .public) outgoing=\(outgoingCount, privacy: .public) backlinks=\(backlinkCount, privacy: .public) tags=\(tagCount, privacy: .public) properties=\(propertyCount, privacy: .public) duration_ms=\(durationMilliseconds, privacy: .public)")
     }
 
-    public static func graphPlaceholderRendered(_ file: FileTreeItem) {
-        graphLogger.debug("Graph placeholder rendered id=\(redactedIdentifier(for: file.relativePath), privacy: .public)")
+    public static func graphRendered(
+        _ file: FileTreeItem,
+        state: SearchResultState,
+        nodeCount: Int,
+        edgeCount: Int,
+        durationMilliseconds: Double
+    ) {
+        graphLogger.info("Graph rendered id=\(redactedIdentifier(for: file.relativePath), privacy: .public) state=\(state.rawValue, privacy: .public) nodes=\(nodeCount, privacy: .public) edges=\(edgeCount, privacy: .public) duration_ms=\(durationMilliseconds, privacy: .public)")
     }
 
     public static func saveRequested(file: FileTreeItem?, available: Bool) {
