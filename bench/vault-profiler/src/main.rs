@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use std::env;
 use std::error::Error;
 use std::ffi::OsString;
@@ -97,6 +98,7 @@ fn run() -> Result<(), Box<dyn Error>> {
                 command.pretty,
             )
         }
+        Command::ObsidianRunbook(command) => write_obsidian_runbook(&command),
     }
 }
 
@@ -145,6 +147,7 @@ enum Command {
     QueryCorpus(QueryCorpusCommand),
     SyntheticVault(SyntheticVaultCommand),
     BackendBenchmark(BackendBenchmarkCommand),
+    ObsidianRunbook(ObsidianRunbookCommand),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -187,6 +190,43 @@ struct BackendBenchmarkCommand {
     pretty: bool,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct ObsidianRunbookCommand {
+    corpus_path: PathBuf,
+    private_query_file: PathBuf,
+    output_path: PathBuf,
+    pretty: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct RunbookCorpus {
+    samples: Vec<RunbookSample>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RunbookSample {
+    id: String,
+    query_class: String,
+    query_hash: String,
+    redacted_display: String,
+    expected_result_shape: String,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+struct ObsidianRunbookEntry {
+    sample_id: String,
+    query_class: String,
+    query_hash: String,
+    redacted_display: String,
+    expected_result_shape: String,
+    obsidian_surface: String,
+    timing_stop_condition: String,
+    raw_query: String,
+    duration_ms: Option<f64>,
+    excluded: bool,
+    notes: Vec<String>,
+}
+
 impl Cli {
     fn parse<I>(mut args: I) -> Result<Self, Box<dyn Error>>
     where
@@ -201,6 +241,7 @@ impl Cli {
             "query-corpus" => Command::QueryCorpus(QueryCorpusCommand::parse(args)?),
             "synthetic-vault" => Command::SyntheticVault(SyntheticVaultCommand::parse(args)?),
             "backend-benchmark" => Command::BackendBenchmark(BackendBenchmarkCommand::parse(args)?),
+            "obsidian-runbook" => Command::ObsidianRunbook(ObsidianRunbookCommand::parse(args)?),
             _ => return Err(usage().into()),
         };
 
@@ -373,6 +414,138 @@ impl BackendBenchmarkCommand {
     }
 }
 
+impl ObsidianRunbookCommand {
+    fn parse<I>(mut args: I) -> Result<Self, Box<dyn Error>>
+    where
+        I: Iterator<Item = OsString>,
+    {
+        let mut corpus_path = None;
+        let mut private_query_file = None;
+        let mut output_path = None;
+        let mut pretty = false;
+
+        while let Some(arg) = args.next() {
+            match arg.to_string_lossy().as_ref() {
+                "--corpus" => {
+                    corpus_path = Some(PathBuf::from(required_string(&mut args, "--corpus")?))
+                }
+                "--private-query-file" => {
+                    private_query_file = Some(PathBuf::from(required_string(
+                        &mut args,
+                        "--private-query-file",
+                    )?));
+                }
+                "--output" => {
+                    output_path = Some(PathBuf::from(required_string(&mut args, "--output")?))
+                }
+                "--pretty" => pretty = true,
+                _ => return Err(usage().into()),
+            }
+        }
+
+        let Some(corpus_path) = corpus_path else {
+            return Err("missing required --corpus argument".into());
+        };
+        let Some(private_query_file) = private_query_file else {
+            return Err("missing required --private-query-file argument".into());
+        };
+        let Some(output_path) = output_path else {
+            return Err("missing required --output argument".into());
+        };
+
+        Ok(Self {
+            corpus_path,
+            private_query_file,
+            output_path,
+            pretty,
+        })
+    }
+}
+
+fn write_obsidian_runbook(command: &ObsidianRunbookCommand) -> Result<(), Box<dyn Error>> {
+    if !has_private_path_component(&command.output_path) {
+        return Err("raw Obsidian runbook output must be written under a private directory".into());
+    }
+
+    let entries = obsidian_runbook_entries(&command.corpus_path, &command.private_query_file)?;
+    let json = if command.pretty {
+        serde_json::to_string_pretty(&entries)?
+    } else {
+        serde_json::to_string(&entries)?
+    };
+    if let Some(parent) = command.output_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(&command.output_path, json)?;
+    Ok(())
+}
+
+fn obsidian_runbook_entries(
+    corpus_path: &Path,
+    private_query_file: &Path,
+) -> Result<Vec<ObsidianRunbookEntry>, Box<dyn Error>> {
+    let corpus: RunbookCorpus = serde_json::from_str(&fs::read_to_string(corpus_path)?)?;
+    let raw_queries = fs::read_to_string(private_query_file)?
+        .lines()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+
+    if corpus.samples.len() != raw_queries.len() {
+        return Err(format!(
+            "sample count mismatch: corpus has {}, private query file has {}",
+            corpus.samples.len(),
+            raw_queries.len()
+        )
+        .into());
+    }
+
+    Ok(corpus
+        .samples
+        .into_iter()
+        .zip(raw_queries)
+        .map(|(sample, raw_query)| ObsidianRunbookEntry {
+            obsidian_surface: obsidian_surface(&sample.query_class).to_string(),
+            timing_stop_condition: timing_stop_condition(&sample.query_class).to_string(),
+            sample_id: sample.id,
+            query_class: sample.query_class,
+            query_hash: sample.query_hash,
+            redacted_display: sample.redacted_display,
+            expected_result_shape: sample.expected_result_shape,
+            raw_query,
+            duration_ms: None,
+            excluded: false,
+            notes: Vec::new(),
+        })
+        .collect())
+}
+
+fn obsidian_surface(query_class: &str) -> &'static str {
+    match query_class {
+        "file_name" => "Quick Switcher",
+        "body" => "Search panel",
+        "backlink" => "Backlinks pane",
+        "tag" => "Tags pane or tag search",
+        "property" => "Search panel property query",
+        _ => "Manual Obsidian surface",
+    }
+}
+
+fn timing_stop_condition(query_class: &str) -> &'static str {
+    match query_class {
+        "file_name" => "Result list is visually stable for 500ms",
+        "body" => "Search results and count are visually stable for 500ms",
+        "backlink" => "Backlinks pane is visually stable for 500ms",
+        "tag" => "Tag result list is visually stable for 500ms",
+        "property" => "Property query result list is visually stable for 500ms",
+        _ => "Relevant result surface is visually stable for 500ms",
+    }
+}
+
+fn has_private_path_component(path: &Path) -> bool {
+    path.components()
+        .any(|component| component.as_os_str() == "private")
+}
+
 fn required_string<I>(args: &mut I, name: &str) -> Result<String, Box<dyn Error>>
 where
     I: Iterator<Item = OsString>,
@@ -441,7 +614,7 @@ where
 }
 
 fn usage() -> &'static str {
-    "usage: vault-profiler <profile|query-corpus|synthetic-vault|backend-benchmark> --vault <path> [--output <path>] [--pretty]"
+    "usage: vault-profiler <profile|query-corpus|synthetic-vault|backend-benchmark|obsidian-runbook> [options]"
 }
 
 #[cfg(test)]
@@ -598,6 +771,106 @@ mod tests {
                 }),
             }
         );
+    }
+
+    #[test]
+    fn parses_obsidian_runbook_args() {
+        let cli = Cli::parse(
+            [
+                "obsidian-runbook",
+                "--corpus",
+                "/tmp/query-corpus.json",
+                "--private-query-file",
+                "/tmp/private/queries.txt",
+                "--output",
+                "/tmp/private/runbook.json",
+                "--pretty",
+            ]
+            .into_iter()
+            .map(OsString::from),
+        )
+        .expect("cli");
+
+        assert_eq!(
+            cli,
+            Cli {
+                command: Command::ObsidianRunbook(ObsidianRunbookCommand {
+                    corpus_path: PathBuf::from("/tmp/query-corpus.json"),
+                    private_query_file: PathBuf::from("/tmp/private/queries.txt"),
+                    output_path: PathBuf::from("/tmp/private/runbook.json"),
+                    pretty: true,
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn obsidian_runbook_pairs_redacted_samples_with_private_queries() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let corpus = dir.path().join("corpus.json");
+        let private_dir = dir.path().join("private");
+        let queries = private_dir.join("queries.txt");
+        let output = private_dir.join("runbook.json");
+        fs::create_dir_all(&private_dir).expect("private dir");
+        fs::write(
+            &corpus,
+            r#"{
+              "samples": [
+                {
+                  "id": "file_name-0001",
+                  "query_class": "file_name",
+                  "query_hash": "hash-a",
+                  "redacted_display": "<hash-a:english:single>",
+                  "expected_result_shape": "single"
+                },
+                {
+                  "id": "body-0001",
+                  "query_class": "body",
+                  "query_hash": "hash-b",
+                  "redacted_display": "<hash-b:english:many>",
+                  "expected_result_shape": "many"
+                }
+              ]
+            }"#,
+        )
+        .expect("corpus");
+        fs::write(&queries, "Secret Note\nprivate body phrase\n").expect("queries");
+
+        let command = ObsidianRunbookCommand {
+            corpus_path: corpus,
+            private_query_file: queries,
+            output_path: output.clone(),
+            pretty: true,
+        };
+        write_obsidian_runbook(&command).expect("runbook");
+
+        let runbook = fs::read_to_string(output).expect("runbook json");
+        assert!(runbook.contains("\"sample_id\": \"file_name-0001\""));
+        assert!(runbook.contains("\"obsidian_surface\": \"Quick Switcher\""));
+        assert!(runbook.contains("\"raw_query\": \"Secret Note\""));
+        assert!(runbook.contains("\"duration_ms\": null"));
+    }
+
+    #[test]
+    fn obsidian_runbook_rejects_non_private_output() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let corpus = dir.path().join("corpus.json");
+        let queries = dir.path().join("queries.txt");
+        fs::write(
+            &corpus,
+            r#"{"samples":[{"id":"file_name-0001","query_class":"file_name","query_hash":"hash","redacted_display":"<hash>","expected_result_shape":"single"}]}"#,
+        )
+        .expect("corpus");
+        fs::write(&queries, "Secret Note\n").expect("queries");
+
+        let command = ObsidianRunbookCommand {
+            corpus_path: corpus,
+            private_query_file: queries,
+            output_path: dir.path().join("runbook.json"),
+            pretty: false,
+        };
+
+        assert!(write_obsidian_runbook(&command).is_err());
     }
 
     #[test]
