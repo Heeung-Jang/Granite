@@ -18,7 +18,12 @@ enum LivePreviewTheme {
     static let linkColor = NSColor.linkColor
     static let tagColor = NSColor.systemPurple
     static let codeColor = NSColor.systemBrown
+    static let inlineCodeBackgroundColor = NSColor.controlBackgroundColor
+    static let codeBlockBackgroundColor = NSColor.controlBackgroundColor
     static let quoteColor = NSColor.secondaryLabelColor
+    static let quoteBarColor = NSColor.systemGray
+    static let calloutAccentColor = NSColor.systemBlue
+    static let calloutBackgroundColor = NSColor.controlBackgroundColor
     static let listMarkerColor = NSColor.systemOrange
     static let concealedColor = NSColor.clear
 
@@ -37,5 +42,56 @@ enum LivePreviewTheme {
         default:
             return h6Font
         }
+    }
+
+    static var baseParagraphStyle: NSParagraphStyle {
+        let style = NSMutableParagraphStyle()
+        style.lineHeightMultiple = 1.16
+        style.paragraphSpacing = 4
+        return style.copy() as! NSParagraphStyle
+    }
+
+    static func headingParagraphStyle(level: Int) -> NSParagraphStyle {
+        let style = NSMutableParagraphStyle()
+        style.lineHeightMultiple = 1.04
+        style.paragraphSpacingBefore = level <= 2 ? 10 : 8
+        style.paragraphSpacing = level <= 2 ? 7 : 5
+        return style.copy() as! NSParagraphStyle
+    }
+
+    static var codeBlockParagraphStyle: NSParagraphStyle {
+        let style = NSMutableParagraphStyle()
+        style.lineHeightMultiple = 1.12
+        style.paragraphSpacingBefore = 6
+        style.paragraphSpacing = 6
+        return style.copy() as! NSParagraphStyle
+    }
+
+    static var listParagraphStyle: NSParagraphStyle {
+        let style = NSMutableParagraphStyle()
+        style.lineHeightMultiple = 1.12
+        style.firstLineHeadIndent = 0
+        style.headIndent = 18
+        style.paragraphSpacing = 2
+        return style.copy() as! NSParagraphStyle
+    }
+
+    static var quoteParagraphStyle: NSParagraphStyle {
+        let style = NSMutableParagraphStyle()
+        style.lineHeightMultiple = 1.12
+        style.firstLineHeadIndent = 0
+        style.headIndent = 18
+        style.paragraphSpacing = 4
+        return style.copy() as! NSParagraphStyle
+    }
+
+    static var calloutParagraphStyle: NSParagraphStyle {
+        let style = NSMutableParagraphStyle()
+        style.lineHeightMultiple = 1.12
+        style.firstLineHeadIndent = 0
+        style.headIndent = 20
+        style.paragraphSpacingBefore = 4
+        style.paragraphSpacing = 6
+        return style.copy() as! NSParagraphStyle
     }
 }

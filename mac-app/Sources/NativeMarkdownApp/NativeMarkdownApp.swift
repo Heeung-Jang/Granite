@@ -62,6 +62,11 @@ struct NativeMarkdownApp: App {
             print(MarkdownDecorationProbe.encodedReport())
             Foundation.exit(0)
         }
+
+        if CommandLine.arguments.contains("--live-preview-style-probe") {
+            print(LivePreviewStyleProbe.encodedReport())
+            Foundation.exit(0)
+        }
     }
 
     var body: some Scene {

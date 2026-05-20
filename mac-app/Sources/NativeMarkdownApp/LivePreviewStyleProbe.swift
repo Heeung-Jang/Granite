@@ -1,0 +1,205 @@
+import AppKit
+import Foundation
+
+struct LivePreviewStyleProbeReport: Codable, Equatable {
+    var headingFontScaleApplied: Bool
+    var headingParagraphSpacingApplied: Bool
+    var baseParagraphSpacingApplied: Bool
+    var inlineCodeStyleApplied: Bool
+    var inlineCodePreservesSource: Bool
+    var fencedCodeStyleApplied: Bool
+    var fencedCodeFenceConcealedOutsideReveal: Bool
+    var fencedCodeFenceRevealedInsideBlock: Bool
+    var fencedCodePreservesSource: Bool
+    var listParagraphIndentApplied: Bool
+    var listMarkerConcealedOutsideReveal: Bool
+    var listMarkerStyledInsideReveal: Bool
+    var taskCheckboxVisibleOutsideReveal: Bool
+    var nestedListIndentStable: Bool
+    var listRenderPreservesSource: Bool
+    var blockquoteParagraphIndentApplied: Bool
+    var blockquoteMarkerStyledAsBar: Bool
+    var blockquoteRenderPreservesSource: Bool
+    var calloutChromeApplied: Bool
+    var calloutSyntaxConcealedOutsideReveal: Bool
+    var calloutSyntaxRevealedInsideBlock: Bool
+    var calloutRenderPreservesSource: Bool
+    var headingRenderPreservesSource: Bool
+}
+
+@MainActor
+enum LivePreviewStyleProbe {
+    static func encodedReport() -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try! encoder.encode(run())
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    static func run() -> LivePreviewStyleProbeReport {
+        let source = """
+        # Heading 1
+        Paragraph one wraps with `code` and normal live-preview rhythm.
+
+        Paragraph two keeps source text exact.
+
+        ```swift
+        let value = 1
+        ```
+
+        - Bullet item
+          - Nested item
+        1. Ordered item
+        - [x] Done item
+
+        > Quote line
+        > [!note] Callout body
+
+        ## Heading 2
+        ### Heading 3
+        #### Heading 4
+        ##### Heading 5
+        ###### Heading 6
+        """
+        let textView = MarkdownEditorTextViewFactory.makeTextView()
+        textView.string = source
+        textView.setSelectedRange(NSRange(location: (source as NSString).length, length: 0))
+
+        MarkdownVisibleRangeDecorator.decorateVisibleRange(
+            in: textView,
+            livePreviewMode: .livePreview,
+            revealRange: textView.selectedRange()
+        )
+
+        let fonts = (1...6).compactMap { font(in: textView, source: source, marker: "Heading \($0)") }
+        let paragraphStyles = (1...6).compactMap {
+            paragraphStyle(in: textView, source: source, marker: "Heading \($0)")
+        }
+        let baseParagraphStyle = paragraphStyle(in: textView, source: source, marker: "Paragraph one")
+        let inlineCodeAttributes = attributes(in: textView, source: source, marker: "code")
+        let fencedCodeAttributes = attributes(in: textView, source: source, marker: "let value")
+        let hiddenFenceColor = foregroundColor(in: textView, source: source, marker: "```swift")
+        let listParagraphStyle = paragraphStyle(in: textView, source: source, marker: "Bullet item")
+        let nestedListParagraphStyle = paragraphStyle(in: textView, source: source, marker: "Nested item")
+        let hiddenListMarkerColor = foregroundColor(in: textView, source: source, marker: "- Bullet")
+        let visibleTaskCheckboxColor = foregroundColor(in: textView, source: source, marker: "[x]")
+        let blockquoteParagraphStyle = paragraphStyle(in: textView, source: source, marker: "Quote line")
+        let blockquoteMarkerColor = foregroundColor(in: textView, source: source, marker: "> Quote")
+        let calloutAttributes = attributes(in: textView, source: source, marker: "Callout body")
+        let hiddenCalloutSyntaxColor = foregroundColor(in: textView, source: source, marker: "> [!note]")
+
+        if let codeOffset = utf16Offset(of: "let value", in: source) {
+            textView.setSelectedRange(NSRange(location: codeOffset, length: 0))
+            MarkdownVisibleRangeDecorator.decorateVisibleRange(
+                in: textView,
+                livePreviewMode: .livePreview,
+                revealRange: textView.selectedRange()
+            )
+        }
+        let revealedFenceColor = foregroundColor(in: textView, source: source, marker: "```swift")
+
+        if let listOffset = utf16Offset(of: "Bullet item", in: source) {
+            textView.setSelectedRange(NSRange(location: listOffset, length: 0))
+            MarkdownVisibleRangeDecorator.decorateVisibleRange(
+                in: textView,
+                livePreviewMode: .livePreview,
+                revealRange: textView.selectedRange()
+            )
+        }
+        let revealedListMarkerColor = foregroundColor(in: textView, source: source, marker: "- Bullet")
+
+        if let calloutOffset = utf16Offset(of: "Callout body", in: source) {
+            textView.setSelectedRange(NSRange(location: calloutOffset, length: 0))
+            MarkdownVisibleRangeDecorator.decorateVisibleRange(
+                in: textView,
+                livePreviewMode: .livePreview,
+                revealRange: textView.selectedRange()
+            )
+        }
+        let revealedCalloutSyntaxColor = foregroundColor(in: textView, source: source, marker: "> [!note]")
+
+        return LivePreviewStyleProbeReport(
+            headingFontScaleApplied: fonts.map(\.pointSize) == [
+                LivePreviewTheme.h1Font.pointSize,
+                LivePreviewTheme.h2Font.pointSize,
+                LivePreviewTheme.h3Font.pointSize,
+                LivePreviewTheme.h4Font.pointSize,
+                LivePreviewTheme.h5Font.pointSize,
+                LivePreviewTheme.h6Font.pointSize
+            ],
+            headingParagraphSpacingApplied: paragraphStyles.count == 6
+                && paragraphStyles.allSatisfy { $0.paragraphSpacing > 0 && $0.paragraphSpacingBefore > 0 },
+            baseParagraphSpacingApplied: baseParagraphStyle?.lineHeightMultiple ?? 0 > 1
+                && baseParagraphStyle?.paragraphSpacing ?? 0 > 0,
+            inlineCodeStyleApplied: inlineCodeAttributes?[.font] as? NSFont == LivePreviewTheme.codeFont
+                && inlineCodeAttributes?[.foregroundColor] as? NSColor == LivePreviewTheme.codeColor
+                && inlineCodeAttributes?[.backgroundColor] as? NSColor == LivePreviewTheme.inlineCodeBackgroundColor,
+            inlineCodePreservesSource: textView.string.contains("`code`"),
+            fencedCodeStyleApplied: fencedCodeAttributes?[.font] as? NSFont == LivePreviewTheme.codeFont
+                && fencedCodeAttributes?[.foregroundColor] as? NSColor == LivePreviewTheme.codeColor
+                && fencedCodeAttributes?[.backgroundColor] as? NSColor == LivePreviewTheme.codeBlockBackgroundColor
+                && (fencedCodeAttributes?[.paragraphStyle] as? NSParagraphStyle)?.paragraphSpacing ?? 0 > 0,
+            fencedCodeFenceConcealedOutsideReveal: hiddenFenceColor == LivePreviewTheme.concealedColor,
+            fencedCodeFenceRevealedInsideBlock: revealedFenceColor != LivePreviewTheme.concealedColor,
+            fencedCodePreservesSource: textView.string.contains("```swift\nlet value = 1\n```"),
+            listParagraphIndentApplied: listParagraphStyle?.headIndent ?? 0 > 0,
+            listMarkerConcealedOutsideReveal: hiddenListMarkerColor == LivePreviewTheme.concealedColor,
+            listMarkerStyledInsideReveal: revealedListMarkerColor == LivePreviewTheme.listMarkerColor,
+            taskCheckboxVisibleOutsideReveal: visibleTaskCheckboxColor != LivePreviewTheme.concealedColor,
+            nestedListIndentStable: nestedListParagraphStyle?.headIndent == listParagraphStyle?.headIndent,
+            listRenderPreservesSource: textView.string.contains("- [x] Done item"),
+            blockquoteParagraphIndentApplied: blockquoteParagraphStyle?.headIndent ?? 0 > 0,
+            blockquoteMarkerStyledAsBar: blockquoteMarkerColor == LivePreviewTheme.quoteBarColor,
+            blockquoteRenderPreservesSource: textView.string.contains("> Quote line"),
+            calloutChromeApplied: calloutAttributes?[.backgroundColor] as? NSColor == LivePreviewTheme.calloutBackgroundColor
+                && (calloutAttributes?[.paragraphStyle] as? NSParagraphStyle)?.headIndent ?? 0 > 0,
+            calloutSyntaxConcealedOutsideReveal: hiddenCalloutSyntaxColor == LivePreviewTheme.concealedColor,
+            calloutSyntaxRevealedInsideBlock: revealedCalloutSyntaxColor != LivePreviewTheme.concealedColor,
+            calloutRenderPreservesSource: textView.string.contains("> [!note] Callout body"),
+            headingRenderPreservesSource: textView.string == source
+        )
+    }
+
+    private static func font(in textView: NSTextView, source: String, marker: String) -> NSFont? {
+        guard let offset = utf16Offset(of: marker, in: source) else {
+            return nil
+        }
+        return textView.textStorage?.attribute(.font, at: offset, effectiveRange: nil) as? NSFont
+    }
+
+    private static func paragraphStyle(
+        in textView: NSTextView,
+        source: String,
+        marker: String
+    ) -> NSParagraphStyle? {
+        guard let offset = utf16Offset(of: marker, in: source) else {
+            return nil
+        }
+        return textView.textStorage?.attribute(.paragraphStyle, at: offset, effectiveRange: nil) as? NSParagraphStyle
+    }
+
+    private static func attributes(
+        in textView: NSTextView,
+        source: String,
+        marker: String
+    ) -> [NSAttributedString.Key: Any]? {
+        guard let offset = utf16Offset(of: marker, in: source) else {
+            return nil
+        }
+        return textView.textStorage?.attributes(at: offset, effectiveRange: nil)
+    }
+
+    private static func foregroundColor(in textView: NSTextView, source: String, marker: String) -> NSColor? {
+        guard let offset = utf16Offset(of: marker, in: source) else {
+            return nil
+        }
+        return textView.textStorage?.attribute(.foregroundColor, at: offset, effectiveRange: nil) as? NSColor
+    }
+
+    private static func utf16Offset(of marker: String, in source: String) -> Int? {
+        guard let range = source.range(of: marker) else {
+            return nil
+        }
+        return NSRange(range, in: source).location
+    }
+}

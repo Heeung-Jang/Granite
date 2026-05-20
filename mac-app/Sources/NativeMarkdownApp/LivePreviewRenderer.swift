@@ -8,9 +8,11 @@ enum LivePreviewRenderer {
     private static let unorderedListPrefixRegex = regex(#"^\s*[-*+]\s"#)
     private static let orderedListPrefixRegex = regex(#"^\s*\d+[.)]\s"#)
     private static let taskListPrefixRegex = regex(#"^\s*[-*+]\s+\[[ xX]\]\s"#)
+    private static let taskCheckboxTokenRegex = regex(#"\[[ xX]\]"#)
     private static let blockquotePrefixRegex = regex(#"^\s*>\s?"#)
     private static let calloutPrefixRegex = regex(#"^\s*>\s?\[![^\]\n]+\]\s?"#)
     private static let tablePipeRegex = regex(#"\|"#)
+    private static let fenceLineRegex = regex(#"^\s*(```+|~~~+).*$"#)
     private static let wikiEmbedTokenRegex = regex(#"!\[\[|\]\]"#)
     private static let wikiLinkTokenRegex = regex(#"!?\[\[|\]\]"#)
 
@@ -141,6 +143,7 @@ enum LivePreviewRenderer {
                 continue
             }
             applyBlockAttributes(block, plan: plan, range: blockRange)
+            applyBlockTokenAttributes(block, source: source, plan: plan, visibleRange: visibleRange)
             applyInlineAttributes(block, source: source, plan: plan, visibleRange: visibleRange)
             concealTokens(block, source: source, plan: plan, visibleRange: visibleRange, revealRange: revealRange)
         }
@@ -155,27 +158,66 @@ enum LivePreviewRenderer {
         case .heading(let level):
             plan.addAttributes([
                 .font: LivePreviewTheme.headingFont(level: level),
-                .foregroundColor: LivePreviewTheme.textColor
+                .foregroundColor: LivePreviewTheme.textColor,
+                .paragraphStyle: LivePreviewTheme.headingParagraphStyle(level: level)
             ], range: range)
         case .blockquote:
-            plan.addAttributes([.foregroundColor: LivePreviewTheme.quoteColor], range: range)
+            plan.addAttributes([
+                .foregroundColor: LivePreviewTheme.quoteColor,
+                .paragraphStyle: LivePreviewTheme.quoteParagraphStyle
+            ], range: range)
         case .callout:
-            plan.addAttributes([.foregroundColor: LivePreviewTheme.quoteColor], range: range)
+            plan.addAttributes([
+                .foregroundColor: LivePreviewTheme.quoteColor,
+                .backgroundColor: LivePreviewTheme.calloutBackgroundColor,
+                .paragraphStyle: LivePreviewTheme.calloutParagraphStyle
+            ], range: range)
         case .fencedCode:
             plan.addAttributes([
                 .font: LivePreviewTheme.codeFont,
-                .foregroundColor: LivePreviewTheme.codeColor
+                .foregroundColor: LivePreviewTheme.codeColor,
+                .backgroundColor: LivePreviewTheme.codeBlockBackgroundColor,
+                .paragraphStyle: LivePreviewTheme.codeBlockParagraphStyle
             ], range: range)
         case .table:
             plan.addAttributes([.font: LivePreviewTheme.codeFont], range: range)
         case .embed:
             plan.addAttributes([.foregroundColor: LivePreviewTheme.secondaryTextColor], range: range)
         case .unorderedList, .orderedList, .taskList:
-            plan.addAttributes([.foregroundColor: LivePreviewTheme.textColor], range: range)
+            plan.addAttributes([
+                .foregroundColor: LivePreviewTheme.textColor,
+                .paragraphStyle: LivePreviewTheme.listParagraphStyle
+            ], range: range)
         case .frontmatter:
             plan.addAttributes([.foregroundColor: LivePreviewTheme.secondaryTextColor], range: range)
         case .paragraph:
             break
+        }
+    }
+
+    private static func applyBlockTokenAttributes(
+        _ block: LivePreviewBlockSpan,
+        source: String,
+        plan: LivePreviewAttributePlan,
+        visibleRange: NSRange
+    ) {
+        for range in blockTokenRanges(for: block, source: source) {
+            let range = NSIntersectionRange(range, visibleRange)
+            guard range.length > 0 else {
+                continue
+            }
+            plan.addAttributes([.foregroundColor: blockTokenColor(for: block)], range: range)
+        }
+    }
+
+    private static func blockTokenColor(for block: LivePreviewBlockSpan) -> NSColor {
+        switch block.kind {
+        case .blockquote:
+            return LivePreviewTheme.quoteBarColor
+        case .callout:
+            return LivePreviewTheme.calloutAccentColor
+        default:
+            return LivePreviewTheme.listMarkerColor
         }
     }
 
@@ -198,7 +240,8 @@ enum LivePreviewRenderer {
             case .inlineCode:
                 plan.addAttributes([
                     .font: LivePreviewTheme.codeFont,
-                    .foregroundColor: LivePreviewTheme.codeColor
+                    .foregroundColor: LivePreviewTheme.codeColor,
+                    .backgroundColor: LivePreviewTheme.inlineCodeBackgroundColor
                 ], range: range)
             case .wikiLink:
                 plan.addAttributes([.foregroundColor: LivePreviewTheme.linkColor], range: range)
@@ -242,9 +285,9 @@ enum LivePreviewRenderer {
         case .orderedList:
             ranges = prefixMatches(in: source, block: block, regex: orderedListPrefixRegex)
         case .taskList:
-            ranges = prefixMatches(in: source, block: block, regex: taskListPrefixRegex)
+            ranges = taskListConcealmentRanges(for: block, source: source)
         case .blockquote:
-            ranges = prefixMatches(in: source, block: block, regex: blockquotePrefixRegex)
+            ranges = []
         case .callout:
             ranges = prefixMatches(in: source, block: block, regex: calloutPrefixRegex)
         case .table:
@@ -253,11 +296,51 @@ enum LivePreviewRenderer {
             return embedTokenRanges(for: block, source: source)
         case .paragraph:
             ranges = []
-        case .frontmatter, .fencedCode:
+        case .fencedCode:
+            return matches(in: source, range: block.sourceRange.nsRange, regex: fenceLineRegex)
+        case .frontmatter:
             return []
         }
         ranges += inlineTokenRanges(block.inlineSpans, source: source)
         return ranges
+    }
+
+    private static func blockTokenRanges(for block: LivePreviewBlockSpan, source: String) -> [NSRange] {
+        switch block.kind {
+        case .blockquote:
+            return prefixMatches(in: source, block: block, regex: blockquotePrefixRegex)
+        case .callout:
+            return prefixMatches(in: source, block: block, regex: calloutPrefixRegex)
+        case .unorderedList:
+            return prefixMatches(in: source, block: block, regex: unorderedListPrefixRegex)
+        case .orderedList:
+            return prefixMatches(in: source, block: block, regex: orderedListPrefixRegex)
+        case .taskList:
+            return prefixMatches(in: source, block: block, regex: taskListPrefixRegex)
+        default:
+            return []
+        }
+    }
+
+    private static func taskListConcealmentRanges(for block: LivePreviewBlockSpan, source: String) -> [NSRange] {
+        prefixMatches(in: source, block: block, regex: taskListPrefixRegex).flatMap { prefixRange in
+            guard let checkboxRange = taskCheckboxTokenRegex
+                .firstMatch(in: source, range: prefixRange)?
+                .range
+            else {
+                return [prefixRange]
+            }
+            let before = NSRange(
+                location: prefixRange.location,
+                length: max(0, checkboxRange.location - prefixRange.location)
+            )
+            let afterLocation = checkboxRange.location + checkboxRange.length
+            let after = NSRange(
+                location: afterLocation,
+                length: max(0, prefixRange.location + prefixRange.length - afterLocation)
+            )
+            return [before, after].filter { $0.length > 0 }
+        }
     }
 
     private static func inlineTokenRanges(_ inlineSpans: [LivePreviewInlineSpan], source: String) -> [NSRange] {
@@ -340,7 +423,8 @@ enum LivePreviewRenderer {
     private static func baseAttributes() -> [NSAttributedString.Key: Any] {
         [
             .font: LivePreviewTheme.baseFont,
-            .foregroundColor: LivePreviewTheme.textColor
+            .foregroundColor: LivePreviewTheme.textColor,
+            .paragraphStyle: LivePreviewTheme.baseParagraphStyle
         ]
     }
 

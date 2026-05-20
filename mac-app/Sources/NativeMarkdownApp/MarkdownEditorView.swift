@@ -128,6 +128,12 @@ struct MarkdownEditorView: NSViewRepresentable {
         }
 
         func textView(_ textView: MarkdownInteractionTextView, handleMouseDown event: NSEvent) -> Bool {
+            if textView.isEditable,
+               let utf16Offset = textView.utf16Offset(for: event),
+               textView.toggleTaskCheckbox(at: utf16Offset) {
+                return true
+            }
+
             guard !textView.isEditable || event.modifierFlags.contains(.command),
                   let utf16Offset = textView.utf16Offset(for: event),
                   let interaction = MarkdownEditorInteractionResolver.interaction(
@@ -198,6 +204,17 @@ final class MarkdownInteractionTextView: NSTextView {
         didChangeText()
     }
 
+    @discardableResult
+    func toggleTaskCheckbox(at utf16Offset: Int) -> Bool {
+        guard isEditable,
+              let edit = MarkdownTaskCheckboxToggle.edit(in: string, utf16Offset: utf16Offset)
+        else {
+            return false
+        }
+        replaceTaskCheckbox(edit.tokenRange.nsRange, with: edit.replacement, registersUndo: true)
+        return true
+    }
+
     func utf16Offset(for event: NSEvent) -> Int? {
         guard let layoutManager, let textContainer else {
             return nil
@@ -213,6 +230,28 @@ final class MarkdownInteractionTextView: NSTextView {
         let glyphIndex = layoutManager.glyphIndex(for: point, in: textContainer)
         let characterIndex = layoutManager.characterIndexForGlyph(at: glyphIndex)
         return min(characterIndex, (string as NSString).length - 1)
+    }
+
+    private func replaceTaskCheckbox(_ range: NSRange, with replacement: String, registersUndo: Bool) {
+        guard shouldChangeText(in: range, replacementString: replacement) else {
+            return
+        }
+        let original = (string as NSString).substring(with: range)
+        let selection = selectedRange()
+        if registersUndo {
+            undoManager?.registerUndo(withTarget: self) { textView in
+                MainActor.assumeIsolated {
+                    textView.replaceTaskCheckbox(range, with: original, registersUndo: true)
+                }
+            }
+            undoManager?.setActionName("Toggle Checkbox")
+        }
+        replaceCharacters(in: range, with: replacement)
+        didChangeText()
+        setSelectedRange(NSRange(
+            location: min(selection.location, (string as NSString).length),
+            length: min(selection.length, max(0, (string as NSString).length - min(selection.location, (string as NSString).length)))
+        ))
     }
 }
 

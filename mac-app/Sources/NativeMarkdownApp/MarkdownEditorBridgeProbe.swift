@@ -26,6 +26,9 @@ struct MarkdownEditorBridgeProbeReport: Codable, Equatable {
     var markdownImageEmbedDelimitersConcealed: Bool
     var unsafeMarkdownLinkTargetsRemainVisible: Bool
     var plainTextPastePolicy: Bool
+    var checkboxToggleChangesOnlyToken: Bool
+    var checkboxToggleUndoRestoresToken: Bool
+    var checkboxToggleReadOnlyPreservesBuffer: Bool
 }
 
 @MainActor
@@ -45,6 +48,7 @@ enum MarkdownEditorBridgeProbe {
         let coordinatorProbe = probeCoordinatorBinding()
         let modeProbe = probeModeTransitions()
         let renderProbe = probeLivePreviewRendering()
+        let checkboxProbe = probeCheckboxToggle()
 
         return MarkdownEditorBridgeProbeReport(
             sameTextSkippedUpdate: sameTextProbe.skipped,
@@ -68,7 +72,10 @@ enum MarkdownEditorBridgeProbe {
             sourceEquivalentSelectionText: renderProbe.sourceEquivalentSelectionText,
             markdownImageEmbedDelimitersConcealed: renderProbe.markdownImageEmbedDelimitersConcealed,
             unsafeMarkdownLinkTargetsRemainVisible: renderProbe.unsafeMarkdownLinkTargetsRemainVisible,
-            plainTextPastePolicy: renderProbe.plainTextPastePolicy
+            plainTextPastePolicy: renderProbe.plainTextPastePolicy,
+            checkboxToggleChangesOnlyToken: checkboxProbe.changesOnlyToken,
+            checkboxToggleUndoRestoresToken: checkboxProbe.undoRestoresToken,
+            checkboxToggleReadOnlyPreservesBuffer: checkboxProbe.readOnlyPreservesBuffer
         )
     }
 
@@ -323,5 +330,45 @@ enum MarkdownEditorBridgeProbe {
             return nil
         }
         return NSRange(range, in: text).location
+    }
+
+    private static func probeCheckboxToggle() -> (
+        changesOnlyToken: Bool,
+        undoRestoresToken: Bool,
+        readOnlyPreservesBuffer: Bool
+    ) {
+        let text = "- [ ] Task\n- [x] Done\n"
+        let textView = MarkdownEditorTextViewFactory.makeTextView()
+        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 900, height: 700))
+        scrollView.documentView = textView
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 900, height: 700),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: true
+        )
+        window.contentView = scrollView
+        window.makeFirstResponder(textView)
+        textView.string = text
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+        guard let offset = utf16Offset(of: "[ ]", in: text) else {
+            return (false, false, false)
+        }
+
+        let toggled = (textView as? MarkdownInteractionTextView)?.toggleTaskCheckbox(at: offset + 1) == true
+        let expected = "- [x] Task\n- [x] Done\n"
+        let changesOnlyToken = toggled && textView.string == expected
+        let canUndo = textView.undoManager?.canUndo ?? false
+        textView.undoManager?.undo()
+        let undoRestoresToken = canUndo && textView.string == text
+
+        let readOnlyTextView = MarkdownEditorTextViewFactory.makeTextView()
+        readOnlyTextView.string = text
+        readOnlyTextView.isEditable = false
+        let readOnlyToggled = (readOnlyTextView as? MarkdownInteractionTextView)?.toggleTaskCheckbox(at: offset + 1) == true
+        let readOnlyPreservesBuffer = !readOnlyToggled
+            && readOnlyTextView.string == text
+
+        return (changesOnlyToken, undoRestoresToken, readOnlyPreservesBuffer)
     }
 }
