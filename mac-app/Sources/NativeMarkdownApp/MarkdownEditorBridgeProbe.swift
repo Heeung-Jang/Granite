@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import NativeMarkdownCore
 import SwiftUI
 
 struct MarkdownEditorBridgeProbeReport: Codable, Equatable {
@@ -10,6 +11,10 @@ struct MarkdownEditorBridgeProbeReport: Codable, Equatable {
     var shortExternalTextClampedSelection: Bool
     var appKitChangeSkippedExternalSync: Bool
     var coordinatorUpdatedBinding: Bool
+    var modeTransitionsPreservedText: Bool
+    var modeTransitionsPreservedSelection: Bool
+    var modeTransitionsPreservedDirtyState: Bool
+    var modeTransitionsKeptUndoEnabled: Bool
 }
 
 @MainActor
@@ -27,6 +32,7 @@ enum MarkdownEditorBridgeProbe {
         let clampedProbe = probeClampedSelection()
         let appKitChangeProbe = probeAppKitChangeSkip()
         let coordinatorProbe = probeCoordinatorBinding()
+        let modeProbe = probeModeTransitions()
 
         return MarkdownEditorBridgeProbeReport(
             sameTextSkippedUpdate: sameTextProbe.skipped,
@@ -35,7 +41,11 @@ enum MarkdownEditorBridgeProbe {
             externalTextSelectionPreserved: externalTextProbe.selectionPreserved,
             shortExternalTextClampedSelection: clampedProbe,
             appKitChangeSkippedExternalSync: appKitChangeProbe,
-            coordinatorUpdatedBinding: coordinatorProbe
+            coordinatorUpdatedBinding: coordinatorProbe,
+            modeTransitionsPreservedText: modeProbe.textPreserved,
+            modeTransitionsPreservedSelection: modeProbe.selectionPreserved,
+            modeTransitionsPreservedDirtyState: modeProbe.dirtyStatePreserved,
+            modeTransitionsKeptUndoEnabled: modeProbe.undoEnabled
         )
     }
 
@@ -108,5 +118,35 @@ enum MarkdownEditorBridgeProbe {
         coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
 
         return modelText == "after"
+    }
+
+    private static func probeModeTransitions() -> (
+        textPreserved: Bool,
+        selectionPreserved: Bool,
+        dirtyStatePreserved: Bool,
+        undoEnabled: Bool
+    ) {
+        let text = "# Heading\n\n**Strong** and `code` with [[Link]]\n"
+        let selection = NSRange(location: 4, length: 7)
+        let textView = MarkdownEditorTextViewFactory.makeTextView()
+        textView.string = text
+        textView.setSelectedRange(selection)
+        var saveSession = EditorSaveSession(file: FileTreeItem(relativePath: "Probe.md"), contents: text)
+        saveSession.updateContents("\(text)Edited\n")
+        let saveSessionBefore = saveSession
+
+        MarkdownVisibleRangeDecorator.decorateVisibleRange(in: textView, livePreviewMode: .livePreview)
+        MarkdownVisibleRangeDecorator.decorateVisibleRange(in: textView, livePreviewMode: .source)
+        MarkdownVisibleRangeDecorator.decorateVisibleRange(
+            in: textView,
+            livePreviewMode: .fallbackSource(reason: .fileTooLarge)
+        )
+
+        return (
+            textView.string == text,
+            NSEqualRanges(textView.selectedRange(), selection),
+            saveSession == saveSessionBefore && saveSession.isDirty,
+            textView.allowsUndo
+        )
     }
 }

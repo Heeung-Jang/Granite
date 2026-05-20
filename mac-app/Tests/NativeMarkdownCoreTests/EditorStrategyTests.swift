@@ -9,6 +9,13 @@ func editorStrategyDefaultsToTextKit1Compatibility() {
     #expect(decision.thresholds.maxDecoratedFileBytes == 5 * 1024 * 1024)
     #expect(decision.thresholds.maxSingleLineCharacters == 100_000)
     #expect(decision.thresholds.maxEmbedCount == 100)
+    #expect(decision.thresholds.maxWidgetCount == 250)
+    #expect(decision.thresholds.maxAttachmentCount == 100)
+    #expect(decision.thresholds.maxTableCellCount == 10_000)
+    #expect(decision.thresholds.maxSpanCount == 50_000)
+    #expect(decision.thresholds.maxVisibleParseP95Milliseconds == 50)
+    #expect(decision.thresholds.maxVisibleRenderP95Milliseconds == 50)
+    #expect(decision.thresholds.maxRenderMemoryDeltaBytes == 64 * 1024 * 1024)
     #expect(decision.thresholds.maxVisibleDecorationP95Milliseconds == 50)
     #expect(decision.thresholds.maxTypingP95Milliseconds == 16)
 }
@@ -61,6 +68,54 @@ func editorStrategyDegradesEmbedHeavyDocuments() {
     )
 
     #expect(decision.renderingMode(for: profile) == .degradedSource(reason: .tooManyEmbeds))
+}
+
+@Test
+func editorStrategyDegradesPlannedLivePreviewThresholds() {
+    let decision = EditorStrategyDecision()
+
+    #expect(decision.renderingMode(for: EditorDocumentProfile(
+        byteCount: 1024,
+        longestLineCharacters: 80,
+        embedCount: 0,
+        widgetCount: 251
+    )) == .degradedSource(reason: .tooManyWidgets))
+    #expect(decision.renderingMode(for: EditorDocumentProfile(
+        byteCount: 1024,
+        longestLineCharacters: 80,
+        embedCount: 0,
+        attachmentCount: 101
+    )) == .degradedSource(reason: .tooManyAttachments))
+    #expect(decision.renderingMode(for: EditorDocumentProfile(
+        byteCount: 1024,
+        longestLineCharacters: 80,
+        embedCount: 0,
+        tableCellCount: 10_001
+    )) == .degradedSource(reason: .tooManyTableCells))
+    #expect(decision.renderingMode(for: EditorDocumentProfile(
+        byteCount: 1024,
+        longestLineCharacters: 80,
+        embedCount: 0,
+        spanCount: 50_001
+    )) == .degradedSource(reason: .tooManySpans))
+    #expect(decision.renderingMode(for: EditorDocumentProfile(
+        byteCount: 1024,
+        longestLineCharacters: 80,
+        embedCount: 0,
+        visibleParseP95Milliseconds: 50.1
+    )) == .degradedSource(reason: .visibleParseTooSlow))
+    #expect(decision.renderingMode(for: EditorDocumentProfile(
+        byteCount: 1024,
+        longestLineCharacters: 80,
+        embedCount: 0,
+        visibleRenderP95Milliseconds: 50.1
+    )) == .degradedSource(reason: .visibleRenderTooSlow))
+    #expect(decision.renderingMode(for: EditorDocumentProfile(
+        byteCount: 1024,
+        longestLineCharacters: 80,
+        embedCount: 0,
+        renderMemoryDeltaBytes: 64 * 1024 * 1024 + 1
+    )) == .degradedSource(reason: .memoryDeltaTooHigh))
 }
 
 @Test

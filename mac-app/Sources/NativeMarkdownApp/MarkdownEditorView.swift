@@ -6,10 +6,11 @@ import SwiftUI
 struct MarkdownEditorView: NSViewRepresentable {
     @Binding var text: String
     var isEditable = true
+    var livePreviewMode: LivePreviewMode = .livePreview
     var interactionHandler: ((MarkdownEditorInteraction) -> Void)?
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(text: $text, interactionHandler: interactionHandler)
+        Coordinator(text: $text, interactionHandler: interactionHandler, livePreviewMode: livePreviewMode)
     }
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -20,7 +21,7 @@ struct MarkdownEditorView: NSViewRepresentable {
         }
         textView.string = text
         let decorationTimer = AppTelemetryTimer()
-        MarkdownVisibleRangeDecorator.decorateVisibleRange(in: textView)
+        MarkdownVisibleRangeDecorator.decorateVisibleRange(in: textView, livePreviewMode: livePreviewMode)
         AppTelemetry.editorDecorationCompleted(
             textLength: textView.string.count,
             durationMilliseconds: decorationTimer.elapsedMilliseconds()
@@ -36,7 +37,11 @@ struct MarkdownEditorView: NSViewRepresentable {
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
-        context.coordinator.update(text: $text, interactionHandler: interactionHandler)
+        context.coordinator.update(
+            text: $text,
+            interactionHandler: interactionHandler,
+            livePreviewMode: livePreviewMode
+        )
         guard let textView = scrollView.documentView as? NSTextView else {
             return
         }
@@ -47,7 +52,7 @@ struct MarkdownEditorView: NSViewRepresentable {
             isApplyingAppKitChange: context.coordinator.isApplyingAppKitChange
         )
         let decorationTimer = AppTelemetryTimer()
-        MarkdownVisibleRangeDecorator.decorateVisibleRange(in: textView)
+        MarkdownVisibleRangeDecorator.decorateVisibleRange(in: textView, livePreviewMode: livePreviewMode)
         AppTelemetry.editorDecorationCompleted(
             textLength: textView.string.count,
             durationMilliseconds: decorationTimer.elapsedMilliseconds()
@@ -72,17 +77,28 @@ struct MarkdownEditorView: NSViewRepresentable {
     final class Coordinator: NSObject, NSTextViewDelegate, MarkdownInteractionTextViewDelegate {
         @Binding private var text: String
         private var interactionHandler: ((MarkdownEditorInteraction) -> Void)?
+        private var livePreviewMode: LivePreviewMode
         weak var textView: NSTextView?
         var isApplyingAppKitChange = false
 
-        init(text: Binding<String>, interactionHandler: ((MarkdownEditorInteraction) -> Void)? = nil) {
+        init(
+            text: Binding<String>,
+            interactionHandler: ((MarkdownEditorInteraction) -> Void)? = nil,
+            livePreviewMode: LivePreviewMode = .livePreview
+        ) {
             _text = text
             self.interactionHandler = interactionHandler
+            self.livePreviewMode = livePreviewMode
         }
 
-        func update(text: Binding<String>, interactionHandler: ((MarkdownEditorInteraction) -> Void)?) {
+        func update(
+            text: Binding<String>,
+            interactionHandler: ((MarkdownEditorInteraction) -> Void)?,
+            livePreviewMode: LivePreviewMode
+        ) {
             _text = text
             self.interactionHandler = interactionHandler
+            self.livePreviewMode = livePreviewMode
         }
 
         func textDidChange(_ notification: Notification) {
@@ -92,7 +108,7 @@ struct MarkdownEditorView: NSViewRepresentable {
 
             isApplyingAppKitChange = true
             text = textView.string
-            MarkdownVisibleRangeDecorator.decorateVisibleRange(in: textView)
+            MarkdownVisibleRangeDecorator.decorateVisibleRange(in: textView, livePreviewMode: livePreviewMode)
             isApplyingAppKitChange = false
         }
 

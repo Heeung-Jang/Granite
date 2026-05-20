@@ -13,6 +13,8 @@ struct SourceNoteView: View {
     @State private var state: SourceNoteViewState = .loading
     @State private var text = ""
     @State private var saveSession: EditorSaveSession?
+    @State private var livePreviewMode: LivePreviewMode = .livePreview
+    @State private var fallbackController = LivePreviewFallbackController()
     @State private var pendingExternalLink: PendingExternalLink?
     @State private var interactionNotice: EditorInteractionNotice?
     @State private var pendingRecoverySnapshot: EditorRecoverySnapshot?
@@ -41,10 +43,15 @@ struct SourceNoteView: View {
                 MarkdownEditorView(
                     text: $text,
                     isEditable: saveSession?.canEdit == true,
+                    livePreviewMode: livePreviewMode,
                     interactionHandler: handleEditorInteraction
                 )
                     .frame(minHeight: 320)
                     .accessibilityLabel("Markdown editor for \(file.displayName)")
+                LivePreviewStatusStrip(
+                    mode: livePreviewMode,
+                    retryLivePreview: retryLivePreview
+                )
                 SaveStatusStrip(
                     session: saveSession,
                     save: saveCurrentNote,
@@ -71,6 +78,7 @@ struct SourceNoteView: View {
         }
         .onChange(of: text) { _, newValue in
             saveSession?.updateContents(newValue)
+            updateAutomaticFallback(for: newValue)
             scheduleRecoverySnapshot(contents: newValue)
         }
         .onChange(of: saveSession) { oldValue, newValue in
@@ -122,26 +130,65 @@ struct SourceNoteView: View {
     }
 
     private var header: some View {
-        VStack(spacing: 4) {
-            HStack(spacing: 8) {
-                Text(file.displayName)
-                    .font(.headline)
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Text(file.displayName)
+                        .font(.headline)
 
-                if saveSession?.isDirty == true {
-                    Circle()
-                        .fill(.secondary)
-                        .frame(width: 6, height: 6)
-                        .accessibilityLabel("Unsaved changes")
+                    if saveSession?.isDirty == true {
+                        Circle()
+                            .fill(.secondary)
+                            .frame(width: 6, height: 6)
+                            .accessibilityLabel("Unsaved changes")
+                    }
                 }
-            }
 
-            Text(file.relativePath)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+                Text(file.relativePath)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Current note \(file.displayName)")
+            Spacer(minLength: 12)
+            Button(action: toggleEditorMode) {
+                Label(modeToggleTitle, systemImage: livePreviewMode.rendersSourceOnly ? "eye" : "curlybraces")
+            }
+            .keyboardShortcut("e", modifiers: [.command, .shift])
+            .help("Toggle Live Preview and Source mode")
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Current note \(file.displayName)")
+    }
+
+    private var modeToggleTitle: String {
+        livePreviewMode.rendersSourceOnly ? "Live Preview" : "Source"
+    }
+
+    private func toggleEditorMode() {
+        if livePreviewMode.rendersSourceOnly {
+            retryLivePreview()
+        } else {
+            var controller = fallbackController
+            livePreviewMode = controller.selectSourceMode()
+            fallbackController = controller
+        }
+    }
+
+    private func retryLivePreview() {
+        var controller = fallbackController
+        livePreviewMode = controller.retryLivePreview()
+        fallbackController = controller
+        updateAutomaticFallback(for: text)
+    }
+
+    private func updateAutomaticFallback(for contents: String) {
+        guard livePreviewMode != .source else {
+            return
+        }
+        var controller = fallbackController
+        let profile = EditorDocumentProfiler.profile(contents)
+        livePreviewMode = controller.observe(EditorStrategyDecision().renderingMode(for: profile))
+        fallbackController = controller
     }
 
     private var editorSaveAction: EditorSaveAction {
@@ -154,6 +201,8 @@ struct SourceNoteView: View {
         state = .loading
         saveSession = nil
         pendingRecoverySnapshot = nil
+        fallbackController = LivePreviewFallbackController()
+        livePreviewMode = .livePreview
         let timer = AppTelemetryTimer()
         do {
             let document = try await Task.detached(priority: .userInitiated) {
@@ -166,6 +215,7 @@ struct SourceNoteView: View {
 
             text = document.contents
             saveSession = EditorSaveSession(file: file, contents: document.contents)
+            updateAutomaticFallback(for: document.contents)
             state = .loaded
             AppTelemetry.noteLoadCompleted(
                 file,
@@ -586,6 +636,41 @@ struct SourceNoteView: View {
                 title: "Link Resolution Failed",
                 message: error.localizedDescription
             )
+        }
+    }
+}
+
+private struct LivePreviewStatusStrip: View {
+    let mode: LivePreviewMode
+    let retryLivePreview: () -> Void
+
+    var body: some View {
+        if let statusText = mode.statusText {
+            HStack(spacing: 10) {
+                Label(statusText, systemImage: statusImageName)
+                    .lineLimit(1)
+                Spacer(minLength: 12)
+                if case .fallbackSource = mode {
+                    Button(action: retryLivePreview) {
+                        Label("Retry", systemImage: "arrow.clockwise")
+                    }
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(statusText)
+        }
+    }
+
+    private var statusImageName: String {
+        switch mode {
+        case .livePreview:
+            return "eye"
+        case .source:
+            return "curlybraces"
+        case .fallbackSource:
+            return "exclamationmark.triangle"
         }
     }
 }

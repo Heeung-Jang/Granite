@@ -15,9 +15,14 @@ enum MarkdownVisibleRangeDecorator {
     static func decorateVisibleRange(
         in textView: NSTextView,
         range requestedRange: NSRange? = nil,
+        livePreviewMode: LivePreviewMode = .livePreview,
         documentProfile: EditorDocumentProfile? = nil,
         strategy: EditorStrategyDecision = EditorStrategyDecision()
     ) -> MarkdownDecorationResult {
+        if livePreviewMode.rendersSourceOnly {
+            return applySourceMode(in: textView, range: requestedRange, mode: livePreviewMode)
+        }
+
         let profile = documentProfile ?? EditorDocumentProfile(
             byteCount: textView.string.utf8.count,
             longestLineCharacters: 0,
@@ -48,13 +53,11 @@ enum MarkdownVisibleRangeDecorator {
         storage.beginEditing()
         storage.addAttributes(baseAttributes(), range: visibleRange)
         appliedRuns += apply(headingRegex, to: storage, in: visibleRange, attributes: headingAttributes())
-        appliedRuns += apply(blockquoteRegex, to: storage, in: visibleRange, attributes: blockquoteAttributes())
-        appliedRuns += apply(listRegex, to: storage, in: visibleRange, attributes: listAttributes())
         appliedRuns += apply(strongRegex, to: storage, in: visibleRange, attributes: strongAttributes())
         appliedRuns += apply(emphasisRegex, to: storage, in: visibleRange, attributes: emphasisAttributes())
         appliedRuns += apply(codeSpanRegex, to: storage, in: visibleRange, attributes: codeAttributes())
         appliedRuns += apply(wikiLinkRegex, to: storage, in: visibleRange, attributes: linkAttributes())
-        appliedRuns += apply(tagRegex, to: storage, in: visibleRange, attributes: tagAttributes())
+        appliedRuns += apply(markdownLinkRegex, to: storage, in: visibleRange, attributes: linkAttributes())
         storage.endEditing()
         textView.setSelectedRange(clamped(selection, length: text.length))
 
@@ -64,6 +67,54 @@ enum MarkdownVisibleRangeDecorator {
             rangeLength: visibleRange.length,
             appliedRuns: appliedRuns
         )
+    }
+
+    private static func applySourceMode(
+        in textView: NSTextView,
+        range requestedRange: NSRange?,
+        mode: LivePreviewMode
+    ) -> MarkdownDecorationResult {
+        let text = textView.string as NSString
+        let visibleRange = clamped(requestedRange ?? inferredVisibleRange(in: textView), length: text.length)
+        guard visibleRange.length > 0, let storage = textView.textStorage else {
+            return MarkdownDecorationResult(
+                mode: resultMode(for: mode),
+                reason: fallbackReason(for: mode),
+                rangeLength: 0,
+                appliedRuns: 0
+            )
+        }
+
+        let selection = textView.selectedRange()
+        storage.beginEditing()
+        storage.setAttributes(baseAttributes(), range: visibleRange)
+        storage.endEditing()
+        textView.setSelectedRange(clamped(selection, length: text.length))
+
+        return MarkdownDecorationResult(
+            mode: resultMode(for: mode),
+            reason: fallbackReason(for: mode),
+            rangeLength: visibleRange.length,
+            appliedRuns: 0
+        )
+    }
+
+    private static func resultMode(for mode: LivePreviewMode) -> String {
+        switch mode {
+        case .livePreview:
+            return "decorated-source"
+        case .source:
+            return "source"
+        case .fallbackSource:
+            return "fallback-source"
+        }
+    }
+
+    private static func fallbackReason(for mode: LivePreviewMode) -> String? {
+        if case .fallbackSource(let reason) = mode {
+            return reason.rawValue
+        }
+        return nil
     }
 
     private static func inferredVisibleRange(in textView: NSTextView) -> NSRange {
@@ -117,14 +168,6 @@ enum MarkdownVisibleRangeDecorator {
         ]
     }
 
-    private static func blockquoteAttributes() -> [NSAttributedString.Key: Any] {
-        [.foregroundColor: NSColor.secondaryLabelColor]
-    }
-
-    private static func listAttributes() -> [NSAttributedString.Key: Any] {
-        [.foregroundColor: NSColor.systemOrange]
-    }
-
     private static func strongAttributes() -> [NSAttributedString.Key: Any] {
         [.font: NSFont.monospacedSystemFont(ofSize: 14, weight: .bold)]
     }
@@ -144,18 +187,12 @@ enum MarkdownVisibleRangeDecorator {
         [.foregroundColor: NSColor.linkColor]
     }
 
-    private static func tagAttributes() -> [NSAttributedString.Key: Any] {
-        [.foregroundColor: NSColor.systemPurple]
-    }
-
     private static let headingRegex = regex("^(#{1,6})\\s.*$")
-    private static let blockquoteRegex = regex("^\\s*>.*$")
-    private static let listRegex = regex("^\\s*([-*+]|\\d+[.])\\s+")
     private static let strongRegex = regex("\\*\\*[^*]+\\*\\*|__[^_]+__")
     private static let emphasisRegex = regex("(?<!\\*)\\*[^*\\n]+\\*(?!\\*)|_[^_\\n]+_")
     private static let codeSpanRegex = regex("`[^`\\n]+`")
     private static let wikiLinkRegex = regex("!?\\[\\[[^\\]\\n]+\\]\\]")
-    private static let tagRegex = regex("(^|\\s)#[\\p{L}\\p{N}_/-]+")
+    private static let markdownLinkRegex = regex("!?\\[[^\\]\\n]+\\]\\([^\\)\\n]+\\)")
 
     private static func regex(_ pattern: String) -> NSRegularExpression {
         try! NSRegularExpression(pattern: pattern, options: [.anchorsMatchLines])
