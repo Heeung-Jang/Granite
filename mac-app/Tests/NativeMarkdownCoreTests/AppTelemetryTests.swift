@@ -36,6 +36,49 @@ func telemetryRedactionOmitsSecretLookingProperties() {
 }
 
 @Test
+func telemetrySchemaDefinesAllowedAndDisallowedFields() {
+    let schema = AppTelemetry.privacySchema
+
+    #expect(schema.allowsPublicField("durationMilliseconds"))
+    #expect(schema.allowsPublicField("byteCount"))
+    #expect(schema.allowsPublicField("fallbackReason"))
+    #expect(schema.allowsPublicField("hardCeilingPassed"))
+    #expect(schema.allowsPublicField("hardCeilingViolations"))
+    #expect(schema.allowsPublicField("memoryDeltaBytes"))
+    #expect(schema.rejectsRawField("absolutePath"))
+    #expect(schema.rejectsRawField("fileName"))
+    #expect(schema.rejectsRawField("noteText"))
+    #expect(schema.rejectsRawField("linkTarget"))
+    #expect(schema.rejectsRawField("tagName"))
+    #expect(schema.rejectsRawField("embedName"))
+    #expect(!schema.allowsPublicField("noteText"))
+    #expect(!schema.allowsPublicField("absolutePath"))
+}
+
+@Test
+func telemetryRedactsPrivateMarkdownValues() {
+    let sensitiveValues = [
+        "/Users/example/Codex Vault/Private/Secret Note.md",
+        "Secret Note.md",
+        "private note body with customer details",
+        "https://example.invalid/private/project-plan",
+        "#private/project",
+        "Screenshots/secret-diagram.png"
+    ]
+
+    for value in sensitiveValues {
+        let identifier = AppTelemetry.redactedIdentifier(for: value)
+
+        #expect(identifier.count == 16)
+        #expect(identifier == AppTelemetry.redactedIdentifier(for: value))
+        #expect(!identifier.contains("Secret"))
+        #expect(!identifier.contains("private"))
+        #expect(!identifier.contains("project"))
+        #expect(!identifier.contains("diagram"))
+    }
+}
+
+@Test
 func telemetryTimerReportsMilliseconds() {
     let timer = AppTelemetryTimer(startNanoseconds: 1_000_000)
 

@@ -67,6 +67,12 @@ struct NativeMarkdownApp: App {
             print(LivePreviewStyleProbe.encodedReport())
             Foundation.exit(0)
         }
+
+        if CommandLine.arguments.contains("--live-preview-probe") {
+            let report = LivePreviewProbe.run()
+            print(LivePreviewProbe.encodedReport(report))
+            Foundation.exit(report.hardCeilingPassed ? 0 : 2)
+        }
     }
 
     var body: some Scene {

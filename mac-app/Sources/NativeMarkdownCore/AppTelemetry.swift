@@ -15,6 +15,27 @@ public struct AppTelemetryTimer: Sendable {
     }
 }
 
+public struct AppTelemetryPrivacySchema: Codable, Equatable, Sendable {
+    public var allowedPublicFields: [String]
+    public var disallowedRawFields: [String]
+
+    public init(
+        allowedPublicFields: [String],
+        disallowedRawFields: [String]
+    ) {
+        self.allowedPublicFields = allowedPublicFields.sorted()
+        self.disallowedRawFields = disallowedRawFields.sorted()
+    }
+
+    public func allowsPublicField(_ field: String) -> Bool {
+        allowedPublicFields.contains(field)
+    }
+
+    public func rejectsRawField(_ field: String) -> Bool {
+        disallowedRawFields.contains(field)
+    }
+}
+
 public enum AppTelemetry {
     private static let subsystem = Bundle.main.bundleIdentifier ?? "NativeMarkdownMacApp"
     private static let searchLogger = Logger(subsystem: subsystem, category: "Search")
@@ -24,6 +45,44 @@ public enum AppTelemetry {
     private static let editorLogger = Logger(subsystem: subsystem, category: "Editor")
     private static let saveLogger = Logger(subsystem: subsystem, category: "Save")
     private static let graphLogger = Logger(subsystem: subsystem, category: "Graph")
+
+    public static let privacySchema = AppTelemetryPrivacySchema(
+        allowedPublicFields: [
+            "appliedRuns",
+            "blockCount",
+            "byteCount",
+            "changedRangeCount",
+            "changedUTF16Length",
+            "durationMilliseconds",
+            "embedCount",
+            "fallbackReason",
+            "fixtureID",
+            "hardCeilingPassed",
+            "hardCeilingViolations",
+            "iterationCount",
+            "memoryDeltaBytes",
+            "mode",
+            "resultCount",
+            "stageName",
+            "state",
+            "tableCellCount",
+            "textLength",
+            "visibleRangeLength"
+        ],
+        disallowedRawFields: [
+            "absolutePath",
+            "attachmentFilename",
+            "embedName",
+            "fileName",
+            "frontmatterValue",
+            "linkTarget",
+            "noteText",
+            "rawPath",
+            "renderedSnippet",
+            "selectedText",
+            "tagName"
+        ]
+    )
 
     public static func redactedIdentifier(for value: String) -> String {
         var hash: UInt64 = 0xcbf29ce484222325
