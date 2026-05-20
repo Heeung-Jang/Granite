@@ -71,6 +71,20 @@ func editorStrategyDegradesEmbedHeavyDocuments() {
 }
 
 @Test
+func editorDocumentProfilerCountsTableCellsAndTriggersFallback() {
+    let decision = EditorStrategyDecision()
+    let safeTable = generatedTable(columnCount: 100, bodyRowCount: 99)
+    let oversizedTable = generatedTable(columnCount: 100, bodyRowCount: 100)
+    let safeProfile = EditorDocumentProfiler.profile(safeTable)
+    let oversizedProfile = EditorDocumentProfiler.profile(oversizedTable)
+
+    #expect(safeProfile.tableCellCount == 10_000)
+    #expect(decision.renderingMode(for: safeProfile) == .decoratedSource)
+    #expect(oversizedProfile.tableCellCount == 10_001)
+    #expect(decision.renderingMode(for: oversizedProfile) == .degradedSource(reason: .tooManyTableCells))
+}
+
+@Test
 func editorStrategyDegradesPlannedLivePreviewThresholds() {
     let decision = EditorStrategyDecision()
 
@@ -116,6 +130,18 @@ func editorStrategyDegradesPlannedLivePreviewThresholds() {
         embedCount: 0,
         renderMemoryDeltaBytes: 64 * 1024 * 1024 + 1
     )) == .degradedSource(reason: .memoryDeltaTooHigh))
+}
+
+private func generatedTable(columnCount: Int, bodyRowCount: Int) -> String {
+    let header = (0..<columnCount).map { "H\($0)" }.joined(separator: " | ")
+    let alignment = Array(repeating: "---", count: columnCount).joined(separator: " | ")
+    let row = (0..<columnCount).map { "v\($0)" }.joined(separator: " | ")
+    let body = Array(repeating: "| \(row) |", count: bodyRowCount).joined(separator: "\n")
+    return """
+    | \(header) |
+    | \(alignment) |
+    \(body)
+    """
 }
 
 @Test

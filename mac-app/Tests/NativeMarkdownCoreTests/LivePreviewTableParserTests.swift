@@ -1,0 +1,128 @@
+import Foundation
+import Testing
+@testable import NativeMarkdownCore
+
+@Test
+func livePreviewTableParserParsesSimpleTableCellsAndRanges() throws {
+    let source = try fixture("tables.md")
+    let tables = LivePreviewTableParser.parse(source)
+
+    #expect(tables.count == 3)
+    let simple = tables[0]
+    #expect(simple.header.map(\.text) == ["Name", "Status"])
+    #expect(simple.alignments == [.none, .none])
+    #expect(simple.bodyRows.map { $0.map(\.text) } == [
+        ["Alpha", "Draft"],
+        ["Beta", "Done"]
+    ])
+    #expect(simple.cellCount == 6)
+    #expect(string(for: simple.alignmentRowRange, in: source) == "| --- | --- |")
+    #expect(string(for: simple.bodyRows[0][0].contentRange, in: source) == "Alpha")
+    #expect(string(for: simple.bodyRows[0][0].sourceRange, in: source) == " Alpha ")
+}
+
+@Test
+func livePreviewTableParserParsesAlignmentMarkers() throws {
+    let source = try fixture("tables.md")
+    let tables = LivePreviewTableParser.parse(source)
+    let aligned = tables[1]
+
+    #expect(aligned.header.map(\.text) == ["Left", "Center", "Right"])
+    #expect(aligned.alignments == [.left, .center, .right])
+    #expect(aligned.bodyRows[1].map(\.text) == ["four", "five", "six"])
+}
+
+@Test
+func livePreviewTableParserFindsEditableCellAtOffset() {
+    let source = """
+    | Name | Status |
+    | --- | --- |
+    | Alpha | Draft |
+    """
+    let draftOffset = (source as NSString).range(of: "Draft").location
+    let cell = LivePreviewTableParser.cell(atUTF16Offset: draftOffset, in: source)
+
+    #expect(cell?.text == "Draft")
+    #expect(cell?.columnIndex == 1)
+    #expect(LivePreviewTableParser.cell(atUTF16Offset: (source as NSString).range(of: "---").location, in: source) == nil)
+}
+
+@Test
+func livePreviewTableParserIgnoresMalformedTables() {
+    let source = """
+    | Missing | Alignment |
+    | row without enough cells |
+    """
+
+    #expect(LivePreviewTableParser.parse(source).isEmpty)
+}
+
+@Test
+func livePreviewTableCellEditRewritesOnlyCellContent() throws {
+    let source = """
+    | Name | Status |
+    | --- | --- |
+    | Alpha | Draft |
+    """
+    let table = try #require(LivePreviewTableParser.parse(source).first)
+    let cell = table.bodyRows[0][1]
+    let edited = try #require(LivePreviewTableCellEdit.replacing(
+        cell: cell,
+        with: "Final",
+        in: source
+    ))
+
+    #expect(edited == """
+    | Name | Status |
+    | --- | --- |
+    | Alpha | Final |
+    """)
+    #expect(edited.replacingOccurrences(of: "Final", with: "Draft") == source)
+}
+
+@Test
+func livePreviewTableCellEditRejectsStructuralText() throws {
+    let source = """
+    | Name | Status |
+    | --- | --- |
+    | Alpha | Draft |
+    """
+    let table = try #require(LivePreviewTableParser.parse(source).first)
+    let cell = table.bodyRows[0][1]
+
+    #expect(LivePreviewTableCellEdit.replacing(cell: cell, with: "bad|value", in: source) == nil)
+    #expect(LivePreviewTableCellEdit.replacing(cell: cell, with: "bad\nvalue", in: source) == nil)
+}
+
+@Test
+func livePreviewTableCellEditRejectsStaleCellContent() throws {
+    let source = """
+    | Name | Status |
+    | --- | --- |
+    | Alpha | Draft |
+    """
+    let table = try #require(LivePreviewTableParser.parse(source).first)
+    let cell = table.bodyRows[0][1]
+    let changedSource = source.replacingOccurrences(of: "Draft", with: "Queued")
+
+    #expect(LivePreviewTableCellEdit.replacing(cell: cell, with: "Final", in: changedSource) == nil)
+}
+
+private func fixture(_ name: String) throws -> String {
+    let repoRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let url = repoRoot
+        .appendingPathComponent("fixtures/live-preview-vault", isDirectory: true)
+        .appendingPathComponent(name, isDirectory: false)
+    return try String(contentsOf: url, encoding: .utf8)
+}
+
+private func string(for sourceRange: LivePreviewSourceRange, in source: String) -> String? {
+    guard let range = LivePreviewRangeMapper.stringRange(for: sourceRange, in: source) else {
+        return nil
+    }
+    return String(source[range])
+}

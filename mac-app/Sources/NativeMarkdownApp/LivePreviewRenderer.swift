@@ -150,9 +150,11 @@ enum LivePreviewRenderer {
             }
             let properties = frontmatterProperties(for: block, source: source)
             let embedPreview = embedPreviewMap.preview(for: block)
+            let table = tableModel(for: block, source: source)
             applyBlockAttributes(block, plan: plan, range: blockRange)
             applyBlockTokenAttributes(block, source: source, plan: plan, visibleRange: visibleRange)
             applyPropertyAttributes(properties, plan: plan, visibleRange: visibleRange)
+            applyTableAttributes(table, plan: plan, visibleRange: visibleRange)
             applyEmbedAttributes(embedPreview, plan: plan, visibleRange: visibleRange)
             applyInlineAttributes(
                 block,
@@ -165,6 +167,7 @@ enum LivePreviewRenderer {
                 block,
                 source: source,
                 properties: properties,
+                table: table,
                 embedPreview: embedPreview,
                 plan: plan,
                 visibleRange: visibleRange,
@@ -204,7 +207,10 @@ enum LivePreviewRenderer {
                 .paragraphStyle: LivePreviewTheme.codeBlockParagraphStyle
             ], range: range)
         case .table:
-            plan.addAttributes([.font: LivePreviewTheme.codeFont], range: range)
+            plan.addAttributes([
+                .font: LivePreviewTheme.baseFont,
+                .paragraphStyle: LivePreviewTheme.tableParagraphStyle
+            ], range: range)
         case .embed:
             plan.addAttributes([
                 .foregroundColor: LivePreviewTheme.embedFallbackColor,
@@ -292,6 +298,49 @@ enum LivePreviewRenderer {
                     .foregroundColor: LivePreviewTheme.propertyValueColor,
                     .backgroundColor: LivePreviewTheme.propertyBackgroundColor
                 ], range: visibleValueRange)
+            }
+        }
+    }
+
+    private static func tableModel(
+        for block: LivePreviewBlockSpan,
+        source: String
+    ) -> LivePreviewTable? {
+        guard block.kind == .table else {
+            return nil
+        }
+        return LivePreviewTableParser.parse(block, in: source)
+    }
+
+    private static func applyTableAttributes(
+        _ table: LivePreviewTable?,
+        plan: LivePreviewAttributePlan,
+        visibleRange: NSRange
+    ) {
+        guard let table else {
+            return
+        }
+
+        for cell in table.header {
+            let range = NSIntersectionRange(cell.contentRange.nsRange, visibleRange)
+            guard range.length > 0 else {
+                continue
+            }
+            plan.addAttributes([
+                .font: LivePreviewTheme.strongFont,
+                .backgroundColor: LivePreviewTheme.tableHeaderBackgroundColor
+            ], range: range)
+        }
+
+        for row in table.bodyRows {
+            for cell in row {
+                let range = NSIntersectionRange(cell.contentRange.nsRange, visibleRange)
+                guard range.length > 0 else {
+                    continue
+                }
+                plan.addAttributes([
+                    .backgroundColor: LivePreviewTheme.tableCellBackgroundColor
+                ], range: range)
             }
         }
     }
@@ -407,6 +456,7 @@ enum LivePreviewRenderer {
         _ block: LivePreviewBlockSpan,
         source: String,
         properties: LivePreviewPropertyBlock?,
+        table: LivePreviewTable?,
         embedPreview: LivePreviewEmbedPreview?,
         plan: LivePreviewAttributePlan,
         visibleRange: NSRange,
@@ -420,6 +470,7 @@ enum LivePreviewRenderer {
             for: block,
             source: source,
             properties: properties,
+            table: table,
             embedPreview: embedPreview
         ) {
             let range = NSIntersectionRange(range, visibleRange)
@@ -436,6 +487,7 @@ enum LivePreviewRenderer {
         for block: LivePreviewBlockSpan,
         source: String,
         properties: LivePreviewPropertyBlock?,
+        table: LivePreviewTable?,
         embedPreview: LivePreviewEmbedPreview?
     ) -> [NSRange] {
         var ranges: [NSRange]
@@ -453,7 +505,7 @@ enum LivePreviewRenderer {
         case .callout:
             ranges = prefixMatches(in: source, block: block, regex: calloutPrefixRegex)
         case .table:
-            return matches(in: source, range: block.sourceRange.nsRange, regex: tablePipeRegex)
+            return tableConcealmentRanges(for: block, source: source, table: table)
         case .embed:
             return embedTokenRanges(for: block, source: source, preview: embedPreview)
         case .paragraph:
@@ -503,6 +555,18 @@ enum LivePreviewRenderer {
             )
             return [before, after].filter { $0.length > 0 }
         }
+    }
+
+    private static func tableConcealmentRanges(
+        for block: LivePreviewBlockSpan,
+        source: String,
+        table: LivePreviewTable?
+    ) -> [NSRange] {
+        var ranges = matches(in: source, range: block.sourceRange.nsRange, regex: tablePipeRegex)
+        if let table {
+            ranges.append(table.alignmentRowRange.nsRange)
+        }
+        return ranges
     }
 
     private static func inlineTokenRanges(_ inlineSpans: [LivePreviewInlineSpan], source: String) -> [NSRange] {

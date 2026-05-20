@@ -26,6 +26,7 @@ struct MarkdownEditorView: NSViewRepresentable {
         textView.delegate = context.coordinator
         if let textView = textView as? MarkdownInteractionTextView {
             textView.interactionDelegate = context.coordinator
+            textView.livePreviewMode = livePreviewMode
         }
         textView.string = text
         textView.isEditable = isEditable
@@ -82,6 +83,9 @@ struct MarkdownEditorView: NSViewRepresentable {
             durationMilliseconds: decorationTimer.elapsedMilliseconds()
         )
         textView.isEditable = isEditable
+        if let textView = textView as? MarkdownInteractionTextView {
+            textView.livePreviewMode = livePreviewMode
+        }
         MarkdownEditorAccessibility.apply(to: textView, isEditable: isEditable, mode: livePreviewMode)
     }
 
@@ -215,8 +219,8 @@ enum MarkdownEditorAccessibility {
         switch mode {
         case .livePreview:
             isEditable
-                ? "Live Preview editor. Edit properties and embeds as source, command-click links and tags, click task checkboxes to toggle them."
-                : "Live Preview viewer. Review properties and embeds, click links and tags to open or search."
+                ? "Live Preview editor. Edit properties, embeds, and tables as source, command-click links and tags, click task checkboxes to toggle them."
+                : "Live Preview viewer. Review properties, embeds, and tables, click links and tags to open or search."
         case .source:
             "Source editor. Markdown syntax is shown as plain text."
         case .fallbackSource:
@@ -233,12 +237,38 @@ protocol MarkdownInteractionTextViewDelegate: AnyObject {
 @MainActor
 final class MarkdownInteractionTextView: NSTextView {
     weak var interactionDelegate: MarkdownInteractionTextViewDelegate?
+    var livePreviewMode: LivePreviewMode = .livePreview
+    private var tableCellMenuTarget: LivePreviewTableCell?
 
     override func mouseDown(with event: NSEvent) {
         if interactionDelegate?.textView(self, handleMouseDown: event) == true {
             return
         }
         super.mouseDown(with: event)
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = super.menu(for: event) ?? NSMenu()
+        tableCellMenuTarget = nil
+        guard isEditable,
+              let utf16Offset = utf16Offset(for: event),
+              let cell = tableCellForEditing(at: utf16Offset)
+        else {
+            return menu
+        }
+
+        tableCellMenuTarget = cell
+        let item = NSMenuItem(
+            title: "Edit Table Cell...",
+            action: #selector(editTableCellFromMenu(_:)),
+            keyEquivalent: ""
+        )
+        item.target = self
+        if !menu.items.isEmpty {
+            menu.insertItem(.separator(), at: 0)
+        }
+        menu.insertItem(item, at: 0)
+        return menu
     }
 
     override func paste(_ sender: Any?) {
@@ -264,6 +294,24 @@ final class MarkdownInteractionTextView: NSTextView {
         return true
     }
 
+    @discardableResult
+    func replaceTableCell(_ cell: LivePreviewTableCell, with replacement: String) -> Bool {
+        guard isEditable,
+              LivePreviewTableCellEdit.replacing(cell: cell, with: replacement, in: string) != nil
+        else {
+            return false
+        }
+        replaceTableCell(cell.contentRange.nsRange, with: replacement, registersUndo: true)
+        return true
+    }
+
+    func tableCellForEditing(at utf16Offset: Int) -> LivePreviewTableCell? {
+        guard livePreviewMode == .livePreview else {
+            return nil
+        }
+        return LivePreviewTableParser.cell(atUTF16Offset: utf16Offset, in: string)
+    }
+
     func utf16Offset(for event: NSEvent) -> Int? {
         guard let layoutManager, let textContainer else {
             return nil
@@ -281,6 +329,13 @@ final class MarkdownInteractionTextView: NSTextView {
         return min(characterIndex, (string as NSString).length - 1)
     }
 
+    @objc private func editTableCellFromMenu(_ sender: NSMenuItem) {
+        guard let cell = tableCellMenuTarget else {
+            return
+        }
+        presentTableCellEditor(for: cell)
+    }
+
     private func replaceTaskCheckbox(_ range: NSRange, with replacement: String, registersUndo: Bool) {
         guard shouldChangeText(in: range, replacementString: replacement) else {
             return
@@ -294,6 +349,40 @@ final class MarkdownInteractionTextView: NSTextView {
                 }
             }
             undoManager?.setActionName("Toggle Checkbox")
+        }
+        replaceCharacters(in: range, with: replacement)
+        didChangeText()
+        setSelectedRange(NSRange(
+            location: min(selection.location, (string as NSString).length),
+            length: min(selection.length, max(0, (string as NSString).length - min(selection.location, (string as NSString).length)))
+        ))
+    }
+
+    private func presentTableCellEditor(for cell: LivePreviewTableCell) {
+        let alert = NSAlert()
+        alert.messageText = "Edit Table Cell"
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+
+        let field = NSTextField(string: cell.text)
+        field.frame = NSRect(x: 0, y: 0, width: 320, height: 24)
+        alert.accessoryView = field
+
+        guard alert.runModal() == .alertFirstButtonReturn else {
+            return
+        }
+        if !replaceTableCell(cell, with: field.stringValue) {
+            NSSound.beep()
+        }
+    }
+
+    private func replaceTableCell(_ range: NSRange, with replacement: String, registersUndo: Bool) {
+        guard shouldChangeText(in: range, replacementString: replacement) else {
+            return
+        }
+        let selection = selectedRange()
+        if registersUndo {
+            undoManager?.setActionName("Edit Table Cell")
         }
         replaceCharacters(in: range, with: replacement)
         didChangeText()

@@ -35,6 +35,11 @@ struct LivePreviewStyleProbeReport: Codable, Equatable {
     var embedSizeSyntaxConcealedOutsideReveal: Bool
     var embedSyntaxRevealedInsideBlock: Bool
     var embedRenderPreservesSource: Bool
+    var tableHeaderChromeApplied: Bool
+    var tableBodyChromeApplied: Bool
+    var tableSyntaxConcealedOutsideReveal: Bool
+    var tableSyntaxRevealedInsideBlock: Bool
+    var tableRenderPreservesSource: Bool
     var wikiLinkAliasVisible: Bool
     var wikiLinkSourceConcealedOutsideReveal: Bool
     var wikiLinkRenderPreservesSource: Bool
@@ -95,6 +100,9 @@ enum LivePreviewStyleProbe {
         ![[missing.png]]
         ![[Note]]
         ![Alt](nested/photo.jpg)
+        | Name | Status |
+        | --- | --- |
+        | Alpha | Draft |
 
         ## Heading 2
         ### Heading 3
@@ -151,6 +159,10 @@ enum LivePreviewStyleProbe {
         let nonImageEmbedColor = foregroundColor(in: textView, source: source, marker: "Note")
         let hiddenEmbedSizeColor = foregroundColor(in: textView, source: source, marker: "|100")
         let hiddenEmbedOpeningColor = foregroundColor(in: textView, source: source, marker: "![[image.png")
+        let tableHeaderAttributes = attributes(in: textView, source: source, marker: "Name")
+        let tableBodyAttributes = attributes(in: textView, source: source, marker: "Alpha")
+        let hiddenTablePipeColor = foregroundColor(in: textView, source: source, marker: "| Name")
+        let hiddenTableAlignmentColor = foregroundColor(in: textView, source: source, marker: "--- | ---")
 
         if let codeOffset = utf16Offset(of: "let value", in: source) {
             textView.setSelectedRange(NSRange(location: codeOffset, length: 0))
@@ -214,6 +226,19 @@ enum LivePreviewStyleProbe {
         let revealedEmbedSizeColor = foregroundColor(in: textView, source: source, marker: "|100")
         let revealedEmbedOpeningColor = foregroundColor(in: textView, source: source, marker: "![[image.png")
 
+        if let tableOffset = utf16Offset(of: "Alpha", in: source) {
+            textView.setSelectedRange(NSRange(location: tableOffset, length: 0))
+            MarkdownVisibleRangeDecorator.decorateVisibleRange(
+                in: textView,
+                livePreviewMode: .livePreview,
+                revealRange: textView.selectedRange(),
+                linkStyleMap: linkStyleMap,
+                embedPreviewMap: embedPreviewMap
+            )
+        }
+        let revealedTablePipeColor = foregroundColor(in: textView, source: source, marker: "| Name")
+        let revealedTableAlignmentColor = foregroundColor(in: textView, source: source, marker: "--- | ---")
+
         return LivePreviewStyleProbeReport(
             headingFontScaleApplied: fonts.map(\.pointSize) == [
                 LivePreviewTheme.h1Font.pointSize,
@@ -273,6 +298,16 @@ enum LivePreviewStyleProbe {
                 && textView.string.contains("![[missing.png]]")
                 && textView.string.contains("![[Note]]")
                 && textView.string.contains("![Alt](nested/photo.jpg)"),
+            tableHeaderChromeApplied: tableHeaderAttributes?[.font] as? NSFont == LivePreviewTheme.strongFont
+                && tableHeaderAttributes?[.backgroundColor] as? NSColor == LivePreviewTheme.tableHeaderBackgroundColor,
+            tableBodyChromeApplied: tableBodyAttributes?[.backgroundColor] as? NSColor == LivePreviewTheme.tableCellBackgroundColor,
+            tableSyntaxConcealedOutsideReveal: hiddenTablePipeColor == LivePreviewTheme.concealedColor
+                && hiddenTableAlignmentColor == LivePreviewTheme.concealedColor,
+            tableSyntaxRevealedInsideBlock: revealedTablePipeColor != LivePreviewTheme.concealedColor
+                && revealedTableAlignmentColor != LivePreviewTheme.concealedColor,
+            tableRenderPreservesSource: textView.string.contains("| Name | Status |")
+                && textView.string.contains("| --- | --- |")
+                && textView.string.contains("| Alpha | Draft |"),
             wikiLinkAliasVisible: wikiAliasColor == LivePreviewTheme.linkColor,
             wikiLinkSourceConcealedOutsideReveal: hiddenWikiSourceColor == LivePreviewTheme.concealedColor,
             wikiLinkRenderPreservesSource: textView.string.contains("[[Target#Heading|Alias]]"),

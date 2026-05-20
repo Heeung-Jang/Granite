@@ -31,6 +31,11 @@ struct MarkdownEditorBridgeProbeReport: Codable, Equatable {
     var checkboxToggleChangesOnlyToken: Bool
     var checkboxToggleUndoRestoresToken: Bool
     var checkboxToggleReadOnlyPreservesBuffer: Bool
+    var tableCellContextMenuResolvesCell: Bool
+    var tableCellContextMenuSkipsFallback: Bool
+    var tableCellEditChangesOnlyCell: Bool
+    var tableCellEditUndoRestoresCell: Bool
+    var tableCellEditFailurePreservesBuffer: Bool
     var editorAccessibilityHelpMentionsInteractions: Bool
 }
 
@@ -52,6 +57,7 @@ enum MarkdownEditorBridgeProbe {
         let modeProbe = probeModeTransitions()
         let renderProbe = probeLivePreviewRendering()
         let checkboxProbe = probeCheckboxToggle()
+        let tableCellProbe = probeTableCellEdit()
         let accessibilityProbe = probeEditorAccessibility()
 
         return MarkdownEditorBridgeProbeReport(
@@ -82,6 +88,11 @@ enum MarkdownEditorBridgeProbe {
             checkboxToggleChangesOnlyToken: checkboxProbe.changesOnlyToken,
             checkboxToggleUndoRestoresToken: checkboxProbe.undoRestoresToken,
             checkboxToggleReadOnlyPreservesBuffer: checkboxProbe.readOnlyPreservesBuffer,
+            tableCellContextMenuResolvesCell: tableCellProbe.contextMenuResolvesCell,
+            tableCellContextMenuSkipsFallback: tableCellProbe.contextMenuSkipsFallback,
+            tableCellEditChangesOnlyCell: tableCellProbe.changesOnlyCell,
+            tableCellEditUndoRestoresCell: tableCellProbe.undoRestoresCell,
+            tableCellEditFailurePreservesBuffer: tableCellProbe.failurePreservesBuffer,
             editorAccessibilityHelpMentionsInteractions: accessibilityProbe
         )
     }
@@ -450,6 +461,68 @@ enum MarkdownEditorBridgeProbe {
         return (changesOnlyToken, undoRestoresToken, readOnlyPreservesBuffer)
     }
 
+    private static func probeTableCellEdit() -> (
+        contextMenuResolvesCell: Bool,
+        contextMenuSkipsFallback: Bool,
+        changesOnlyCell: Bool,
+        undoRestoresCell: Bool,
+        failurePreservesBuffer: Bool
+    ) {
+        let text = """
+        | Name | Status |
+        | --- | --- |
+        | Alpha | Draft |
+        """
+        let textView = MarkdownEditorTextViewFactory.makeTextView()
+        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 900, height: 700))
+        scrollView.documentView = textView
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 900, height: 700),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: true
+        )
+        window.contentView = scrollView
+        window.makeFirstResponder(textView)
+        textView.string = text
+        guard let table = LivePreviewTableParser.parse(text).first else {
+            return (false, false, false, false, false)
+        }
+        let cell = table.bodyRows[0][1]
+        let cellOffset = utf16Offset(of: "Draft", in: text) ?? -1
+        let menuCell = (textView as? MarkdownInteractionTextView)?.tableCellForEditing(at: cellOffset)
+        let contextMenuResolvesCell = menuCell == cell
+
+        let fallbackTextView = MarkdownEditorTextViewFactory.makeTextView()
+        fallbackTextView.string = text
+        (fallbackTextView as? MarkdownInteractionTextView)?.livePreviewMode = .fallbackSource(reason: .tooManyTableCells)
+        let fallbackCell = (fallbackTextView as? MarkdownInteractionTextView)?.tableCellForEditing(at: cellOffset)
+        let contextMenuSkipsFallback = fallbackCell == nil
+
+        let edited = (textView as? MarkdownInteractionTextView)?.replaceTableCell(cell, with: "Published") == true
+        let expected = """
+        | Name | Status |
+        | --- | --- |
+        | Alpha | Published |
+        """
+        let changesOnlyCell = edited && textView.string == expected
+        let canUndo = textView.undoManager?.canUndo ?? false
+        textView.undoManager?.undo()
+        let undoRestoresCell = canUndo && textView.string == text
+
+        let failed = (textView as? MarkdownInteractionTextView)?.replaceTableCell(cell, with: "bad|value") == true
+        let readOnlyTextView = MarkdownEditorTextViewFactory.makeTextView()
+        readOnlyTextView.string = text
+        readOnlyTextView.isEditable = false
+        let readOnlyEdited = (readOnlyTextView as? MarkdownInteractionTextView)?.replaceTableCell(cell, with: "Final") == true
+        let failurePreservesBuffer = !failed
+            && !readOnlyEdited
+            && textView.string == text
+            && readOnlyTextView.string == text
+
+        return (contextMenuResolvesCell, contextMenuSkipsFallback, changesOnlyCell, undoRestoresCell, failurePreservesBuffer)
+    }
+
     private static func probeEditorAccessibility() -> Bool {
         let textView = MarkdownEditorTextViewFactory.makeTextView()
         let livePreviewHelp = textView.accessibilityHelp() ?? ""
@@ -464,11 +537,13 @@ enum MarkdownEditorBridgeProbe {
             && livePreviewHelp.contains("tags")
             && livePreviewHelp.contains("properties")
             && livePreviewHelp.contains("embeds")
+            && livePreviewHelp.contains("tables")
             && livePreviewHelp.contains("checkboxes")
             && viewerHelp.contains("links")
             && viewerHelp.contains("tags")
             && viewerHelp.contains("properties")
             && viewerHelp.contains("embeds")
+            && viewerHelp.contains("tables")
             && sourceHelp.contains("Markdown syntax")
     }
 }

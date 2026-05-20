@@ -207,6 +207,8 @@ public struct EditorStrategyDecision: Equatable, Sendable {
 }
 
 public enum EditorDocumentProfiler {
+    private static let defaultTableCellScanLimit = EditorDegradationThresholds().maxTableCellCount + 1
+
     public static func profile(
         _ text: String,
         visibleDecorationP95Milliseconds: Double? = nil,
@@ -230,6 +232,7 @@ public enum EditorDocumentProfiler {
             longestLineCharacters: longestLineCharacters,
             embedCount: countOccurrences(of: "![", in: text),
             attachmentCount: countOccurrences(of: "![", in: text),
+            tableCellCount: countTableCells(in: text, limit: defaultTableCellScanLimit),
             visibleDecorationP95Milliseconds: visibleDecorationP95Milliseconds,
             typingP95Milliseconds: typingP95Milliseconds
         )
@@ -245,5 +248,67 @@ public enum EditorDocumentProfiler {
         }
 
         return count
+    }
+
+    private static func countTableCells(in text: String, limit: Int) -> Int {
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        var count = 0
+        var index = 0
+
+        while index + 1 < lines.count {
+            guard lines[index].contains("|"),
+                  isAlignmentLine(lines[index + 1])
+            else {
+                index += 1
+                continue
+            }
+
+            count += tableCellCount(in: lines[index])
+            if count >= limit {
+                return limit
+            }
+
+            index += 2
+            while index < lines.count,
+                  lines[index].contains("|"),
+                  !lines[index].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                count += tableCellCount(in: lines[index])
+                if count >= limit {
+                    return limit
+                }
+                index += 1
+            }
+        }
+
+        return count
+    }
+
+    private static func isAlignmentLine(_ line: String) -> Bool {
+        let cells = tableCells(in: line).map {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        guard cells.count >= 2 else {
+            return false
+        }
+        return cells.allSatisfy { cell in
+            let dashText = cell.trimmingCharacters(in: CharacterSet(charactersIn: ":"))
+            return dashText.count >= 3 && dashText.allSatisfy { $0 == "-" }
+        }
+    }
+
+    private static func tableCellCount(in line: String) -> Int {
+        tableCells(in: line).count
+    }
+
+    private static func tableCells(in line: String) -> [String] {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        var cells = line.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+        if trimmed.hasPrefix("|"), !cells.isEmpty {
+            cells.removeFirst()
+        }
+        if trimmed.hasSuffix("|"), !cells.isEmpty {
+            cells.removeLast()
+        }
+        return cells
     }
 }
