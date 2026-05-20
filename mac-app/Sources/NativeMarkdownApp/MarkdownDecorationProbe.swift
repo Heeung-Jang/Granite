@@ -66,8 +66,7 @@ enum MarkdownDecorationProbe {
             let start = DispatchTime.now().uptimeNanoseconds
             result = MarkdownVisibleRangeDecorator.decorateVisibleRange(
                 in: textView,
-                range: range,
-                documentProfile: profile
+                range: range
             )
             let end = DispatchTime.now().uptimeNanoseconds
             samples.append((Double(end - start) / 1_000_000).rounded(toPlaces: 3))

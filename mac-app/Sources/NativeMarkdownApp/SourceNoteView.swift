@@ -4,6 +4,7 @@ import SwiftUI
 
 struct SourceNoteView: View {
     private static let conflictActionGeneration: UInt64 = 0
+    private static let fallbackProfileMinimumByteDelta = 4_096
 
     @EnvironmentObject private var appState: AppState
     let vaultURL: URL
@@ -13,8 +14,8 @@ struct SourceNoteView: View {
     @State private var state: SourceNoteViewState = .loading
     @State private var text = ""
     @State private var saveSession: EditorSaveSession?
-    @State private var livePreviewMode: LivePreviewMode = .livePreview
     @State private var fallbackController = LivePreviewFallbackController()
+    @State private var lastFallbackProfileByteCount = 0
     @State private var pendingExternalLink: PendingExternalLink?
     @State private var interactionNotice: EditorInteractionNotice?
     @State private var pendingRecoverySnapshot: EditorRecoverySnapshot?
@@ -78,7 +79,7 @@ struct SourceNoteView: View {
         }
         .onChange(of: text) { _, newValue in
             saveSession?.updateContents(newValue)
-            updateAutomaticFallback(for: newValue)
+            updateAutomaticFallbackAfterTextChange(for: newValue)
             scheduleRecoverySnapshot(contents: newValue)
         }
         .onChange(of: saveSession) { oldValue, newValue in
@@ -164,30 +165,50 @@ struct SourceNoteView: View {
         livePreviewMode.rendersSourceOnly ? "Live Preview" : "Source"
     }
 
+    private var livePreviewMode: LivePreviewMode {
+        fallbackController.mode
+    }
+
     private func toggleEditorMode() {
         if livePreviewMode.rendersSourceOnly {
             retryLivePreview()
         } else {
             var controller = fallbackController
-            livePreviewMode = controller.selectSourceMode()
+            controller.selectSourceMode()
             fallbackController = controller
         }
     }
 
     private func retryLivePreview() {
         var controller = fallbackController
-        livePreviewMode = controller.retryLivePreview()
+        controller.retryLivePreview()
         fallbackController = controller
         updateAutomaticFallback(for: text)
+    }
+
+    private func updateAutomaticFallbackAfterTextChange(for contents: String) {
+        guard livePreviewMode != .source else {
+            return
+        }
+        let byteCount = contents.utf8.count
+        let thresholds = EditorDegradationThresholds()
+        let byteDelta = abs(byteCount - lastFallbackProfileByteCount)
+        guard byteCount > thresholds.maxDecoratedFileBytes ||
+              byteDelta >= Self.fallbackProfileMinimumByteDelta
+        else {
+            return
+        }
+        updateAutomaticFallback(for: contents)
     }
 
     private func updateAutomaticFallback(for contents: String) {
         guard livePreviewMode != .source else {
             return
         }
+        lastFallbackProfileByteCount = contents.utf8.count
         var controller = fallbackController
         let profile = EditorDocumentProfiler.profile(contents)
-        livePreviewMode = controller.observe(EditorStrategyDecision().renderingMode(for: profile))
+        controller.observe(EditorStrategyDecision().renderingMode(for: profile))
         fallbackController = controller
     }
 
@@ -202,7 +223,7 @@ struct SourceNoteView: View {
         saveSession = nil
         pendingRecoverySnapshot = nil
         fallbackController = LivePreviewFallbackController()
-        livePreviewMode = .livePreview
+        lastFallbackProfileByteCount = 0
         let timer = AppTelemetryTimer()
         do {
             let document = try await Task.detached(priority: .userInitiated) {

@@ -15,26 +15,10 @@ enum MarkdownVisibleRangeDecorator {
     static func decorateVisibleRange(
         in textView: NSTextView,
         range requestedRange: NSRange? = nil,
-        livePreviewMode: LivePreviewMode = .livePreview,
-        documentProfile: EditorDocumentProfile? = nil,
-        strategy: EditorStrategyDecision = EditorStrategyDecision()
+        livePreviewMode: LivePreviewMode = .livePreview
     ) -> MarkdownDecorationResult {
         if livePreviewMode.rendersSourceOnly {
             return applySourceMode(in: textView, range: requestedRange, mode: livePreviewMode)
-        }
-
-        let profile = documentProfile ?? EditorDocumentProfile(
-            byteCount: textView.string.utf8.count,
-            longestLineCharacters: 0,
-            embedCount: 0
-        )
-        if case .degradedSource(let reason) = strategy.renderingMode(for: profile) {
-            return MarkdownDecorationResult(
-                mode: "degraded-source",
-                reason: reason.rawValue,
-                rangeLength: 0,
-                appliedRuns: 0
-            )
         }
 
         let text = textView.string as NSString
