@@ -145,8 +145,10 @@ enum LivePreviewRenderer {
             guard blockRange.length > 0 else {
                 continue
             }
+            let properties = frontmatterProperties(for: block, source: source)
             applyBlockAttributes(block, plan: plan, range: blockRange)
             applyBlockTokenAttributes(block, source: source, plan: plan, visibleRange: visibleRange)
+            applyPropertyAttributes(properties, plan: plan, visibleRange: visibleRange)
             applyInlineAttributes(
                 block,
                 source: source,
@@ -154,7 +156,14 @@ enum LivePreviewRenderer {
                 visibleRange: visibleRange,
                 linkStyleMap: linkStyleMap
             )
-            concealTokens(block, source: source, plan: plan, visibleRange: visibleRange, revealRange: revealRange)
+            concealTokens(
+                block,
+                source: source,
+                properties: properties,
+                plan: plan,
+                visibleRange: visibleRange,
+                revealRange: revealRange
+            )
         }
     }
 
@@ -198,7 +207,12 @@ enum LivePreviewRenderer {
                 .paragraphStyle: LivePreviewTheme.listParagraphStyle
             ], range: range)
         case .frontmatter:
-            plan.addAttributes([.foregroundColor: LivePreviewTheme.secondaryTextColor], range: range)
+            plan.addAttributes([
+                .font: LivePreviewTheme.baseFont,
+                .foregroundColor: LivePreviewTheme.propertyValueColor,
+                .backgroundColor: LivePreviewTheme.propertyBackgroundColor,
+                .paragraphStyle: LivePreviewTheme.propertyParagraphStyle
+            ], range: range)
         case .paragraph:
             break
         }
@@ -227,6 +241,48 @@ enum LivePreviewRenderer {
             return LivePreviewTheme.calloutAccentColor
         default:
             return LivePreviewTheme.listMarkerColor
+        }
+    }
+
+    private static func frontmatterProperties(
+        for block: LivePreviewBlockSpan,
+        source: String
+    ) -> LivePreviewPropertyBlock? {
+        guard case .frontmatter(isClosed: true) = block.kind else {
+            return nil
+        }
+        return LivePreviewPropertyParser.parse(source)
+    }
+
+    private static func applyPropertyAttributes(
+        _ properties: LivePreviewPropertyBlock?,
+        plan: LivePreviewAttributePlan,
+        visibleRange: NSRange
+    ) {
+        guard let properties else {
+            return
+        }
+
+        for row in properties.rows {
+            let keyRange = NSIntersectionRange(row.keyRange.nsRange, visibleRange)
+            if keyRange.length > 0 {
+                plan.addAttributes([
+                    .font: LivePreviewTheme.strongFont,
+                    .foregroundColor: LivePreviewTheme.propertyKeyColor,
+                    .backgroundColor: LivePreviewTheme.propertyBackgroundColor
+                ], range: keyRange)
+            }
+
+            guard let valueRange = row.valueRange?.nsRange else {
+                continue
+            }
+            let visibleValueRange = NSIntersectionRange(valueRange, visibleRange)
+            if visibleValueRange.length > 0 {
+                plan.addAttributes([
+                    .foregroundColor: LivePreviewTheme.propertyValueColor,
+                    .backgroundColor: LivePreviewTheme.propertyBackgroundColor
+                ], range: visibleValueRange)
+            }
         }
     }
 
@@ -302,6 +358,7 @@ enum LivePreviewRenderer {
     private static func concealTokens(
         _ block: LivePreviewBlockSpan,
         source: String,
+        properties: LivePreviewPropertyBlock?,
         plan: LivePreviewAttributePlan,
         visibleRange: NSRange,
         revealRange: NSRange
@@ -310,7 +367,7 @@ enum LivePreviewRenderer {
             return
         }
 
-        for range in concealmentRanges(for: block, source: source) {
+        for range in concealmentRanges(for: block, source: source, properties: properties) {
             let range = NSIntersectionRange(range, visibleRange)
             guard range.length > 0 else {
                 continue
@@ -321,7 +378,11 @@ enum LivePreviewRenderer {
         }
     }
 
-    private static func concealmentRanges(for block: LivePreviewBlockSpan, source: String) -> [NSRange] {
+    private static func concealmentRanges(
+        for block: LivePreviewBlockSpan,
+        source: String,
+        properties: LivePreviewPropertyBlock?
+    ) -> [NSRange] {
         var ranges: [NSRange]
         switch block.kind {
         case .heading:
@@ -345,7 +406,7 @@ enum LivePreviewRenderer {
         case .fencedCode:
             return matches(in: source, range: block.sourceRange.nsRange, regex: fenceLineRegex)
         case .frontmatter:
-            return []
+            return properties?.tokenRanges.map(\.nsRange) ?? []
         }
         ranges += inlineTokenRanges(block.inlineSpans, source: source)
         return ranges

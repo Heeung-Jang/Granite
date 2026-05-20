@@ -25,6 +25,10 @@ struct LivePreviewStyleProbeReport: Codable, Equatable {
     var calloutSyntaxConcealedOutsideReveal: Bool
     var calloutSyntaxRevealedInsideBlock: Bool
     var calloutRenderPreservesSource: Bool
+    var propertiesChromeApplied: Bool
+    var propertyYamlConcealedOutsideReveal: Bool
+    var propertyYamlRevealedInsideBlock: Bool
+    var propertiesRenderPreservesSource: Bool
     var wikiLinkAliasVisible: Bool
     var wikiLinkSourceConcealedOutsideReveal: Bool
     var wikiLinkRenderPreservesSource: Bool
@@ -52,6 +56,13 @@ enum LivePreviewStyleProbe {
 
     static func run() -> LivePreviewStyleProbeReport {
         let source = """
+        ---
+        status: draft
+        aliases:
+          - live preview fixture
+        secret_token: "fixture-secret-not-real"
+        ---
+
         # Heading 1
         Paragraph one wraps with `code` and normal live-preview rhythm.
 
@@ -108,6 +119,10 @@ enum LivePreviewStyleProbe {
         let blockquoteMarkerColor = foregroundColor(in: textView, source: source, marker: "> Quote")
         let calloutAttributes = attributes(in: textView, source: source, marker: "Callout body")
         let hiddenCalloutSyntaxColor = foregroundColor(in: textView, source: source, marker: "> [!note]")
+        let propertyKeyAttributes = attributes(in: textView, source: source, marker: "status")
+        let propertyValueAttributes = attributes(in: textView, source: source, marker: "draft")
+        let hiddenPropertyDelimiterColor = foregroundColor(in: textView, source: source, marker: "---")
+        let hiddenPropertyColonColor = foregroundColor(in: textView, source: source, marker: ": draft")
         let wikiAliasColor = foregroundColor(in: textView, source: source, marker: "Alias")
         let hiddenWikiSourceColor = foregroundColor(in: textView, source: source, marker: "[[Target#Heading|")
         let missingLinkColor = foregroundColor(in: textView, source: source, marker: "Missing Target")
@@ -152,6 +167,18 @@ enum LivePreviewStyleProbe {
         }
         let revealedCalloutSyntaxColor = foregroundColor(in: textView, source: source, marker: "> [!note]")
 
+        if let propertyOffset = utf16Offset(of: "status", in: source) {
+            textView.setSelectedRange(NSRange(location: propertyOffset, length: 0))
+            MarkdownVisibleRangeDecorator.decorateVisibleRange(
+                in: textView,
+                livePreviewMode: .livePreview,
+                revealRange: textView.selectedRange(),
+                linkStyleMap: linkStyleMap
+            )
+        }
+        let revealedPropertyDelimiterColor = foregroundColor(in: textView, source: source, marker: "---")
+        let revealedPropertyColonColor = foregroundColor(in: textView, source: source, marker: ": draft")
+
         return LivePreviewStyleProbeReport(
             headingFontScaleApplied: fonts.map(\.pointSize) == [
                 LivePreviewTheme.h1Font.pointSize,
@@ -190,6 +217,15 @@ enum LivePreviewStyleProbe {
             calloutSyntaxConcealedOutsideReveal: hiddenCalloutSyntaxColor == LivePreviewTheme.concealedColor,
             calloutSyntaxRevealedInsideBlock: revealedCalloutSyntaxColor != LivePreviewTheme.concealedColor,
             calloutRenderPreservesSource: textView.string.contains("> [!note] Callout body"),
+            propertiesChromeApplied: propertyKeyAttributes?[.foregroundColor] as? NSColor == LivePreviewTheme.propertyKeyColor
+                && propertyKeyAttributes?[.backgroundColor] as? NSColor == LivePreviewTheme.propertyBackgroundColor
+                && propertyValueAttributes?[.foregroundColor] as? NSColor == LivePreviewTheme.propertyValueColor
+                && propertyValueAttributes?[.backgroundColor] as? NSColor == LivePreviewTheme.propertyBackgroundColor,
+            propertyYamlConcealedOutsideReveal: hiddenPropertyDelimiterColor == LivePreviewTheme.concealedColor
+                && hiddenPropertyColonColor == LivePreviewTheme.concealedColor,
+            propertyYamlRevealedInsideBlock: revealedPropertyDelimiterColor != LivePreviewTheme.concealedColor
+                && revealedPropertyColonColor != LivePreviewTheme.concealedColor,
+            propertiesRenderPreservesSource: textView.string.contains("secret_token: \"fixture-secret-not-real\""),
             wikiLinkAliasVisible: wikiAliasColor == LivePreviewTheme.linkColor,
             wikiLinkSourceConcealedOutsideReveal: hiddenWikiSourceColor == LivePreviewTheme.concealedColor,
             wikiLinkRenderPreservesSource: textView.string.contains("[[Target#Heading|Alias]]"),

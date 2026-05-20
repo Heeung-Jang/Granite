@@ -21,6 +21,9 @@ enum LivePreviewTheme {
     static let missingHeadingLinkColor = NSColor.systemPink
     static let tagColor = NSColor.systemPurple
     static let tagBackgroundColor = NSColor.systemPurple.withAlphaComponent(0.12)
+    static let propertyBackgroundColor = NSColor.controlBackgroundColor
+    static let propertyKeyColor = NSColor.secondaryLabelColor
+    static let propertyValueColor = NSColor.labelColor
     static let codeColor = NSColor.systemBrown
     static let inlineCodeBackgroundColor = NSColor.controlBackgroundColor
     static let codeBlockBackgroundColor = NSColor.controlBackgroundColor
@@ -96,6 +99,16 @@ enum LivePreviewTheme {
         style.headIndent = 20
         style.paragraphSpacingBefore = 4
         style.paragraphSpacing = 6
+        return style.copy() as! NSParagraphStyle
+    }
+
+    static var propertyParagraphStyle: NSParagraphStyle {
+        let style = NSMutableParagraphStyle()
+        style.lineHeightMultiple = 1.08
+        style.firstLineHeadIndent = 0
+        style.headIndent = 18
+        style.paragraphSpacingBefore = 2
+        style.paragraphSpacing = 2
         return style.copy() as! NSParagraphStyle
     }
 }

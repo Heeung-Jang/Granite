@@ -405,9 +405,11 @@ enum MarkdownEditorBridgeProbe {
 
         return livePreviewHelp.contains("links")
             && livePreviewHelp.contains("tags")
+            && livePreviewHelp.contains("properties")
             && livePreviewHelp.contains("checkboxes")
             && viewerHelp.contains("links")
             && viewerHelp.contains("tags")
+            && viewerHelp.contains("properties")
             && sourceHelp.contains("Markdown syntax")
     }
 }
