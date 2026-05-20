@@ -8,6 +8,8 @@ use crate::sqlite_fts::SearchResult;
 use crate::tantivy_search::{TantivySearchError, TantivySearchIndex};
 
 const MAX_PAGE_LIMIT: usize = 100;
+const MAX_GRAPH_NODES: usize = 250;
+const MAX_GRAPH_EDGES: usize = 500;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PageRequest {
@@ -56,6 +58,50 @@ pub struct FileOpenMetadata {
     pub file: FileRecord,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LocalGraphRequest {
+    pub request_id: u64,
+    pub max_nodes: usize,
+    pub max_edges: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalGraph {
+    pub center_node_id: String,
+    pub nodes: Vec<LocalGraphNode>,
+    pub edges: Vec<LocalGraphEdge>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalGraphNode {
+    pub node_id: String,
+    pub file_id: Option<String>,
+    pub label: String,
+    pub kind: LocalGraphNodeKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalGraphNodeKind {
+    Center,
+    Resolved,
+    Unresolved,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalGraphEdge {
+    pub source_node_id: String,
+    pub target_node_id: String,
+    pub target_text: String,
+    pub direction: LocalGraphEdgeDirection,
+    pub is_embed: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalGraphEdgeDirection {
+    Outgoing,
+    Backlink,
+}
+
 pub struct VaultReadApi {
     metadata: MetadataStore,
     search: TantivySearchIndex,
@@ -89,6 +135,28 @@ impl PageRequest {
 
     fn fetch_limit(self) -> usize {
         self.visible_limit() + 1
+    }
+}
+
+impl LocalGraphRequest {
+    pub fn new(max_nodes: usize, max_edges: usize) -> Self {
+        Self::with_request_id(0, max_nodes, max_edges)
+    }
+
+    pub fn with_request_id(request_id: u64, max_nodes: usize, max_edges: usize) -> Self {
+        Self {
+            request_id,
+            max_nodes,
+            max_edges,
+        }
+    }
+
+    fn node_limit(self) -> usize {
+        self.max_nodes.clamp(1, MAX_GRAPH_NODES)
+    }
+
+    fn edge_limit(self) -> usize {
+        self.max_edges.clamp(1, MAX_GRAPH_EDGES)
     }
 }
 
@@ -223,6 +291,24 @@ impl VaultReadApi {
         ))
     }
 
+    pub fn local_graph(
+        &self,
+        file_id: &str,
+        request: LocalGraphRequest,
+    ) -> ReadApiResult<ReadValue<LocalGraph>> {
+        let graph = self.build_one_hop_graph(file_id, request)?;
+        Ok(ReadValue {
+            request_id: request.request_id,
+            generation: self.generation,
+            state: if graph.partial {
+                ReadState::Partial
+            } else {
+                ReadState::Complete
+            },
+            value: graph.graph,
+        })
+    }
+
     fn search(&self, query: &str, page: PageRequest) -> ReadApiResult<ReadPage<SearchHit>> {
         let results = match self
             .search
@@ -260,6 +346,185 @@ impl VaultReadApi {
                 ReadState::Complete
             },
         }
+    }
+
+    fn build_one_hop_graph(
+        &self,
+        file_id: &str,
+        request: LocalGraphRequest,
+    ) -> ReadApiResult<LocalGraphBuild> {
+        let node_limit = request.node_limit();
+        let edge_limit = request.edge_limit();
+        let center_node_id = graph_file_node_id(file_id);
+        let center_label = self
+            .metadata
+            .get_file(file_id)?
+            .map(|file| file.relative_path.display().to_string())
+            .unwrap_or_else(|| file_id.to_string());
+
+        let mut builder = LocalGraphBuilder::new(node_limit, edge_limit);
+        builder.add_node(LocalGraphNode {
+            node_id: center_node_id.clone(),
+            file_id: Some(file_id.to_string()),
+            label: center_label,
+            kind: LocalGraphNodeKind::Center,
+        });
+
+        let outgoing = self
+            .metadata
+            .outgoing_links(file_id, 0, edge_limit.saturating_add(1))?;
+        for (index, link) in outgoing.into_iter().enumerate() {
+            if index >= edge_limit {
+                builder.mark_partial();
+                break;
+            }
+            let target_node = match link.resolved_target_file_id.as_deref() {
+                Some(target_file_id) => self.resolved_graph_node(target_file_id)?,
+                None => unresolved_graph_node(&link.target_text),
+            };
+            builder.add_edge(
+                target_node,
+                LocalGraphEdge {
+                    source_node_id: center_node_id.clone(),
+                    target_node_id: link
+                        .resolved_target_file_id
+                        .as_deref()
+                        .map(graph_file_node_id)
+                        .unwrap_or_else(|| graph_unresolved_node_id(&link.target_text)),
+                    target_text: link.target_text,
+                    direction: LocalGraphEdgeDirection::Outgoing,
+                    is_embed: link.is_embed,
+                },
+            );
+        }
+
+        if !builder.edge_limit_reached() {
+            let remaining = edge_limit.saturating_sub(builder.edges.len());
+            let backlinks = self
+                .metadata
+                .backlinks(file_id, 0, remaining.saturating_add(1))?;
+            for (index, link) in backlinks.into_iter().enumerate() {
+                if index >= remaining {
+                    builder.mark_partial();
+                    break;
+                }
+                let source_node = self.resolved_graph_node(&link.source_file_id)?;
+                builder.add_edge(
+                    source_node,
+                    LocalGraphEdge {
+                        source_node_id: graph_file_node_id(&link.source_file_id),
+                        target_node_id: center_node_id.clone(),
+                        target_text: link.target_text,
+                        direction: LocalGraphEdgeDirection::Backlink,
+                        is_embed: link.is_embed,
+                    },
+                );
+            }
+        }
+
+        Ok(builder.finish(center_node_id))
+    }
+
+    fn resolved_graph_node(&self, file_id: &str) -> ReadApiResult<LocalGraphNode> {
+        let label = self
+            .metadata
+            .get_file(file_id)?
+            .map(|file| file.relative_path.display().to_string())
+            .unwrap_or_else(|| file_id.to_string());
+        Ok(LocalGraphNode {
+            node_id: graph_file_node_id(file_id),
+            file_id: Some(file_id.to_string()),
+            label,
+            kind: LocalGraphNodeKind::Resolved,
+        })
+    }
+}
+
+struct LocalGraphBuild {
+    graph: LocalGraph,
+    partial: bool,
+}
+
+struct LocalGraphBuilder {
+    node_limit: usize,
+    edge_limit: usize,
+    nodes: Vec<LocalGraphNode>,
+    edges: Vec<LocalGraphEdge>,
+    partial: bool,
+}
+
+impl LocalGraphBuilder {
+    fn new(node_limit: usize, edge_limit: usize) -> Self {
+        Self {
+            node_limit,
+            edge_limit,
+            nodes: Vec::new(),
+            edges: Vec::new(),
+            partial: false,
+        }
+    }
+
+    fn add_node(&mut self, node: LocalGraphNode) -> bool {
+        if self
+            .nodes
+            .iter()
+            .any(|existing| existing.node_id == node.node_id)
+        {
+            return true;
+        }
+        if self.nodes.len() >= self.node_limit {
+            self.partial = true;
+            return false;
+        }
+        self.nodes.push(node);
+        true
+    }
+
+    fn add_edge(&mut self, node: LocalGraphNode, edge: LocalGraphEdge) {
+        if self.edges.len() >= self.edge_limit {
+            self.partial = true;
+            return;
+        }
+        if !self.add_node(node) {
+            return;
+        }
+        self.edges.push(edge);
+    }
+
+    fn edge_limit_reached(&self) -> bool {
+        self.edges.len() >= self.edge_limit
+    }
+
+    fn mark_partial(&mut self) {
+        self.partial = true;
+    }
+
+    fn finish(self, center_node_id: String) -> LocalGraphBuild {
+        LocalGraphBuild {
+            graph: LocalGraph {
+                center_node_id,
+                nodes: self.nodes,
+                edges: self.edges,
+            },
+            partial: self.partial,
+        }
+    }
+}
+
+fn graph_file_node_id(file_id: &str) -> String {
+    format!("file:{file_id}")
+}
+
+fn graph_unresolved_node_id(target_text: &str) -> String {
+    format!("unresolved:{}", target_text.to_lowercase())
+}
+
+fn unresolved_graph_node(target_text: &str) -> LocalGraphNode {
+    LocalGraphNode {
+        node_id: graph_unresolved_node_id(target_text),
+        file_id: None,
+        label: target_text.to_string(),
+        kind: LocalGraphNodeKind::Unresolved,
     }
 }
 
@@ -334,6 +599,22 @@ mod tests {
             alias: None,
             is_embed: false,
         };
+        let unresolved_link = crate::index::LinkEdgeRecord {
+            source_file_id: home.file_id.clone(),
+            target_text: "Missing Note".to_string(),
+            resolved_target_file_id: None,
+            heading: None,
+            alias: None,
+            is_embed: false,
+        };
+        let backlink = crate::index::LinkEdgeRecord {
+            source_file_id: target.file_id.clone(),
+            target_text: "Home".to_string(),
+            resolved_target_file_id: Some(home.file_id.clone()),
+            heading: None,
+            alias: Some("Home alias".to_string()),
+            is_embed: true,
+        };
         let tag = TagRecord {
             file_id: home.file_id.clone(),
             tag: "project/native".to_string(),
@@ -363,7 +644,7 @@ mod tests {
         store
             .replace_file_records(
                 &home,
-                std::slice::from_ref(&link),
+                &[link.clone(), unresolved_link.clone()],
                 std::slice::from_ref(&tag),
                 std::slice::from_ref(&property),
                 std::slice::from_ref(&heading),
@@ -371,7 +652,7 @@ mod tests {
             )
             .expect("home records");
         store
-            .replace_file_records(&target, &[], &[], &[], &[], &[])
+            .replace_file_records(&target, std::slice::from_ref(&backlink), &[], &[], &[], &[])
             .expect("target records");
         search
             .replace_documents(&[
@@ -432,13 +713,19 @@ mod tests {
             api.outgoing_links(&home.file_id, PageRequest::new(0, 10))
                 .expect("outgoing")
                 .items,
-            vec![link.clone()]
+            vec![link.clone(), unresolved_link.clone()]
         );
         assert_eq!(
             api.backlinks(&target.file_id, PageRequest::new(0, 10))
                 .expect("backlinks")
                 .items,
             vec![link]
+        );
+        assert_eq!(
+            api.backlinks(&home.file_id, PageRequest::new(0, 10))
+                .expect("home backlinks")
+                .items,
+            vec![backlink.clone()]
         );
         assert_eq!(
             api.tags(&home.file_id, PageRequest::new(0, 10))
@@ -464,6 +751,62 @@ mod tests {
                 .items,
             vec![attachment]
         );
+
+        let graph = api
+            .local_graph(
+                &home.file_id,
+                LocalGraphRequest::with_request_id(60, 10, 10),
+            )
+            .expect("local graph");
+        assert_eq!(graph.request_id, 60);
+        assert_eq!(graph.generation, 1);
+        assert_eq!(graph.state, ReadState::Complete);
+        assert_eq!(
+            graph.value.center_node_id,
+            graph_file_node_id(&home.file_id)
+        );
+        assert!(graph.value.nodes.iter().any(|node| {
+            node.node_id == graph_file_node_id(&home.file_id)
+                && node.kind == LocalGraphNodeKind::Center
+        }));
+        assert!(graph.value.nodes.iter().any(|node| {
+            node.node_id == graph_file_node_id(&target.file_id)
+                && node.kind == LocalGraphNodeKind::Resolved
+                && node.label == "Folder/Target.md"
+        }));
+        assert!(graph.value.nodes.iter().any(|node| {
+            node.node_id == graph_unresolved_node_id("Missing Note")
+                && node.kind == LocalGraphNodeKind::Unresolved
+        }));
+        assert_eq!(graph.value.nodes.len(), 3);
+        assert_eq!(graph.value.edges.len(), 3);
+        assert!(graph.value.edges.iter().any(|edge| {
+            edge.direction == LocalGraphEdgeDirection::Outgoing
+                && edge.source_node_id == graph_file_node_id(&home.file_id)
+                && edge.target_node_id == graph_file_node_id(&target.file_id)
+        }));
+        assert!(graph.value.edges.iter().any(|edge| {
+            edge.direction == LocalGraphEdgeDirection::Outgoing
+                && edge.target_node_id == graph_unresolved_node_id("Missing Note")
+        }));
+        assert!(graph.value.edges.iter().any(|edge| {
+            edge.direction == LocalGraphEdgeDirection::Backlink
+                && edge.source_node_id == graph_file_node_id(&target.file_id)
+                && edge.target_node_id == graph_file_node_id(&home.file_id)
+                && edge.is_embed
+        }));
+
+        let node_capped = api
+            .local_graph(&home.file_id, LocalGraphRequest::new(2, 10))
+            .expect("node capped graph");
+        assert_eq!(node_capped.state, ReadState::Partial);
+        assert_eq!(node_capped.value.nodes.len(), 2);
+
+        let edge_capped = api
+            .local_graph(&home.file_id, LocalGraphRequest::new(10, 1))
+            .expect("edge capped graph");
+        assert_eq!(edge_capped.state, ReadState::Partial);
+        assert_eq!(edge_capped.value.edges.len(), 1);
     }
 
     fn fixture_entry(relative_path: &str) -> ScanEntry {
