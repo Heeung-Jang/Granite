@@ -9,9 +9,11 @@ use crate::parser::parse_markdown;
 use crate::paths::{PathError, VaultRoot, lookup_key};
 use crate::scanner::{ScanEntryKind, ScanError, scan_vault};
 use crate::sqlite_fts::{SearchDocument, SearchResult, SqliteFtsError, SqliteFtsIndex};
-use crate::tantivy_search::{TantivySearchError, TantivySearchIndex};
+use crate::tantivy_search::{
+    TantivyIndexingStageDurations, TantivySearchError, TantivySearchIndex,
+};
 
-pub const BACKEND_BENCHMARK_ARTIFACT_SCHEMA_VERSION: u32 = 2;
+pub const BACKEND_BENCHMARK_ARTIFACT_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Clone)]
 pub struct BackendBenchmarkOptions {
@@ -37,6 +39,7 @@ pub struct BackendBenchmarkArtifact {
     pub generated_at_unix_seconds: u64,
     pub corpus_id: String,
     pub run_metadata: BenchmarkRunMetadata,
+    pub corpus_stages: BenchmarkCorpusStageMetrics,
     pub document_count: usize,
     pub query_count: usize,
     pub total_document_bytes: u64,
@@ -58,38 +61,54 @@ pub struct BackendBenchmarkResult {
     pub incremental_update_micros: u64,
     pub index_size_bytes: u64,
     pub peak_rss_bytes: Option<u64>,
+    pub stages: BenchmarkBackendStageMetrics,
 }
 
-#[allow(dead_code)]
-#[derive(Debug, Clone, Default, PartialEq)]
-struct BenchmarkStageMetrics {
-    durations: BenchmarkStageDurations,
-    throughput: BenchmarkThroughput,
-    memory: BenchmarkMemorySummary,
+#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
+pub struct BenchmarkCorpusStageMetrics {
+    pub scan_micros: u64,
+    pub source_collection_micros: u64,
 }
 
-#[allow(dead_code)]
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct BenchmarkStageDurations {
-    scan_micros: u64,
-    read_micros: u64,
-    parse_micros: u64,
-    sqlite_write_micros: u64,
-    tantivy_write_micros: u64,
-    tantivy_commit_micros: u64,
+#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
+pub struct BenchmarkBackendStageMetrics {
+    pub read_parse: BenchmarkReadParseStageMetrics,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sqlite_upsert_micros: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sqlite_rebuild_micros: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sqlite_integrity_check_micros: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sqlite_optimize_micros: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tantivy_add_micros: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tantivy_commit_micros: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tantivy_reader_reload_micros: Option<u64>,
 }
 
-#[allow(dead_code)]
-#[derive(Debug, Clone, Default, PartialEq)]
-struct BenchmarkThroughput {
-    docs_per_second: f64,
-    mb_per_second: f64,
+#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
+pub struct BenchmarkReadParseStageMetrics {
+    pub sample_count: usize,
+    pub total_bytes: u64,
+    pub read: BenchmarkDurationSummary,
+    pub parse: BenchmarkDurationSummary,
+    pub combined: BenchmarkDurationSummary,
 }
 
-#[allow(dead_code)]
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct BenchmarkMemorySummary {
-    peak_rss_bytes: Option<u64>,
+#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
+pub struct BenchmarkDurationSummary {
+    pub sample_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub p50_micros: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub p95_micros: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub p99_micros: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_micros: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -119,10 +138,10 @@ pub fn load_search_documents_from_vault(
     vault_root: impl AsRef<Path>,
 ) -> BackendBenchmarkResultType<Vec<SearchDocument>> {
     let root = VaultRoot::open(vault_root).map_err(BackendBenchmarkError::Path)?;
-    let sources = load_search_document_sources(&root)?;
+    let loaded_sources = load_search_document_sources(&root)?;
     let mut documents = Vec::new();
 
-    for source in &sources {
+    for source in &loaded_sources.sources {
         documents.push(read_search_document(source)?);
     }
 
@@ -152,6 +171,7 @@ pub fn run_shared_backend_benchmark(
             .as_secs(),
         corpus_id: options.corpus_id.clone(),
         run_metadata: benchmark_run_metadata("in_memory_documents", options.queries.len()),
+        corpus_stages: BenchmarkCorpusStageMetrics::default(),
         document_count: options.documents.len(),
         query_count: options.queries.len(),
         total_document_bytes,
@@ -167,14 +187,14 @@ pub fn run_shared_backend_benchmark_from_vault(
     }
 
     let root = VaultRoot::open(&options.vault_root).map_err(BackendBenchmarkError::Path)?;
-    let sources = load_search_document_sources(&root)?;
-    if sources.is_empty() {
+    let loaded_sources = load_search_document_sources(&root)?;
+    if loaded_sources.sources.is_empty() {
         return Err(BackendBenchmarkError::EmptyDocuments);
     }
 
     fs::create_dir_all(&options.work_dir)?;
-    let sqlite = run_sqlite_benchmark_from_sources(options, &sources)?;
-    let tantivy = run_tantivy_benchmark_from_sources(options, &sources)?;
+    let sqlite = run_sqlite_benchmark_from_sources(options, &loaded_sources.sources)?;
+    let tantivy = run_tantivy_benchmark_from_sources(options, &loaded_sources.sources)?;
 
     Ok(BackendBenchmarkArtifact {
         schema_version: BACKEND_BENCHMARK_ARTIFACT_SCHEMA_VERSION,
@@ -184,7 +204,8 @@ pub fn run_shared_backend_benchmark_from_vault(
             .as_secs(),
         corpus_id: options.corpus_id.clone(),
         run_metadata: benchmark_run_metadata("streaming_vault", options.queries.len()),
-        document_count: sources.len(),
+        corpus_stages: loaded_sources.stages,
+        document_count: loaded_sources.sources.len(),
         query_count: options.queries.len(),
         total_document_bytes: sqlite.total_document_bytes,
         backends: vec![sqlite.result, tantivy.result],
@@ -286,6 +307,24 @@ struct SearchDocumentSource {
     file_id: String,
 }
 
+struct LoadedSearchDocumentSources {
+    sources: Vec<SearchDocumentSource>,
+    stages: BenchmarkCorpusStageMetrics,
+}
+
+struct TimedSearchDocument {
+    document: SearchDocument,
+    timing: ReadParseTiming,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct ReadParseTiming {
+    read_micros: u64,
+    parse_micros: u64,
+    combined_micros: u64,
+    bytes: u64,
+}
+
 struct StreamingBenchmarkResult {
     result: BackendBenchmarkResult,
     total_document_bytes: u64,
@@ -296,6 +335,10 @@ struct StreamingCorpusStats {
     document_count: usize,
     total_document_bytes: u64,
     first_document: Option<SearchDocument>,
+    read_micros: Vec<u64>,
+    parse_micros: Vec<u64>,
+    combined_micros: Vec<u64>,
+    read_parse_bytes: u64,
 }
 
 impl StreamingCorpusStats {
@@ -307,18 +350,39 @@ impl StreamingCorpusStats {
         }
     }
 
+    fn record_timed(&mut self, timed: &TimedSearchDocument) {
+        self.record(&timed.document);
+        self.read_micros.push(timed.timing.read_micros);
+        self.parse_micros.push(timed.timing.parse_micros);
+        self.combined_micros.push(timed.timing.combined_micros);
+        self.read_parse_bytes += timed.timing.bytes;
+    }
+
     fn first_document(&self) -> BackendBenchmarkResultType<&SearchDocument> {
         self.first_document
             .as_ref()
             .ok_or(BackendBenchmarkError::EmptyDocuments)
     }
+
+    fn read_parse_metrics(&self) -> BenchmarkReadParseStageMetrics {
+        BenchmarkReadParseStageMetrics {
+            sample_count: self.read_micros.len(),
+            total_bytes: self.read_parse_bytes,
+            read: duration_summary(&self.read_micros),
+            parse: duration_summary(&self.parse_micros),
+            combined: duration_summary(&self.combined_micros),
+        }
+    }
 }
 
 fn load_search_document_sources(
     root: &VaultRoot,
-) -> BackendBenchmarkResultType<Vec<SearchDocumentSource>> {
+) -> BackendBenchmarkResultType<LoadedSearchDocumentSources> {
+    let scan_start = Instant::now();
     let scan = scan_vault(root).map_err(scan_error_to_string)?;
-    Ok(scan
+    let scan_micros = duration_micros_nonzero(scan_start.elapsed());
+    let source_collection_start = Instant::now();
+    let sources = scan
         .entries
         .into_iter()
         .filter(|entry| entry.kind == ScanEntryKind::Markdown)
@@ -330,25 +394,60 @@ fn load_search_document_sources(
                 absolute_path,
             }
         })
-        .collect())
+        .collect();
+    let source_collection_micros = duration_micros_nonzero(source_collection_start.elapsed());
+
+    Ok(LoadedSearchDocumentSources {
+        sources,
+        stages: BenchmarkCorpusStageMetrics {
+            scan_micros,
+            source_collection_micros,
+        },
+    })
 }
 
 fn read_search_document(
     source: &SearchDocumentSource,
 ) -> BackendBenchmarkResultType<SearchDocument> {
-    let body = fs::read_to_string(&source.absolute_path)?;
+    Ok(read_search_document_timed(source)?.document)
+}
+
+fn read_search_document_timed(
+    source: &SearchDocumentSource,
+) -> BackendBenchmarkResultType<TimedSearchDocument> {
+    let combined_start = Instant::now();
+    let (body, read_micros) = read_markdown_body(&source.absolute_path)?;
+    let parse_start = Instant::now();
     let parsed = parse_markdown(&body);
+    let parse_micros = duration_micros_nonzero(parse_start.elapsed());
+    let combined_micros = duration_micros_nonzero(combined_start.elapsed());
+    let bytes = body.len() as u64;
     let title = parsed
         .headings
         .first()
         .map(|heading| heading.text.clone())
         .unwrap_or_else(|| fallback_title(&source.relative_path));
-    Ok(SearchDocument {
-        file_id: source.file_id.clone(),
-        path: source.relative_path.to_string_lossy().to_string(),
-        title,
-        body,
+    Ok(TimedSearchDocument {
+        document: SearchDocument {
+            file_id: source.file_id.clone(),
+            path: source.relative_path.to_string_lossy().to_string(),
+            title,
+            body,
+        },
+        timing: ReadParseTiming {
+            read_micros,
+            parse_micros,
+            combined_micros,
+            bytes,
+        },
     })
+}
+
+fn read_markdown_body(path: &Path) -> BackendBenchmarkResultType<(String, u64)> {
+    let start = Instant::now();
+    let body = fs::read_to_string(path)?;
+    let read_micros = duration_micros_nonzero(start.elapsed());
+    Ok((body, read_micros))
 }
 
 fn run_sqlite_benchmark(
@@ -360,12 +459,20 @@ fn run_sqlite_benchmark(
     let mut index = SqliteFtsIndex::open(&db_path)?;
 
     let index_start = Instant::now();
+    let upsert_start = Instant::now();
     for document in &options.documents {
         index.upsert_document(document)?;
     }
+    let sqlite_upsert_micros = duration_micros_nonzero(upsert_start.elapsed());
+    let rebuild_start = Instant::now();
     index.rebuild()?;
+    let sqlite_rebuild_micros = duration_micros_nonzero(rebuild_start.elapsed());
+    let integrity_check_start = Instant::now();
     index.integrity_check()?;
+    let sqlite_integrity_check_micros = duration_micros_nonzero(integrity_check_start.elapsed());
+    let optimize_start = Instant::now();
     index.optimize()?;
+    let sqlite_optimize_micros = duration_micros_nonzero(optimize_start.elapsed());
     let index_duration = index_start.elapsed();
     let query_stats = measure_queries(&options.queries, |query| {
         index
@@ -382,6 +489,13 @@ fn run_sqlite_benchmark(
         query_stats,
         incremental_update_micros,
         index.estimated_size_bytes()?,
+        BenchmarkBackendStageMetrics {
+            sqlite_upsert_micros: Some(sqlite_upsert_micros),
+            sqlite_rebuild_micros: Some(sqlite_rebuild_micros),
+            sqlite_integrity_check_micros: Some(sqlite_integrity_check_micros),
+            sqlite_optimize_micros: Some(sqlite_optimize_micros),
+            ..Default::default()
+        },
     ))
 }
 
@@ -395,14 +509,23 @@ fn run_sqlite_benchmark_from_sources(
     let mut stats = StreamingCorpusStats::default();
 
     let index_start = Instant::now();
+    let mut sqlite_upsert_micros = 0;
     for source in sources {
-        let document = read_search_document(source)?;
-        stats.record(&document);
-        index.upsert_document(&document)?;
+        let timed = read_search_document_timed(source)?;
+        stats.record_timed(&timed);
+        let upsert_start = Instant::now();
+        index.upsert_document(&timed.document)?;
+        sqlite_upsert_micros += duration_micros_nonzero(upsert_start.elapsed());
     }
+    let rebuild_start = Instant::now();
     index.rebuild()?;
+    let sqlite_rebuild_micros = duration_micros_nonzero(rebuild_start.elapsed());
+    let integrity_check_start = Instant::now();
     index.integrity_check()?;
+    let sqlite_integrity_check_micros = duration_micros_nonzero(integrity_check_start.elapsed());
+    let optimize_start = Instant::now();
     index.optimize()?;
+    let sqlite_optimize_micros = duration_micros_nonzero(optimize_start.elapsed());
     let index_duration = index_start.elapsed();
     let query_stats = measure_queries(&options.queries, |query| {
         index
@@ -421,6 +544,14 @@ fn run_sqlite_benchmark_from_sources(
             query_stats,
             incremental_update_micros,
             index.estimated_size_bytes()?,
+            BenchmarkBackendStageMetrics {
+                read_parse: stats.read_parse_metrics(),
+                sqlite_upsert_micros: Some(sqlite_upsert_micros),
+                sqlite_rebuild_micros: Some(sqlite_rebuild_micros),
+                sqlite_integrity_check_micros: Some(sqlite_integrity_check_micros),
+                sqlite_optimize_micros: Some(sqlite_optimize_micros),
+                ..Default::default()
+            },
         ),
         total_document_bytes: stats.total_document_bytes,
     })
@@ -435,7 +566,7 @@ fn run_tantivy_benchmark(
     let mut index = TantivySearchIndex::open_in_dir(&index_dir)?;
 
     let index_start = Instant::now();
-    index.replace_documents(&options.documents)?;
+    let tantivy_stages = index.replace_documents_with_stage_durations(&options.documents)?;
     let index_duration = index_start.elapsed();
     let query_stats = measure_queries(&options.queries, |query| {
         index
@@ -452,6 +583,7 @@ fn run_tantivy_benchmark(
         query_stats,
         incremental_update_micros,
         index.estimated_size_bytes()?,
+        tantivy_stage_metrics(tantivy_stages),
     ))
 }
 
@@ -465,11 +597,13 @@ fn run_tantivy_benchmark_from_sources(
     let mut stats = StreamingCorpusStats::default();
 
     let index_start = Instant::now();
-    index.replace_documents_from_result_iter(sources.iter().map(|source| {
-        let document = read_search_document(source)?;
-        stats.record(&document);
-        Ok::<SearchDocument, BackendBenchmarkError>(document)
-    }))?;
+    let tantivy_stages = index.replace_documents_from_result_iter_with_stage_durations(
+        sources.iter().map(|source| {
+            let timed = read_search_document_timed(source)?;
+            stats.record_timed(&timed);
+            Ok::<SearchDocument, BackendBenchmarkError>(timed.document)
+        }),
+    )?;
     let index_duration = index_start.elapsed();
     let query_stats = measure_queries(&options.queries, |query| {
         index
@@ -488,6 +622,10 @@ fn run_tantivy_benchmark_from_sources(
             query_stats,
             incremental_update_micros,
             index.estimated_size_bytes()?,
+            BenchmarkBackendStageMetrics {
+                read_parse: stats.read_parse_metrics(),
+                ..tantivy_stage_metrics(tantivy_stages)
+            },
         ),
         total_document_bytes: stats.total_document_bytes,
     })
@@ -583,6 +721,7 @@ fn backend_result(
     query_stats: QueryStats,
     incremental_update_micros: u64,
     index_size_bytes: u64,
+    stages: BenchmarkBackendStageMetrics,
 ) -> BackendBenchmarkResult {
     BackendBenchmarkResult {
         backend: backend.to_string(),
@@ -598,6 +737,16 @@ fn backend_result(
         incremental_update_micros,
         index_size_bytes,
         peak_rss_bytes: peak_rss_bytes(),
+        stages,
+    }
+}
+
+fn tantivy_stage_metrics(stages: TantivyIndexingStageDurations) -> BenchmarkBackendStageMetrics {
+    BenchmarkBackendStageMetrics {
+        tantivy_add_micros: Some(stages.add_micros),
+        tantivy_commit_micros: Some(stages.commit_micros),
+        tantivy_reader_reload_micros: Some(stages.reader_reload_micros),
+        ..Default::default()
     }
 }
 
@@ -640,6 +789,33 @@ fn per_second(count: f64, duration: Duration) -> f64 {
 
 fn duration_micros(duration: Duration) -> u64 {
     duration.as_micros().min(u128::from(u64::MAX)) as u64
+}
+
+fn duration_micros_nonzero(duration: Duration) -> u64 {
+    duration_micros(duration).max(1)
+}
+
+fn duration_summary(values: &[u64]) -> BenchmarkDurationSummary {
+    if values.is_empty() {
+        return BenchmarkDurationSummary::default();
+    }
+
+    let mut sorted = values.to_vec();
+    sorted.sort_unstable();
+    let include_percentiles = sorted.len() > 1;
+
+    BenchmarkDurationSummary {
+        sample_count: sorted.len(),
+        p50_micros: include_percentiles.then(|| percentile_value(&sorted, 50)),
+        p95_micros: include_percentiles.then(|| percentile_value(&sorted, 95)),
+        p99_micros: include_percentiles.then(|| percentile_value(&sorted, 99)),
+        max_micros: sorted.last().copied(),
+    }
+}
+
+fn percentile_value(values: &[u64], percentile: usize) -> u64 {
+    let index = ((values.len() * percentile).div_ceil(100)).saturating_sub(1);
+    values[index.min(values.len() - 1)]
 }
 
 fn remove_file_if_exists(path: &Path) -> std::io::Result<()> {
@@ -739,7 +915,52 @@ mod tests {
     #[test]
     fn benchmark_module_ready() {
         assert!(super::benchmark_module_ready());
-        assert_eq!(BenchmarkStageMetrics::default().durations.scan_micros, 0);
+        assert_eq!(BenchmarkCorpusStageMetrics::default().scan_micros, 0);
+        assert_eq!(
+            BenchmarkBackendStageMetrics::default()
+                .read_parse
+                .sample_count,
+            0
+        );
+    }
+
+    #[test]
+    fn read_search_document_timed_reports_nonzero_bytes() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("Home.md");
+        fs::write(&path, "# Home\nFixture body.").expect("fixture markdown");
+        let source = SearchDocumentSource {
+            relative_path: PathBuf::from("Home.md"),
+            absolute_path: path,
+            file_id: "home.md".to_string(),
+        };
+
+        let timed = read_search_document_timed(&source).expect("timed document");
+
+        assert_eq!(timed.document.title, "Home");
+        assert!(timed.timing.bytes > 0);
+        assert!(timed.timing.read_micros > 0);
+        assert!(timed.timing.parse_micros > 0);
+        assert!(timed.timing.combined_micros > 0);
+    }
+
+    #[test]
+    fn duration_summary_handles_empty_single_and_multi_item_inputs() {
+        assert_eq!(duration_summary(&[]), BenchmarkDurationSummary::default());
+
+        let single = duration_summary(&[7]);
+        assert_eq!(single.sample_count, 1);
+        assert_eq!(single.p50_micros, None);
+        assert_eq!(single.p95_micros, None);
+        assert_eq!(single.p99_micros, None);
+        assert_eq!(single.max_micros, Some(7));
+
+        let multi = duration_summary(&[30, 10, 20]);
+        assert_eq!(multi.sample_count, 3);
+        assert_eq!(multi.p50_micros, Some(20));
+        assert_eq!(multi.p95_micros, Some(30));
+        assert_eq!(multi.p99_micros, Some(30));
+        assert_eq!(multi.max_micros, Some(30));
     }
 
     #[test]
@@ -770,6 +991,8 @@ mod tests {
 
         assert_eq!(artifact.document_count, 2);
         assert_eq!(artifact.query_count, 2);
+        assert!(artifact.corpus_stages.scan_micros > 0);
+        assert!(artifact.corpus_stages.source_collection_micros > 0);
         assert_eq!(artifact.run_metadata.run_condition, "streaming_vault");
         assert_eq!(artifact.run_metadata.sample_count, options.queries.len());
         assert!(artifact.run_metadata.redaction_enabled);
@@ -778,6 +1001,54 @@ mod tests {
         assert!(artifact.backends.iter().all(|backend| {
             backend.index_size_bytes > 0 && backend.query_p95_micros <= backend.query_p99_micros
         }));
+        assert!(artifact.backends.iter().all(|backend| {
+            backend.stages.read_parse.sample_count == artifact.document_count
+                && backend.stages.read_parse.total_bytes > 0
+                && backend.stages.read_parse.read.sample_count == artifact.document_count
+                && backend.stages.read_parse.parse.sample_count == artifact.document_count
+                && backend.stages.read_parse.combined.sample_count == artifact.document_count
+        }));
+        let sqlite = artifact
+            .backends
+            .iter()
+            .find(|backend| backend.backend == "sqlite_fts")
+            .expect("sqlite backend");
+        assert!(sqlite.stages.sqlite_upsert_micros.expect("sqlite upsert") > 0);
+        assert!(sqlite.stages.sqlite_rebuild_micros.expect("sqlite rebuild") > 0);
+        assert!(
+            sqlite
+                .stages
+                .sqlite_integrity_check_micros
+                .expect("sqlite integrity")
+                > 0
+        );
+        assert!(
+            sqlite
+                .stages
+                .sqlite_optimize_micros
+                .expect("sqlite optimize")
+                > 0
+        );
+        let tantivy = artifact
+            .backends
+            .iter()
+            .find(|backend| backend.backend == "tantivy")
+            .expect("tantivy backend");
+        assert!(tantivy.stages.tantivy_add_micros.expect("tantivy add") > 0);
+        assert!(
+            tantivy
+                .stages
+                .tantivy_commit_micros
+                .expect("tantivy commit")
+                > 0
+        );
+        assert!(
+            tantivy
+                .stages
+                .tantivy_reader_reload_micros
+                .expect("tantivy reload")
+                > 0
+        );
     }
 
     #[test]
@@ -808,6 +1079,15 @@ mod tests {
         assert!(json.contains("\"run_metadata\""));
         assert!(json.contains("\"sample_count\": 1"));
         assert!(json.contains("\"redaction_enabled\": true"));
+        assert!(json.contains("\"corpus_stages\""));
+        assert!(json.contains("\"scan_micros\""));
+        assert!(json.contains("\"source_collection_micros\""));
+        assert!(json.contains("\"stages\""));
+        assert!(json.contains("\"read_parse\""));
+        assert!(json.contains("\"sqlite_upsert_micros\""));
+        assert!(json.contains("\"tantivy_add_micros\""));
+        assert!(json.contains("\"tantivy_commit_micros\""));
+        assert!(json.contains("\"tantivy_reader_reload_micros\""));
         assert!(json.contains("\"snippet_result_count\""));
     }
 

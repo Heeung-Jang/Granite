@@ -18,6 +18,13 @@ pub struct TantivySearchIndex {
     index_dir: Option<PathBuf>,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TantivyIndexingStageDurations {
+    pub add_micros: u64,
+    pub commit_micros: u64,
+    pub reader_reload_micros: u64,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct TantivyFields {
     file_id: Field,
@@ -71,7 +78,15 @@ impl TantivySearchIndex {
     }
 
     pub fn replace_documents(&mut self, documents: &[SearchDocument]) -> TantivySearchResult<()> {
-        self.replace_documents_from_result_iter(
+        self.replace_documents_with_stage_durations(documents)?;
+        Ok(())
+    }
+
+    pub fn replace_documents_with_stage_durations(
+        &mut self,
+        documents: &[SearchDocument],
+    ) -> TantivySearchResult<TantivyIndexingStageDurations> {
+        self.replace_documents_from_result_iter_with_stage_durations(
             documents
                 .iter()
                 .cloned()
@@ -84,12 +99,26 @@ impl TantivySearchIndex {
         I: IntoIterator<Item = Result<SearchDocument, E>>,
         E: From<TantivySearchError>,
     {
+        self.replace_documents_from_result_iter_with_stage_durations(documents)?;
+        Ok(())
+    }
+
+    pub fn replace_documents_from_result_iter_with_stage_durations<I, E>(
+        &mut self,
+        documents: I,
+    ) -> Result<TantivyIndexingStageDurations, E>
+    where
+        I: IntoIterator<Item = Result<SearchDocument, E>>,
+        E: From<TantivySearchError>,
+    {
         let mut writer = self
             .index
             .writer(50_000_000)
             .map_err(TantivySearchError::from)?;
+        let mut add_micros = 0;
         for document in documents {
             let document = document?;
+            let add_start = Instant::now();
             writer.delete_term(Term::from_field_text(
                 self.fields.file_id,
                 &document.file_id,
@@ -102,10 +131,20 @@ impl TantivySearchIndex {
                     self.fields.body => document.body.as_str(),
                 ))
                 .map_err(TantivySearchError::from)?;
+            add_micros += duration_micros_nonzero(add_start.elapsed());
         }
+        let commit_start = Instant::now();
         writer.commit().map_err(TantivySearchError::from)?;
+        let commit_micros = duration_micros_nonzero(commit_start.elapsed());
+        let reload_start = Instant::now();
         self.reader.reload().map_err(TantivySearchError::from)?;
-        Ok(())
+        let reader_reload_micros = duration_micros_nonzero(reload_start.elapsed());
+
+        Ok(TantivyIndexingStageDurations {
+            add_micros,
+            commit_micros,
+            reader_reload_micros,
+        })
     }
 
     pub fn search(&self, query: &str, limit: usize) -> TantivySearchResult<Vec<SearchResult>> {
@@ -251,6 +290,10 @@ fn percentile_duration(values: &[Duration], percentile: usize) -> Duration {
     }
     let index = ((values.len() * percentile).div_ceil(100)).saturating_sub(1);
     values[index.min(values.len() - 1)]
+}
+
+fn duration_micros_nonzero(duration: Duration) -> u64 {
+    (duration.as_micros().min(u128::from(u64::MAX)) as u64).max(1)
 }
 
 fn directory_size(path: &Path) -> TantivySearchResult<u64> {
