@@ -59,6 +59,25 @@ public struct GraphRendererCallbacks: Sendable {
     }
 }
 
+public struct GraphRendererInteractionCallbacks {
+    public let beginNodeDrag: (GraphNodeDragStart) -> Void
+    public let updateNodeDrag: (GraphPoint) -> Void
+    public let endNodeDrag: () -> Void
+    public let panCanvas: (GraphPoint) -> Void
+
+    public init(
+        beginNodeDrag: @escaping (GraphNodeDragStart) -> Void = { _ in },
+        updateNodeDrag: @escaping (GraphPoint) -> Void = { _ in },
+        endNodeDrag: @escaping () -> Void = {},
+        panCanvas: @escaping (GraphPoint) -> Void = { _ in }
+    ) {
+        self.beginNodeDrag = beginNodeDrag
+        self.updateNodeDrag = updateNodeDrag
+        self.endNodeDrag = endNodeDrag
+        self.panCanvas = panCanvas
+    }
+}
+
 public struct GraphRendererMetrics: Equatable, Sendable {
     public let rendererKind: GraphRendererKind
     public let nodeCount: Int
@@ -86,6 +105,7 @@ public struct GraphRendererInput: Equatable, Sendable {
     public var selectedNodeID: String?
     public var searchMatchedNodeIDs: Set<String>
     public var groupColorHexByNodeID: [String: String]
+    public var positionOverrides: GraphNodePositionOverrides
 
     public init(
         layout: GraphRendererSnapshot,
@@ -94,7 +114,8 @@ public struct GraphRendererInput: Equatable, Sendable {
         hoveredNodeID: String? = nil,
         selectedNodeID: String? = nil,
         searchMatchedNodeIDs: Set<String> = [],
-        groupColorHexByNodeID: [String: String] = [:]
+        groupColorHexByNodeID: [String: String] = [:],
+        positionOverrides: GraphNodePositionOverrides = GraphNodePositionOverrides()
     ) {
         self.layout = layout
         self.viewport = viewport
@@ -103,6 +124,7 @@ public struct GraphRendererInput: Equatable, Sendable {
         self.selectedNodeID = selectedNodeID
         self.searchMatchedNodeIDs = searchMatchedNodeIDs
         self.groupColorHexByNodeID = groupColorHexByNodeID
+        self.positionOverrides = positionOverrides
     }
 
     public func validate() throws {
@@ -129,5 +151,9 @@ public struct GraphRendererInput: Equatable, Sendable {
                 zoomScale: viewport.zoomScale
             )
         )
+    }
+
+    public func position(for node: GraphLayoutNode) -> GraphPoint {
+        positionOverrides.position(for: node)
     }
 }

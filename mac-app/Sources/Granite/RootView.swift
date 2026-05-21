@@ -7,6 +7,7 @@ struct RootView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.openSettings) private var openSettings
     @State private var leftPanel: ObsidianLeftPanel = .files
+    @State private var selectedInspectorPanel: NoteInspectorPanel = .backlinks
     @State private var vaultSelectionError: String?
     @State private var presentedSheet: RootSheet?
 
@@ -14,6 +15,7 @@ struct RootView: View {
         HStack(spacing: 0) {
             ObsidianRibbonView(
                 selectedPanel: $leftPanel,
+                graphIsActive: appState.workspaceSelection == .graph,
                 openVault: openVaultPanel,
                 openGraph: openGraphFromRibbon,
                 showHelp: showHelp,
@@ -39,10 +41,12 @@ struct RootView: View {
                 newTab: newTab
             )
 
-            Divider()
+            if appState.workspaceSelection != .graph {
+                Divider()
 
-            ObsidianRightSidebar()
-                .frame(width: ObsidianUI.rightSidebarWidth)
+                ObsidianRightSidebar(selectedPanel: $selectedInspectorPanel)
+                    .frame(width: ObsidianUI.rightSidebarWidth)
+            }
         }
         .background(ObsidianUI.editorBackground)
         .alert("Unsaved Changes", isPresented: dirtyNavigationAlertBinding) {
@@ -103,11 +107,6 @@ struct RootView: View {
         .focusedValue(\.workspaceTabAction, workspaceTabAction)
         .onAppear {
             AppLifecycleController.shared.appState = appState
-        }
-        .onChange(of: appState.workspaceSelection) { _, selection in
-            if selection == .graph {
-                leftPanel = .graph
-            }
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Workspace")
@@ -309,7 +308,6 @@ struct RootView: View {
     }
 
     private func openGraphFromRibbon() {
-        leftPanel = .graph
         appState.openGraph(source: .ribbon)
     }
 }
@@ -318,7 +316,6 @@ private enum ObsidianLeftPanel {
     case files
     case search
     case bookmarks
-    case graph
 }
 
 private enum RootSheet: Identifiable {
@@ -337,6 +334,7 @@ private enum RootSheet: Identifiable {
 
 private struct ObsidianRibbonView: View {
     @Binding var selectedPanel: ObsidianLeftPanel
+    let graphIsActive: Bool
     let openVault: () -> Void
     let openGraph: () -> Void
     let showHelp: () -> Void
@@ -371,7 +369,7 @@ private struct ObsidianRibbonView: View {
             ObsidianIconButton(
                 systemName: "point.3.connected.trianglepath.dotted",
                 accessibilityLabel: "Graph view",
-                isSelected: selectedPanel == .graph,
+                isSelected: graphIsActive,
                 action: openGraph
             )
 
@@ -424,8 +422,6 @@ private struct ObsidianLeftSidebar: View {
                     SearchPanelView()
                 case .bookmarks:
                     ObsidianBookmarksPlaceholder()
-                case .graph:
-                    ObsidianGraphSidebarPlaceholder()
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -464,27 +460,10 @@ private struct ObsidianSidebarToolbar: View {
                 Text("Bookmarks")
                     .font(.headline)
                 Spacer()
-            case .graph:
-                Text("Graph")
-                    .font(.headline)
-                Spacer()
             }
         }
         .padding(.horizontal, 12)
         .frame(height: ObsidianUI.noteToolbarHeight)
-    }
-}
-
-private struct ObsidianGraphSidebarPlaceholder: View {
-    var body: some View {
-        VStack(spacing: 10) {
-            Image(systemName: "point.3.connected.trianglepath.dotted")
-                .foregroundStyle(.secondary)
-            Text("Graph")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
@@ -927,12 +906,17 @@ private struct ObsidianMarkerStyleMenu: View {
 
 private struct ObsidianRightSidebar: View {
     @EnvironmentObject private var appState: AppState
+    @Binding var selectedPanel: NoteInspectorPanel
 
     var body: some View {
         switch appState.vaultSelection {
         case .selected(let url):
             if let selectedFile = appState.selectedFile {
-                NoteInspectorView(vaultURL: url, file: selectedFile)
+                NoteInspectorView(
+                    vaultURL: url,
+                    file: selectedFile,
+                    selectedPanel: $selectedPanel
+                )
             } else {
                 ObsidianEmptySidebar(title: "No note selected")
             }

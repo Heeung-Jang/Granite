@@ -7,11 +7,12 @@ struct GraphCanvasRendererView: View {
     @Binding var viewport: GraphViewport
     let hitTestIndex: GraphHitTestIndex
     var callbacks: GraphRendererCallbacks
+    var interactionCallbacks: GraphRendererInteractionCallbacks
     var onHoverNode: (String?) -> Void
     var onSelectNode: (String?) -> Void
     var onOpenNode: (String) -> Void
 
-    @State private var dragStartPanOffset: GraphPoint?
+    @State private var dragMode: GraphCanvasDragMode?
     @State private var drawReportGate = GraphCanvasDrawReportGate()
     @State private var pathCache = GraphCanvasPathCache()
 
@@ -21,6 +22,7 @@ struct GraphCanvasRendererView: View {
         input: GraphRendererInput,
         viewport: Binding<GraphViewport>,
         callbacks: GraphRendererCallbacks = GraphRendererCallbacks(),
+        interactionCallbacks: GraphRendererInteractionCallbacks = GraphRendererInteractionCallbacks(),
         hitTestIndex: GraphHitTestIndex? = nil,
         onHoverNode: @escaping (String?) -> Void = { _ in },
         onSelectNode: @escaping (String?) -> Void = { _ in },
@@ -29,6 +31,7 @@ struct GraphCanvasRendererView: View {
         self.input = input
         self._viewport = viewport
         self.callbacks = callbacks
+        self.interactionCallbacks = interactionCallbacks
         self.hitTestIndex = hitTestIndex ?? GraphHitTestIndex(layout: input.layout)
         self.onHoverNode = onHoverNode
         self.onSelectNode = onSelectNode
@@ -73,14 +76,15 @@ struct GraphCanvasRendererView: View {
                     )
                 }
                 .background(ObsidianUI.editorBackground)
-                .gesture(panGesture)
-                .simultaneousGesture(tapGesture(input: renderInput, size: proxy.size))
+                .gesture(panGesture(size: proxy.size))
                 .onContinuousHover { phase in
                     updateHover(phase: phase, input: renderInput, size: proxy.size)
                 }
                 .focusable()
+                .focusEffectDisabled()
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(accessibilitySummary(for: renderInput))
+                .accessibilityHint("Use arrow keys to pan, plus or minus to zoom, Return to open the selected node, and Escape to clear selection.")
             }
         case .failed(let error):
             Color.clear
@@ -98,34 +102,81 @@ struct GraphCanvasRendererView: View {
         return renderInput
     }
 
-    private var panGesture: some Gesture {
-        DragGesture(minimumDistance: 1)
+    private func panGesture(size: CGSize) -> some Gesture {
+        DragGesture(minimumDistance: 0)
             .onChanged { value in
-                if dragStartPanOffset == nil {
-                    dragStartPanOffset = viewport.panOffset
-                }
-                guard let start = dragStartPanOffset else {
-                    return
-                }
-                viewport.panOffset = GraphPoint(
-                    x: start.x + Double(value.translation.width),
-                    y: start.y + Double(value.translation.height)
-                )
+                updateDrag(value, size: size)
             }
-            .onEnded { _ in
-                dragStartPanOffset = nil
+            .onEnded { value in
+                updateDrag(value, size: size)
+                switch dragMode {
+                case .node:
+                    interactionCallbacks.endNodeDrag()
+                case .canvasPan(_, false):
+                    onSelectNode(nil)
+                case .canvasPan, nil:
+                    break
+                }
+                dragMode = nil
             }
     }
 
-    private func tapGesture(input: GraphRendererInput, size: CGSize) -> some Gesture {
-        SpatialTapGesture()
-            .onEnded { value in
-                let nodeID = hitNodeID(at: value.location, input: input, size: size)
-                onSelectNode(nodeID)
-                if let nodeID {
-                    onOpenNode(nodeID)
-                }
+    private func updateDrag(_ value: DragGesture.Value, size: CGSize) {
+        if dragMode == nil {
+            dragMode = dragMode(
+                at: value.startLocation,
+                input: currentInput,
+                size: size
+            )
+        }
+        switch dragMode {
+        case .node:
+            interactionCallbacks.updateNodeDrag(GraphGestureDecision.pointerGraphPoint(
+                screenPoint: GraphPoint(x: Double(value.location.x), y: Double(value.location.y)),
+                viewport: viewport,
+                canvasSize: graphSize(size)
+            ))
+        case .canvasPan(let startPanOffset, let didPan):
+            let translation = GraphPoint(
+                x: Double(value.translation.width),
+                y: Double(value.translation.height)
+            )
+            guard didPan || !isTapTranslation(value.translation) else {
+                return
             }
+            dragMode = .canvasPan(startPanOffset: startPanOffset, didPan: true)
+            viewport.panOffset = GraphPoint(
+                x: startPanOffset.x + translation.x,
+                y: startPanOffset.y + translation.y
+            )
+            interactionCallbacks.panCanvas(translation)
+        case nil:
+            break
+        }
+    }
+
+    private func dragMode(
+        at location: CGPoint,
+        input: GraphRendererInput,
+        size: CGSize
+    ) -> GraphCanvasDragMode {
+        switch GraphGestureDecision.dragStart(
+            screenPoint: GraphPoint(x: Double(location.x), y: Double(location.y)),
+            viewport: input.viewport,
+            canvasSize: graphSize(size),
+            hitTestIndex: hitTestIndex,
+            positionOverrides: input.positionOverrides
+        ) {
+        case .node(let start):
+            interactionCallbacks.beginNodeDrag(start)
+            return .node
+        case .canvasPan:
+            return .canvasPan(startPanOffset: viewport.panOffset, didPan: false)
+        }
+    }
+
+    private func graphSize(_ size: CGSize) -> GraphSize {
+        GraphSize(width: Double(size.width), height: Double(size.height))
     }
 
     private func updateHover(
@@ -141,32 +192,46 @@ struct GraphCanvasRendererView: View {
         }
     }
 
+    private func isTapTranslation(_ translation: CGSize) -> Bool {
+        hypot(Double(translation.width), Double(translation.height)) < GraphNodeDragState.defaultGraphMovementThreshold
+    }
+
     private func drawEdges(
         input: GraphRendererInput,
         paths: GraphCanvasRenderPaths,
         context: inout GraphicsContext
     ) {
-        let zoomScale = max(0.01, input.viewport.zoomScale)
-
         context.stroke(
             paths.resolvedEdges,
-            with: .color(Color.secondary.opacity(0.22)),
-            lineWidth: max(0.5, input.presentation.linkThickness) / zoomScale
+            with: .color(Color.secondary.opacity(GraphVisualMetrics.resolvedEdgeAlpha)),
+            lineWidth: GraphVisualMetrics.linkThickness(
+                base: input.presentation.linkThickness,
+                isActive: false
+            )
         )
         context.stroke(
             paths.unresolvedEdges,
-            with: .color(Color.secondary.opacity(0.12)),
-            lineWidth: max(0.5, input.presentation.linkThickness) / zoomScale
+            with: .color(Color.secondary.opacity(GraphVisualMetrics.unresolvedEdgeAlpha)),
+            lineWidth: GraphVisualMetrics.linkThickness(
+                base: input.presentation.linkThickness,
+                isActive: false
+            )
         )
         context.stroke(
             paths.activeEdges,
-            with: .color(Color.accentColor.opacity(0.55)),
-            lineWidth: max(1.5, input.presentation.linkThickness + 1.0) / zoomScale
+            with: .color(Color.green.opacity(GraphVisualMetrics.activeEdgeAlpha)),
+            lineWidth: GraphVisualMetrics.linkThickness(
+                base: input.presentation.linkThickness,
+                isActive: true
+            )
         )
         context.stroke(
             paths.arrowHeads,
-            with: .color(Color.secondary.opacity(0.32)),
-            lineWidth: max(0.5, input.presentation.linkThickness) / zoomScale
+            with: .color(Color.secondary.opacity(GraphVisualMetrics.resolvedEdgeAlpha)),
+            lineWidth: GraphVisualMetrics.linkThickness(
+                base: input.presentation.linkThickness,
+                isActive: false
+            )
         )
     }
 
@@ -174,14 +239,14 @@ struct GraphCanvasRendererView: View {
         paths: GraphCanvasRenderPaths,
         context: inout GraphicsContext
     ) {
-        context.fill(paths.unresolvedNodes, with: .color(Color.secondary.opacity(0.45)))
-        context.fill(paths.resolvedNodes, with: .color(Color.primary.opacity(0.7)))
+        context.fill(paths.unresolvedNodes, with: .color(Color.secondary.opacity(GraphVisualMetrics.unresolvedNodeAlpha)))
+        context.fill(paths.resolvedNodes, with: .color(Color.primary.opacity(GraphVisualMetrics.resolvedNodeAlpha)))
         for (colorHex, path) in paths.groupNodes {
             context.fill(path, with: .color(Color(graphHex: colorHex)))
         }
         context.fill(paths.searchNodes, with: .color(.green))
-        context.fill(paths.hoveredNodes, with: .color(Color.accentColor.opacity(0.85)))
-        context.fill(paths.selectedNodes, with: .color(.accentColor))
+        context.fill(paths.hoveredNodes, with: .color(Color.green.opacity(GraphVisualMetrics.activeNodeAlpha)))
+        context.fill(paths.selectedNodes, with: .color(Color.green))
     }
 
     private func drawLabels(
@@ -190,7 +255,7 @@ struct GraphCanvasRendererView: View {
         size: CGSize
     ) {
         for node in input.layout.nodes where input.labelIsVisible(for: node) {
-            let point = canvasPoint(for: node.position, input: input, size: size)
+            let point = canvasPoint(for: input.position(for: node), input: input, size: size)
             let text = Text(node.label)
                 .font(.caption)
                 .foregroundStyle(Color.primary)
@@ -229,8 +294,16 @@ struct GraphCanvasRendererView: View {
     private func accessibilitySummary(for input: GraphRendererInput) -> String {
         GraphAccessibilitySummaryBuilder.summary(
             input: input,
-            selectedNode: input.layout.nodes.first { $0.nodeID == input.selectedNodeID }
+            selectedNode: accessibilityNode(id: input.selectedNodeID, input: input),
+            hoveredNode: accessibilityNode(id: input.hoveredNodeID, input: input)
         )
+    }
+
+    private func accessibilityNode(id nodeID: String?, input: GraphRendererInput) -> GraphLayoutNode? {
+        guard let nodeID else {
+            return nil
+        }
+        return input.layout.nodes.first { $0.nodeID == nodeID }
     }
 
     private func drawIdentity(for input: GraphRendererInput) -> String {
@@ -268,9 +341,15 @@ struct GraphCanvasRendererView: View {
         hitTestIndex.nearestNode(
             at: GraphPoint(x: Double(location.x), y: Double(location.y)),
             viewport: input.viewport,
-            canvasSize: GraphSize(width: Double(size.width), height: Double(size.height))
+            canvasSize: GraphSize(width: Double(size.width), height: Double(size.height)),
+            positionOverrides: input.positionOverrides
         )?.nodeID
     }
+}
+
+private enum GraphCanvasDragMode {
+    case node
+    case canvasPan(startPanOffset: GraphPoint, didPan: Bool)
 }
 
 private extension Color {
@@ -324,8 +403,8 @@ private final class GraphCanvasPathCache {
                 continue
             }
 
-            let source = graphPoint(input.layout.nodes[edge.sourceIndex].position)
-            let target = graphPoint(input.layout.nodes[edge.targetIndex].position)
+            let source = graphPoint(input.position(for: input.layout.nodes[edge.sourceIndex]))
+            let target = graphPoint(input.position(for: input.layout.nodes[edge.targetIndex]))
             if edgeIsActive(edge, input: input) {
                 appendEdge(from: source, to: target, path: &paths.activeEdges)
             } else {
@@ -342,10 +421,14 @@ private final class GraphCanvasPathCache {
         }
 
         for node in input.layout.nodes {
-            let radius = CGFloat(max(2.0, node.radius * input.presentation.nodeSize))
+            let position = input.position(for: node)
+            let radius = CGFloat(GraphVisualMetrics.drawRadius(
+                forNodeRadius: node.radius,
+                nodeSize: input.presentation.nodeSize
+            ))
             let rect = CGRect(
-                x: CGFloat(node.position.x) - radius,
-                y: CGFloat(node.position.y) - radius,
+                x: CGFloat(position.x) - radius,
+                y: CGFloat(position.y) - radius,
                 width: radius * 2,
                 height: radius * 2
             )
@@ -388,6 +471,7 @@ private final class GraphCanvasPathCache {
             String(input.presentation.linkThickness.bitPattern),
             input.presentation.showArrows.description,
             groupColorIdentity(input.groupColorHexByNodeID),
+            String(input.positionOverrides.renderIdentity),
             String(searchHasher.finalize()),
             input.hoveredNodeID ?? "",
             input.selectedNodeID ?? ""

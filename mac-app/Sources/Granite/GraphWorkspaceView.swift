@@ -9,46 +9,43 @@ struct GraphWorkspaceView: View {
 
     @State private var workspaceModel = GraphWorkspaceModel()
     @State private var settings = GraphSettings()
-    @State private var interaction = GraphInteractionState(
-        selectedNodeID: GraphCanvasRendererSmokeFixture.defaultSelectedNodeID
-    )
+    @State private var interaction = GraphInteractionState()
     @State private var loadedLayout: GraphRendererSnapshot?
     @State private var loadedHitTestIndex: GraphHitTestIndex?
     @State private var graphBannerText: String?
     @State private var pendingFirstRender: PendingGraphFirstRender?
     @State private var forceRefinementTask: Task<Void, Never>?
     @State private var nextGraphRequestID: UInt64 = 1
+    @State private var showsSearch = false
     @State private var showsSettings = false
     @State private var viewport = GraphViewport()
+    @State private var viewportFitState = GraphViewportFitState()
+    @State private var graphCanvasSize: GraphSize?
     @FocusState private var graphSurfaceFocused: Bool
 
     private let graphClient = EngineGraphClient()
     private let enablesParityControls = true
+    private let graphViewTitle = "그래프 뷰"
 
     var body: some View {
-        HStack(spacing: 0) {
-            VStack(spacing: 0) {
-                toolbar
-
-                Divider()
-
-                graphContent
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        ZStack(alignment: .topTrailing) {
+            graphContent
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             if showsSettings {
-                Divider()
-
                 GraphSettingsPanel(
                     settings: $settings,
                     parityControlsEnabled: enablesParityControls
                 )
                 .frame(width: 280)
+                .padding(.top, 52)
+                .padding(.trailing, 52)
             }
         }
         .background(ObsidianUI.editorBackground)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Graph view")
+        .accessibilityLabel(graphViewTitle)
+        .focusedSceneValue(\.graphCommandActions, graphCommandActions)
         .task(id: graphLoadKey) {
             await loadGraphIfNeeded()
         }
@@ -58,47 +55,16 @@ struct GraphWorkspaceView: View {
         }
     }
 
-    private var toolbar: some View {
-        HStack(spacing: 10) {
-            TextField("Search", text: $settings.searchQuery)
-                .textFieldStyle(.roundedBorder)
-                .frame(maxWidth: 260)
-                .accessibilityLabel("Graph search")
-
-            Spacer()
-
-            ObsidianIconButton(
-                systemName: "minus.magnifyingglass",
-                accessibilityLabel: "Zoom out graph"
-            ) {
-                zoom(by: 0.85)
-            }
-
-            ObsidianIconButton(
-                systemName: "plus.magnifyingglass",
-                accessibilityLabel: "Zoom in graph"
-            ) {
-                zoom(by: 1.15)
-            }
-
-            ObsidianIconButton(
-                systemName: "arrow.counterclockwise",
-                accessibilityLabel: "Reset graph view"
-            ) {
-                viewport.reset()
-            }
-
-            ObsidianIconButton(
-                systemName: "slider.horizontal.3",
-                accessibilityLabel: "Graph settings",
-                isSelected: showsSettings
-            ) {
-                showsSettings.toggle()
-            }
-        }
-        .padding(.horizontal, 14)
-        .frame(height: ObsidianUI.noteToolbarHeight)
-        .background(ObsidianUI.editorBackground)
+    private var graphCommandActions: GraphCommandActions {
+        GraphCommandActions(
+            resetView: resetViewportToFit,
+            zoomIn: { zoom(by: 1.15) },
+            zoomOut: { zoom(by: 0.85) },
+            clearSelection: clearGraphSelection,
+            openSelectedNode: openSelectedGraphNodeFromCommand,
+            toggleControls: { showsSettings.toggle() },
+            canOpenSelectedNode: interaction.selectedNodeID != nil
+        )
     }
 
     @ViewBuilder
@@ -115,56 +81,101 @@ struct GraphWorkspaceView: View {
                             Divider()
                         }
 
-                        GraphRendererSurfaceView(
-                            input: input,
-                            viewport: $viewport,
-                            callbacks: GraphRendererCallbacks(
-                                didCompleteFirstDraw: { metrics in
-                                    Task { @MainActor in
-                                        handleFirstDraw(
-                                            metrics,
-                                            requestID: input.layout.requestID
-                                        )
+                        GeometryReader { proxy in
+                            ZStack(alignment: .top) {
+                                GraphRendererSurfaceView(
+                                    input: input,
+                                    viewport: $viewport,
+                                    callbacks: GraphRendererCallbacks(
+                                        didCompleteFirstDraw: { metrics in
+                                            Task { @MainActor in
+                                                handleFirstDraw(
+                                                    metrics,
+                                                    requestID: input.layout.requestID
+                                                )
+                                            }
+                                        }
+                                    ),
+                                    interactionCallbacks: graphInteractionCallbacks(input: input),
+                                    hitTestIndex: loadedHitTestIndex,
+                                    onHoverNode: { nodeID in
+                                        interaction.hover(nodeID)
+                                    },
+                                    onSelectNode: { nodeID in
+                                        interaction.select(nodeID)
+                                    },
+                                    onOpenNode: { nodeID in
+                                        openNode(nodeID, in: input)
                                     }
+                                )
+                                .frame(width: proxy.size.width, height: proxy.size.height)
+                                .focused($graphSurfaceFocused)
+                                .onAppear {
+                                    graphSurfaceFocused = true
+                                    workspaceModel.applyStableGraph(GraphStableGraphSummary(
+                                        generation: input.layout.generation,
+                                        nodeCount: input.layout.nodes.count,
+                                        edgeCount: input.layout.edges.count
+                                    ))
+                                    updateGraphCanvasSize(proxy.size, layout: input.layout)
                                 }
-                            ),
-                            hitTestIndex: loadedHitTestIndex,
-                            onHoverNode: { nodeID in
-                                interaction.hover(nodeID)
-                            },
-                            onSelectNode: { nodeID in
-                                interaction.select(nodeID)
-                            },
-                            onOpenNode: { nodeID in
-                                openNode(nodeID, in: input)
+                                .onChange(of: proxy.size) { _, newSize in
+                                    updateGraphCanvasSize(newSize, layout: input.layout)
+                                }
+                                .onChange(of: input.layout.requestID) { _, _ in
+                                    updateGraphCanvasSize(proxy.size, layout: input.layout)
+                                }
+                                .onMoveCommand { direction in
+                                    panGraph(direction)
+                                }
+                                .onKeyPress(.return) {
+                                    openSelectedNode(in: input)
+                                }
+                                .onKeyPress("+") {
+                                    zoom(by: 1.15)
+                                    return .handled
+                                }
+                                .onKeyPress("-") {
+                                    zoom(by: 0.85)
+                                    return .handled
+                                }
+                                .onExitCommand {
+                                    clearGraphSelection()
+                                }
+
+                                GraphCanvasHeader(
+                                    title: graphViewTitle
+                                )
+
+                                if showsSearch {
+                                    GraphSearchOverlay(
+                                        searchQuery: $settings.searchQuery,
+                                        close: closeGraphSearch
+                                    )
+                                    .position(x: min(154, max(130, proxy.size.width / 2)), y: 24)
+                                }
+
+                                GraphFloatingControlStack(
+                                    searchIsPresented: showsSearch || searchIsActive,
+                                    searchAccessibilityLabel: showsSearch ? "Close graph search" : "Search graph",
+                                    searchAccessibilityHint: showsSearch
+                                        ? "Closes the graph search field"
+                                        : (searchIsActive ? "Opens the active graph search field" : "Opens the graph search field"),
+                                    searchAccessibilityValue: searchIsActive
+                                        ? "Active query"
+                                        : (showsSearch ? "Search field open" : "Inactive"),
+                                    settingsIsPresented: showsSettings,
+                                    toggleSearch: toggleGraphSearch,
+                                    zoomOut: { zoom(by: 0.85) },
+                                    zoomIn: { zoom(by: 1.15) },
+                                    resetView: resetViewportToFit,
+                                    toggleSettings: { showsSettings.toggle() }
+                                )
+                                .position(
+                                    x: max(15, proxy.size.width - 29),
+                                    y: GraphFloatingControlStack.centerY
+                                )
                             }
-                        )
-                        .focused($graphSurfaceFocused)
-                        .onAppear {
-                            graphSurfaceFocused = true
-                            workspaceModel.applyStableGraph(GraphStableGraphSummary(
-                                generation: input.layout.generation,
-                                nodeCount: input.layout.nodes.count,
-                                edgeCount: input.layout.edges.count
-                            ))
-                        }
-                        .onMoveCommand { direction in
-                            panGraph(direction)
-                        }
-                        .onKeyPress(.return) {
-                            openSelectedNode(in: input)
-                        }
-                        .onKeyPress("+") {
-                            zoom(by: 1.15)
-                            return .handled
-                        }
-                        .onKeyPress("-") {
-                            zoom(by: 0.85)
-                            return .handled
-                        }
-                        .onExitCommand {
-                            interaction.hover(nil)
-                            interaction.clearSelection()
                         }
 
                         if showsKeyboardResults(for: input) {
@@ -196,9 +207,9 @@ struct GraphWorkspaceView: View {
                 )
             }
         case .noVault:
-            graphStatusPlaceholder(title: "Graph view", detail: "No vault open")
+            graphStatusPlaceholder(title: graphViewTitle, detail: "No vault open")
         case .unavailable(let issue):
-            graphStatusPlaceholder(title: "Graph view", detail: issue.displayTitle)
+            graphStatusPlaceholder(title: graphViewTitle, detail: issue.displayTitle)
         }
     }
 
@@ -223,7 +234,7 @@ struct GraphWorkspaceView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Graph view")
+        .accessibilityLabel(graphViewTitle)
     }
 
     private func validatedRendererInput(layout: GraphRendererSnapshot) -> RendererInputState {
@@ -240,7 +251,8 @@ struct GraphWorkspaceView: View {
             groupColorHexByNodeID: GraphGroupMatcher.groupColorHexByNodeID(
                 in: layout,
                 rules: settings.groupRules
-            )
+            ),
+            positionOverrides: activePositionOverrides
         )
 
         do {
@@ -260,6 +272,8 @@ struct GraphWorkspaceView: View {
             loadedLayout = nil
             loadedHitTestIndex = nil
             graphBannerText = nil
+            graphCanvasSize = nil
+            viewportFitState.invalidate()
             workspaceModel.clear(.noVault)
             return
         }
@@ -271,6 +285,8 @@ struct GraphWorkspaceView: View {
             loadedLayout = nil
             loadedHitTestIndex = nil
             graphBannerText = nil
+            graphCanvasSize = nil
+            viewportFitState.invalidate()
             workspaceModel.clear(.missingIndex)
             return
         }
@@ -334,6 +350,7 @@ struct GraphWorkspaceView: View {
             )
             try Task.checkCancellation()
 
+            viewportFitState.invalidate()
             loadedLayout = layout
             loadedHitTestIndex = preparedGraph.hitTestIndex
             let stableGraph = GraphStableGraphSummary(
@@ -472,6 +489,7 @@ struct GraphWorkspaceView: View {
 
         cancelForceRefinement()
         forceRefinementTask = Task {
+            let baseRenderIdentity = layout.renderIdentity
             do {
                 let refined = try await Task.detached(priority: .utility) {
                     try GraphForceRefinement.refined(
@@ -489,7 +507,9 @@ struct GraphWorkspaceView: View {
                 }.value
                 try Task.checkCancellation()
                 await MainActor.run {
-                    guard loadedLayout?.requestID == requestID else {
+                    guard loadedLayout?.requestID == requestID,
+                          loadedLayout?.renderIdentity == baseRenderIdentity
+                    else {
                         return
                     }
                     loadedLayout = refined
@@ -507,8 +527,59 @@ struct GraphWorkspaceView: View {
         forceRefinementTask = nil
     }
 
+    private func updateGraphCanvasSize(_ size: CGSize, layout: GraphRendererSnapshot) {
+        let canvasSize = GraphSize(width: Double(size.width), height: Double(size.height))
+        guard canvasSize.width.isFinite,
+              canvasSize.height.isFinite,
+              canvasSize.width > 0,
+              canvasSize.height > 0
+        else {
+            return
+        }
+
+        if graphCanvasSize != canvasSize {
+            graphCanvasSize = canvasSize
+        }
+        if let fitViewport = viewportFitState.initialFitViewport(
+            layout: layout,
+            canvasSize: canvasSize
+        ) {
+            viewport = fitViewport
+        }
+    }
+
+    private func resetViewportToFit() {
+        guard let loadedLayout,
+              let graphCanvasSize
+        else {
+            viewport.reset()
+            return
+        }
+
+        viewport = viewportFitState.resetViewport(
+            layout: loadedLayout,
+            canvasSize: graphCanvasSize
+        )
+    }
+
     private func zoom(by multiplier: Double) {
         viewport.zoomScale *= multiplier
+    }
+
+    private func toggleGraphSearch() {
+        if showsSearch {
+            closeGraphSearch()
+        } else {
+            showsSearch = true
+        }
+    }
+
+    private func closeGraphSearch() {
+        showsSearch = false
+        Task { @MainActor in
+            await Task.yield()
+            graphSurfaceFocused = true
+        }
     }
 
     private func panGraph(_ direction: MoveCommandDirection) {
@@ -541,6 +612,73 @@ struct GraphWorkspaceView: View {
         return .handled
     }
 
+    private func openSelectedGraphNodeFromCommand() {
+        guard let loadedLayout,
+              let selectedNodeID = interaction.selectedNodeID,
+              case .ready(let input) = validatedRendererInput(layout: loadedLayout)
+        else {
+            return
+        }
+        openNode(selectedNodeID, in: input)
+    }
+
+    private func graphInteractionCallbacks(input: GraphRendererInput) -> GraphRendererInteractionCallbacks {
+        GraphRendererInteractionCallbacks(
+            beginNodeDrag: { start in
+                cancelForceRefinement()
+                interaction.beginDrag(
+                    nodeID: start.nodeID,
+                    nodePosition: start.nodePosition,
+                    pointerGraphPoint: start.pointerGraphPoint,
+                    graphMovementThreshold: start.graphMovementThreshold
+                )
+                interaction.select(start.nodeID)
+            },
+            updateNodeDrag: { pointerGraphPoint in
+                interaction.updateDrag(to: pointerGraphPoint)
+            },
+            endNodeDrag: {
+                guard let result = interaction.finishDrag() else {
+                    return
+                }
+                switch GraphGestureDecision.completion(for: result) {
+                case .tap(let nodeID):
+                    interaction.select(nodeID)
+                    openNode(nodeID, in: input)
+                case .drag(let result):
+                    commitDraggedNode(result)
+                    break
+                }
+            }
+        )
+    }
+
+    private var activePositionOverrides: GraphNodePositionOverrides {
+        var overrides = GraphNodePositionOverrides()
+        if let dragState = interaction.dragState {
+            overrides.set(dragState.currentNodePosition, for: dragState.nodeID)
+        }
+        return overrides
+    }
+
+    private func commitDraggedNode(_ result: GraphNodeDragResult) {
+        guard result.movedBeyondThreshold,
+              let hitTestIndex = loadedHitTestIndex
+        else {
+            return
+        }
+
+        let movedHitTestIndex = hitTestIndex.movingNode(
+            nodeID: result.nodeID,
+            to: result.nodePosition
+        )
+        guard movedHitTestIndex != hitTestIndex else {
+            return
+        }
+        loadedLayout = movedHitTestIndex.layout
+        loadedHitTestIndex = movedHitTestIndex
+    }
+
     private func openNode(_ nodeID: String, in input: GraphRendererInput) {
         guard let node = input.layout.nodes.first(where: { $0.nodeID == nodeID }) else {
             return
@@ -552,6 +690,11 @@ struct GraphWorkspaceView: View {
         }
 
         _ = appState.openFile(file)
+    }
+
+    private func clearGraphSelection() {
+        interaction.hover(nil)
+        interaction.clearSelection()
     }
 
     private var searchIsActive: Bool {
@@ -612,7 +755,7 @@ struct GraphWorkspaceView: View {
         case .cancelled:
             return "Graph load cancelled"
         default:
-            return "Graph view"
+            return graphViewTitle
         }
     }
 
@@ -644,6 +787,8 @@ struct GraphWorkspaceView: View {
             loadedLayout = nil
             loadedHitTestIndex = nil
             graphBannerText = nil
+            graphCanvasSize = nil
+            viewportFitState.invalidate()
             return
         default:
             workspaceModel.fail(.snapshotFailed)
@@ -685,6 +830,137 @@ private struct PendingGraphFirstRender {
     let state: SearchResultState
     let nodeCount: Int
     let edgeCount: Int
+}
+
+private struct GraphCanvasHeader: View {
+    let title: String
+
+    var body: some View {
+        Text(title)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.primary)
+            .lineLimit(1)
+            .frame(maxWidth: .infinity, alignment: .center)
+            .frame(height: 32)
+            .frame(maxWidth: .infinity)
+            .padding(.top, 8)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+}
+
+private struct GraphSearchOverlay: View {
+    @Binding var searchQuery: String
+    let close: () -> Void
+
+    @FocusState private var searchFieldFocused: Bool
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+
+            TextField("Search", text: $searchQuery)
+                .textFieldStyle(.plain)
+                .focused($searchFieldFocused)
+                .accessibilityLabel("Graph search")
+
+            if !searchQuery.isEmpty {
+                Button {
+                    searchQuery = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 12))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("Clear graph search")
+                .accessibilityLabel("Clear graph search")
+                .accessibilityHint("Removes the current graph search query")
+            }
+
+            Button(action: close) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 12))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .help("Close graph search")
+            .accessibilityLabel("Close graph search")
+            .accessibilityHint("Closes the search field and returns focus to the graph")
+        }
+        .padding(.horizontal, 8)
+        .frame(width: 280, height: 32)
+        .background(ObsidianUI.sidebarBackground.opacity(0.94))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(ObsidianUI.border)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .onAppear {
+            searchFieldFocused = true
+        }
+        .onExitCommand(perform: close)
+    }
+}
+
+private struct GraphFloatingControlStack: View {
+    static let centerY: CGFloat = 139
+
+    let searchIsPresented: Bool
+    let searchAccessibilityLabel: String
+    let searchAccessibilityHint: String
+    let searchAccessibilityValue: String
+    let settingsIsPresented: Bool
+    let toggleSearch: () -> Void
+    let zoomOut: () -> Void
+    let zoomIn: () -> Void
+    let resetView: () -> Void
+    let toggleSettings: () -> Void
+
+    var body: some View {
+        VStack(spacing: 6) {
+            ObsidianIconButton(
+                systemName: "magnifyingglass",
+                accessibilityLabel: searchAccessibilityLabel,
+                isSelected: searchIsPresented,
+                action: toggleSearch
+            )
+            .accessibilityHint(searchAccessibilityHint)
+            .accessibilityValue(searchAccessibilityValue)
+
+            ObsidianIconButton(
+                systemName: "minus.magnifyingglass",
+                accessibilityLabel: "Zoom out graph",
+                action: zoomOut
+            )
+            .accessibilityHint("Decreases graph zoom")
+
+            ObsidianIconButton(
+                systemName: "plus.magnifyingglass",
+                accessibilityLabel: "Zoom in graph",
+                action: zoomIn
+            )
+            .accessibilityHint("Increases graph zoom")
+
+            ObsidianIconButton(
+                systemName: "arrow.counterclockwise",
+                accessibilityLabel: "Reset graph view",
+                action: resetView
+            )
+            .accessibilityHint("Fits the graph back into the canvas")
+
+            ObsidianIconButton(
+                systemName: "slider.horizontal.3",
+                accessibilityLabel: "Graph settings",
+                isSelected: settingsIsPresented,
+                action: toggleSettings
+            )
+            .accessibilityHint("Opens graph display and filter settings")
+        }
+        .fixedSize()
+    }
 }
 
 private struct GraphKeyboardResultsList: View {
@@ -795,14 +1071,18 @@ private struct GraphSettingsPanel: View {
                 Text("Node size")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
-                Slider(value: $settings.presentation.nodeSize, in: 0.6...2.4, step: 0.1)
+                Slider(value: $settings.presentation.nodeSize, in: 0.6...1.8, step: 0.1)
             }
 
             VStack(alignment: .leading, spacing: 6) {
                 Text("Link thickness")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
-                Slider(value: $settings.presentation.linkThickness, in: 0.5...3.0, step: 0.1)
+                Slider(
+                    value: $settings.presentation.linkThickness,
+                    in: GraphVisualMetrics.minimumLinkThickness...1.8,
+                    step: 0.05
+                )
             }
 
             if parityControlsEnabled {

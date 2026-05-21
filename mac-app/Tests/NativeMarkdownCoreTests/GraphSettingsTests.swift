@@ -2,6 +2,33 @@ import Testing
 @testable import NativeMarkdownCore
 
 @Test
+func graphVisualMetricsMatchObsidianDensityTargets() {
+    #expect(GraphVisualMetrics.defaultNodeRadius == 2.2)
+    #expect(GraphVisualMetrics.maximumHubNodeRadius == 5.0)
+    #expect(GraphVisualMetrics.minimumDrawRadius == 1.25)
+    #expect(GraphVisualMetrics.defaultLinkThickness == 0.6)
+    #expect(GraphVisualMetrics.minimumLinkThickness == 0.35)
+    #expect(GraphVisualMetrics.activeLinkThicknessBonus == 0.8)
+    #expect(GraphVisualMetrics.resolvedNodeAlpha == 0.7)
+    #expect(GraphVisualMetrics.unresolvedNodeAlpha == 0.36)
+    #expect(GraphVisualMetrics.activeNodeAlpha == 0.95)
+    #expect(GraphVisualMetrics.resolvedEdgeAlpha == 0.16)
+    #expect(GraphVisualMetrics.unresolvedEdgeAlpha == 0.08)
+    #expect(GraphVisualMetrics.activeEdgeAlpha == 0.38)
+    #expect(GraphVisualMetrics.defaultHitRadius == 8.0)
+    #expect(GraphVisualMetrics.hitRadiusPadding == 4.0)
+    #expect(GraphVisualMetrics.nodeRadius(forDegree: 0) == GraphVisualMetrics.defaultNodeRadius)
+    #expect(GraphVisualMetrics.nodeRadius(forDegree: 100) == GraphVisualMetrics.maximumHubNodeRadius)
+    #expect(GraphVisualMetrics.drawRadius(forNodeRadius: 0.5, nodeSize: 1) == 1.25)
+    #expect(GraphVisualMetrics.drawRadius(forNodeRadius: 5, nodeSize: 2) == 10)
+    #expect(GraphVisualMetrics.linkThickness(base: 0.2, isActive: false) == 0.35)
+    #expect(GraphVisualMetrics.linkThickness(base: 0.6, isActive: false) == 0.6)
+    #expect(GraphVisualMetrics.linkThickness(base: 0.6, isActive: true) == 1.4)
+    #expect(GraphVisualMetrics.hitRadius(forNodeRadius: 1.25, zoomScale: 1) == 8.0)
+    #expect(GraphVisualMetrics.hitRadius(forNodeRadius: 5.0, zoomScale: 2) == 14.0)
+}
+
+@Test
 func graphSettingsDefaultsMatchMvpGate() {
     let settings = GraphSettings()
 
@@ -9,6 +36,8 @@ func graphSettingsDefaultsMatchMvpGate() {
     #expect(settings.semantic.includeOrphans == false)
     #expect(settings.semantic.resolvedLinksOnly)
     #expect(settings.presentation.labelVisibility == .automatic)
+    #expect(settings.presentation.nodeSize == 1.0)
+    #expect(settings.presentation.linkThickness == GraphVisualMetrics.defaultLinkThickness)
     #expect(settings.presentation.force.isEnabled == false)
     #expect(settings.searchQuery.isEmpty)
     #expect(settings.groupRules.isEmpty)

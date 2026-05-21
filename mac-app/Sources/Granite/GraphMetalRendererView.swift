@@ -8,6 +8,7 @@ struct GraphRendererSurfaceView: View {
     let input: GraphRendererInput
     @Binding var viewport: GraphViewport
     var callbacks: GraphRendererCallbacks
+    var interactionCallbacks: GraphRendererInteractionCallbacks
     let hitTestIndex: GraphHitTestIndex
     var onHoverNode: (String?) -> Void
     var onSelectNode: (String?) -> Void
@@ -17,6 +18,7 @@ struct GraphRendererSurfaceView: View {
         input: GraphRendererInput,
         viewport: Binding<GraphViewport>,
         callbacks: GraphRendererCallbacks = GraphRendererCallbacks(),
+        interactionCallbacks: GraphRendererInteractionCallbacks = GraphRendererInteractionCallbacks(),
         hitTestIndex: GraphHitTestIndex,
         onHoverNode: @escaping (String?) -> Void = { _ in },
         onSelectNode: @escaping (String?) -> Void = { _ in },
@@ -25,6 +27,7 @@ struct GraphRendererSurfaceView: View {
         self.input = input
         self._viewport = viewport
         self.callbacks = callbacks
+        self.interactionCallbacks = interactionCallbacks
         self.hitTestIndex = hitTestIndex
         self.onHoverNode = onHoverNode
         self.onSelectNode = onSelectNode
@@ -37,6 +40,7 @@ struct GraphRendererSurfaceView: View {
                 input: input,
                 viewport: $viewport,
                 callbacks: callbacks,
+                interactionCallbacks: interactionCallbacks,
                 hitTestIndex: hitTestIndex,
                 onHoverNode: onHoverNode,
                 onSelectNode: onSelectNode,
@@ -47,6 +51,7 @@ struct GraphRendererSurfaceView: View {
                 input: input,
                 viewport: $viewport,
                 callbacks: callbacks,
+                interactionCallbacks: interactionCallbacks,
                 hitTestIndex: hitTestIndex,
                 onHoverNode: onHoverNode,
                 onSelectNode: onSelectNode,
@@ -69,12 +74,13 @@ struct GraphMetalRendererView: View {
     let input: GraphRendererInput
     @Binding var viewport: GraphViewport
     var callbacks: GraphRendererCallbacks
+    var interactionCallbacks: GraphRendererInteractionCallbacks
     let hitTestIndex: GraphHitTestIndex
     var onHoverNode: (String?) -> Void
     var onSelectNode: (String?) -> Void
     var onOpenNode: (String) -> Void
 
-    @State private var dragStartPanOffset: GraphPoint?
+    @State private var dragMode: GraphMetalDragMode?
     @State private var drawReportGate = GraphMetalDrawReportGate()
     @State private var metalInitializationFailed = false
 
@@ -82,6 +88,7 @@ struct GraphMetalRendererView: View {
         input: GraphRendererInput,
         viewport: Binding<GraphViewport>,
         callbacks: GraphRendererCallbacks = GraphRendererCallbacks(),
+        interactionCallbacks: GraphRendererInteractionCallbacks = GraphRendererInteractionCallbacks(),
         hitTestIndex: GraphHitTestIndex,
         onHoverNode: @escaping (String?) -> Void = { _ in },
         onSelectNode: @escaping (String?) -> Void = { _ in },
@@ -90,6 +97,7 @@ struct GraphMetalRendererView: View {
         self.input = input
         self._viewport = viewport
         self.callbacks = callbacks
+        self.interactionCallbacks = interactionCallbacks
         self.hitTestIndex = hitTestIndex
         self.onHoverNode = onHoverNode
         self.onSelectNode = onSelectNode
@@ -103,6 +111,7 @@ struct GraphMetalRendererView: View {
                 input: input,
                 viewport: $viewport,
                 callbacks: callbacks,
+                interactionCallbacks: interactionCallbacks,
                 hitTestIndex: hitTestIndex,
                 onHoverNode: onHoverNode,
                 onSelectNode: onSelectNode,
@@ -132,14 +141,15 @@ struct GraphMetalRendererView: View {
                         .allowsHitTesting(false)
                 }
                 .background(ObsidianUI.editorBackground)
-                .gesture(panGesture)
-                .simultaneousGesture(tapGesture(input: renderInput, size: proxy.size))
+                .gesture(panGesture(size: proxy.size))
                 .onContinuousHover { phase in
                     updateHover(phase: phase, input: renderInput, size: proxy.size)
                 }
                 .focusable()
+                .focusEffectDisabled()
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(accessibilitySummary(for: renderInput))
+                .accessibilityHint("Use arrow keys to pan, plus or minus to zoom, Return to open the selected node, and Escape to clear selection.")
             }
         case .failed(let error):
             Color.clear
@@ -157,34 +167,85 @@ struct GraphMetalRendererView: View {
         return renderInput
     }
 
-    private var panGesture: some Gesture {
-        DragGesture(minimumDistance: 1)
+    private func panGesture(size: CGSize) -> some Gesture {
+        DragGesture(minimumDistance: 0)
             .onChanged { value in
-                if dragStartPanOffset == nil {
-                    dragStartPanOffset = viewport.panOffset
-                }
-                guard let start = dragStartPanOffset else {
-                    return
-                }
-                viewport.panOffset = GraphPoint(
-                    x: start.x + Double(value.translation.width),
-                    y: start.y + Double(value.translation.height)
-                )
+                updateDrag(value, size: size)
             }
-            .onEnded { _ in
-                dragStartPanOffset = nil
+            .onEnded { value in
+                updateDrag(value, size: size)
+                switch dragMode {
+                case .node:
+                    interactionCallbacks.endNodeDrag()
+                case .canvasPan(_, false):
+                    onSelectNode(nil)
+                case .canvasPan, nil:
+                    break
+                }
+                dragMode = nil
             }
     }
 
-    private func tapGesture(input: GraphRendererInput, size: CGSize) -> some Gesture {
-        SpatialTapGesture()
-            .onEnded { value in
-                let nodeID = hitNodeID(at: value.location, input: input, size: size)
-                onSelectNode(nodeID)
-                if let nodeID {
-                    onOpenNode(nodeID)
-                }
+    private func updateDrag(_ value: DragGesture.Value, size: CGSize) {
+        if dragMode == nil {
+            dragMode = dragMode(
+                at: value.startLocation,
+                input: currentInput,
+                size: size
+            )
+        }
+        switch dragMode {
+        case .node:
+            interactionCallbacks.updateNodeDrag(GraphGestureDecision.pointerGraphPoint(
+                screenPoint: GraphPoint(x: Double(value.location.x), y: Double(value.location.y)),
+                viewport: viewport,
+                canvasSize: graphSize(size)
+            ))
+        case .canvasPan(let startPanOffset, let didPan):
+            let translation = GraphPoint(
+                x: Double(value.translation.width),
+                y: Double(value.translation.height)
+            )
+            guard didPan || !isTapTranslation(value.translation) else {
+                return
             }
+            dragMode = .canvasPan(startPanOffset: startPanOffset, didPan: true)
+            viewport.panOffset = GraphPoint(
+                x: startPanOffset.x + translation.x,
+                y: startPanOffset.y + translation.y
+            )
+            interactionCallbacks.panCanvas(translation)
+        case nil:
+            break
+        }
+    }
+
+    private func dragMode(
+        at location: CGPoint,
+        input: GraphRendererInput,
+        size: CGSize
+    ) -> GraphMetalDragMode {
+        switch GraphGestureDecision.dragStart(
+            screenPoint: GraphPoint(x: Double(location.x), y: Double(location.y)),
+            viewport: input.viewport,
+            canvasSize: graphSize(size),
+            hitTestIndex: hitTestIndex,
+            positionOverrides: input.positionOverrides
+        ) {
+        case .node(let start):
+            interactionCallbacks.beginNodeDrag(start)
+            return .node
+        case .canvasPan:
+            return .canvasPan(startPanOffset: viewport.panOffset, didPan: false)
+        }
+    }
+
+    private func graphSize(_ size: CGSize) -> GraphSize {
+        GraphSize(width: Double(size.width), height: Double(size.height))
+    }
+
+    private func isTapTranslation(_ translation: CGSize) -> Bool {
+        hypot(Double(translation.width), Double(translation.height)) < GraphNodeDragState.defaultGraphMovementThreshold
     }
 
     private func updateHover(
@@ -208,15 +269,24 @@ struct GraphMetalRendererView: View {
         hitTestIndex.nearestNode(
             at: GraphPoint(x: Double(location.x), y: Double(location.y)),
             viewport: input.viewport,
-            canvasSize: GraphSize(width: Double(size.width), height: Double(size.height))
+            canvasSize: graphSize(size),
+            positionOverrides: input.positionOverrides
         )?.nodeID
     }
 
     private func accessibilitySummary(for input: GraphRendererInput) -> String {
         GraphAccessibilitySummaryBuilder.summary(
             input: input,
-            selectedNode: input.layout.nodes.first { $0.nodeID == input.selectedNodeID }
+            selectedNode: accessibilityNode(id: input.selectedNodeID, input: input),
+            hoveredNode: accessibilityNode(id: input.hoveredNodeID, input: input)
         )
+    }
+
+    private func accessibilityNode(id nodeID: String?, input: GraphRendererInput) -> GraphLayoutNode? {
+        guard let nodeID else {
+            return nil
+        }
+        return input.layout.nodes.first { $0.nodeID == nodeID }
     }
 
     private func validationState(for input: GraphRendererInput) -> ValidationState {
@@ -234,6 +304,11 @@ struct GraphMetalRendererView: View {
         case ready(GraphRendererInput)
         case failed(GraphRendererValidationError)
     }
+}
+
+private enum GraphMetalDragMode {
+    case node
+    case canvasPan(startPanOffset: GraphPoint, didPan: Bool)
 }
 
 private struct GraphMetalRepresentable: NSViewRepresentable {
@@ -342,12 +417,11 @@ private final class GraphMetalRenderer {
     private let commandQueue: any MTLCommandQueue
     private let edgePipeline: any MTLRenderPipelineState
     private let nodePipeline: any MTLRenderPipelineState
-    private var cachedIdentity: String?
+    private var bufferState: GraphMetalBufferState?
     private var edgeBuffer: (any MTLBuffer)?
     private var nodeBuffer: (any MTLBuffer)?
     private var edgeVertexCount = 0
     private var nodeVertexCount = 0
-    private var edgePrimitiveType: MTLPrimitiveType = .line
 
     init(device: any MTLDevice) throws {
         self.device = device
@@ -378,61 +452,59 @@ private final class GraphMetalRenderer {
     }
 
     func updateBuffers(for input: GraphRendererInput) throws {
-        let identity = cacheIdentity(for: input)
-        guard cachedIdentity != identity else {
+        let geometryIdentity = geometryIdentity(for: input)
+        let styleIdentity = styleIdentity(for: input)
+        guard let bufferState,
+              bufferState.geometryIdentity == geometryIdentity,
+              edgeBuffer != nil || input.layout.edges.isEmpty,
+              nodeBuffer != nil || input.layout.nodes.isEmpty
+        else {
+            rebuildBuffers(
+                for: input,
+                geometryIdentity: geometryIdentity,
+                styleIdentity: styleIdentity
+            )
             return
         }
 
-        let usesExpandedEdges = input.presentation.showArrows
-            || input.presentation.linkThickness > 1.0
+        guard bufferState.styleIdentity != styleIdentity
+                || bufferState.positionOverrides != input.positionOverrides
+        else {
+            return
+        }
+
+        if bufferState.styleIdentity == styleIdentity {
+            updatePositionOverrides(from: bufferState.positionOverrides, to: input.positionOverrides, input: input)
+        } else {
+            updateDynamicVertices(for: input)
+        }
+        self.bufferState = bufferState.updating(
+            styleIdentity: styleIdentity,
+            positionOverrides: input.positionOverrides
+        )
+    }
+
+    private func rebuildBuffers(
+        for input: GraphRendererInput,
+        geometryIdentity: String,
+        styleIdentity: String
+    ) {
         var edgeVertices: [GraphMetalVertex] = []
-        edgeVertices.reserveCapacity(input.layout.edges.count * (usesExpandedEdges ? 9 : 2))
+        edgeVertices.reserveCapacity(input.layout.edges.count * (input.presentation.showArrows ? 9 : 6))
         for edge in input.layout.edges {
-            guard input.layout.nodes.indices.contains(edge.sourceIndex),
-                  input.layout.nodes.indices.contains(edge.targetIndex)
-            else {
-                continue
-            }
-            let color = edgeColor(edge, input: input)
-            let source = metalPoint(input.layout.nodes[edge.sourceIndex].position)
-            let target = metalPoint(input.layout.nodes[edge.targetIndex].position)
-            if usesExpandedEdges {
-                appendThickEdgeVertices(
-                    from: source,
-                    to: target,
-                    color: color,
-                    thickness: Float(max(0.5, input.presentation.linkThickness)),
-                    vertices: &edgeVertices
-                )
-                if input.presentation.showArrows {
-                    appendArrowHeadVertices(
-                        from: source,
-                        to: target,
-                        color: color,
-                        vertices: &edgeVertices
-                    )
-                }
-            } else {
-                edgeVertices.append(GraphMetalVertex(
-                    position: source,
-                    color: color,
-                    radius: 1
-                ))
-                edgeVertices.append(GraphMetalVertex(
-                    position: target,
-                    color: color,
-                    radius: 1
-                ))
-            }
+            appendEdgeVertices(edge: edge, input: input, vertices: &edgeVertices)
         }
 
         var nodeVertices: [GraphMetalVertex] = []
         nodeVertices.reserveCapacity(input.layout.nodes.count)
         for node in input.layout.nodes {
             nodeVertices.append(GraphMetalVertex(
-                position: metalPoint(node.position),
+                position: metalPoint(input.position(for: node)),
                 color: nodeColor(node, input: input),
-                radius: Float(max(2.0, node.radius * input.presentation.nodeSize))
+                radius: Float(GraphVisualMetrics.drawRadius(
+                    forNodeRadius: node.radius,
+                    nodeSize: input.presentation.nodeSize
+                ))
             ))
         }
 
@@ -440,8 +512,108 @@ private final class GraphMetalRenderer {
         nodeBuffer = Self.makeBuffer(device: device, vertices: nodeVertices)
         edgeVertexCount = edgeVertices.count
         nodeVertexCount = nodeVertices.count
-        edgePrimitiveType = usesExpandedEdges ? .triangle : .line
-        cachedIdentity = identity
+        bufferState = GraphMetalBufferState(
+            geometryIdentity: geometryIdentity,
+            styleIdentity: styleIdentity,
+            positionOverrides: input.positionOverrides,
+            nodeIndexByID: nodeIndexByID(for: input.layout),
+            incidentEdgeIndexesByNodeIndex: incidentEdgeIndexesByNodeIndex(for: input.layout),
+            edgeVertexSpan: input.presentation.showArrows ? 9 : 6
+        )
+    }
+
+    private func updatePositionOverrides(
+        from oldOverrides: GraphNodePositionOverrides,
+        to newOverrides: GraphNodePositionOverrides,
+        input: GraphRendererInput
+    ) {
+        guard let bufferState else {
+            return
+        }
+
+        let changedNodeIDs = Set(oldOverrides.positionsByNodeID.keys)
+            .union(newOverrides.positionsByNodeID.keys)
+        for nodeID in changedNodeIDs {
+            guard let nodeIndex = bufferState.nodeIndexByID[nodeID],
+                  input.layout.nodes.indices.contains(nodeIndex)
+            else {
+                continue
+            }
+            writeNodeVertex(at: nodeIndex, input: input)
+            for edgeIndex in bufferState.incidentEdgeIndexesByNodeIndex[nodeIndex] {
+                writeEdgeVertices(at: edgeIndex, input: input)
+            }
+        }
+    }
+
+    private func updateDynamicVertices(for input: GraphRendererInput) {
+        for nodeIndex in input.layout.nodes.indices {
+            writeNodeVertex(at: nodeIndex, input: input)
+        }
+        for edgeIndex in input.layout.edges.indices {
+            writeEdgeVertices(at: edgeIndex, input: input)
+        }
+    }
+
+    private func writeNodeVertex(at nodeIndex: Int, input: GraphRendererInput) {
+        guard let nodeBuffer,
+              input.layout.nodes.indices.contains(nodeIndex)
+        else {
+            return
+        }
+
+        let node = input.layout.nodes[nodeIndex]
+        var vertex = GraphMetalVertex(
+            position: metalPoint(input.position(for: node)),
+            color: nodeColor(node, input: input),
+            radius: Float(GraphVisualMetrics.drawRadius(
+                forNodeRadius: node.radius,
+                nodeSize: input.presentation.nodeSize
+            ))
+        )
+        write(vertex: &vertex, to: nodeBuffer, at: nodeIndex)
+    }
+
+    private func writeEdgeVertices(at edgeIndex: Int, input: GraphRendererInput) {
+        guard let edgeBuffer,
+              let bufferState,
+              input.layout.edges.indices.contains(edgeIndex)
+        else {
+            return
+        }
+
+        var vertices: [GraphMetalVertex] = []
+        vertices.reserveCapacity(bufferState.edgeVertexSpan)
+        appendEdgeVertices(edge: input.layout.edges[edgeIndex], input: input, vertices: &vertices)
+        write(vertices: vertices, to: edgeBuffer, at: edgeIndex * bufferState.edgeVertexSpan)
+    }
+
+    private func write(vertex: inout GraphMetalVertex, to buffer: any MTLBuffer, at index: Int) {
+        let offset = index * MemoryLayout<GraphMetalVertex>.stride
+        guard offset + MemoryLayout<GraphMetalVertex>.stride <= buffer.length else {
+            return
+        }
+        withUnsafeBytes(of: &vertex) { bytes in
+            buffer.contents()
+                .advanced(by: offset)
+                .copyMemory(from: bytes.baseAddress!, byteCount: bytes.count)
+        }
+    }
+
+    private func write(vertices: [GraphMetalVertex], to buffer: any MTLBuffer, at startIndex: Int) {
+        guard !vertices.isEmpty else {
+            return
+        }
+        let offset = startIndex * MemoryLayout<GraphMetalVertex>.stride
+        let byteCount = vertices.count * MemoryLayout<GraphMetalVertex>.stride
+        guard offset + byteCount <= buffer.length else {
+            return
+        }
+        vertices.withUnsafeBytes { bytes in
+            buffer.contents()
+                .advanced(by: offset)
+                .copyMemory(from: bytes.baseAddress!, byteCount: bytes.count)
+        }
     }
 
     @MainActor
@@ -486,7 +658,7 @@ private final class GraphMetalRenderer {
                 index: 1
             )
             encoder.drawPrimitives(
-                type: edgePrimitiveType,
+                type: .triangle,
                 vertexStart: 0,
                 vertexCount: edgeVertexCount
             )
@@ -556,12 +728,8 @@ private final class GraphMetalRenderer {
         }
     }
 
-    private func cacheIdentity(for input: GraphRendererInput) -> String {
-        var searchHasher = Hasher()
-        for nodeID in input.searchMatchedNodeIDs.sorted() {
-            searchHasher.combine(nodeID)
-        }
-        return [
+    private func geometryIdentity(for input: GraphRendererInput) -> String {
+        [
             String(input.layout.requestID),
             String(input.layout.generation),
             String(input.layout.renderIdentity),
@@ -569,7 +737,17 @@ private final class GraphMetalRenderer {
             String(input.layout.edges.count),
             String(input.presentation.nodeSize.bitPattern),
             String(input.presentation.linkThickness.bitPattern),
-            input.presentation.showArrows.description,
+            input.presentation.showArrows.description
+        ]
+        .joined(separator: ":")
+    }
+
+    private func styleIdentity(for input: GraphRendererInput) -> String {
+        var searchHasher = Hasher()
+        for nodeID in input.searchMatchedNodeIDs.sorted() {
+            searchHasher.combine(nodeID)
+        }
+        return [
             groupColorIdentity(input.groupColorHexByNodeID),
             String(searchHasher.finalize()),
             input.hoveredNodeID ?? "",
@@ -591,6 +769,26 @@ private final class GraphMetalRenderer {
 
     private func metalPoint(_ point: GraphPoint) -> SIMD2<Float> {
         SIMD2<Float>(Float(point.x), Float(point.y))
+    }
+
+    private func nodeIndexByID(for layout: GraphRendererSnapshot) -> [String: Int] {
+        Dictionary(uniqueKeysWithValues: layout.nodes.enumerated().map { ($0.element.nodeID, $0.offset) })
+    }
+
+    private func incidentEdgeIndexesByNodeIndex(for layout: GraphRendererSnapshot) -> [[Int]] {
+        var incidentEdges = Array(repeating: [Int](), count: layout.nodes.count)
+        for (edgeIndex, edge) in layout.edges.enumerated() {
+            guard incidentEdges.indices.contains(edge.sourceIndex),
+                  incidentEdges.indices.contains(edge.targetIndex)
+            else {
+                continue
+            }
+            incidentEdges[edge.sourceIndex].append(edgeIndex)
+            if edge.targetIndex != edge.sourceIndex {
+                incidentEdges[edge.targetIndex].append(edgeIndex)
+            }
+        }
+        return incidentEdges
     }
 
     private func nodeColor(_ node: GraphLayoutNode, input: GraphRendererInput) -> SIMD4<Float> {
@@ -640,6 +838,41 @@ private final class GraphMetalRenderer {
             || input.layout.nodes[edge.targetIndex].nodeID == activeNodeID
     }
 
+    private func appendEdgeVertices(
+        edge: GraphLayoutEdge,
+        input: GraphRendererInput,
+        vertices: inout [GraphMetalVertex]
+    ) {
+        guard input.layout.nodes.indices.contains(edge.sourceIndex),
+              input.layout.nodes.indices.contains(edge.targetIndex)
+        else {
+            return
+        }
+
+        let isActiveEdge = edgeIsActive(edge, input: input)
+        let color = edgeColor(edge, input: input)
+        let source = metalPoint(input.position(for: input.layout.nodes[edge.sourceIndex]))
+        let target = metalPoint(input.position(for: input.layout.nodes[edge.targetIndex]))
+        appendThickEdgeVertices(
+            from: source,
+            to: target,
+            color: color,
+            thickness: Float(GraphVisualMetrics.linkThickness(
+                base: input.presentation.linkThickness,
+                isActive: isActiveEdge
+            )),
+            vertices: &vertices
+        )
+        if input.presentation.showArrows {
+            appendArrowHeadVertices(
+                from: source,
+                to: target,
+                color: color,
+                vertices: &vertices
+            )
+        }
+    }
+
     private func appendArrowHeadVertices(
         from source: SIMD2<Float>,
         to target: SIMD2<Float>,
@@ -669,7 +902,7 @@ private final class GraphMetalRenderer {
         let delta = target - source
         let length = max(0.001, sqrt(delta.x * delta.x + delta.y * delta.y))
         let unit = delta / length
-        let normal = SIMD2<Float>(-unit.y, unit.x) * max(0.25, thickness * 0.5)
+        let normal = SIMD2<Float>(-unit.y, unit.x) * (thickness * 0.5)
         let sourceLeft = source + normal
         let sourceRight = source - normal
         let targetLeft = target + normal
@@ -712,7 +945,7 @@ private struct GraphMetalLabelsOverlay: View {
         if hasVisibleLabels {
             Canvas { context, size in
                 for node in input.layout.nodes where input.labelIsVisible(for: node) {
-                    let point = canvasPoint(for: node.position, size: size)
+                    let point = canvasPoint(for: input.position(for: node), size: size)
                     let text = Text(node.label)
                         .font(.caption)
                         .foregroundStyle(Color.primary)
@@ -755,6 +988,29 @@ private struct GraphMetalVertex {
     var radius: Float
 }
 
+private struct GraphMetalBufferState {
+    let geometryIdentity: String
+    let styleIdentity: String
+    let positionOverrides: GraphNodePositionOverrides
+    let nodeIndexByID: [String: Int]
+    let incidentEdgeIndexesByNodeIndex: [[Int]]
+    let edgeVertexSpan: Int
+
+    func updating(
+        styleIdentity: String,
+        positionOverrides: GraphNodePositionOverrides
+    ) -> GraphMetalBufferState {
+        GraphMetalBufferState(
+            geometryIdentity: geometryIdentity,
+            styleIdentity: styleIdentity,
+            positionOverrides: positionOverrides,
+            nodeIndexByID: nodeIndexByID,
+            incidentEdgeIndexesByNodeIndex: incidentEdgeIndexesByNodeIndex,
+            edgeVertexSpan: edgeVertexSpan
+        )
+    }
+}
+
 private struct GraphMetalUniforms {
     var viewportSize: SIMD2<Float>
     var panOffset: SIMD2<Float>
@@ -763,14 +1019,14 @@ private struct GraphMetalUniforms {
 }
 
 private enum GraphMetalColor {
-    static let resolvedNode = SIMD4<Float>(0.18, 0.18, 0.18, 0.72)
-    static let unresolvedNode = SIMD4<Float>(0.42, 0.42, 0.42, 0.45)
+    static let resolvedNode = SIMD4<Float>(0.18, 0.18, 0.18, Float(GraphVisualMetrics.resolvedNodeAlpha))
+    static let unresolvedNode = SIMD4<Float>(0.42, 0.42, 0.42, Float(GraphVisualMetrics.unresolvedNodeAlpha))
     static let searchNode = SIMD4<Float>(0.07, 0.72, 0.28, 1.0)
-    static let hoveredNode = SIMD4<Float>(0.0, 0.48, 1.0, 0.85)
-    static let selectedNode = SIMD4<Float>(0.0, 0.48, 1.0, 1.0)
-    static let resolvedEdge = SIMD4<Float>(0.25, 0.25, 0.25, 0.22)
-    static let unresolvedEdge = SIMD4<Float>(0.25, 0.25, 0.25, 0.12)
-    static let activeEdge = SIMD4<Float>(0.0, 0.48, 1.0, 0.55)
+    static let hoveredNode = SIMD4<Float>(0.07, 0.72, 0.28, Float(GraphVisualMetrics.activeNodeAlpha))
+    static let selectedNode = SIMD4<Float>(0.07, 0.72, 0.28, 1.0)
+    static let resolvedEdge = SIMD4<Float>(0.25, 0.25, 0.25, Float(GraphVisualMetrics.resolvedEdgeAlpha))
+    static let unresolvedEdge = SIMD4<Float>(0.25, 0.25, 0.25, Float(GraphVisualMetrics.unresolvedEdgeAlpha))
+    static let activeEdge = SIMD4<Float>(0.07, 0.72, 0.28, Float(GraphVisualMetrics.activeEdgeAlpha))
 
     static func clearColor() -> MTLClearColor {
         let color = NSColor.textBackgroundColor.usingColorSpace(.deviceRGB)
@@ -872,7 +1128,7 @@ vertex GraphMetalRasterOut graphNodeVertex(
     GraphMetalRasterOut out;
     out.position = graphClipPosition(item.position, uniforms);
     out.color = item.color;
-    out.pointSize = max(2.0, item.radius * uniforms.zoomScale * 2.0 * uniforms.pointScale);
+    out.pointSize = item.radius * uniforms.zoomScale * 2.0 * uniforms.pointScale;
     return out;
 }
 

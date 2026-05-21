@@ -22,13 +22,86 @@ func graphLayoutSeedPositionsAreDeterministic() {
 }
 
 @Test
+func graphLayoutUsesSmallObsidianLikeNodeRadii() {
+    let layout = GraphLayoutMapper.map(radiusFixtureSnapshot())
+
+    #expect(layout.nodes[0].radius == GraphVisualMetrics.defaultNodeRadius)
+    #expect(layout.nodes[1].radius < 4.0)
+    #expect(layout.nodes[2].radius == GraphVisualMetrics.maximumHubNodeRadius)
+    #expect(layout.nodes.allSatisfy { $0.radius < 12.0 })
+}
+
+@Test
 func graphLayoutComponentsSeparateClustersAndOrphans() {
     let layout = GraphLayoutMapper.map(layoutFixtureSnapshot())
 
     #expect(layout.components.map(\.nodeIndexes) == [[0, 1], [2, 3], [4]])
     #expect(layout.components.map(\.isOrphanRing) == [false, false, true])
     #expect(abs(centerX(layout, indexes: [0, 1]) - centerX(layout, indexes: [2, 3])) > 300)
-    #expect(abs(layout.nodes[4].position.x) > 600 || abs(layout.nodes[4].position.y) > 600)
+    #expect(hypot(layout.nodes[4].position.x, layout.nodes[4].position.y) > 600)
+}
+
+@Test
+func graphLayoutOrphansUseDispersedCloudInsteadOfSingleRing() {
+    let layout = GraphLayoutMapper.map(largeLayoutFixtureSnapshot(nodeCount: 48))
+    let roundedRadii = Set(layout.nodes.map { node in
+        Int(hypot(node.position.x, node.position.y).rounded())
+    })
+    let xs = layout.nodes.map(\.position.x)
+    let ys = layout.nodes.map(\.position.y)
+    let xSpan = (xs.max() ?? 0) - (xs.min() ?? 0)
+    let ySpan = (ys.max() ?? 0) - (ys.min() ?? 0)
+
+    #expect(layout.components.map(\.isOrphanRing).allSatisfy { $0 })
+    #expect(roundedRadii.count > 12)
+    #expect(xSpan > 1_000)
+    #expect(ySpan > 1_000)
+}
+
+@Test
+func graphLayoutBoundsIncludeNodeRadii() {
+    let bounds = GraphLayoutBounds.enclosing([
+        layoutTestNode(index: 0, id: "file:a", x: -10, y: 0, radius: 2),
+        layoutTestNode(index: 1, id: "file:b", x: 20, y: 6, radius: 4)
+    ])
+
+    #expect(bounds == GraphLayoutBounds(minX: -12, minY: -2, maxX: 24, maxY: 10))
+    #expect(bounds?.width == 36)
+    #expect(bounds?.height == 12)
+    #expect(bounds?.center == GraphPoint(x: 6, y: 4))
+    #expect(GraphLayoutBounds.enclosing([]) == nil)
+}
+
+@Test
+func graphViewportFitsLayoutBoundsWithPadding() {
+    let bounds = GraphLayoutBounds(minX: -100, minY: -50, maxX: 100, maxY: 50)
+    let viewport = GraphViewport.fit(
+        layoutBounds: bounds,
+        canvasSize: GraphSize(width: 500, height: 300),
+        padding: 50,
+        maximumZoomScale: 10
+    )
+
+    #expect(viewport.zoomScale == 2)
+    #expect(viewport.panOffset == GraphPoint(x: 0, y: 0))
+    #expect(viewport.screenPoint(for: GraphPoint(x: -100, y: -50)) == GraphPoint(x: -200, y: -100))
+    #expect(viewport.screenPoint(for: GraphPoint(x: 100, y: 50)) == GraphPoint(x: 200, y: 100))
+}
+
+@Test
+func graphViewportFitHandlesEmptyAndSingleNodeBounds() {
+    let emptyFit = GraphViewport.fit(
+        layoutBounds: nil,
+        canvasSize: GraphSize(width: 500, height: 300)
+    )
+    let singleNodeFit = GraphViewport.fit(
+        layoutBounds: GraphLayoutBounds(minX: 8, minY: 8, maxX: 12, maxY: 12),
+        canvasSize: GraphSize(width: 500, height: 300)
+    )
+
+    #expect(emptyFit == GraphViewport())
+    #expect(singleNodeFit.zoomScale == GraphVisualMetrics.maximumFitZoomScale)
+    #expect(singleNodeFit.screenPoint(for: GraphPoint(x: 10, y: 10)) == GraphPoint(x: 0, y: 0))
 }
 
 @Test
@@ -62,9 +135,128 @@ func graphViewportRoundTripsCoordinatesAndResets() {
     #expect(viewport == GraphViewport())
 
     viewport.zoomScale = 0
-    #expect(viewport.zoomScale == 0.1)
+    #expect(viewport.zoomScale == GraphVisualMetrics.minimumZoomScale)
     viewport.zoomScale = .infinity
     #expect(viewport.zoomScale == 1)
+}
+
+@Test
+func graphViewportFitsLargeLayoutBelowLegacyMinimumZoom() {
+    let bounds = GraphLayoutBounds(minX: 0, minY: 0, maxX: 10_000, maxY: 5_000)
+    let viewport = GraphViewport.fit(
+        layoutBounds: bounds,
+        canvasSize: GraphSize(width: 500, height: 300),
+        padding: 50
+    )
+
+    #expect(viewport.zoomScale == 0.04)
+    #expect(viewport.screenPoint(for: bounds.center) == GraphPoint(x: 0, y: 0))
+    #expect(viewport.screenPoint(for: GraphPoint(x: bounds.minX, y: bounds.minY)) == GraphPoint(x: -200, y: -100))
+    #expect(viewport.screenPoint(for: GraphPoint(x: bounds.maxX, y: bounds.maxY)) == GraphPoint(x: 200, y: 100))
+}
+
+@Test
+func graphViewportFitStateFitsOncePerRequest() {
+    let layout = GraphLayoutMapper.map(layoutFixtureSnapshot(requestID: 7))
+    let canvasSize = GraphSize(width: 500, height: 300)
+    var fitState = GraphViewportFitState()
+
+    let firstFit = fitState.initialFitViewport(layout: layout, canvasSize: canvasSize)
+    let secondFit = fitState.initialFitViewport(layout: layout, canvasSize: canvasSize)
+
+    #expect(firstFit != nil)
+    #expect(secondFit == nil)
+}
+
+@Test
+func graphViewportFitStatePreservesUserViewportAcrossSameRequestRefinement() {
+    let layout = GraphLayoutMapper.map(layoutFixtureSnapshot(requestID: 7))
+    let refinedLayout = GraphRendererSnapshot(
+        requestID: layout.requestID,
+        generation: layout.generation,
+        nodes: layout.nodes,
+        edges: layout.edges,
+        components: layout.components,
+        renderIdentity: layout.renderIdentity &+ 1
+    )
+    let canvasSize = GraphSize(width: 500, height: 300)
+    var fitState = GraphViewportFitState()
+
+    #expect(fitState.initialFitViewport(layout: layout, canvasSize: canvasSize) != nil)
+    #expect(fitState.initialFitViewport(layout: refinedLayout, canvasSize: canvasSize) == nil)
+}
+
+@Test
+func graphViewportFitStateWaitsForUsableCanvasAndCanInvalidate() {
+    let layout = GraphLayoutMapper.map(layoutFixtureSnapshot(requestID: 7))
+    let usableCanvasSize = GraphSize(width: 500, height: 300)
+    var fitState = GraphViewportFitState()
+
+    #expect(fitState.initialFitViewport(
+        layout: layout,
+        canvasSize: GraphSize(
+            width: GraphViewportFitState.minimumUsableCanvasSide - 1,
+            height: 300
+        )
+    ) == nil)
+    #expect(fitState.initialFitViewport(layout: layout, canvasSize: usableCanvasSize) != nil)
+
+    fitState.invalidate()
+
+    #expect(fitState.initialFitViewport(layout: layout, canvasSize: usableCanvasSize) != nil)
+}
+
+@Test
+func graphViewportFitStateResetAlwaysReturnsFitViewport() {
+    let layout = GraphLayoutMapper.map(layoutFixtureSnapshot(requestID: 7))
+    let canvasSize = GraphSize(width: 500, height: 300)
+    var fitState = GraphViewportFitState()
+    let firstFit = fitState.initialFitViewport(layout: layout, canvasSize: canvasSize)
+
+    let resetFit = fitState.resetViewport(layout: layout, canvasSize: canvasSize)
+
+    #expect(firstFit == resetFit)
+    #expect(fitState.initialFitViewport(layout: layout, canvasSize: canvasSize) == nil)
+}
+
+@Test
+func graphViewportFitStateCachesBoundsByLayoutIdentity() {
+    let layout = GraphLayoutMapper.map(layoutFixtureSnapshot(requestID: 7))
+    let refinedLayout = GraphRendererSnapshot(
+        requestID: layout.requestID,
+        generation: layout.generation,
+        nodes: layout.nodes,
+        edges: layout.edges,
+        components: layout.components,
+        renderIdentity: layout.renderIdentity &+ 1
+    )
+    let canvasSize = GraphSize(width: 500, height: 300)
+    var fitState = GraphViewportFitState()
+
+    #expect(fitState.cachedLayoutIdentity == nil)
+    #expect(fitState.initialFitViewport(layout: layout, canvasSize: canvasSize) != nil)
+    #expect(fitState.cachedLayoutIdentity == layout.renderIdentity)
+    #expect(fitState.initialFitViewport(layout: refinedLayout, canvasSize: canvasSize) == nil)
+    #expect(fitState.cachedLayoutIdentity == layout.renderIdentity)
+
+    _ = fitState.resetViewport(layout: refinedLayout, canvasSize: canvasSize)
+
+    #expect(fitState.cachedLayoutIdentity == refinedLayout.renderIdentity)
+}
+
+@Test
+func graphViewportFitBenchmarkFitsSynthetic60kNodesUnderBudget() {
+    let result = GraphViewportFitBenchmark.run(nodeCount: 60_000)
+    let usesStrictBudget = ProcessInfo.processInfo.environment["GRANITE_STRICT_GRAPH_FIT_BENCHMARK"] == "1"
+
+    #expect(result.nodeCount == 60_000)
+    #expect(result.viewport.zoomScale > 0)
+    if usesStrictBudget {
+        #expect(result.boundsDurationMilliseconds <= 10)
+        #expect(result.totalDurationMilliseconds <= 25)
+    } else {
+        #expect(result.totalDurationMilliseconds <= 250)
+    }
 }
 
 @Test
@@ -172,6 +364,24 @@ private func centerX(_ layout: GraphRendererSnapshot, indexes: [Int]) -> Double 
     return total / Double(indexes.count)
 }
 
+private func layoutTestNode(
+    index: Int,
+    id: String,
+    x: Double,
+    y: Double,
+    radius: Double
+) -> GraphLayoutNode {
+    GraphLayoutNode(
+        index: index,
+        nodeID: id,
+        label: id,
+        kind: .resolved,
+        degree: 1,
+        position: GraphPoint(x: x, y: y),
+        radius: radius
+    )
+}
+
 private func layoutFixtureSnapshot(
     requestID: UInt64 = 1,
     generation: UInt64 = 9
@@ -216,6 +426,22 @@ private func largeLayoutFixtureSnapshot(nodeCount: Int) -> WholeVaultGraphSnapsh
         nodes: (0..<nodeCount).map { index in
             layoutNode("file:\(index)", degree: 0)
         },
+        edges: []
+    )
+}
+
+private func radiusFixtureSnapshot() -> WholeVaultGraphSnapshot {
+    WholeVaultGraphSnapshot(
+        requestID: 1,
+        generation: 9,
+        partialReasons: [],
+        nodeCountTotal: 3,
+        edgeCountTotal: 0,
+        nodes: [
+            layoutNode("file:zero", degree: 0),
+            layoutNode("file:moderate", degree: 4),
+            layoutNode("file:hub", degree: 100)
+        ],
         edges: []
     )
 }
