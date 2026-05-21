@@ -1,19 +1,32 @@
+use std::collections::HashSet;
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_uchar};
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::panic::{self, catch_unwind, AssertUnwindSafe};
+use std::path::Path;
 use std::slice;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::sync::Mutex;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::ENGINE_ABI_VERSION;
+use crate::graph::{
+    build_whole_vault_graph_snapshot, WholeVaultGraphInputs, WholeVaultGraphRequest,
+    WholeVaultGraphSnapshot,
+};
+use crate::index::{
+    GraphFileRecord, GraphResolvedEdgeRecord, GraphUnresolvedEdgeRecord, IndexSchemaMetadata,
+    MetadataStore, MetadataStoreError,
+};
 use crate::indexing_queue::{IndexingQueue, IndexingQueueItem};
 use crate::paths::{FileIdentity, PathError, VaultRoot};
 use crate::save::{
+    keep_conflicted_buffer_as_new_note, overwrite_after_conflict, reload_after_conflict, safe_save,
     SafeSaveError, SaveBaseline, SaveChoiceOutcome, SaveConflict, SaveConflictChoiceError,
     SaveConflictKind, SaveConflictSnapshot, SaveOutcome, SaveReloadOutcome, SaveRequest,
-    keep_conflicted_buffer_as_new_note, overwrite_after_conflict, reload_after_conflict, safe_save,
 };
+use crate::ENGINE_ABI_VERSION;
+
+static FFI_PANIC_HOOK_LOCK: Mutex<()> = Mutex::new(());
 
 pub fn abi_version() -> u32 {
     ENGINE_ABI_VERSION
@@ -156,6 +169,29 @@ pub unsafe extern "C" fn engine_save_overwrite_after_conflict(
     })
 }
 
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn engine_graph_snapshot(
+    metadata_path: *const c_char,
+    request_json: *const c_char,
+) -> *mut c_char {
+    ffi_response(|| {
+        let metadata_path = unsafe { read_c_string(metadata_path, "metadata_path") }?;
+        let request_json = unsafe { read_c_string(request_json, "request_json") }?;
+        let request: FfiWholeVaultGraphRequest = read_json(&request_json, "request_json")?;
+        if request.payload_version != 1 {
+            return Err(FfiError::invalid_request(
+                "unsupported graph request version",
+            ));
+        }
+        if request.byte_cap_bytes == 0 {
+            return Err(FfiError::invalid_request(
+                "byte cap must be greater than zero",
+            ));
+        }
+        graph_snapshot_payload(Path::new(&metadata_path), request)
+    })
+}
+
 #[derive(Debug, Serialize)]
 struct FfiResponse<T> {
     ok: bool,
@@ -239,6 +275,34 @@ struct FfiSaveChoiceOutcome {
     dirty: bool,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct FfiWholeVaultGraphRequest {
+    payload_version: u32,
+    request_id: u64,
+    generation: u64,
+    include_unresolved: bool,
+    include_orphans: bool,
+    max_nodes: usize,
+    max_edges: usize,
+    byte_cap_bytes: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct FfiWholeVaultGraphPayload {
+    payload_version: u32,
+    request_id: u64,
+    generation: u64,
+    state: String,
+    metrics: FfiWholeVaultGraphMetrics,
+    snapshot: WholeVaultGraphSnapshot,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct FfiWholeVaultGraphMetrics {
+    snapshot_duration_milliseconds: f64,
+    encoded_payload_bytes: usize,
+}
+
 impl FfiError {
     fn invalid_input(field: &str, message: impl Into<String>) -> Self {
         Self {
@@ -310,6 +374,51 @@ impl FfiError {
         Self {
             code: "queue_error".to_string(),
             message: error.to_string(),
+            conflict_kind: None,
+            conflict: None,
+        }
+    }
+
+    fn invalid_request(message: impl Into<String>) -> Self {
+        Self {
+            code: "invalid_request".to_string(),
+            message: message.into(),
+            conflict_kind: None,
+            conflict: None,
+        }
+    }
+
+    fn missing_index() -> Self {
+        Self {
+            code: "missing_index".to_string(),
+            message: "graph index is missing".to_string(),
+            conflict_kind: None,
+            conflict: None,
+        }
+    }
+
+    fn stale_schema() -> Self {
+        Self {
+            code: "stale_schema".to_string(),
+            message: "graph index schema is stale".to_string(),
+            conflict_kind: None,
+            conflict: None,
+        }
+    }
+
+    fn graph_index_error() -> Self {
+        Self {
+            code: "graph_index_error".to_string(),
+            message: "graph index could not be read".to_string(),
+            conflict_kind: None,
+            conflict: None,
+        }
+    }
+
+    fn oversized_response() -> Self {
+        Self {
+            code: "oversized_response".to_string(),
+            message: "graph response exceeded byte cap".to_string(),
             conflict_kind: None,
             conflict: None,
         }
@@ -460,12 +569,220 @@ impl From<&SaveChoiceOutcome> for FfiSaveChoiceOutcome {
     }
 }
 
+fn graph_snapshot_payload(
+    metadata_path: &Path,
+    request: FfiWholeVaultGraphRequest,
+) -> Result<FfiWholeVaultGraphPayload, FfiError> {
+    if !metadata_path.is_file() {
+        return Err(FfiError::missing_index());
+    }
+
+    let expected = IndexSchemaMetadata::new(
+        "sqlite+tantivy",
+        "metadata-v2",
+        "tantivy",
+        request.generation,
+    );
+    let metadata = MetadataStore::open(metadata_path, &expected).map_err(graph_metadata_error)?;
+    let graph_request = WholeVaultGraphRequest::with_request_id(
+        request.request_id,
+        request.max_nodes,
+        request.max_edges,
+    )
+    .including_unresolved(request.include_unresolved)
+    .including_orphans(request.include_orphans);
+    let start = Instant::now();
+    let edge_fetch_limit = graph_request.edge_limit().saturating_add(1);
+    let node_fetch_limit = graph_request.node_limit().saturating_add(1);
+    let resolved_edges = metadata
+        .graph_resolved_edges(request.generation, edge_fetch_limit)
+        .map_err(graph_metadata_error)?;
+    let unresolved_edges = if graph_request.include_unresolved {
+        metadata
+            .graph_unresolved_edges(request.generation, edge_fetch_limit)
+            .map_err(graph_metadata_error)?
+    } else {
+        Vec::new()
+    };
+    let orphan_files = if graph_request.include_orphans {
+        metadata
+            .graph_orphan_files(
+                request.generation,
+                graph_request.include_unresolved,
+                node_fetch_limit,
+            )
+            .map_err(graph_metadata_error)?
+    } else {
+        Vec::new()
+    };
+    let files = graph_candidate_files(
+        &resolved_edges,
+        &unresolved_edges,
+        &orphan_files,
+        node_fetch_limit,
+    );
+    let file_ids = files
+        .iter()
+        .map(|file| file.file_id.clone())
+        .collect::<Vec<_>>();
+    let tags = metadata
+        .graph_tags_for_files(&file_ids, graph_request.tag_limit().saturating_add(1))
+        .map_err(graph_metadata_error)?;
+    let node_count_total = metadata
+        .graph_visible_node_count(
+            request.generation,
+            graph_request.include_unresolved,
+            graph_request.include_orphans,
+        )
+        .map_err(graph_metadata_error)?;
+    let edge_count_total = metadata
+        .graph_visible_edge_count(request.generation, graph_request.include_unresolved)
+        .map_err(graph_metadata_error)?;
+    let graph = build_whole_vault_graph_snapshot(
+        graph_request,
+        request.generation,
+        WholeVaultGraphInputs {
+            node_count_total,
+            edge_count_total,
+            files,
+            resolved_edges,
+            unresolved_edges,
+            orphan_files,
+            tags,
+        },
+    );
+    let snapshot_duration_milliseconds = start.elapsed().as_secs_f64() * 1_000.0;
+    let payload = FfiWholeVaultGraphPayload {
+        payload_version: 1,
+        request_id: request.request_id,
+        generation: request.generation,
+        state: if graph.partial {
+            "partial".to_string()
+        } else {
+            "complete".to_string()
+        },
+        metrics: FfiWholeVaultGraphMetrics {
+            snapshot_duration_milliseconds,
+            encoded_payload_bytes: 0,
+        },
+        snapshot: graph.snapshot,
+    };
+
+    finalize_graph_payload(payload, request.byte_cap_bytes)
+}
+
+fn finalize_graph_payload(
+    mut payload: FfiWholeVaultGraphPayload,
+    byte_cap_bytes: usize,
+) -> Result<FfiWholeVaultGraphPayload, FfiError> {
+    for _ in 0..8 {
+        let encoded_payload_bytes = ffi_success_response_len(&payload)?;
+        if encoded_payload_bytes > byte_cap_bytes {
+            return Err(FfiError::oversized_response());
+        }
+        if payload.metrics.encoded_payload_bytes == encoded_payload_bytes {
+            return Ok(payload);
+        }
+        payload.metrics.encoded_payload_bytes = encoded_payload_bytes;
+    }
+
+    let encoded_payload_bytes = ffi_success_response_len(&payload)?;
+    if encoded_payload_bytes > byte_cap_bytes {
+        return Err(FfiError::oversized_response());
+    }
+    payload.metrics.encoded_payload_bytes = encoded_payload_bytes;
+    Ok(payload)
+}
+
+fn ffi_success_response_len<T: Serialize>(value: &T) -> Result<usize, FfiError> {
+    let response: FfiResponse<&T> = FfiResponse {
+        ok: true,
+        value: Some(value),
+        error: None,
+    };
+    serde_json::to_vec(&response)
+        .map(|bytes| bytes.len())
+        .map_err(|_| FfiError::graph_index_error())
+}
+
+fn graph_metadata_error(error: MetadataStoreError) -> FfiError {
+    match error {
+        MetadataStoreError::SchemaMismatch { .. } => FfiError::stale_schema(),
+        MetadataStoreError::Sqlite(_) | MetadataStoreError::InvalidStoredValue(_) => {
+            FfiError::graph_index_error()
+        }
+    }
+}
+
+fn graph_candidate_files(
+    resolved_edges: &[GraphResolvedEdgeRecord],
+    unresolved_edges: &[GraphUnresolvedEdgeRecord],
+    orphan_files: &[GraphFileRecord],
+    limit: usize,
+) -> Vec<GraphFileRecord> {
+    let mut seen = HashSet::new();
+    let mut files = Vec::new();
+
+    for edge in resolved_edges {
+        push_graph_candidate_file(
+            &mut files,
+            &mut seen,
+            limit,
+            &edge.source_file_id,
+            &edge.source_relative_path,
+        );
+        push_graph_candidate_file(
+            &mut files,
+            &mut seen,
+            limit,
+            &edge.target_file_id,
+            &edge.target_relative_path,
+        );
+    }
+    for edge in unresolved_edges {
+        push_graph_candidate_file(
+            &mut files,
+            &mut seen,
+            limit,
+            &edge.source_file_id,
+            &edge.source_relative_path,
+        );
+    }
+    for file in orphan_files {
+        push_graph_candidate_file(
+            &mut files,
+            &mut seen,
+            limit,
+            &file.file_id,
+            &file.relative_path,
+        );
+    }
+
+    files
+}
+
+fn push_graph_candidate_file(
+    files: &mut Vec<GraphFileRecord>,
+    seen: &mut HashSet<String>,
+    limit: usize,
+    file_id: &str,
+    relative_path: &Path,
+) {
+    if files.len() >= limit || !seen.insert(file_id.to_string()) {
+        return;
+    }
+    files.push(GraphFileRecord {
+        file_id: file_id.to_string(),
+        relative_path: relative_path.to_path_buf(),
+    });
+}
+
 fn ffi_response<T, F>(call: F) -> *mut c_char
 where
     T: Serialize,
     F: FnOnce() -> Result<T, FfiError>,
 {
-    let result = catch_unwind(AssertUnwindSafe(call)).unwrap_or_else(|_| Err(FfiError::panic()));
+    let result = catch_ffi_unwind(call).unwrap_or_else(|_| Err(FfiError::panic()));
     let response = match result {
         Ok(value) => FfiResponse {
             ok: true,
@@ -487,6 +804,20 @@ where
     CString::new(json)
         .expect("serialized FFI response must not contain nul bytes")
         .into_raw()
+}
+
+fn catch_ffi_unwind<T, F>(call: F) -> std::thread::Result<T>
+where
+    F: FnOnce() -> T,
+{
+    let _guard = FFI_PANIC_HOOK_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let previous_hook = panic::take_hook();
+    panic::set_hook(Box::new(|_| {}));
+    let result = catch_unwind(AssertUnwindSafe(call));
+    panic::set_hook(previous_hook);
+    result
 }
 
 unsafe fn read_c_string(ptr: *const c_char, field: &str) -> Result<String, FfiError> {
@@ -547,9 +878,199 @@ fn system_time(time: FfiSystemTime) -> SystemTime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::index::{
+        FileIndexStatus, FileRecord, IndexSchemaMetadata, LinkEdgeRecord, MetadataStore, TagRecord,
+        TagSource,
+    };
+    use crate::paths::FileIdentity;
+    use crate::scanner::ScanEntryKind;
     use serde_json::Value;
     use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicBool, Ordering};
     use tempfile::tempdir;
+
+    #[test]
+    fn graph_ffi_returns_versioned_payload() {
+        let dir = tempdir().expect("tempdir");
+        let metadata_path = dir.path().join("metadata.sqlite");
+        write_graph_metadata(&metadata_path, "metadata-v2", 1);
+        let metadata = CString::new(metadata_path.to_string_lossy().as_bytes()).expect("metadata");
+        let request = CString::new(graph_request_json(1, 1, 1024 * 1024)).expect("request");
+
+        let response =
+            unsafe { take_response(engine_graph_snapshot(metadata.as_ptr(), request.as_ptr())) };
+        let json: Value = serde_json::from_str(&response).expect("response json");
+
+        assert_eq!(json["ok"], true);
+        assert_eq!(json["value"]["payload_version"], 1);
+        assert_eq!(json["value"]["request_id"], 1);
+        assert_eq!(json["value"]["generation"], 1);
+        assert_eq!(json["value"]["state"], "complete");
+        assert_eq!(json["value"]["snapshot"]["node_count_total"], 2);
+        assert_eq!(json["value"]["snapshot"]["edge_count_total"], 1);
+        assert_eq!(
+            json["value"]["snapshot"]["nodes"]
+                .as_array()
+                .expect("nodes")
+                .len(),
+            2
+        );
+        assert_eq!(
+            json["value"]["snapshot"]["edges"]
+                .as_array()
+                .expect("edges")
+                .len(),
+            1
+        );
+        assert!(
+            json["value"]["metrics"]["snapshot_duration_milliseconds"]
+                .as_f64()
+                .expect("duration")
+                >= 0.0
+        );
+        assert!(
+            json["value"]["metrics"]["encoded_payload_bytes"]
+                .as_u64()
+                .expect("payload bytes")
+                > 0
+        );
+        assert_eq!(
+            json["value"]["metrics"]["encoded_payload_bytes"]
+                .as_u64()
+                .expect("payload bytes") as usize,
+            response.len()
+        );
+    }
+
+    #[test]
+    fn graph_ffi_returns_redacted_structured_errors() {
+        let dir = tempdir().expect("tempdir");
+        let missing_path = dir.path().join("SecretProject").join("metadata.sqlite");
+        let missing = CString::new(missing_path.to_string_lossy().as_bytes()).expect("missing");
+        let request = CString::new(graph_request_json(1, 1, 1024 * 1024)).expect("request");
+
+        let missing_response =
+            unsafe { take_response(engine_graph_snapshot(missing.as_ptr(), request.as_ptr())) };
+        assert_graph_error(&missing_response, "missing_index");
+        assert!(!missing_response.contains("SecretProject"));
+        assert!(!missing_response.contains(&dir.path().to_string_lossy().to_string()));
+
+        let metadata_path = dir.path().join("metadata.sqlite");
+        write_graph_metadata(&metadata_path, "metadata-v1", 1);
+        let metadata = CString::new(metadata_path.to_string_lossy().as_bytes()).expect("metadata");
+        let stale_response =
+            unsafe { take_response(engine_graph_snapshot(metadata.as_ptr(), request.as_ptr())) };
+        assert_graph_error(&stale_response, "stale_schema");
+        assert!(!stale_response.contains("SecretProject"));
+        assert!(!stale_response.contains(&metadata_path.to_string_lossy().to_string()));
+
+        let invalid_request = CString::new(graph_request_json(1, 1, 1024 * 1024).replacen(
+            r#""payload_version":1"#,
+            r#""payload_version":2"#,
+            1,
+        ))
+        .expect("invalid request");
+        let invalid_response = unsafe {
+            take_response(engine_graph_snapshot(
+                metadata.as_ptr(),
+                invalid_request.as_ptr(),
+            ))
+        };
+        assert_graph_error(&invalid_response, "invalid_request");
+
+        let tiny_cap = CString::new(graph_request_json(1, 1, 1)).expect("tiny cap");
+        let oversized_response =
+            unsafe { take_response(engine_graph_snapshot(metadata.as_ptr(), tiny_cap.as_ptr())) };
+        assert_graph_error(&oversized_response, "stale_schema");
+    }
+
+    #[test]
+    fn graph_ffi_reports_oversized_response_without_private_values() {
+        let dir = tempdir().expect("tempdir");
+        let metadata_path = dir.path().join("metadata.sqlite");
+        write_graph_metadata(&metadata_path, "metadata-v2", 1);
+        let metadata = CString::new(metadata_path.to_string_lossy().as_bytes()).expect("metadata");
+        let request = CString::new(graph_request_json(1, 1, 1)).expect("request");
+
+        let response =
+            unsafe { take_response(engine_graph_snapshot(metadata.as_ptr(), request.as_ptr())) };
+
+        assert_graph_error(&response, "oversized_response");
+        assert!(!response.contains("SecretProject"));
+        assert!(!response.contains("client@example.com"));
+        assert!(!response.contains(&metadata_path.to_string_lossy().to_string()));
+    }
+
+    #[test]
+    fn graph_ffi_reports_oversized_response_when_envelope_exceeds_cap() {
+        let dir = tempdir().expect("tempdir");
+        let metadata_path = dir.path().join("metadata.sqlite");
+        write_graph_metadata(&metadata_path, "metadata-v2", 1);
+        let uncapped_payload = graph_snapshot_payload(
+            &metadata_path,
+            FfiWholeVaultGraphRequest {
+                payload_version: 1,
+                request_id: 1,
+                generation: 1,
+                include_unresolved: false,
+                include_orphans: false,
+                max_nodes: 100,
+                max_edges: 100,
+                byte_cap_bytes: 1024 * 1024,
+            },
+        )
+        .expect("uncapped graph payload");
+        let full_response_len =
+            ffi_success_response_len(&uncapped_payload).expect("full response length");
+        let snapshot_len = serde_json::to_vec(&uncapped_payload.snapshot)
+            .expect("snapshot json")
+            .len();
+        let boundary_cap = snapshot_len;
+        assert!(boundary_cap < full_response_len);
+
+        let metadata = CString::new(metadata_path.to_string_lossy().as_bytes()).expect("metadata");
+        let request = CString::new(graph_request_json(1, 1, boundary_cap)).expect("request");
+        let response =
+            unsafe { take_response(engine_graph_snapshot(metadata.as_ptr(), request.as_ptr())) };
+
+        assert_graph_error(&response, "oversized_response");
+        assert!(!response.contains("SecretProject"));
+        assert!(!response.contains("client@example.com"));
+        assert!(!response.contains(&metadata_path.to_string_lossy().to_string()));
+    }
+
+    #[test]
+    fn ffi_response_catches_panics() {
+        let response = unsafe {
+            take_response(ffi_response(|| -> Result<Value, FfiError> {
+                panic!("graph panic should be redacted");
+            }))
+        };
+
+        assert_graph_error(&response, "panic");
+        assert!(!response.contains("graph panic should be redacted"));
+    }
+
+    #[test]
+    fn ffi_response_suppresses_panic_hook_payloads() {
+        static HOOK_WAS_CALLED: AtomicBool = AtomicBool::new(false);
+        HOOK_WAS_CALLED.store(false, Ordering::SeqCst);
+        let previous_hook = panic::take_hook();
+        panic::set_hook(Box::new(|info| {
+            if info.to_string().contains("SecretProject") {
+                HOOK_WAS_CALLED.store(true, Ordering::SeqCst);
+            }
+        }));
+
+        let result = catch_ffi_unwind(|| {
+            panic!("SecretProject client@example.com");
+        });
+        panic::set_hook(previous_hook);
+
+        assert!(result.is_err());
+        assert!(!HOOK_WAS_CALLED.load(Ordering::SeqCst));
+    }
 
     #[test]
     fn save_ffi_captures_baseline_and_writes_exact_bytes() {
@@ -816,6 +1337,68 @@ mod tests {
         let value: Value = serde_json::from_str(&save_response).expect("deleted conflict json");
         assert_eq!(value["ok"], false);
         value["error"]["conflict"].to_string()
+    }
+
+    fn graph_request_json(request_id: u64, generation: u64, byte_cap_bytes: usize) -> String {
+        format!(
+            r#"{{"payload_version":1,"request_id":{request_id},"generation":{generation},"include_unresolved":false,"include_orphans":false,"max_nodes":100,"max_edges":100,"byte_cap_bytes":{byte_cap_bytes}}}"#
+        )
+    }
+
+    fn write_graph_metadata(path: &Path, backend_version: &str, generation: u64) {
+        let metadata =
+            IndexSchemaMetadata::new("sqlite+tantivy", backend_version, "tantivy", generation);
+        let mut store = MetadataStore::open(path, &metadata).expect("metadata store");
+        let mut home = graph_file("home", "SecretProject.md", generation, 1);
+        home.status = FileIndexStatus::SearchIndexed;
+        let mut target = graph_file("target", "Target.md", generation, 2);
+        target.status = FileIndexStatus::SearchIndexed;
+        store
+            .replace_file_records(
+                &home,
+                &[LinkEdgeRecord {
+                    source_file_id: home.file_id.clone(),
+                    target_text: "Target".to_string(),
+                    resolved_target_file_id: Some(target.file_id.clone()),
+                    heading: None,
+                    alias: None,
+                    is_embed: false,
+                }],
+                &[TagRecord {
+                    file_id: home.file_id.clone(),
+                    tag: "client@example.com".to_string(),
+                    source: TagSource::Inline,
+                }],
+                &[],
+                &[],
+                &[],
+            )
+            .expect("home records");
+        store
+            .replace_file_records(&target, &[], &[], &[], &[], &[])
+            .expect("target records");
+    }
+
+    fn graph_file(file_id: &str, relative_path: &str, generation: u64, inode: u64) -> FileRecord {
+        FileRecord {
+            file_id: file_id.to_string(),
+            relative_path: PathBuf::from(relative_path),
+            kind: ScanEntryKind::Markdown,
+            size_bytes: 1,
+            modified: None,
+            file_identity: FileIdentity { device: 1, inode },
+            content_hash: Some(format!("{file_id}-hash")),
+            generation,
+            status: FileIndexStatus::Parsed,
+            last_error: None,
+        }
+    }
+
+    fn assert_graph_error(response: &str, expected_code: &str) {
+        let json: Value = serde_json::from_str(response).expect("response json");
+        assert_eq!(json["ok"], false);
+        assert_eq!(json["error"]["code"], expected_code);
+        assert_eq!(json["value"], Value::Null);
     }
 
     unsafe fn take_response(ptr: *mut c_char) -> String {
