@@ -1115,6 +1115,23 @@ mod tests {
         }));
         assert!(whole_graph.value.edges.iter().any(|edge| edge.weight == 1));
 
+        let whole_graph_with_group_metadata = api
+            .whole_vault_graph(
+                WholeVaultGraphRequest::with_request_id(64, 10, 10)
+                    .with_group_limits(1, 100, 10, 100),
+            )
+            .expect("whole vault graph with group metadata");
+        assert!(
+            whole_graph_with_group_metadata
+                .value
+                .nodes
+                .iter()
+                .any(|node| {
+                    node.relative_path.as_deref() == Some("Home.md")
+                        && node.tags == vec!["project/native"]
+                })
+        );
+
         let whole_with_unresolved = api
             .whole_vault_graph(
                 WholeVaultGraphRequest::with_request_id(63, 10, 10).including_unresolved(true),

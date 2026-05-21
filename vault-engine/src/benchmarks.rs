@@ -316,6 +316,11 @@ pub fn run_whole_vault_graph_snapshot_benchmark(
     } else {
         timed(|| Ok(store.graph_resolved_edges(1, edge_fetch_limit)?))?
     };
+    let resolved_query_stage = if has_all_files {
+        GraphQueryStage::ResolvedEdgesCompact
+    } else {
+        GraphQueryStage::ResolvedEdges
+    };
     let (unresolved_edges, unresolved_duration) = if request.include_unresolved {
         timed(|| Ok(store.graph_unresolved_edges(1, edge_fetch_limit)?))?
     } else {
@@ -369,7 +374,7 @@ pub fn run_whole_vault_graph_snapshot_benchmark(
     let rss_after = current_rss_bytes();
     let rss_delta = rss_before
         .zip(rss_after)
-        .map(|(before, after)| after.saturating_sub(before));
+        .and_then(|(before, after)| after.checked_sub(before));
     if let Some(path) = &options.private_payload_output {
         write_private_graph_payload(path, &build.snapshot, snapshot_ms, encoded_payload_bytes)?;
     }
@@ -380,17 +385,29 @@ pub fn run_whole_vault_graph_snapshot_benchmark(
         indexed_access(
             "resolvedEdges",
             &plans,
-            GraphQueryStage::ResolvedEdges,
+            resolved_query_stage,
             resolved_duration,
         ),
-        indexed_access(
-            "unresolvedEdges",
-            &plans,
-            GraphQueryStage::UnresolvedEdges,
-            unresolved_duration,
-        ),
-        indexed_access_for_orphans(&plans, orphan_duration),
-        indexed_access("tags", &plans, GraphQueryStage::Tags, tags_duration),
+        if request.include_unresolved {
+            indexed_access(
+                "unresolvedEdges",
+                &plans,
+                GraphQueryStage::UnresolvedEdges,
+                unresolved_duration,
+            )
+        } else {
+            skipped_indexed_access("unresolvedEdges")
+        },
+        if request.include_orphans {
+            indexed_access_for_orphans(&plans, orphan_duration)
+        } else {
+            skipped_indexed_access("orphans")
+        },
+        if whole_vault_graph_needs_tags(request) {
+            indexed_access("tags", &plans, GraphQueryStage::Tags, tags_duration)
+        } else {
+            skipped_indexed_access("tags")
+        },
         WholeVaultGraphIndexedAccess {
             stage: "assembly".to_string(),
             uses_index: false,
@@ -1228,6 +1245,15 @@ fn indexed_access_for_orphans(
             "intentionalFullPass".to_string()
         },
         duration_milliseconds: duration_millis(duration),
+    }
+}
+
+fn skipped_indexed_access(stage: &str) -> WholeVaultGraphIndexedAccess {
+    WholeVaultGraphIndexedAccess {
+        stage: stage.to_string(),
+        uses_index: false,
+        scan_kind: "skipped".to_string(),
+        duration_milliseconds: 0.0,
     }
 }
 

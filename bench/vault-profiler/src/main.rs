@@ -939,12 +939,24 @@ fn is_private_output_inside_vault(vault_root: &Path, output_path: &Path) -> std:
         .parent()
         .filter(|path| !path.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
-    let absolute_parent = if parent.is_absolute() {
+    let mut absolute_parent = if parent.is_absolute() {
         parent.to_path_buf()
     } else {
         env::current_dir()?.join(parent)
     };
-    let normalized_parent = normalize_existing_or_future_path(&absolute_parent);
+    let mut future_components = Vec::new();
+    while !absolute_parent.exists() {
+        if let Some(component) = absolute_parent.file_name() {
+            future_components.push(component.to_os_string());
+        }
+        if !absolute_parent.pop() {
+            break;
+        }
+    }
+    let mut normalized_parent = normalize_existing_or_future_path(&absolute_parent.canonicalize()?);
+    for component in future_components.iter().rev() {
+        normalized_parent.push(component);
+    }
     Ok(normalized_parent == vault_root || normalized_parent.starts_with(&vault_root))
 }
 
@@ -1512,6 +1524,23 @@ mod tests {
                 "Home".to_string(),
                 "#보안_검증".to_string()
             ]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_private_graph_payload_parent_symlinked_into_vault() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let vault = temp.path().join("vault");
+        let outside = temp.path().join("outside");
+        fs::create_dir(&vault).expect("vault dir");
+        fs::create_dir(&outside).expect("outside dir");
+        let symlink_parent = outside.join("private");
+        std::os::unix::fs::symlink(&vault, &symlink_parent).expect("symlink");
+
+        assert!(
+            is_private_output_inside_vault(&vault, &symlink_parent.join("graph-payload.json"))
+                .expect("inside vault check")
         );
     }
 }

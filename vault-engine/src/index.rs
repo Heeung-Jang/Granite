@@ -95,6 +95,7 @@ pub struct GraphTagRecord {
 pub enum GraphQueryStage {
     Files,
     ResolvedEdges,
+    ResolvedEdgesCompact,
     UnresolvedEdges,
     OrphansResolvedOnly,
     OrphansWithUnresolved,
@@ -556,6 +557,10 @@ impl MetadataStore {
         let queries = [
             (GraphQueryStage::Files, GRAPH_FILES_SQL),
             (GraphQueryStage::ResolvedEdges, GRAPH_RESOLVED_EDGES_SQL),
+            (
+                GraphQueryStage::ResolvedEdgesCompact,
+                GRAPH_RESOLVED_EDGES_COMPACT_SQL,
+            ),
             (GraphQueryStage::UnresolvedEdges, GRAPH_UNRESOLVED_EDGES_SQL),
             (
                 GraphQueryStage::OrphansResolvedOnly,
