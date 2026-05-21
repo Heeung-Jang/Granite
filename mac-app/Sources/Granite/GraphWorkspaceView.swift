@@ -264,7 +264,8 @@ struct GraphWorkspaceView: View {
             groupColorHexByNodeID: GraphGroupMatcher.groupColorHexByNodeID(
                 in: layout,
                 rules: settings.groupRules
-            )
+            ),
+            positionOverrides: activePositionOverrides
         )
 
         do {
@@ -501,6 +502,7 @@ struct GraphWorkspaceView: View {
 
         cancelForceRefinement()
         forceRefinementTask = Task {
+            let baseRenderIdentity = layout.renderIdentity
             do {
                 let refined = try await Task.detached(priority: .utility) {
                     try GraphForceRefinement.refined(
@@ -518,7 +520,9 @@ struct GraphWorkspaceView: View {
                 }.value
                 try Task.checkCancellation()
                 await MainActor.run {
-                    guard loadedLayout?.requestID == requestID else {
+                    guard loadedLayout?.requestID == requestID,
+                          loadedLayout?.renderIdentity == baseRenderIdentity
+                    else {
                         return
                     }
                     loadedLayout = refined
@@ -618,6 +622,7 @@ struct GraphWorkspaceView: View {
     private func graphInteractionCallbacks(input: GraphRendererInput) -> GraphRendererInteractionCallbacks {
         GraphRendererInteractionCallbacks(
             beginNodeDrag: { start in
+                cancelForceRefinement()
                 interaction.beginDrag(
                     nodeID: start.nodeID,
                     nodePosition: start.nodePosition,
@@ -637,11 +642,39 @@ struct GraphWorkspaceView: View {
                 case .tap(let nodeID):
                     interaction.select(nodeID)
                     openNode(nodeID, in: input)
-                case .drag:
+                case .drag(let result):
+                    commitDraggedNode(result)
                     break
                 }
             }
         )
+    }
+
+    private var activePositionOverrides: GraphNodePositionOverrides {
+        var overrides = GraphNodePositionOverrides()
+        if let dragState = interaction.dragState {
+            overrides.set(dragState.currentNodePosition, for: dragState.nodeID)
+        }
+        return overrides
+    }
+
+    private func commitDraggedNode(_ result: GraphNodeDragResult) {
+        guard result.movedBeyondThreshold,
+              let layout = loadedLayout
+        else {
+            return
+        }
+
+        let movedLayout = GraphNodePositionUpdater.movingNode(
+            in: layout,
+            nodeID: result.nodeID,
+            to: result.nodePosition
+        )
+        guard movedLayout != layout else {
+            return
+        }
+        loadedLayout = movedLayout
+        loadedHitTestIndex = GraphHitTestIndex(layout: movedLayout)
     }
 
     private func openNode(_ nodeID: String, in input: GraphRendererInput) {

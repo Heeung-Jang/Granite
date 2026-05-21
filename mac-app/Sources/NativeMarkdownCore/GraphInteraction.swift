@@ -26,6 +26,7 @@ public struct GraphHitTestIndex: Equatable, Sendable {
     public let layout: GraphRendererSnapshot
     public let bucketCellSize: Double
     private let buckets: [GraphGridCell: [Int]]
+    private let nodeIndexByID: [String: Int]
 
     public var bucketCount: Int {
         buckets.count
@@ -47,21 +48,25 @@ public struct GraphHitTestIndex: Equatable, Sendable {
         self.layout = layout
         self.bucketCellSize = max(24, bucketCellSize)
         var buckets: [GraphGridCell: [Int]] = [:]
+        var nodeIndexByID: [String: Int] = [:]
         for (arrayIndex, node) in layout.nodes.enumerated() {
             if arrayIndex.isMultiple(of: 2_048) {
                 try checkCancellation()
             }
+            nodeIndexByID[node.nodeID] = arrayIndex
             buckets[Self.gridCell(for: node.position, bucketCellSize: self.bucketCellSize), default: []]
                 .append(arrayIndex)
         }
         self.buckets = buckets
+        self.nodeIndexByID = nodeIndexByID
     }
 
     public func nearestNode(
         at screenPoint: GraphPoint,
         viewport: GraphViewport,
         canvasSize: GraphSize,
-        maxDistance: Double = GraphVisualMetrics.defaultHitRadius
+        maxDistance: Double = GraphVisualMetrics.defaultHitRadius,
+        positionOverrides: GraphNodePositionOverrides = GraphNodePositionOverrides()
     ) -> GraphHitTestResult? {
         var best: GraphHitTestResult?
         let centeredPoint = GraphPoint(
@@ -75,31 +80,76 @@ public struct GraphHitTestIndex: Equatable, Sendable {
             radius: queryRadius
         )
 
+        var visitedIndexes: Set<Int> = []
         for nodeIndex in candidates {
             guard layout.nodes.indices.contains(nodeIndex) else {
                 continue
             }
+            visitedIndexes.insert(nodeIndex)
             let node = layout.nodes[nodeIndex]
-            let nodePoint = nodeScreenPoint(for: node, viewport: viewport, canvasSize: canvasSize)
-            let distance = hypot(screenPoint.x - nodePoint.x, screenPoint.y - nodePoint.y)
-            let hitRadius = GraphVisualMetrics.hitRadius(
-                forNodeRadius: node.radius,
-                zoomScale: viewport.zoomScale,
-                minimumHitRadius: maxDistance
+            best = nearestResult(
+                currentBest: best,
+                node: node,
+                nodeIndex: nodeIndex,
+                position: positionOverrides.position(for: node),
+                screenPoint: screenPoint,
+                viewport: viewport,
+                canvasSize: canvasSize,
+                maxDistance: maxDistance
             )
-            guard distance <= hitRadius else {
+        }
+
+        for nodeID in positionOverrides.positionsByNodeID.keys {
+            guard let nodeIndex = nodeIndexByID[nodeID],
+                  !visitedIndexes.contains(nodeIndex),
+                  layout.nodes.indices.contains(nodeIndex)
+            else {
                 continue
             }
-            if best == nil || distance < (best?.distance ?? .greatestFiniteMagnitude) {
-                best = GraphHitTestResult(
-                    nodeID: node.nodeID,
-                    nodeIndex: node.index,
-                    distance: distance
-                )
-            }
+            let node = layout.nodes[nodeIndex]
+            best = nearestResult(
+                currentBest: best,
+                node: node,
+                nodeIndex: nodeIndex,
+                position: positionOverrides.position(for: node),
+                screenPoint: screenPoint,
+                viewport: viewport,
+                canvasSize: canvasSize,
+                maxDistance: maxDistance
+            )
         }
 
         return best
+    }
+
+    private func nearestResult(
+        currentBest: GraphHitTestResult?,
+        node: GraphLayoutNode,
+        nodeIndex: Int,
+        position: GraphPoint,
+        screenPoint: GraphPoint,
+        viewport: GraphViewport,
+        canvasSize: GraphSize,
+        maxDistance: Double
+    ) -> GraphHitTestResult? {
+        let nodePoint = nodeScreenPoint(for: position, viewport: viewport, canvasSize: canvasSize)
+        let distance = hypot(screenPoint.x - nodePoint.x, screenPoint.y - nodePoint.y)
+        let hitRadius = GraphVisualMetrics.hitRadius(
+            forNodeRadius: node.radius,
+            zoomScale: viewport.zoomScale,
+            minimumHitRadius: maxDistance
+        )
+        guard distance <= hitRadius else {
+            return currentBest
+        }
+        if currentBest == nil || distance < (currentBest?.distance ?? .greatestFiniteMagnitude) {
+            return GraphHitTestResult(
+                nodeID: node.nodeID,
+                nodeIndex: nodeIndex,
+                distance: distance
+            )
+        }
+        return currentBest
     }
 
     private func candidateNodeIndexes(around point: GraphPoint, radius: Double) -> [Int] {
@@ -122,11 +172,11 @@ public struct GraphHitTestIndex: Equatable, Sendable {
     }
 
     private func nodeScreenPoint(
-        for node: GraphLayoutNode,
+        for position: GraphPoint,
         viewport: GraphViewport,
         canvasSize: GraphSize
     ) -> GraphPoint {
-        let point = viewport.screenPoint(for: node.position)
+        let point = viewport.screenPoint(for: position)
         return GraphPoint(
             x: canvasSize.width / 2 + point.x,
             y: canvasSize.height / 2 + point.y
@@ -304,12 +354,14 @@ public enum GraphGestureDecision {
         viewport: GraphViewport,
         canvasSize: GraphSize,
         hitTestIndex: GraphHitTestIndex,
-        screenMovementThreshold: Double = GraphNodeDragState.defaultGraphMovementThreshold
+        screenMovementThreshold: Double = GraphNodeDragState.defaultGraphMovementThreshold,
+        positionOverrides: GraphNodePositionOverrides = GraphNodePositionOverrides()
     ) -> GraphDragStartDecision {
         guard let hit = hitTestIndex.nearestNode(
             at: screenPoint,
             viewport: viewport,
-            canvasSize: canvasSize
+            canvasSize: canvasSize,
+            positionOverrides: positionOverrides
         ) else {
             return .canvasPan
         }
@@ -318,10 +370,11 @@ public enum GraphGestureDecision {
         }
 
         let node = hitTestIndex.layout.nodes[hit.nodeIndex]
+        let nodePosition = positionOverrides.position(for: node)
         return .node(GraphNodeDragStart(
             nodeID: hit.nodeID,
             nodeIndex: hit.nodeIndex,
-            nodePosition: node.position,
+            nodePosition: nodePosition,
             pointerGraphPoint: pointerGraphPoint(
                 screenPoint: screenPoint,
                 viewport: viewport,
@@ -353,6 +406,28 @@ public struct GraphNodePositionOverrides: Equatable, Sendable {
 
     public init(positionsByNodeID: [String: GraphPoint] = [:]) {
         self.positionsByNodeID = positionsByNodeID
+    }
+
+    public var isEmpty: Bool {
+        positionsByNodeID.isEmpty
+    }
+
+    public var renderIdentity: UInt64 {
+        var hash: UInt64 = 0xcbf29ce484222325
+
+        func mix(_ value: UInt64) {
+            hash ^= value
+            hash &*= 0x100000001b3
+        }
+
+        for (nodeID, point) in positionsByNodeID.sorted(by: { $0.key < $1.key }) {
+            for byte in nodeID.utf8 {
+                mix(UInt64(byte))
+            }
+            mix(point.x.bitPattern)
+            mix(point.y.bitPattern)
+        }
+        return hash
     }
 
     public mutating func set(_ graphPoint: GraphPoint, for nodeID: String) {

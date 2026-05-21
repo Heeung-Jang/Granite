@@ -164,7 +164,8 @@ struct GraphCanvasRendererView: View {
             screenPoint: GraphPoint(x: Double(location.x), y: Double(location.y)),
             viewport: input.viewport,
             canvasSize: graphSize(size),
-            hitTestIndex: hitTestIndex
+            hitTestIndex: hitTestIndex,
+            positionOverrides: input.positionOverrides
         ) {
         case .node(let start):
             interactionCallbacks.beginNodeDrag(start)
@@ -254,7 +255,7 @@ struct GraphCanvasRendererView: View {
         size: CGSize
     ) {
         for node in input.layout.nodes where input.labelIsVisible(for: node) {
-            let point = canvasPoint(for: node.position, input: input, size: size)
+            let point = canvasPoint(for: input.position(for: node), input: input, size: size)
             let text = Text(node.label)
                 .font(.caption)
                 .foregroundStyle(Color.primary)
@@ -332,7 +333,8 @@ struct GraphCanvasRendererView: View {
         hitTestIndex.nearestNode(
             at: GraphPoint(x: Double(location.x), y: Double(location.y)),
             viewport: input.viewport,
-            canvasSize: GraphSize(width: Double(size.width), height: Double(size.height))
+            canvasSize: GraphSize(width: Double(size.width), height: Double(size.height)),
+            positionOverrides: input.positionOverrides
         )?.nodeID
     }
 }
@@ -393,8 +395,8 @@ private final class GraphCanvasPathCache {
                 continue
             }
 
-            let source = graphPoint(input.layout.nodes[edge.sourceIndex].position)
-            let target = graphPoint(input.layout.nodes[edge.targetIndex].position)
+            let source = graphPoint(input.position(for: input.layout.nodes[edge.sourceIndex]))
+            let target = graphPoint(input.position(for: input.layout.nodes[edge.targetIndex]))
             if edgeIsActive(edge, input: input) {
                 appendEdge(from: source, to: target, path: &paths.activeEdges)
             } else {
@@ -411,13 +413,14 @@ private final class GraphCanvasPathCache {
         }
 
         for node in input.layout.nodes {
+            let position = input.position(for: node)
             let radius = CGFloat(GraphVisualMetrics.drawRadius(
                 forNodeRadius: node.radius,
                 nodeSize: input.presentation.nodeSize
             ))
             let rect = CGRect(
-                x: CGFloat(node.position.x) - radius,
-                y: CGFloat(node.position.y) - radius,
+                x: CGFloat(position.x) - radius,
+                y: CGFloat(position.y) - radius,
                 width: radius * 2,
                 height: radius * 2
             )
@@ -460,6 +463,7 @@ private final class GraphCanvasPathCache {
             String(input.presentation.linkThickness.bitPattern),
             input.presentation.showArrows.description,
             groupColorIdentity(input.groupColorHexByNodeID),
+            String(input.positionOverrides.renderIdentity),
             String(searchHasher.finalize()),
             input.hoveredNodeID ?? "",
             input.selectedNodeID ?? ""

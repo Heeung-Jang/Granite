@@ -18,6 +18,27 @@ func graphHitTestPicksNearestVisibleNode() {
 }
 
 @Test
+func graphHitTestResultUsesArrayIndex() {
+    let layout = GraphRendererSnapshot(
+        requestID: 1,
+        generation: 1,
+        nodes: [
+            interactionNode(index: 42, id: "file:a", label: "Alpha", fileID: "alpha.md", kind: .resolved)
+        ],
+        edges: [],
+        components: []
+    )
+
+    let result = GraphHitTestIndex(layout: layout).nearestNode(
+        at: GraphPoint(x: 200, y: 100),
+        viewport: GraphViewport(),
+        canvasSize: GraphSize(width: 400, height: 200)
+    )
+
+    #expect(result?.nodeIndex == 0)
+}
+
+@Test
 func graphHitTestIgnoresDistantNodes() {
     let result = GraphHitTestIndex(layout: interactionLayout()).nearestNode(
         at: GraphPoint(x: 20, y: 20),
@@ -87,6 +108,32 @@ func graphHitTestIndexPropagatesCancellation() {
 }
 
 @Test
+func graphHitTestUsesPositionOverrideForMovedNode() {
+    let layout = interactionLayout()
+    let hitTest = GraphHitTestIndex(layout: layout)
+    let canvasSize = GraphSize(width: 400, height: 200)
+    var overrides = GraphNodePositionOverrides()
+
+    overrides.set(GraphPoint(x: 160, y: 0), for: "file:a")
+
+    let movedHit = hitTest.nearestNode(
+        at: GraphPoint(x: 360, y: 100),
+        viewport: GraphViewport(),
+        canvasSize: canvasSize,
+        positionOverrides: overrides
+    )
+    let oldPositionHit = hitTest.nearestNode(
+        at: GraphPoint(x: 200, y: 100),
+        viewport: GraphViewport(),
+        canvasSize: canvasSize,
+        positionOverrides: overrides
+    )
+
+    #expect(movedHit?.nodeID == "file:a")
+    #expect(oldPositionHit == nil)
+}
+
+@Test
 func graphInteractionKeepsSelectionIndependentFromHover() {
     var interaction = GraphInteractionState()
 
@@ -152,6 +199,21 @@ func graphNodePositionOverridesUseDraggedPositionOnlyForMatchingNode() {
 
     #expect(overrides.position(for: layout.nodes[0]) == GraphPoint(x: 42, y: 84))
     #expect(overrides.position(for: layout.nodes[1]) == layout.nodes[1].position)
+    #expect(!overrides.isEmpty)
+    #expect(overrides.renderIdentity != GraphNodePositionOverrides().renderIdentity)
+}
+
+@Test
+func graphRendererInputUsesPositionOverridesWithoutChangingLayout() {
+    let layout = interactionLayout()
+    var overrides = GraphNodePositionOverrides()
+
+    overrides.set(GraphPoint(x: 40, y: 50), for: "file:a")
+    let input = GraphRendererInput(layout: layout, positionOverrides: overrides)
+
+    #expect(input.position(for: layout.nodes[0]) == GraphPoint(x: 40, y: 50))
+    #expect(input.position(for: layout.nodes[1]) == layout.nodes[1].position)
+    #expect(input.layout == layout)
 }
 
 @Test
@@ -195,6 +257,28 @@ func graphGestureDecisionStartsNodeDragFromHitNode() {
         pointerGraphPoint: GraphPoint(x: 0, y: 0),
         graphMovementThreshold: 6
     )))
+}
+
+@Test
+func graphGestureDecisionStartsNodeDragFromOverriddenPosition() {
+    let layout = interactionLayout()
+    var overrides = GraphNodePositionOverrides()
+
+    overrides.set(GraphPoint(x: 160, y: 0), for: "file:a")
+    let decision = GraphGestureDecision.dragStart(
+        screenPoint: GraphPoint(x: 360, y: 100),
+        viewport: GraphViewport(),
+        canvasSize: GraphSize(width: 400, height: 200),
+        hitTestIndex: GraphHitTestIndex(layout: layout),
+        positionOverrides: overrides
+    )
+
+    if case .node(let start) = decision {
+        #expect(start.nodeID == "file:a")
+        #expect(start.nodePosition == GraphPoint(x: 160, y: 0))
+    } else {
+        Issue.record("Expected node drag decision")
+    }
 }
 
 @Test
