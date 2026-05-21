@@ -6,6 +6,13 @@ struct LivePreviewStyleProbeReport: Codable, Equatable {
     var summary: ProbeCheckSummary
     var headingFontScaleApplied: Bool
     var headingParagraphSpacingApplied: Bool
+    var headingMarkerGeometry: HeadingMarkerGeometryProbeReport
+    var headingMarkerGeometryMeasured: Bool
+    var headingMarkerTextXPositionMeasured: Bool
+    var collapsedHeadingMarkerWidthReduced: Bool
+    var collapsedHeadingMarkerLineHeightPreserved: Bool
+    var collapsedHeadingMarkerSelectionSafe: Bool
+    var collapsedHeadingMarkerMarkedTextSafe: Bool
     var baseParagraphSpacingApplied: Bool
     var inlineCodeStyleApplied: Bool
     var inlineCodePreservesSource: Bool
@@ -76,6 +83,20 @@ struct LivePreviewStyleProbeReport: Codable, Equatable {
     var tagMarkerConcealedOutsideReveal: Bool
     var tagRenderPreservesSource: Bool
     var headingRenderPreservesSource: Bool
+}
+
+struct HeadingMarkerGeometryProbeReport: Codable, Equatable {
+    var originalMarkerWidth: Double
+    var originalTextX: Double
+    var collapsedMarkerWidth: Double
+    var collapsedTextX: Double
+
+    static let empty = HeadingMarkerGeometryProbeReport(
+        originalMarkerWidth: 0,
+        originalTextX: 0,
+        collapsedMarkerWidth: 0,
+        collapsedTextX: 0
+    )
 }
 
 @MainActor
@@ -285,6 +306,7 @@ enum LivePreviewStyleProbe {
         let revealedTableAlignmentColor = foregroundColor(in: textView, source: source, marker: "--- | ---")
         let obsidianMarkerFields = probeObsidianMarkerFields()
         let horizontalRuleFields = probeHorizontalRuleFields()
+        let headingMarkerFields = probeHeadingMarkerGeometry()
 
         var report = LivePreviewStyleProbeReport(
             summary: .passed,
@@ -298,6 +320,13 @@ enum LivePreviewStyleProbe {
             ],
             headingParagraphSpacingApplied: paragraphStyles.count == 6
                 && paragraphStyles.allSatisfy { $0.paragraphSpacing > 0 && $0.paragraphSpacingBefore > 0 },
+            headingMarkerGeometry: headingMarkerFields.geometry,
+            headingMarkerGeometryMeasured: headingMarkerFields.geometryMeasured,
+            headingMarkerTextXPositionMeasured: headingMarkerFields.textXPositionMeasured,
+            collapsedHeadingMarkerWidthReduced: headingMarkerFields.collapsedWidthReduced,
+            collapsedHeadingMarkerLineHeightPreserved: headingMarkerFields.collapsedLineHeightPreserved,
+            collapsedHeadingMarkerSelectionSafe: headingMarkerFields.collapsedSelectionSafe,
+            collapsedHeadingMarkerMarkedTextSafe: headingMarkerFields.collapsedMarkedTextSafe,
             baseParagraphSpacingApplied: baseParagraphStyle?.lineHeightMultiple ?? 0 > 1
                 && baseParagraphStyle?.paragraphSpacing ?? 0 > 0,
             inlineCodeStyleApplied: inlineCodeAttributes?[.font] as? NSFont == LivePreviewTheme.codeFont
@@ -536,6 +565,122 @@ enum LivePreviewStyleProbe {
         )
     }
 
+    private static func probeHeadingMarkerGeometry() -> (
+        geometry: HeadingMarkerGeometryProbeReport,
+        geometryMeasured: Bool,
+        textXPositionMeasured: Bool,
+        collapsedWidthReduced: Bool,
+        collapsedLineHeightPreserved: Bool,
+        collapsedSelectionSafe: Bool,
+        collapsedMarkedTextSafe: Bool
+    ) {
+        let source = "# Probe Heading\n\nBody"
+        let markerRange = NSRange(location: 0, length: 2)
+        let textView = MarkdownEditorTextViewFactory.makeTextView()
+        textView.string = source
+        textView.setSelectedRange(NSRange(location: (source as NSString).length, length: 0))
+        MarkdownVisibleRangeDecorator.decorateVisibleRange(
+            in: textView,
+            livePreviewMode: .livePreview,
+            revealRange: textView.selectedRange(),
+            markerStyle: .obsidian
+        )
+
+        guard let headingOffset = utf16Offset(of: "Probe Heading", in: source),
+              let originalMarkerRect = boundingRect(in: textView, range: markerRange),
+              let originalTextRect = boundingRect(in: textView, range: NSRange(location: headingOffset, length: 1)),
+              let originalLineRect = lineRect(in: textView, source: source, marker: "Probe Heading")
+        else {
+            return (.empty, false, false, false, false, false, false)
+        }
+
+        let geometryMeasured = originalMarkerRect.width > 0 && originalTextRect.width > 0
+        let textXPositionMeasured = originalTextRect.minX > originalMarkerRect.minX
+
+        textView.textStorage?.addAttributes([
+            .font: LivePreviewTheme.collapsedSyntaxFont,
+            .foregroundColor: LivePreviewTheme.concealedColor
+        ], range: markerRange)
+
+        guard let collapsedMarkerRect = boundingRect(in: textView, range: markerRange),
+              let collapsedTextRect = boundingRect(in: textView, range: NSRange(location: headingOffset, length: 1)),
+              let collapsedLineRect = lineRect(in: textView, source: source, marker: "Probe Heading")
+        else {
+            let geometry = HeadingMarkerGeometryProbeReport(
+                originalMarkerWidth: Double(originalMarkerRect.width),
+                originalTextX: Double(originalTextRect.minX),
+                collapsedMarkerWidth: 0,
+                collapsedTextX: 0
+            )
+            return (geometry, geometryMeasured, textXPositionMeasured, false, false, false, false)
+        }
+
+        let geometry = HeadingMarkerGeometryProbeReport(
+            originalMarkerWidth: Double(originalMarkerRect.width),
+            originalTextX: Double(originalTextRect.minX),
+            collapsedMarkerWidth: Double(collapsedMarkerRect.width),
+            collapsedTextX: Double(collapsedTextRect.minX)
+        )
+
+        let collapsedWidthReduced = collapsedMarkerRect.width < originalMarkerRect.width
+            && collapsedTextRect.minX < originalTextRect.minX
+        let collapsedLineHeightPreserved = abs(collapsedLineRect.height - originalLineRect.height) <= 1
+
+        textView.setSelectedRange(NSRange(location: markerRange.location, length: 0))
+        let caretAtMarkerStartPreserved = textView.selectedRange() == NSRange(location: markerRange.location, length: 0)
+        textView.setSelectedRange(NSRange(location: markerRange.upperBound, length: 0))
+        let caretAfterMarkerPreserved = textView.selectedRange() == NSRange(location: markerRange.upperBound, length: 0)
+        textView.setSelectedRange(markerRange)
+        let selectedMarkerText = (textView.string as NSString).substring(with: markerRange)
+        let collapsedSelectionSafe = caretAtMarkerStartPreserved
+            && caretAfterMarkerPreserved
+            && selectedMarkerText == "# "
+
+        let collapsedMarkedTextSafe = probeCollapsedHeadingMarkerMarkedText(source: source, markerRange: markerRange)
+
+        return (
+            geometry,
+            geometryMeasured,
+            textXPositionMeasured,
+            collapsedWidthReduced,
+            collapsedLineHeightPreserved,
+            collapsedSelectionSafe,
+            collapsedMarkedTextSafe
+        )
+    }
+
+    private static func probeCollapsedHeadingMarkerMarkedText(source: String, markerRange: NSRange) -> Bool {
+        let textView = MarkdownEditorTextViewFactory.makeTextView()
+        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 900, height: 700))
+        scrollView.documentView = textView
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 900, height: 700),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: true
+        )
+        window.contentView = scrollView
+        window.makeFirstResponder(textView)
+
+        textView.string = source
+        textView.setSelectedRange(NSRange(location: markerRange.upperBound, length: 0))
+        textView.setMarkedText(
+            "한글",
+            selectedRange: NSRange(location: 2, length: 0),
+            replacementRange: NSRange(location: NSNotFound, length: 0)
+        )
+        let hadMarkedText = textView.hasMarkedText()
+        textView.textStorage?.addAttributes([
+            .font: LivePreviewTheme.collapsedSyntaxFont,
+            .foregroundColor: LivePreviewTheme.concealedColor
+        ], range: markerRange)
+        let markerStillPresent = (textView.string as NSString).substring(with: markerRange) == "# "
+        let markedTextStillActive = textView.hasMarkedText()
+        textView.unmarkText()
+
+        return hadMarkedText && markedTextStillActive && markerStillPresent
+    }
+
     private static func linkStyleMap(for source: String) -> LivePreviewLinkStyleMap {
         var states: [LivePreviewSourceRange: LivePreviewLinkStyleState] = [:]
         record("[[Target#Heading|Alias]]", state: .resolved, in: source, states: &states)
@@ -700,6 +845,30 @@ enum LivePreviewStyleProbe {
             stop.pointee = true
         }
         return result
+    }
+
+    private static func boundingRect(in textView: NSTextView, range: NSRange) -> NSRect? {
+        guard let layoutManager = textView.layoutManager,
+              let textContainer = textView.textContainer
+        else {
+            return nil
+        }
+
+        let stringLength = (textView.string as NSString).length
+        let textRange = NSIntersectionRange(range, NSRange(location: 0, length: stringLength))
+        guard textRange.length > 0 else {
+            return nil
+        }
+
+        layoutManager.ensureLayout(for: textContainer)
+        let glyphRange = layoutManager.glyphRange(forCharacterRange: textRange, actualCharacterRange: nil)
+        guard glyphRange.length > 0 else {
+            return nil
+        }
+
+        let origin = textView.textContainerOrigin
+        return layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+            .offsetBy(dx: origin.x, dy: origin.y)
     }
 
     private static func propertyHeaderGeometrySeparated(
