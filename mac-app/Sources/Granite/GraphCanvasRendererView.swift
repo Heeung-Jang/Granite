@@ -342,7 +342,10 @@ private final class GraphCanvasPathCache {
         }
 
         for node in input.layout.nodes {
-            let radius = CGFloat(max(2.0, node.radius * input.presentation.nodeSize))
+            let radius = CGFloat(GraphVisualMetrics.drawRadius(
+                forNodeRadius: node.radius,
+                nodeSize: input.presentation.nodeSize
+            ))
             let rect = CGRect(
                 x: CGFloat(node.position.x) - radius,
                 y: CGFloat(node.position.y) - radius,

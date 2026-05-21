@@ -21,6 +21,10 @@ public enum GraphVisualMetrics {
         )
     }
 
+    public static func drawRadius(forNodeRadius nodeRadius: Double, nodeSize: Double) -> Double {
+        max(minimumDrawRadius, nodeRadius * nodeSize)
+    }
+
     public static func hitRadius(
         forNodeRadius nodeRadius: Double,
         zoomScale: Double,

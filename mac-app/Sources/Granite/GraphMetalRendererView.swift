@@ -432,7 +432,10 @@ private final class GraphMetalRenderer {
             nodeVertices.append(GraphMetalVertex(
                 position: metalPoint(node.position),
                 color: nodeColor(node, input: input),
-                radius: Float(max(2.0, node.radius * input.presentation.nodeSize))
+                radius: Float(GraphVisualMetrics.drawRadius(
+                    forNodeRadius: node.radius,
+                    nodeSize: input.presentation.nodeSize
+                ))
             ))
         }
 
@@ -872,7 +875,7 @@ vertex GraphMetalRasterOut graphNodeVertex(
     GraphMetalRasterOut out;
     out.position = graphClipPosition(item.position, uniforms);
     out.color = item.color;
-    out.pointSize = max(2.0, item.radius * uniforms.zoomScale * 2.0 * uniforms.pointScale);
+    out.pointSize = item.radius * uniforms.zoomScale * 2.0 * uniforms.pointScale;
     return out;
 }
 
