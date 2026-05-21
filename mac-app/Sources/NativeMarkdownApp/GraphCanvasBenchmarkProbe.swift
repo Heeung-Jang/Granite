@@ -29,6 +29,7 @@ enum GraphCanvasBenchmarkProbe {
     static func run(payloadURL: URL) throws -> GraphRendererBenchmarkResult {
         let setup = try loadBenchmarkSetup(payloadURL: payloadURL)
         let driver = GraphRendererBenchmarkDriver(
+            expectedRendererKind: .canvas,
             totalTimer: setup.totalTimer,
             samples: GraphRendererBenchmarkSetup.panZoomSamples()
         )
@@ -67,6 +68,7 @@ enum GraphMetalBenchmarkProbe {
         }
         let setup = try loadBenchmarkSetup(payloadURL: payloadURL)
         let driver = GraphRendererBenchmarkDriver(
+            expectedRendererKind: .metal,
             totalTimer: setup.totalTimer,
             samples: GraphRendererBenchmarkSetup.panZoomSamples()
         )
@@ -231,6 +233,10 @@ private func runWindowBenchmark<Content: View>(
     while !driver.isComplete && Date() < deadline {
         RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
     }
+    if let failure = driver.benchmarkFailure {
+        window.close()
+        throw failure
+    }
     guard let result = driver.result(
         rendererKind: rendererKind,
         nodeCount: setup.layout.nodes.count,
@@ -251,26 +257,38 @@ private func runWindowBenchmark<Content: View>(
 private enum GraphRendererBenchmarkError: Error {
     case invalidResult
     case metalUnavailable
+    case unexpectedRendererKind
     case timeout
 }
 
 @MainActor
 private final class GraphRendererBenchmarkDriver {
+    private let expectedRendererKind: GraphRendererKind
     private let totalTimer: AppTelemetryTimer
     private let samples: [GraphViewport]
     private var pendingFrameTimer: AppTelemetryTimer?
     private var frameDurations: [Double] = []
     private var drawDurations: [Double] = []
     private var totalFirstRenderDuration: Double?
+    private var failure: GraphRendererBenchmarkError?
     private var completed = false
 
-    init(totalTimer: AppTelemetryTimer, samples: [GraphViewport]) {
+    init(
+        expectedRendererKind: GraphRendererKind,
+        totalTimer: AppTelemetryTimer,
+        samples: [GraphViewport]
+    ) {
+        self.expectedRendererKind = expectedRendererKind
         self.totalTimer = totalTimer
         self.samples = samples
     }
 
     var isComplete: Bool {
         completed
+    }
+
+    var benchmarkFailure: GraphRendererBenchmarkError? {
+        failure
     }
 
     func startFirstFrame() {
@@ -282,6 +300,12 @@ private final class GraphRendererBenchmarkDriver {
         applyViewport: (GraphViewport) -> Void
     ) {
         guard !completed, let pendingFrameTimer else {
+            return
+        }
+        guard metrics.rendererKind == expectedRendererKind else {
+            failure = .unexpectedRendererKind
+            completed = true
+            self.pendingFrameTimer = nil
             return
         }
 
