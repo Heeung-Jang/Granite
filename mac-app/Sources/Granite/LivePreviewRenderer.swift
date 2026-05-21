@@ -573,11 +573,16 @@ enum LivePreviewRenderer {
         revealRange: NSRange,
         markerStyle: LivePreviewMarkerStyle
     ) {
-        guard !shouldRevealSyntax(for: block, revealRange: revealRange, markerStyle: markerStyle) else {
+        let sourceReveal = sourceRevealEligibility(
+            for: block,
+            revealRange: revealRange,
+            markerStyle: markerStyle
+        )
+        guard !sourceReveal.revealsSyntax else {
             return
         }
 
-        for range in concealmentRanges(
+        for range in rawMarkerConcealmentRanges(
             for: block,
             source: source,
             properties: properties,
@@ -595,7 +600,15 @@ enum LivePreviewRenderer {
         }
     }
 
-    private static func concealmentRanges(
+    private struct SourceRevealEligibility {
+        var revealsSyntax: Bool
+    }
+
+    private struct RenderedMarkerOverlayPolicy {
+        var isNeeded: Bool
+    }
+
+    private static func rawMarkerConcealmentRanges(
         for block: LivePreviewBlockSpan,
         source: String,
         properties: LivePreviewPropertyBlock?,
@@ -643,21 +656,45 @@ enum LivePreviewRenderer {
         return ranges
     }
 
-    private static func shouldRevealSyntax(
+    private static func sourceRevealEligibility(
         for block: LivePreviewBlockSpan,
         revealRange: NSRange,
         markerStyle: LivePreviewMarkerStyle
-    ) -> Bool {
+    ) -> SourceRevealEligibility {
+        let revealsSyntax: Bool
         switch block.kind {
         case .heading:
-            return block.sourceRange.nsRange.intersectsOrContainsCaret(revealRange)
+            revealsSyntax = block.sourceRange.nsRange.intersectsOrContainsCaret(revealRange)
         case .blockquote where markerStyle.keepsBlockquoteMarkersConcealed:
-            return false
+            revealsSyntax = false
         case .frontmatter, .callout, .table:
-            return false
+            revealsSyntax = false
         default:
-            return block.sourceRange.nsRange.intersectsOrContainsCaret(revealRange)
+            revealsSyntax = block.sourceRange.nsRange.intersectsOrContainsCaret(revealRange)
         }
+        return SourceRevealEligibility(revealsSyntax: revealsSyntax)
+    }
+
+    private static func renderedMarkerOverlayPolicy(
+        for block: LivePreviewBlockSpan,
+        revealRange: NSRange,
+        markerStyle: LivePreviewMarkerStyle
+    ) -> RenderedMarkerOverlayPolicy {
+        let revealsSyntax = sourceRevealEligibility(
+            for: block,
+            revealRange: revealRange,
+            markerStyle: markerStyle
+        ).revealsSyntax
+        let isNeeded: Bool
+        switch block.kind {
+        case .unorderedList, .orderedList:
+            isNeeded = markerStyle == .obsidian && !revealsSyntax
+        case .taskList:
+            isNeeded = markerStyle == .obsidian && !revealsSyntax
+        default:
+            isNeeded = false
+        }
+        return RenderedMarkerOverlayPolicy(isNeeded: isNeeded)
     }
 
     private static func blockTokenRanges(for block: LivePreviewBlockSpan, source: String) -> [NSRange] {
