@@ -280,7 +280,7 @@ enum LivePreviewOverlayRenderer {
     }
 
     private static func drawTableBackground(_ table: LivePreviewTable, in textView: NSTextView, dirtyRect: NSRect) {
-        guard let layout = tableLayout(table, in: textView),
+        guard let layout = LivePreviewTableLayout.make(for: table, in: textView),
               layout.outerRect.intersects(dirtyRect)
         else {
             return
@@ -295,29 +295,18 @@ enum LivePreviewOverlayRenderer {
     }
 
     private static func drawTableForeground(_ table: LivePreviewTable, in textView: NSTextView, dirtyRect: NSRect) {
-        guard let layout = tableLayout(table, in: textView),
+        guard let layout = LivePreviewTableLayout.make(for: table, in: textView),
               layout.outerRect.intersects(dirtyRect)
         else {
             return
         }
 
         drawTableGrid(layout)
-        let rows = [table.header] + table.bodyRows
-        for (rowIndex, row) in rows.enumerated() where rowIndex < layout.rowRects.count {
-            let rowRect = layout.rowRects[rowIndex]
-            for (columnIndex, cell) in row.enumerated() where columnIndex < layout.columnRects.count {
-                let columnRect = layout.columnRects[columnIndex]
-                let cellRect = NSRect(
-                    x: columnRect.minX + 8,
-                    y: rowRect.minY + 6,
-                    width: max(10, columnRect.width - 16),
-                    height: max(10, rowRect.height - 12)
-                )
-                markdownInlineString(
-                    displayValue(cell.text, key: nil),
-                    isHeader: rowIndex == 0
-                ).draw(with: cellRect, options: [.usesLineFragmentOrigin, .usesFontLeading])
-            }
+        for cell in layout.cells {
+            markdownInlineString(
+                displayValue(cell.tableCell.text, key: nil),
+                isHeader: cell.isHeader
+            ).draw(with: cell.textRect, options: [.usesLineFragmentOrigin, .usesFontLeading])
         }
     }
 
@@ -551,51 +540,7 @@ enum LivePreviewOverlayRenderer {
         }
     }
 
-    private struct TableLayout {
-        var outerRect: NSRect
-        var rowRects: [NSRect]
-        var columnRects: [NSRect]
-    }
-
-    private static func tableLayout(_ table: LivePreviewTable, in textView: NSTextView) -> TableLayout? {
-        let rows = [table.header] + table.bodyRows
-        guard !rows.isEmpty else {
-            return nil
-        }
-
-        let rowRects = rows.compactMap { row -> NSRect? in
-            guard let range = unionRange(row.map(\.sourceRange.nsRange)) else {
-                return nil
-            }
-            return unionLineRect(for: range, in: textView)
-                .map { NSRect(x: $0.minX, y: $0.minY - 3, width: $0.width, height: max(30, $0.height + 6)) }
-        }
-        guard rowRects.count == rows.count,
-              let first = rowRects.first
-        else {
-            return nil
-        }
-
-        let x = first.minX
-        let width = min(920, max(420, textView.bounds.width - x - 36))
-        let weights = columnWeights(for: table)
-        var columnRects: [NSRect] = []
-        var cursor = x
-        let totalWeight = max(1, weights.reduce(0, +))
-        for (index, weight) in weights.enumerated() {
-            let isLast = index == weights.count - 1
-            let columnWidth = isLast ? x + width - cursor : width * CGFloat(weight) / CGFloat(totalWeight)
-            columnRects.append(NSRect(x: cursor, y: first.minY, width: columnWidth, height: 1))
-            cursor += columnWidth
-        }
-
-        let outer = rowRects.reduce(NSRect(x: x, y: first.minY, width: width, height: first.height)) {
-            $0.union(NSRect(x: x, y: $1.minY, width: width, height: $1.height))
-        }
-        return TableLayout(outerRect: outer, rowRects: rowRects, columnRects: columnRects)
-    }
-
-    private static func drawTableGrid(_ layout: TableLayout) {
+    private static func drawTableGrid(_ layout: LivePreviewTableLayout) {
         LivePreviewTheme.tableBorderColor.setStroke()
         let path = NSBezierPath()
         path.lineWidth = 1
@@ -614,17 +559,6 @@ enum LivePreviewOverlayRenderer {
             path.line(to: NSPoint(x: columnRect.maxX, y: layout.outerRect.maxY))
         }
         path.stroke()
-    }
-
-    private static func columnWeights(for table: LivePreviewTable) -> [Int] {
-        let rows = [table.header] + table.bodyRows
-        let columnCount = rows.map(\.count).max() ?? 0
-        return (0..<columnCount).map { column in
-            let maxLength = rows
-                .compactMap { row in row.indices.contains(column) ? row[column].text.count : nil }
-                .max() ?? 8
-            return min(34, max(8, maxLength))
-        }
     }
 
     private static func markdownInlineString(_ text: String, isHeader: Bool = false) -> NSAttributedString {
