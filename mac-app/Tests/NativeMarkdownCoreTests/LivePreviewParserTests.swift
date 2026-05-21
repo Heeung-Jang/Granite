@@ -79,6 +79,32 @@ func livePreviewParserGroupsObsidianCalloutBodyLines() throws {
 }
 
 @Test
+func livePreviewParserHandlesCalloutVariantsAndPlainBlockquotes() {
+    let source = """
+    > [!NOTE] Uppercase kind
+    > Multiline body
+
+    > [!note] Titled callout
+
+    > [!note]- Folded callout
+    > Folded body
+
+    > Plain quote
+    """
+    let result = LivePreviewParser.parse(source)
+    let callouts = result.blocks.filter {
+        if case .callout(kind: "note") = $0.kind {
+            return true
+        }
+        return false
+    }
+
+    #expect(callouts.count == 3)
+    #expect(callouts.contains { string(for: $0.sourceRange, in: source)?.contains("Multiline body") == true })
+    #expect(result.blocks.containsBlock { $0 == .blockquote })
+}
+
+@Test
 func livePreviewParserKeepsMalformedFenceBounded() throws {
     let source = "Before\n```swift\nlet value = `not inline`\n"
     let result = LivePreviewParser.parse(source)
