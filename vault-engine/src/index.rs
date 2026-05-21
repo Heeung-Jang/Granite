@@ -541,6 +541,9 @@ fn create_schema(connection: &Connection) -> MetadataStoreResult<()> {
     connection.execute_batch(
         "
         PRAGMA foreign_keys = ON;
+        PRAGMA journal_mode = WAL;
+        PRAGMA synchronous = NORMAL;
+        PRAGMA temp_store = MEMORY;
         CREATE TABLE IF NOT EXISTS index_metadata (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
@@ -601,6 +604,18 @@ fn create_schema(connection: &Connection) -> MetadataStoreResult<()> {
             state_detail TEXT,
             FOREIGN KEY(source_file_id) REFERENCES files(file_id) ON DELETE CASCADE
         );
+        CREATE INDEX IF NOT EXISTS idx_links_source_file_id
+            ON links(source_file_id);
+        CREATE INDEX IF NOT EXISTS idx_links_resolved_target_file_id
+            ON links(resolved_target_file_id);
+        CREATE INDEX IF NOT EXISTS idx_tags_file_id
+            ON tags(file_id);
+        CREATE INDEX IF NOT EXISTS idx_properties_file_id
+            ON properties(file_id);
+        CREATE INDEX IF NOT EXISTS idx_headings_file_id
+            ON headings(file_id);
+        CREATE INDEX IF NOT EXISTS idx_attachments_source_file_id
+            ON attachments(source_file_id);
         ",
     )?;
     Ok(())
@@ -1302,6 +1317,35 @@ mod tests {
                 .expect("attachments"),
             2
         );
+    }
+
+    #[test]
+    fn metadata_store_creates_child_lookup_indexes() {
+        let metadata = IndexSchemaMetadata::new("sqlite", "metadata-v1", "none", 1);
+        let store = MetadataStore::open_in_memory(&metadata).expect("store");
+        let mut statement = store
+            .connection
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'index'")
+            .expect("index query");
+        let indexes = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .expect("index rows")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("indexes");
+
+        for expected in [
+            "idx_links_source_file_id",
+            "idx_links_resolved_target_file_id",
+            "idx_tags_file_id",
+            "idx_properties_file_id",
+            "idx_headings_file_id",
+            "idx_attachments_source_file_id",
+        ] {
+            assert!(
+                indexes.iter().any(|name| name == expected),
+                "missing index {expected}"
+            );
+        }
     }
 
     #[test]
