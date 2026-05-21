@@ -26,6 +26,10 @@ struct LivePreviewStyleProbeReport: Codable, Equatable {
     var calloutSyntaxStaysConcealedInsideBlock: Bool
     var calloutRenderPreservesSource: Bool
     var propertiesChromeApplied: Bool
+    var propertiesTitleSpacingApplied: Bool
+    var propertiesSectionSpacingApplied: Bool
+    var propertiesRowSpacingApplied: Bool
+    var propertiesHeaderGeometrySeparated: Bool
     var propertyYamlConcealedOutsideReveal: Bool
     var propertiesSourceStaysConcealedInsideBlock: Bool
     var propertiesRenderPreservesSource: Bool
@@ -142,6 +146,13 @@ enum LivePreviewStyleProbe {
         let hiddenCalloutSyntaxColor = foregroundColor(in: textView, source: source, marker: "> [!note]")
         let propertyKeyAttributes = attributes(in: textView, source: source, marker: "status")
         let propertyValueAttributes = attributes(in: textView, source: source, marker: "draft")
+        let propertyTitleParagraphStyle = paragraphStyle(in: textView, source: source, marker: "---")
+        let propertySectionParagraphStyle = paragraphStyle(in: textView, source: source, marker: "status")
+        let propertyRowParagraphStyle = paragraphStyle(in: textView, source: source, marker: "aliases")
+        let propertyTitleLineRect = lineRect(in: textView, source: source, marker: "---")
+        let propertySectionLineRect = lineRect(in: textView, source: source, marker: "status")
+        let propertyRowLineRect = lineRect(in: textView, source: source, marker: "aliases")
+        let propertyBodyLineRect = lineRect(in: textView, source: source, marker: "Heading 1")
         let hiddenPropertyDelimiterColor = foregroundColor(in: textView, source: source, marker: "---")
         let hiddenPropertyColonColor = foregroundColor(in: textView, source: source, marker: ": draft")
         let wikiAliasColor = foregroundColor(in: textView, source: source, marker: "Alias")
@@ -280,6 +291,21 @@ enum LivePreviewStyleProbe {
             propertiesChromeApplied: propertyKeyAttributes?[.foregroundColor] as? NSColor == LivePreviewTheme.concealedColor
                 && propertyValueAttributes?[.foregroundColor] as? NSColor == LivePreviewTheme.concealedColor
                 && propertyKeyAttributes?[.backgroundColor] as? NSColor == LivePreviewTheme.propertyBackgroundColor,
+            propertiesTitleSpacingApplied: propertyTitleParagraphStyle?.minimumLineHeight == LivePreviewTheme.propertyTitleLineHeight
+                && propertyTitleParagraphStyle?.maximumLineHeight == LivePreviewTheme.propertyTitleLineHeight
+                && propertyTitleParagraphStyle?.paragraphSpacing == LivePreviewTheme.propertyTitleParagraphSpacing,
+            propertiesSectionSpacingApplied: propertySectionParagraphStyle?.minimumLineHeight == LivePreviewTheme.propertySectionLineHeight
+                && propertySectionParagraphStyle?.maximumLineHeight == LivePreviewTheme.propertySectionLineHeight
+                && propertySectionParagraphStyle?.paragraphSpacing == LivePreviewTheme.propertySectionParagraphSpacing,
+            propertiesRowSpacingApplied: propertyRowParagraphStyle?.minimumLineHeight == LivePreviewTheme.propertyRowLineHeight
+                && propertyRowParagraphStyle?.maximumLineHeight == LivePreviewTheme.propertyRowLineHeight
+                && propertyRowParagraphStyle?.paragraphSpacing == LivePreviewTheme.propertyRowParagraphSpacing,
+            propertiesHeaderGeometrySeparated: propertyHeaderGeometrySeparated(
+                title: propertyTitleLineRect,
+                section: propertySectionLineRect,
+                row: propertyRowLineRect,
+                body: propertyBodyLineRect
+            ),
             propertyYamlConcealedOutsideReveal: hiddenPropertyDelimiterColor == LivePreviewTheme.concealedColor
                 && hiddenPropertyColonColor == LivePreviewTheme.concealedColor,
             propertiesSourceStaysConcealedInsideBlock: revealedPropertyDelimiterColor == LivePreviewTheme.concealedColor
@@ -457,6 +483,56 @@ enum LivePreviewStyleProbe {
             return nil
         }
         return textView.textStorage?.attribute(.underlineStyle, at: offset, effectiveRange: nil) as? Int
+    }
+
+    private static func lineRect(in textView: NSTextView, source: String, marker: String) -> NSRect? {
+        guard let offset = utf16Offset(of: marker, in: source),
+              let layoutManager = textView.layoutManager,
+              let textContainer = textView.textContainer
+        else {
+            return nil
+        }
+
+        layoutManager.ensureLayout(for: textContainer)
+        let glyphRange = layoutManager.glyphRange(
+            forCharacterRange: NSRange(location: offset, length: 1),
+            actualCharacterRange: nil
+        )
+        guard glyphRange.length > 0 else {
+            return nil
+        }
+
+        let origin = textView.textContainerOrigin
+        var result: NSRect?
+        layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) { lineRect, _, _, lineGlyphRange, stop in
+            guard lineGlyphRange.location < glyphRange.location + glyphRange.length,
+                  glyphRange.location < lineGlyphRange.location + lineGlyphRange.length
+            else {
+                return
+            }
+            result = NSRect(
+                x: lineRect.minX + origin.x,
+                y: lineRect.minY + origin.y,
+                width: lineRect.width,
+                height: lineRect.height
+            )
+            stop.pointee = true
+        }
+        return result
+    }
+
+    private static func propertyHeaderGeometrySeparated(
+        title: NSRect?,
+        section: NSRect?,
+        row: NSRect?,
+        body: NSRect?
+    ) -> Bool {
+        guard let title, let section, let row, let body else {
+            return false
+        }
+        return section.minY - title.minY >= LivePreviewTheme.propertyTitleLineHeight
+            && row.minY - section.minY >= LivePreviewTheme.propertySectionLineHeight
+            && body.minY - row.minY >= LivePreviewTheme.propertyRowLineHeight
     }
 
     private static func utf16Offset(of marker: String, in source: String) -> Int? {

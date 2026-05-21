@@ -152,7 +152,7 @@ enum LivePreviewRenderer {
             let table = tableModel(for: block, source: source)
             applyBlockAttributes(block, plan: plan, range: blockRange)
             applyBlockTokenAttributes(block, source: source, plan: plan, visibleRange: visibleRange)
-            applyPropertyAttributes(properties, plan: plan, visibleRange: visibleRange)
+            applyPropertyAttributes(properties, source: source, plan: plan, visibleRange: visibleRange)
             applyTableAttributes(table, plan: plan, visibleRange: visibleRange)
             applyEmbedAttributes(embedPreview, plan: plan, visibleRange: visibleRange)
             applyInlineAttributes(
@@ -270,12 +270,15 @@ enum LivePreviewRenderer {
 
     private static func applyPropertyAttributes(
         _ properties: LivePreviewPropertyBlock?,
+        source: String,
         plan: LivePreviewAttributePlan,
         visibleRange: NSRange
     ) {
         guard let properties else {
             return
         }
+
+        applyPropertyLayoutAttributes(properties, source: source, plan: plan, visibleRange: visibleRange)
 
         for row in properties.rows {
             let keyRange = NSIntersectionRange(row.keyRange.nsRange, visibleRange)
@@ -298,6 +301,82 @@ enum LivePreviewRenderer {
                 ], range: visibleValueRange)
             }
         }
+    }
+
+    private static func applyPropertyLayoutAttributes(
+        _ properties: LivePreviewPropertyBlock,
+        source: String,
+        plan: LivePreviewAttributePlan,
+        visibleRange: NSRange
+    ) {
+        let lineRanges = propertyLineRanges(for: properties, source: source)
+        guard let titleRange = lineRanges.first else {
+            return
+        }
+
+        addPropertyParagraphStyle(
+            LivePreviewTheme.propertyTitleParagraphStyle,
+            range: titleRange,
+            plan: plan,
+            visibleRange: visibleRange
+        )
+
+        if lineRanges.indices.contains(1) {
+            addPropertyParagraphStyle(
+                LivePreviewTheme.propertySectionParagraphStyle,
+                range: lineRanges[1],
+                plan: plan,
+                visibleRange: visibleRange
+            )
+        }
+
+        guard lineRanges.count > 2 else {
+            return
+        }
+        for lineRange in lineRanges.dropFirst(2) {
+            addPropertyParagraphStyle(
+                LivePreviewTheme.propertyRowParagraphStyle,
+                range: lineRange,
+                plan: plan,
+                visibleRange: visibleRange
+            )
+        }
+    }
+
+    private static func addPropertyParagraphStyle(
+        _ style: NSParagraphStyle,
+        range: NSRange,
+        plan: LivePreviewAttributePlan,
+        visibleRange: NSRange
+    ) {
+        let range = NSIntersectionRange(range, visibleRange)
+        guard range.length > 0 else {
+            return
+        }
+        plan.addAttributes([.paragraphStyle: style], range: range)
+    }
+
+    private static func propertyLineRanges(
+        for properties: LivePreviewPropertyBlock,
+        source: String
+    ) -> [NSRange] {
+        let text = source as NSString
+        let blockRange = properties.sourceRange.nsRange
+        let blockEnd = blockRange.location + blockRange.length
+        var cursor = blockRange.location
+        var ranges: [NSRange] = []
+
+        while cursor < blockEnd {
+            let searchRange = NSRange(location: cursor, length: blockEnd - cursor)
+            let newlineRange = text.range(of: "\n", options: [], range: searchRange)
+            let upper = newlineRange.location == NSNotFound
+                ? blockEnd
+                : newlineRange.location + newlineRange.length
+            ranges.append(NSRange(location: cursor, length: upper - cursor))
+            cursor = upper
+        }
+
+        return ranges
     }
 
     private static func tableModel(

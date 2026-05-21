@@ -43,6 +43,12 @@ enum LivePreviewTheme {
     static let listMarkerColor = NSColor.systemOrange
     static let concealedColor = NSColor.clear
     static let collapsedSyntaxFont = NSFont.systemFont(ofSize: 1, weight: .regular)
+    static let propertyTitleLineHeight: CGFloat = 42
+    static let propertyTitleParagraphSpacing: CGFloat = 18
+    static let propertySectionLineHeight: CGFloat = 24
+    static let propertySectionParagraphSpacing: CGFloat = 8
+    static let propertyRowLineHeight: CGFloat = 28
+    static let propertyRowParagraphSpacing: CGFloat = 4
 
     static func headingFont(level: Int) -> NSFont {
         switch level {
@@ -122,12 +128,38 @@ enum LivePreviewTheme {
     }
 
     static var propertyParagraphStyle: NSParagraphStyle {
+        propertyRowParagraphStyle
+    }
+
+    static var propertyTitleParagraphStyle: NSParagraphStyle {
+        fixedLineParagraphStyle(
+            lineHeight: propertyTitleLineHeight,
+            paragraphSpacing: propertyTitleParagraphSpacing
+        )
+    }
+
+    static var propertySectionParagraphStyle: NSParagraphStyle {
+        fixedLineParagraphStyle(
+            lineHeight: propertySectionLineHeight,
+            paragraphSpacing: propertySectionParagraphSpacing
+        )
+    }
+
+    static var propertyRowParagraphStyle: NSParagraphStyle {
+        fixedLineParagraphStyle(
+            lineHeight: propertyRowLineHeight,
+            paragraphSpacing: propertyRowParagraphSpacing
+        )
+    }
+
+    private static func fixedLineParagraphStyle(lineHeight: CGFloat, paragraphSpacing: CGFloat) -> NSParagraphStyle {
         let style = NSMutableParagraphStyle()
-        style.lineHeightMultiple = 1.08
+        style.minimumLineHeight = lineHeight
+        style.maximumLineHeight = lineHeight
         style.firstLineHeadIndent = 0
         style.headIndent = 18
-        style.paragraphSpacingBefore = 2
-        style.paragraphSpacing = 2
+        style.paragraphSpacingBefore = 0
+        style.paragraphSpacing = paragraphSpacing
         return style.copy() as! NSParagraphStyle
     }
 

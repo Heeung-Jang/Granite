@@ -20,6 +20,27 @@ enum LivePreviewOverlayRenderer {
         var values: [String]
     }
 
+    private enum PropertyLayout {
+        static let maxWidth: CGFloat = 760
+        static let minWidth: CGFloat = 420
+        static let rightPadding: CGFloat = 36
+        static let titleYOffset: CGFloat = 0
+        static let titleHeight: CGFloat = 36
+        static let sectionYOffset: CGFloat = 1
+        static let sectionHeight: CGFloat = 22
+        static let rowYOffset: CGFloat = 3
+        static let rowTextHeight: CGFloat = 22
+        static let iconX: CGFloat = 2
+        static let iconYOffset: CGFloat = 3
+        static let iconSize: CGFloat = 16
+        static let keyX: CGFloat = 28
+        static let keyWidth: CGFloat = 126
+        static let valueX: CGFloat = 166
+        static let tagHeight: CGFloat = 20
+        static let tagGap: CGFloat = 6
+        static let tagHorizontalPadding: CGFloat = 18
+    }
+
     static func drawBackgrounds(in textView: MarkdownInteractionTextView, dirtyRect: NSRect) {
         guard textView.livePreviewMode == .livePreview else {
             return
@@ -127,16 +148,24 @@ enum LivePreviewOverlayRenderer {
         dirtyRect: NSRect
     ) {
         let fragments = lineFragments(for: properties.sourceRange.nsRange, in: textView)
-        guard fragments.count >= 3 else {
+        guard fragments.count >= 2 else {
             return
         }
 
         let x = fragments[0].lineRect.minX
-        let width = min(760, max(420, textView.bounds.width - x - 36))
+        let width = min(
+            PropertyLayout.maxWidth,
+            max(PropertyLayout.minWidth, textView.bounds.width - x - PropertyLayout.rightPadding)
+        )
         let titleText = normalizedTitle(title)
         drawString(
             titleText,
-            in: NSRect(x: x, y: fragments[0].lineRect.minY + 2, width: width, height: 34),
+            in: NSRect(
+                x: x,
+                y: fragments[0].lineRect.minY + PropertyLayout.titleYOffset,
+                width: width,
+                height: PropertyLayout.titleHeight
+            ),
             attributes: [
                 .font: NSFont.systemFont(ofSize: 26, weight: .bold),
                 .foregroundColor: LivePreviewTheme.textColor
@@ -146,7 +175,12 @@ enum LivePreviewOverlayRenderer {
 
         drawString(
             "속성",
-            in: NSRect(x: x, y: fragments[1].lineRect.minY + 3, width: width, height: 22),
+            in: NSRect(
+                x: x,
+                y: fragments[1].lineRect.minY + PropertyLayout.sectionYOffset,
+                width: width,
+                height: PropertyLayout.sectionHeight
+            ),
             attributes: [
                 .font: NSFont.systemFont(ofSize: 15, weight: .semibold),
                 .foregroundColor: LivePreviewTheme.textColor
@@ -156,7 +190,7 @@ enum LivePreviewOverlayRenderer {
 
         let groups = propertyGroups(from: properties.rows)
         var lineIndex = 2
-        for group in groups where lineIndex < fragments.count - 1 {
+        for group in groups where lineIndex < fragments.count {
             let rect = fragments[lineIndex].lineRect
             drawPropertyRow(group, rect: rect, x: x, width: width, dirtyRect: dirtyRect)
             lineIndex += 1
@@ -174,11 +208,24 @@ enum LivePreviewOverlayRenderer {
             return
         }
 
-        let rowY = rect.minY + 2
-        drawPropertyIcon(for: group.key, in: NSRect(x: x + 2, y: rowY + 1, width: 16, height: 16))
+        let rowY = rect.minY + PropertyLayout.rowYOffset
+        drawPropertyIcon(
+            for: group.key,
+            in: NSRect(
+                x: x + PropertyLayout.iconX,
+                y: rowY + PropertyLayout.iconYOffset,
+                width: PropertyLayout.iconSize,
+                height: PropertyLayout.iconSize
+            )
+        )
         drawString(
             displayKey(group.key),
-            in: NSRect(x: x + 28, y: rowY, width: 112, height: 20),
+            in: NSRect(
+                x: x + PropertyLayout.keyX,
+                y: rowY,
+                width: PropertyLayout.keyWidth,
+                height: PropertyLayout.rowTextHeight
+            ),
             attributes: [
                 .font: NSFont.systemFont(ofSize: 14, weight: .regular),
                 .foregroundColor: LivePreviewTheme.propertyKeyColor
@@ -189,7 +236,7 @@ enum LivePreviewOverlayRenderer {
         if group.key == "tags" {
             drawTagPills(
                 group.values.map { displayValue($0, key: group.key) },
-                x: x + 150,
+                x: x + PropertyLayout.valueX,
                 y: rowY,
                 maxX: x + width,
                 dirtyRect: dirtyRect
@@ -201,7 +248,12 @@ enum LivePreviewOverlayRenderer {
         let isLink = group.key.lowercased().contains("link") || value.contains("://")
         drawString(
             value,
-            in: NSRect(x: x + 150, y: rowY, width: max(120, width - 150), height: 21),
+            in: NSRect(
+                x: x + PropertyLayout.valueX,
+                y: rowY,
+                width: max(120, width - PropertyLayout.valueX),
+                height: PropertyLayout.rowTextHeight
+            ),
             attributes: [
                 .font: NSFont.systemFont(ofSize: 14, weight: .regular),
                 .foregroundColor: isLink ? LivePreviewTheme.linkColor : LivePreviewTheme.propertyValueColor
@@ -401,19 +453,28 @@ enum LivePreviewOverlayRenderer {
                 .foregroundColor: LivePreviewTheme.tagColor
             ]
             let textSize = (value as NSString).size(withAttributes: attributes)
-            let rect = NSRect(x: cursor, y: y + 1, width: textSize.width + 18, height: 20)
+            let rect = NSRect(
+                x: cursor,
+                y: y + 1,
+                width: textSize.width + PropertyLayout.tagHorizontalPadding,
+                height: PropertyLayout.tagHeight
+            )
             guard rect.maxX <= maxX else {
                 return
             }
             if rect.intersects(dirtyRect) {
                 LivePreviewTheme.tagBackgroundColor.setFill()
-                NSBezierPath(roundedRect: rect, xRadius: 10, yRadius: 10).fill()
+                NSBezierPath(
+                    roundedRect: rect,
+                    xRadius: PropertyLayout.tagHeight / 2,
+                    yRadius: PropertyLayout.tagHeight / 2
+                ).fill()
                 (value as NSString).draw(
                     in: rect.insetBy(dx: 9, dy: 2),
                     withAttributes: attributes
                 )
             }
-            cursor = rect.maxX + 6
+            cursor = rect.maxX + PropertyLayout.tagGap
         }
     }
 
