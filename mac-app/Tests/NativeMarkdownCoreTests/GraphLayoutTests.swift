@@ -139,6 +139,70 @@ func graphViewportFitsLargeLayoutBelowLegacyMinimumZoom() {
 }
 
 @Test
+func graphViewportFitStateFitsOncePerRequest() {
+    let layout = GraphLayoutMapper.map(layoutFixtureSnapshot(requestID: 7))
+    let canvasSize = GraphSize(width: 500, height: 300)
+    var fitState = GraphViewportFitState()
+
+    let firstFit = fitState.initialFitViewport(layout: layout, canvasSize: canvasSize)
+    let secondFit = fitState.initialFitViewport(layout: layout, canvasSize: canvasSize)
+
+    #expect(firstFit != nil)
+    #expect(secondFit == nil)
+}
+
+@Test
+func graphViewportFitStatePreservesUserViewportAcrossSameRequestRefinement() {
+    let layout = GraphLayoutMapper.map(layoutFixtureSnapshot(requestID: 7))
+    let refinedLayout = GraphRendererSnapshot(
+        requestID: layout.requestID,
+        generation: layout.generation,
+        nodes: layout.nodes,
+        edges: layout.edges,
+        components: layout.components,
+        renderIdentity: layout.renderIdentity &+ 1
+    )
+    let canvasSize = GraphSize(width: 500, height: 300)
+    var fitState = GraphViewportFitState()
+
+    #expect(fitState.initialFitViewport(layout: layout, canvasSize: canvasSize) != nil)
+    #expect(fitState.initialFitViewport(layout: refinedLayout, canvasSize: canvasSize) == nil)
+}
+
+@Test
+func graphViewportFitStateWaitsForUsableCanvasAndCanInvalidate() {
+    let layout = GraphLayoutMapper.map(layoutFixtureSnapshot(requestID: 7))
+    let usableCanvasSize = GraphSize(width: 500, height: 300)
+    var fitState = GraphViewportFitState()
+
+    #expect(fitState.initialFitViewport(
+        layout: layout,
+        canvasSize: GraphSize(
+            width: GraphViewportFitState.minimumUsableCanvasSide - 1,
+            height: 300
+        )
+    ) == nil)
+    #expect(fitState.initialFitViewport(layout: layout, canvasSize: usableCanvasSize) != nil)
+
+    fitState.invalidate()
+
+    #expect(fitState.initialFitViewport(layout: layout, canvasSize: usableCanvasSize) != nil)
+}
+
+@Test
+func graphViewportFitStateResetAlwaysReturnsFitViewport() {
+    let layout = GraphLayoutMapper.map(layoutFixtureSnapshot(requestID: 7))
+    let canvasSize = GraphSize(width: 500, height: 300)
+    var fitState = GraphViewportFitState()
+    let firstFit = fitState.initialFitViewport(layout: layout, canvasSize: canvasSize)
+
+    let resetFit = fitState.resetViewport(layout: layout, canvasSize: canvasSize)
+
+    #expect(firstFit == resetFit)
+    #expect(fitState.initialFitViewport(layout: layout, canvasSize: canvasSize) == nil)
+}
+
+@Test
 func graphLabelVisibilityUsesFocusSearchAndZoomPolicy() {
     let settings = GraphPresentationSettings()
 

@@ -455,6 +455,59 @@ public struct GraphViewport: Equatable, Sendable {
     }
 }
 
+public struct GraphViewportFitState: Equatable, Sendable {
+    static let minimumUsableCanvasSide = 32.0
+
+    private var fittedRequestID: UInt64?
+
+    public init(fittedRequestID: UInt64? = nil) {
+        self.fittedRequestID = fittedRequestID
+    }
+
+    public mutating func invalidate() {
+        fittedRequestID = nil
+    }
+
+    public mutating func initialFitViewport(
+        layout: GraphRendererSnapshot,
+        canvasSize: GraphSize
+    ) -> GraphViewport? {
+        guard fittedRequestID != layout.requestID,
+              Self.hasUsableCanvas(canvasSize)
+        else {
+            return nil
+        }
+
+        fittedRequestID = layout.requestID
+        return Self.fitViewport(layout: layout, canvasSize: canvasSize)
+    }
+
+    public mutating func resetViewport(
+        layout: GraphRendererSnapshot,
+        canvasSize: GraphSize
+    ) -> GraphViewport {
+        fittedRequestID = layout.requestID
+        return Self.fitViewport(layout: layout, canvasSize: canvasSize)
+    }
+
+    private static func fitViewport(
+        layout: GraphRendererSnapshot,
+        canvasSize: GraphSize
+    ) -> GraphViewport {
+        GraphViewport.fit(
+            layoutBounds: GraphLayoutBounds.enclosing(layout.nodes),
+            canvasSize: canvasSize
+        )
+    }
+
+    private static func hasUsableCanvas(_ canvasSize: GraphSize) -> Bool {
+        canvasSize.width.isFinite
+            && canvasSize.height.isFinite
+            && canvasSize.width >= minimumUsableCanvasSide
+            && canvasSize.height >= minimumUsableCanvasSide
+    }
+}
+
 public struct GraphLabelVisibilityContext: Equatable, Sendable {
     public var hoveredNodeID: String?
     public var selectedNodeID: String?

@@ -18,6 +18,8 @@ struct GraphWorkspaceView: View {
     @State private var nextGraphRequestID: UInt64 = 1
     @State private var showsSettings = false
     @State private var viewport = GraphViewport()
+    @State private var viewportFitState = GraphViewportFitState()
+    @State private var graphCanvasSize: GraphSize?
     @FocusState private var graphSurfaceFocused: Bool
 
     private let graphClient = EngineGraphClient()
@@ -83,7 +85,7 @@ struct GraphWorkspaceView: View {
                 systemName: "arrow.counterclockwise",
                 accessibilityLabel: "Reset graph view"
             ) {
-                viewport.reset()
+                resetViewportToFit()
             }
 
             ObsidianIconButton(
@@ -113,56 +115,66 @@ struct GraphWorkspaceView: View {
                             Divider()
                         }
 
-                        GraphRendererSurfaceView(
-                            input: input,
-                            viewport: $viewport,
-                            callbacks: GraphRendererCallbacks(
-                                didCompleteFirstDraw: { metrics in
-                                    Task { @MainActor in
-                                        handleFirstDraw(
-                                            metrics,
-                                            requestID: input.layout.requestID
-                                        )
+                        GeometryReader { proxy in
+                            GraphRendererSurfaceView(
+                                input: input,
+                                viewport: $viewport,
+                                callbacks: GraphRendererCallbacks(
+                                    didCompleteFirstDraw: { metrics in
+                                        Task { @MainActor in
+                                            handleFirstDraw(
+                                                metrics,
+                                                requestID: input.layout.requestID
+                                            )
+                                        }
                                     }
+                                ),
+                                hitTestIndex: loadedHitTestIndex,
+                                onHoverNode: { nodeID in
+                                    interaction.hover(nodeID)
+                                },
+                                onSelectNode: { nodeID in
+                                    interaction.select(nodeID)
+                                },
+                                onOpenNode: { nodeID in
+                                    openNode(nodeID, in: input)
                                 }
-                            ),
-                            hitTestIndex: loadedHitTestIndex,
-                            onHoverNode: { nodeID in
-                                interaction.hover(nodeID)
-                            },
-                            onSelectNode: { nodeID in
-                                interaction.select(nodeID)
-                            },
-                            onOpenNode: { nodeID in
-                                openNode(nodeID, in: input)
+                            )
+                            .frame(width: proxy.size.width, height: proxy.size.height)
+                            .focused($graphSurfaceFocused)
+                            .onAppear {
+                                graphSurfaceFocused = true
+                                workspaceModel.applyStableGraph(GraphStableGraphSummary(
+                                    generation: input.layout.generation,
+                                    nodeCount: input.layout.nodes.count,
+                                    edgeCount: input.layout.edges.count
+                                ))
+                                updateGraphCanvasSize(proxy.size, layout: input.layout)
                             }
-                        )
-                        .focused($graphSurfaceFocused)
-                        .onAppear {
-                            graphSurfaceFocused = true
-                            workspaceModel.applyStableGraph(GraphStableGraphSummary(
-                                generation: input.layout.generation,
-                                nodeCount: input.layout.nodes.count,
-                                edgeCount: input.layout.edges.count
-                            ))
-                        }
-                        .onMoveCommand { direction in
-                            panGraph(direction)
-                        }
-                        .onKeyPress(.return) {
-                            openSelectedNode(in: input)
-                        }
-                        .onKeyPress("+") {
-                            zoom(by: 1.15)
-                            return .handled
-                        }
-                        .onKeyPress("-") {
-                            zoom(by: 0.85)
-                            return .handled
-                        }
-                        .onExitCommand {
-                            interaction.hover(nil)
-                            interaction.clearSelection()
+                            .onChange(of: proxy.size) { _, newSize in
+                                updateGraphCanvasSize(newSize, layout: input.layout)
+                            }
+                            .onChange(of: input.layout.requestID) { _, _ in
+                                updateGraphCanvasSize(proxy.size, layout: input.layout)
+                            }
+                            .onMoveCommand { direction in
+                                panGraph(direction)
+                            }
+                            .onKeyPress(.return) {
+                                openSelectedNode(in: input)
+                            }
+                            .onKeyPress("+") {
+                                zoom(by: 1.15)
+                                return .handled
+                            }
+                            .onKeyPress("-") {
+                                zoom(by: 0.85)
+                                return .handled
+                            }
+                            .onExitCommand {
+                                interaction.hover(nil)
+                                interaction.clearSelection()
+                            }
                         }
 
                         if showsKeyboardResults(for: input) {
@@ -258,6 +270,8 @@ struct GraphWorkspaceView: View {
             loadedLayout = nil
             loadedHitTestIndex = nil
             graphBannerText = nil
+            graphCanvasSize = nil
+            viewportFitState.invalidate()
             workspaceModel.clear(.noVault)
             return
         }
@@ -269,6 +283,8 @@ struct GraphWorkspaceView: View {
             loadedLayout = nil
             loadedHitTestIndex = nil
             graphBannerText = nil
+            graphCanvasSize = nil
+            viewportFitState.invalidate()
             workspaceModel.clear(.missingIndex)
             return
         }
@@ -332,6 +348,7 @@ struct GraphWorkspaceView: View {
             )
             try Task.checkCancellation()
 
+            viewportFitState.invalidate()
             loadedLayout = layout
             loadedHitTestIndex = preparedGraph.hitTestIndex
             let stableGraph = GraphStableGraphSummary(
@@ -505,6 +522,41 @@ struct GraphWorkspaceView: View {
         forceRefinementTask = nil
     }
 
+    private func updateGraphCanvasSize(_ size: CGSize, layout: GraphRendererSnapshot) {
+        let canvasSize = GraphSize(width: Double(size.width), height: Double(size.height))
+        guard canvasSize.width.isFinite,
+              canvasSize.height.isFinite,
+              canvasSize.width > 0,
+              canvasSize.height > 0
+        else {
+            return
+        }
+
+        if graphCanvasSize != canvasSize {
+            graphCanvasSize = canvasSize
+        }
+        if let fitViewport = viewportFitState.initialFitViewport(
+            layout: layout,
+            canvasSize: canvasSize
+        ) {
+            viewport = fitViewport
+        }
+    }
+
+    private func resetViewportToFit() {
+        guard let loadedLayout,
+              let graphCanvasSize
+        else {
+            viewport.reset()
+            return
+        }
+
+        viewport = viewportFitState.resetViewport(
+            layout: loadedLayout,
+            canvasSize: graphCanvasSize
+        )
+    }
+
     private func zoom(by multiplier: Double) {
         viewport.zoomScale *= multiplier
     }
@@ -642,6 +694,8 @@ struct GraphWorkspaceView: View {
             loadedLayout = nil
             loadedHitTestIndex = nil
             graphBannerText = nil
+            graphCanvasSize = nil
+            viewportFitState.invalidate()
             return
         default:
             workspaceModel.fail(.snapshotFailed)
