@@ -9,6 +9,9 @@ use serde::{Deserialize, Serialize};
 use crate::ENGINE_ABI_VERSION;
 use crate::indexing_queue::{IndexingQueue, IndexingQueueItem};
 use crate::paths::{FileIdentity, PathError, VaultRoot};
+use crate::read_api::{
+    ENGINE_READ_STATE_COMPLETE, ReadOpenError, VaultReadApi, open_vault_read_api,
+};
 use crate::save::{
     SafeSaveError, SaveBaseline, SaveChoiceOutcome, SaveConflict, SaveConflictChoiceError,
     SaveConflictKind, SaveConflictSnapshot, SaveOutcome, SaveReloadOutcome, SaveRequest,
@@ -47,6 +50,77 @@ pub unsafe extern "C" fn engine_string_free(ptr: *mut c_char) {
     unsafe {
         drop(CString::from_raw(ptr));
     }
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct EngineReadResultBuffer {
+    pub ptr: *mut c_uchar,
+    pub len: usize,
+    pub capacity: usize,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct EngineReadOpenResult {
+    pub handle: *mut EngineReadHandle,
+    pub result: EngineReadResultBuffer,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct EngineReadOpenStatus {
+    abi_version: u32,
+    ok: u32,
+    state: u32,
+    generation: u64,
+    error_code: u32,
+}
+
+pub struct EngineReadHandle {
+    api: VaultReadApi,
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn engine_read_open(
+    metadata_path: *const c_char,
+    tantivy_path: *const c_char,
+) -> EngineReadOpenResult {
+    read_open_response(|| {
+        let metadata_path = unsafe {
+            read_c_string(metadata_path, "metadata_path")
+                .map_err(|_| ReadOpenError::InvalidInput("metadata_path"))?
+        };
+        let tantivy_path = unsafe {
+            read_c_string(tantivy_path, "tantivy_path")
+                .map_err(|_| ReadOpenError::InvalidInput("tantivy_path"))?
+        };
+        EngineReadHandle::open(metadata_path, tantivy_path)
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn engine_read_close(handle: *mut EngineReadHandle) {
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        if handle.is_null() {
+            return;
+        }
+        unsafe {
+            drop(Box::from_raw(handle));
+        }
+    }));
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn engine_read_result_free(buffer: EngineReadResultBuffer) {
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        if buffer.ptr.is_null() {
+            return;
+        }
+        unsafe {
+            drop(Vec::from_raw_parts(buffer.ptr, buffer.len, buffer.capacity));
+        }
+    }));
 }
 
 #[unsafe(no_mangle)]
@@ -489,6 +563,70 @@ where
         .into_raw()
 }
 
+impl EngineReadHandle {
+    fn open(
+        metadata_path: impl AsRef<std::path::Path>,
+        tantivy_path: impl AsRef<std::path::Path>,
+    ) -> Result<Self, ReadOpenError> {
+        Ok(Self {
+            api: open_vault_read_api(metadata_path, tantivy_path)?,
+        })
+    }
+
+    fn generation(&self) -> u64 {
+        self.api.generation()
+    }
+}
+
+fn read_open_response<F>(call: F) -> EngineReadOpenResult
+where
+    F: FnOnce() -> Result<EngineReadHandle, ReadOpenError>,
+{
+    match catch_unwind(AssertUnwindSafe(call)).unwrap_or(Err(ReadOpenError::Panic)) {
+        Ok(handle) => {
+            let generation = handle.generation();
+            EngineReadOpenResult {
+                handle: Box::into_raw(Box::new(handle)),
+                result: open_status_buffer(EngineReadOpenStatus {
+                    abi_version: ENGINE_ABI_VERSION,
+                    ok: 1,
+                    state: ENGINE_READ_STATE_COMPLETE,
+                    generation,
+                    error_code: 0,
+                }),
+            }
+        }
+        Err(error) => EngineReadOpenResult {
+            handle: std::ptr::null_mut(),
+            result: open_status_buffer(EngineReadOpenStatus {
+                abi_version: ENGINE_ABI_VERSION,
+                ok: 0,
+                state: error.state_code(),
+                generation: 0,
+                error_code: error.abi_numeric_code(),
+            }),
+        },
+    }
+}
+
+fn open_status_buffer(status: EngineReadOpenStatus) -> EngineReadResultBuffer {
+    let mut bytes = Vec::with_capacity(std::mem::size_of::<EngineReadOpenStatus>());
+    let status_bytes = unsafe {
+        slice::from_raw_parts(
+            (&status as *const EngineReadOpenStatus).cast::<u8>(),
+            std::mem::size_of::<EngineReadOpenStatus>(),
+        )
+    };
+    bytes.extend_from_slice(status_bytes);
+    let result = EngineReadResultBuffer {
+        ptr: bytes.as_mut_ptr(),
+        len: bytes.len(),
+        capacity: bytes.capacity(),
+    };
+    std::mem::forget(bytes);
+    result
+}
+
 unsafe fn read_c_string(ptr: *const c_char, field: &str) -> Result<String, FfiError> {
     if ptr.is_null() {
         return Err(FfiError::invalid_input(field, "null pointer"));
@@ -547,9 +685,87 @@ fn system_time(time: FfiSystemTime) -> SystemTime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::index::{IndexSchemaMetadata, MetadataStore};
+    use crate::read_api::{READ_BACKEND_NAME, READ_BACKEND_VERSION, READ_TOKENIZER_CONFIG};
+    use crate::sqlite_fts::SearchDocument;
+    use crate::tantivy_search::TantivySearchIndex;
     use serde_json::Value;
     use std::fs;
-    use tempfile::tempdir;
+    use tempfile::{TempDir, tempdir};
+
+    #[test]
+    fn read_handle_constructs_and_drops_without_ffi() {
+        let fixture = read_fixture().expect("fixture");
+        let handle = EngineReadHandle::open(&fixture.metadata_path, &fixture.tantivy_path)
+            .expect("read handle");
+
+        assert_eq!(handle.generation(), 11);
+        drop(handle);
+    }
+
+    #[test]
+    fn engine_read_open_opens_fixture_index_and_returns_status() {
+        let fixture = read_fixture().expect("fixture");
+        let metadata =
+            CString::new(fixture.metadata_path.to_string_lossy().as_bytes()).expect("metadata");
+        let tantivy =
+            CString::new(fixture.tantivy_path.to_string_lossy().as_bytes()).expect("tantivy");
+
+        let response = unsafe { engine_read_open(metadata.as_ptr(), tantivy.as_ptr()) };
+        let status = unsafe { take_open_status(response.result) };
+
+        assert!(!response.handle.is_null());
+        assert_eq!(
+            status,
+            EngineReadOpenStatus {
+                abi_version: ENGINE_ABI_VERSION,
+                ok: 1,
+                state: ENGINE_READ_STATE_COMPLETE,
+                generation: 11,
+                error_code: 0,
+            }
+        );
+
+        unsafe {
+            engine_read_close(response.handle);
+        }
+    }
+
+    #[test]
+    fn engine_read_open_invalid_paths_return_error_buffer() {
+        let response = unsafe { engine_read_open(std::ptr::null(), std::ptr::null()) };
+        let status = unsafe { take_open_status(response.result) };
+
+        assert!(response.handle.is_null());
+        assert_eq!(status.ok, 0);
+        assert_eq!(status.state, crate::read_api::ENGINE_READ_STATE_ERROR);
+        assert_eq!(
+            status.error_code,
+            ReadOpenError::InvalidInput("metadata_path").abi_numeric_code()
+        );
+    }
+
+    #[test]
+    fn engine_read_close_and_result_free_are_null_safe() {
+        unsafe {
+            engine_read_close(std::ptr::null_mut());
+            engine_read_result_free(EngineReadResultBuffer {
+                ptr: std::ptr::null_mut(),
+                len: 0,
+                capacity: 0,
+            });
+        }
+    }
+
+    #[test]
+    fn read_ffi_panic_boundary_returns_error_buffer() {
+        let response = read_open_response(|| panic!("test panic"));
+        let status = unsafe { take_open_status(response.result) };
+
+        assert!(response.handle.is_null());
+        assert_eq!(status.ok, 0);
+        assert_eq!(status.error_code, ReadOpenError::Panic.abi_numeric_code());
+    }
 
     #[test]
     fn save_ffi_captures_baseline_and_writes_exact_bytes() {
@@ -827,5 +1043,49 @@ mod tests {
             engine_string_free(ptr);
         }
         value
+    }
+
+    unsafe fn take_open_status(buffer: EngineReadResultBuffer) -> EngineReadOpenStatus {
+        assert!(!buffer.ptr.is_null());
+        assert_eq!(buffer.len, std::mem::size_of::<EngineReadOpenStatus>());
+        let status = unsafe { std::ptr::read_unaligned(buffer.ptr.cast::<EngineReadOpenStatus>()) };
+        unsafe {
+            engine_read_result_free(buffer);
+        }
+        status
+    }
+
+    struct ReadFixture {
+        _dir: TempDir,
+        metadata_path: std::path::PathBuf,
+        tantivy_path: std::path::PathBuf,
+    }
+
+    fn read_fixture() -> Result<ReadFixture, Box<dyn std::error::Error>> {
+        let dir = tempdir()?;
+        let metadata_path = dir.path().join("metadata.sqlite");
+        let tantivy_path = dir.path().join("tantivy");
+        let metadata = IndexSchemaMetadata::new(
+            READ_BACKEND_NAME,
+            READ_BACKEND_VERSION,
+            READ_TOKENIZER_CONFIG,
+            11,
+        );
+        let store = MetadataStore::open(&metadata_path, &metadata)?;
+        drop(store);
+        let mut index = TantivySearchIndex::open_in_dir(&tantivy_path)?;
+        index.replace_documents(&[SearchDocument {
+            file_id: "home".to_string(),
+            path: "Home.md".to_string(),
+            title: "Home".to_string(),
+            body: "body".to_string(),
+        }])?;
+        drop(index);
+
+        Ok(ReadFixture {
+            _dir: dir,
+            metadata_path,
+            tantivy_path,
+        })
     }
 }

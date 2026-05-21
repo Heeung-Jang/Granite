@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::attachments::{AttachmentReferenceSource, AttachmentResolutionState};
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 
 use crate::parser::PropertyValue;
 use crate::paths::{FileIdentity, lookup_key};
@@ -211,6 +211,27 @@ impl MetadataStore {
 
     pub fn open_in_memory(expected: &IndexSchemaMetadata) -> MetadataStoreResult<Self> {
         Self::from_connection(Connection::open_in_memory()?, expected)
+    }
+
+    pub fn open_existing_read_only(
+        path: impl AsRef<Path>,
+        expected: &IndexSchemaMetadata,
+    ) -> MetadataStoreResult<(Self, IndexSchemaMetadata)> {
+        let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        let stored = read_schema_metadata(&connection)?
+            .ok_or(MetadataStoreError::InvalidStoredValue("schema_version"))?;
+        let expected_with_stored_generation = IndexSchemaMetadata {
+            generation: stored.generation,
+            ..expected.clone()
+        };
+        if stored != expected_with_stored_generation {
+            return Err(MetadataStoreError::SchemaMismatch {
+                stored: Box::new(stored),
+                expected: Box::new(expected_with_stored_generation),
+            });
+        }
+
+        Ok((Self { connection }, stored))
     }
 
     fn from_connection(

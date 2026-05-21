@@ -1,8 +1,8 @@
-use std::fmt;
+use std::{fmt, path::Path};
 
 use crate::index::{
-    AttachmentRecord, FileRecord, HeadingRecord, LinkEdgeRecord, MetadataStore, MetadataStoreError,
-    PropertyRecord, TagRecord,
+    AttachmentRecord, FileRecord, HeadingRecord, IndexSchemaMetadata, LinkEdgeRecord,
+    MetadataStore, MetadataStoreError, PropertyRecord, TagRecord,
 };
 use crate::sqlite_fts::SearchResult;
 use crate::tantivy_search::{TantivySearchError, TantivySearchIndex};
@@ -10,6 +10,15 @@ use crate::tantivy_search::{TantivySearchError, TantivySearchIndex};
 const MAX_PAGE_LIMIT: usize = 100;
 const MAX_GRAPH_NODES: usize = 250;
 const MAX_GRAPH_EDGES: usize = 500;
+pub const READ_BACKEND_NAME: &str = "sqlite+tantivy";
+pub const READ_BACKEND_VERSION: &str = "metadata-v1";
+pub const READ_TOKENIZER_CONFIG: &str = "tantivy";
+pub const ENGINE_READ_STATE_COMPLETE: u32 = 0;
+pub const ENGINE_READ_STATE_PARTIAL: u32 = 1;
+pub const ENGINE_READ_STATE_STALE: u32 = 2;
+pub const ENGINE_READ_STATE_CANCELLED: u32 = 3;
+pub const ENGINE_READ_STATE_ERROR: u32 = 4;
+pub const ENGINE_READ_STATE_INDEX_UNAVAILABLE: u32 = 5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PageRequest {
@@ -122,7 +131,31 @@ pub enum ReadApiError {
     Search(TantivySearchError),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReadOpenError {
+    MissingMetadata,
+    CorruptMetadata,
+    SchemaMismatch {
+        stored: u32,
+        expected: u32,
+    },
+    BackendMismatch {
+        stored_name: String,
+        stored_version: String,
+        expected_name: String,
+        expected_version: String,
+    },
+    TokenizerMismatch {
+        stored: String,
+        expected: String,
+    },
+    MissingTantivyIndex,
+    InvalidInput(&'static str),
+    Panic,
+}
+
 pub type ReadApiResult<T> = Result<T, ReadApiError>;
+pub type ReadOpenResult<T> = Result<T, ReadOpenError>;
 
 impl PageRequest {
     pub fn new(offset: usize, limit: usize) -> Self {
@@ -193,6 +226,10 @@ impl VaultReadApi {
             search,
             generation,
         }
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
 
     pub fn file_tree(&self, page: PageRequest) -> ReadApiResult<ReadPage<FileRecord>> {
@@ -514,6 +551,55 @@ impl VaultReadApi {
     }
 }
 
+pub fn expected_read_schema_metadata() -> IndexSchemaMetadata {
+    IndexSchemaMetadata::new(
+        READ_BACKEND_NAME,
+        READ_BACKEND_VERSION,
+        READ_TOKENIZER_CONFIG,
+        0,
+    )
+}
+
+pub fn open_metadata_store_for_read(
+    metadata_path: impl AsRef<Path>,
+) -> ReadOpenResult<(MetadataStore, u64)> {
+    let metadata_path = metadata_path.as_ref();
+    if metadata_path.as_os_str().is_empty() {
+        return Err(ReadOpenError::InvalidInput("metadata_path"));
+    }
+    if !metadata_path.is_file() {
+        return Err(ReadOpenError::MissingMetadata);
+    }
+
+    let expected = expected_read_schema_metadata();
+    let (metadata, stored) = MetadataStore::open_existing_read_only(metadata_path, &expected)
+        .map_err(ReadOpenError::from_metadata_open)?;
+    Ok((metadata, stored.generation))
+}
+
+pub fn open_tantivy_index_for_read(
+    tantivy_path: impl AsRef<Path>,
+) -> ReadOpenResult<TantivySearchIndex> {
+    let tantivy_path = tantivy_path.as_ref();
+    if tantivy_path.as_os_str().is_empty() {
+        return Err(ReadOpenError::InvalidInput("tantivy_path"));
+    }
+    if !tantivy_path.is_dir() {
+        return Err(ReadOpenError::MissingTantivyIndex);
+    }
+    TantivySearchIndex::open_existing_dir(tantivy_path)
+        .map_err(|_| ReadOpenError::MissingTantivyIndex)
+}
+
+pub fn open_vault_read_api(
+    metadata_path: impl AsRef<Path>,
+    tantivy_path: impl AsRef<Path>,
+) -> ReadOpenResult<VaultReadApi> {
+    let (metadata, generation) = open_metadata_store_for_read(metadata_path)?;
+    let search = open_tantivy_index_for_read(tantivy_path)?;
+    Ok(VaultReadApi::with_generation(metadata, search, generation))
+}
+
 struct LocalGraphBuild {
     graph: LocalGraph,
     partial: bool,
@@ -635,6 +721,106 @@ impl From<TantivySearchError> for ReadApiError {
     }
 }
 
+impl ReadOpenError {
+    pub fn abi_code(&self) -> &'static str {
+        match self {
+            Self::MissingMetadata => "missing_metadata",
+            Self::CorruptMetadata => "corrupt_metadata",
+            Self::SchemaMismatch { .. } => "schema_mismatch",
+            Self::BackendMismatch { .. } => "backend_mismatch",
+            Self::TokenizerMismatch { .. } => "tokenizer_mismatch",
+            Self::MissingTantivyIndex => "missing_tantivy_index",
+            Self::InvalidInput(_) => "invalid_input",
+            Self::Panic => "panic",
+        }
+    }
+
+    pub fn abi_numeric_code(&self) -> u32 {
+        match self {
+            Self::MissingMetadata => 1,
+            Self::CorruptMetadata => 2,
+            Self::SchemaMismatch { .. } => 3,
+            Self::BackendMismatch { .. } => 4,
+            Self::TokenizerMismatch { .. } => 5,
+            Self::MissingTantivyIndex => 6,
+            Self::InvalidInput(_) => 7,
+            Self::Panic => 8,
+        }
+    }
+
+    pub fn state_code(&self) -> u32 {
+        match self {
+            Self::MissingMetadata | Self::MissingTantivyIndex => {
+                ENGINE_READ_STATE_INDEX_UNAVAILABLE
+            }
+            _ => ENGINE_READ_STATE_ERROR,
+        }
+    }
+
+    fn from_metadata_open(error: MetadataStoreError) -> Self {
+        match error {
+            MetadataStoreError::SchemaMismatch { stored, expected } => {
+                if stored.schema_version != expected.schema_version {
+                    Self::SchemaMismatch {
+                        stored: stored.schema_version,
+                        expected: expected.schema_version,
+                    }
+                } else if stored.backend_name != expected.backend_name
+                    || stored.backend_version != expected.backend_version
+                {
+                    Self::BackendMismatch {
+                        stored_name: stored.backend_name,
+                        stored_version: stored.backend_version,
+                        expected_name: expected.backend_name,
+                        expected_version: expected.backend_version,
+                    }
+                } else if stored.tokenizer_config != expected.tokenizer_config {
+                    Self::TokenizerMismatch {
+                        stored: stored.tokenizer_config,
+                        expected: expected.tokenizer_config,
+                    }
+                } else {
+                    Self::CorruptMetadata
+                }
+            }
+            MetadataStoreError::Sqlite(_) | MetadataStoreError::InvalidStoredValue(_) => {
+                Self::CorruptMetadata
+            }
+        }
+    }
+}
+
+impl fmt::Display for ReadOpenError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingMetadata => write!(formatter, "metadata store is missing"),
+            Self::CorruptMetadata => write!(formatter, "metadata store is corrupt"),
+            Self::SchemaMismatch { stored, expected } => write!(
+                formatter,
+                "metadata schema mismatch: stored={stored}, expected={expected}"
+            ),
+            Self::BackendMismatch {
+                stored_name,
+                stored_version,
+                expected_name,
+                expected_version,
+            } => write!(
+                formatter,
+                "metadata backend mismatch: stored={stored_name}/{stored_version}, expected={expected_name}/{expected_version}"
+            ),
+            Self::TokenizerMismatch { stored, expected } => write!(
+                formatter,
+                "metadata tokenizer mismatch: stored={stored}, expected={expected}"
+            ),
+            Self::MissingTantivyIndex => write!(formatter, "tantivy search index is missing"),
+            Self::InvalidInput(field) => write!(formatter, "invalid read open input: {field}"),
+            Self::Panic => write!(formatter, "read ffi panic"),
+        }
+    }
+}
+
+impl std::error::Error for ReadOpenError {}
+
 impl From<SearchResult> for SearchHit {
     fn from(result: SearchResult) -> Self {
         Self {
@@ -650,7 +836,7 @@ impl From<SearchResult> for SearchHit {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
+    use std::{fs, path::PathBuf};
 
     use crate::attachments::{AttachmentReferenceSource, AttachmentResolutionState};
     use crate::index::{
@@ -662,6 +848,163 @@ mod tests {
     use crate::scanner::{ScanEntry, scan_vault};
     use crate::sqlite_fts::SearchDocument;
     use crate::tantivy_search::TantivySearchIndex;
+    use tempfile::tempdir;
+
+    #[test]
+    fn read_open_error_codes_are_stable() {
+        let errors = [
+            (ReadOpenError::MissingMetadata, "missing_metadata", 1),
+            (ReadOpenError::CorruptMetadata, "corrupt_metadata", 2),
+            (
+                ReadOpenError::SchemaMismatch {
+                    stored: 0,
+                    expected: 1,
+                },
+                "schema_mismatch",
+                3,
+            ),
+            (
+                ReadOpenError::BackendMismatch {
+                    stored_name: "sqlite-fts".to_string(),
+                    stored_version: "metadata-v1".to_string(),
+                    expected_name: READ_BACKEND_NAME.to_string(),
+                    expected_version: READ_BACKEND_VERSION.to_string(),
+                },
+                "backend_mismatch",
+                4,
+            ),
+            (
+                ReadOpenError::TokenizerMismatch {
+                    stored: "unicode61".to_string(),
+                    expected: READ_TOKENIZER_CONFIG.to_string(),
+                },
+                "tokenizer_mismatch",
+                5,
+            ),
+            (
+                ReadOpenError::MissingTantivyIndex,
+                "missing_tantivy_index",
+                6,
+            ),
+            (
+                ReadOpenError::InvalidInput("metadata_path"),
+                "invalid_input",
+                7,
+            ),
+            (ReadOpenError::Panic, "panic", 8),
+        ];
+
+        for (error, code, numeric_code) in errors {
+            assert_eq!(error.abi_code(), code);
+            assert_eq!(error.abi_numeric_code(), numeric_code);
+        }
+    }
+
+    #[test]
+    fn read_state_abi_constants_are_stable() {
+        assert_eq!(ENGINE_READ_STATE_COMPLETE, 0);
+        assert_eq!(ENGINE_READ_STATE_PARTIAL, 1);
+        assert_eq!(ENGINE_READ_STATE_STALE, 2);
+        assert_eq!(ENGINE_READ_STATE_CANCELLED, 3);
+        assert_eq!(ENGINE_READ_STATE_ERROR, 4);
+        assert_eq!(ENGINE_READ_STATE_INDEX_UNAVAILABLE, 5);
+    }
+
+    #[test]
+    fn metadata_read_open_preserves_stored_generation() {
+        let dir = tempdir().expect("tempdir");
+        let metadata_path = dir.path().join("metadata.sqlite");
+        let metadata = IndexSchemaMetadata::new(
+            READ_BACKEND_NAME,
+            READ_BACKEND_VERSION,
+            READ_TOKENIZER_CONFIG,
+            7,
+        );
+        let store = MetadataStore::open(&metadata_path, &metadata).expect("store");
+        drop(store);
+
+        let (_store, generation) =
+            open_metadata_store_for_read(&metadata_path).expect("open metadata");
+
+        assert_eq!(generation, 7);
+    }
+
+    #[test]
+    fn metadata_read_open_reports_missing_corrupt_and_schema_mismatch() {
+        let dir = tempdir().expect("tempdir");
+        let missing_path = dir.path().join("missing.sqlite");
+        assert_eq!(
+            open_metadata_store_for_read(&missing_path)
+                .err()
+                .expect("missing"),
+            ReadOpenError::MissingMetadata
+        );
+
+        let corrupt_path = dir.path().join("corrupt.sqlite");
+        fs::write(&corrupt_path, b"not sqlite").expect("corrupt");
+        assert_eq!(
+            open_metadata_store_for_read(&corrupt_path)
+                .err()
+                .expect("corrupt"),
+            ReadOpenError::CorruptMetadata
+        );
+
+        let schema_path = dir.path().join("schema.sqlite");
+        let metadata = IndexSchemaMetadata::new(
+            READ_BACKEND_NAME,
+            READ_BACKEND_VERSION,
+            READ_TOKENIZER_CONFIG,
+            3,
+        );
+        let store = MetadataStore::open(&schema_path, &metadata).expect("store");
+        drop(store);
+        let connection = rusqlite::Connection::open(&schema_path).expect("connection");
+        connection
+            .execute(
+                "UPDATE index_metadata SET value = '2' WHERE key = 'schema_version'",
+                [],
+            )
+            .expect("schema version update");
+        drop(connection);
+
+        assert_eq!(
+            open_metadata_store_for_read(&schema_path)
+                .err()
+                .expect("schema"),
+            ReadOpenError::SchemaMismatch {
+                stored: 2,
+                expected: 1
+            }
+        );
+    }
+
+    #[test]
+    fn tantivy_read_open_reports_missing_and_opens_existing_index() {
+        let dir = tempdir().expect("tempdir");
+        let missing_path = dir.path().join("missing-tantivy");
+        assert_eq!(
+            open_tantivy_index_for_read(&missing_path)
+                .err()
+                .expect("missing"),
+            ReadOpenError::MissingTantivyIndex
+        );
+
+        let index_path = dir.path().join("tantivy");
+        let mut index = TantivySearchIndex::open_in_dir(&index_path).expect("create index");
+        index
+            .replace_documents(&[SearchDocument {
+                file_id: "home".to_string(),
+                path: "Home.md".to_string(),
+                title: "Home".to_string(),
+                body: "searchable body".to_string(),
+            }])
+            .expect("write index");
+        drop(index);
+
+        let index = open_tantivy_index_for_read(&index_path).expect("open index");
+
+        assert_eq!(index.search("searchable", 10).expect("search").len(), 1);
+    }
 
     #[test]
     fn read_api_returns_paginated_metadata_and_search_states() {
