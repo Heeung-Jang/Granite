@@ -18,6 +18,21 @@ struct LivePreviewTableLayout {
     var columnRects: [NSRect]
     var cells: [Cell]
 
+    func cell(at point: NSPoint) -> LivePreviewTableCell? {
+        cells.first { $0.textRect.contains(point) }?.tableCell
+    }
+
+    static func tableCell(at point: NSPoint, in textView: NSTextView) -> LivePreviewTableCell? {
+        LivePreviewTableParser.parse(textView.string).lazy.compactMap { table -> LivePreviewTableCell? in
+            guard let layout = make(for: table, in: textView),
+                  layout.outerRect.contains(point)
+            else {
+                return nil
+            }
+            return layout.cell(at: point)
+        }.first
+    }
+
     static func make(for table: LivePreviewTable, in textView: NSTextView) -> LivePreviewTableLayout? {
         let rows = [table.header] + table.bodyRows
         guard !rows.isEmpty else {

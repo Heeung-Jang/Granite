@@ -393,8 +393,8 @@ final class MarkdownInteractionTextView: NSTextView {
         let menu = super.menu(for: event) ?? NSMenu()
         tableCellMenuTarget = nil
         guard isEditable,
-              let utf16Offset = utf16Offset(for: event),
-              let cell = tableCellForEditing(at: utf16Offset)
+              let cell = tableCellForEditing(at: convert(event.locationInWindow, from: nil)) ??
+                utf16Offset(for: event).flatMap({ tableCellForEditing(at: $0) })
         else {
             return menu
         }
@@ -452,6 +452,13 @@ final class MarkdownInteractionTextView: NSTextView {
             return nil
         }
         return LivePreviewTableParser.cell(atUTF16Offset: utf16Offset, in: string)
+    }
+
+    func tableCellForEditing(at point: NSPoint) -> LivePreviewTableCell? {
+        guard livePreviewMode == .livePreview else {
+            return nil
+        }
+        return LivePreviewTableLayout.tableCell(at: point, in: self)
     }
 
     func refreshLivePreviewOverlayState(revealRange: NSRange? = nil) {

@@ -69,6 +69,9 @@ struct MarkdownEditorBridgeProbeReport: Codable, Equatable {
     var renderedTaskCheckboxToggleUndoRestoresToken: Bool
     var tableCellContextMenuResolvesCell: Bool
     var tableCellContextMenuSkipsFallback: Bool
+    var tableRenderedBodyCellHitTestResolvesCell: Bool
+    var tableRenderedHeaderCellHitTestResolvesCell: Bool
+    var tableRenderedHitTestRejectsSyntax: Bool
     var tableCellEditChangesOnlyCell: Bool
     var tableCellEditUndoRestoresCell: Bool
     var tableCellEditFailurePreservesBuffer: Bool
@@ -177,6 +180,9 @@ enum MarkdownEditorBridgeProbe {
             renderedTaskCheckboxToggleUndoRestoresToken: checkboxProbe.renderedToggleUndoRestoresToken,
             tableCellContextMenuResolvesCell: tableCellProbe.contextMenuResolvesCell,
             tableCellContextMenuSkipsFallback: tableCellProbe.contextMenuSkipsFallback,
+            tableRenderedBodyCellHitTestResolvesCell: tableCellProbe.renderedBodyCellHitTestResolvesCell,
+            tableRenderedHeaderCellHitTestResolvesCell: tableCellProbe.renderedHeaderCellHitTestResolvesCell,
+            tableRenderedHitTestRejectsSyntax: tableCellProbe.renderedHitTestRejectsSyntax,
             tableCellEditChangesOnlyCell: tableCellProbe.changesOnlyCell,
             tableCellEditUndoRestoresCell: tableCellProbe.undoRestoresCell,
             tableCellEditFailurePreservesBuffer: tableCellProbe.failurePreservesBuffer,
@@ -984,6 +990,22 @@ enum MarkdownEditorBridgeProbe {
         return NSRange(range, in: text).location
     }
 
+    private static func point(for range: NSRange, in textView: NSTextView) -> NSPoint? {
+        guard let layoutManager = textView.layoutManager,
+              let textContainer = textView.textContainer
+        else {
+            return nil
+        }
+        layoutManager.ensureLayout(for: textContainer)
+        let glyphRange = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+        guard glyphRange.length > 0 else {
+            return nil
+        }
+        let rect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+        let origin = textView.textContainerOrigin
+        return NSPoint(x: rect.midX + origin.x, y: rect.midY + origin.y)
+    }
+
     private static func probeCheckboxToggle() -> (
         changesOnlyToken: Bool,
         undoRestoresToken: Bool,
@@ -1100,6 +1122,9 @@ enum MarkdownEditorBridgeProbe {
     private static func probeTableCellEdit() -> (
         contextMenuResolvesCell: Bool,
         contextMenuSkipsFallback: Bool,
+        renderedBodyCellHitTestResolvesCell: Bool,
+        renderedHeaderCellHitTestResolvesCell: Bool,
+        renderedHitTestRejectsSyntax: Bool,
         changesOnlyCell: Bool,
         undoRestoresCell: Bool,
         failurePreservesBuffer: Bool
@@ -1122,12 +1147,31 @@ enum MarkdownEditorBridgeProbe {
         window.makeFirstResponder(textView)
         textView.string = text
         guard let table = LivePreviewTableParser.parse(text).first else {
-            return (false, false, false, false, false)
+            return (false, false, false, false, false, false, false, false)
         }
         let cell = table.bodyRows[0][1]
         let cellOffset = utf16Offset(of: "Draft", in: text) ?? -1
-        let menuCell = (textView as? MarkdownInteractionTextView)?.tableCellForEditing(at: cellOffset)
+        let interactionTextView = textView as? MarkdownInteractionTextView
+        let menuCell = interactionTextView?.tableCellForEditing(at: cellOffset)
         let contextMenuResolvesCell = menuCell == cell
+
+        let layout = LivePreviewTableLayout.make(for: table, in: textView)
+        let bodyLayout = layout?.cells.first { !$0.isHeader && $0.tableCell.text == "Draft" }
+        let headerLayout = layout?.cells.first { $0.isHeader && $0.tableCell.text == "Status" }
+        let renderedBodyCell = bodyLayout.flatMap {
+            interactionTextView?.tableCellForEditing(at: NSPoint(x: $0.textRect.midX, y: $0.textRect.midY))
+        }
+        let renderedHeaderCell = headerLayout.flatMap {
+            interactionTextView?.tableCellForEditing(at: NSPoint(x: $0.textRect.midX, y: $0.textRect.midY))
+        }
+        let renderedBodyCellHitTestResolvesCell = renderedBodyCell == cell
+        let renderedHeaderCellHitTestResolvesCell = renderedHeaderCell == table.header[1]
+        let pipePoint = point(for: NSRange(location: 0, length: 1), in: textView)
+        let alignmentPoint = utf16Offset(of: "| --- | --- |", in: text).flatMap {
+            point(for: NSRange(location: $0, length: 1), in: textView)
+        }
+        let renderedHitTestRejectsSyntax = pipePoint.flatMap { interactionTextView?.tableCellForEditing(at: $0) } == nil
+            && alignmentPoint.flatMap { interactionTextView?.tableCellForEditing(at: $0) } == nil
 
         let fallbackTextView = MarkdownEditorTextViewFactory.makeTextView()
         fallbackTextView.string = text
@@ -1156,7 +1200,16 @@ enum MarkdownEditorBridgeProbe {
             && textView.string == text
             && readOnlyTextView.string == text
 
-        return (contextMenuResolvesCell, contextMenuSkipsFallback, changesOnlyCell, undoRestoresCell, failurePreservesBuffer)
+        return (
+            contextMenuResolvesCell,
+            contextMenuSkipsFallback,
+            renderedBodyCellHitTestResolvesCell,
+            renderedHeaderCellHitTestResolvesCell,
+            renderedHitTestRejectsSyntax,
+            changesOnlyCell,
+            undoRestoresCell,
+            failurePreservesBuffer
+        )
     }
 
     private static func probeEditorAccessibility() -> Bool {
