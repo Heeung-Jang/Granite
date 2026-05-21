@@ -26,7 +26,19 @@ enum LivePreviewMarkerStyle: String, CaseIterable, Identifiable {
         }
     }
 
-    var showsBlockMarkersOutsideReveal: Bool {
+    var showsHeadingMarkersOutsideReveal: Bool {
+        self == .accent || self == .muted
+    }
+
+    var showsListMarkersOutsideReveal: Bool {
         self != .hidden
+    }
+
+    var usesMutedMarkerColor: Bool {
+        self == .obsidian || self == .muted
+    }
+
+    var keepsBlockquoteMarkersConcealed: Bool {
+        self == .obsidian
     }
 }
