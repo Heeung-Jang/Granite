@@ -309,8 +309,7 @@ public enum GraphLayoutMapper {
         var offsets = Array(repeating: GraphPoint(x: 0, y: 0), count: components.count)
 
         for (ordinal, componentIndex) in orphanIndexes.enumerated() {
-            let angle = Double(ordinal) / Double(max(1, orphanIndexes.count)) * 2.0 * Double.pi
-            offsets[componentIndex] = GraphPoint(x: cos(angle) * 900.0, y: sin(angle) * 900.0)
+            offsets[componentIndex] = orphanCloudOffset(ordinal: ordinal)
         }
 
         for (ordinal, componentIndex) in nonOrphanIndexes.enumerated() {
@@ -320,6 +319,15 @@ public enum GraphLayoutMapper {
         }
 
         return offsets
+    }
+
+    private static func orphanCloudOffset(ordinal: Int) -> GraphPoint {
+        let goldenAngle = Double.pi * (3.0 - 5.0.squareRoot())
+        let angle = Double(ordinal) * goldenAngle
+        let radius = 900.0
+            + Double(ordinal + 1).squareRoot() * 44.0
+            + Double((ordinal * 37) % 29)
+        return GraphPoint(x: cos(angle) * radius, y: sin(angle) * radius)
     }
 
     private static func connectedComponents(
@@ -459,13 +467,23 @@ public struct GraphViewportFitState: Equatable, Sendable {
     static let minimumUsableCanvasSide = 32.0
 
     private var fittedRequestID: UInt64?
+    private(set) var cachedLayoutIdentity: UInt64?
+    private var cachedLayoutBounds: GraphLayoutBounds?
 
-    public init(fittedRequestID: UInt64? = nil) {
+    public init(
+        fittedRequestID: UInt64? = nil,
+        cachedLayoutIdentity: UInt64? = nil,
+        cachedLayoutBounds: GraphLayoutBounds? = nil
+    ) {
         self.fittedRequestID = fittedRequestID
+        self.cachedLayoutIdentity = cachedLayoutIdentity
+        self.cachedLayoutBounds = cachedLayoutBounds
     }
 
     public mutating func invalidate() {
         fittedRequestID = nil
+        cachedLayoutIdentity = nil
+        cachedLayoutBounds = nil
     }
 
     public mutating func initialFitViewport(
@@ -479,7 +497,7 @@ public struct GraphViewportFitState: Equatable, Sendable {
         }
 
         fittedRequestID = layout.requestID
-        return Self.fitViewport(layout: layout, canvasSize: canvasSize)
+        return fitViewport(layout: layout, canvasSize: canvasSize)
     }
 
     public mutating func resetViewport(
@@ -487,17 +505,28 @@ public struct GraphViewportFitState: Equatable, Sendable {
         canvasSize: GraphSize
     ) -> GraphViewport {
         fittedRequestID = layout.requestID
-        return Self.fitViewport(layout: layout, canvasSize: canvasSize)
+        return fitViewport(layout: layout, canvasSize: canvasSize)
     }
 
-    private static func fitViewport(
+    private mutating func fitViewport(
         layout: GraphRendererSnapshot,
         canvasSize: GraphSize
     ) -> GraphViewport {
         GraphViewport.fit(
-            layoutBounds: GraphLayoutBounds.enclosing(layout.nodes),
+            layoutBounds: layoutBounds(for: layout),
             canvasSize: canvasSize
         )
+    }
+
+    private mutating func layoutBounds(for layout: GraphRendererSnapshot) -> GraphLayoutBounds? {
+        guard cachedLayoutIdentity != layout.renderIdentity else {
+            return cachedLayoutBounds
+        }
+
+        let bounds = GraphLayoutBounds.enclosing(layout.nodes)
+        cachedLayoutIdentity = layout.renderIdentity
+        cachedLayoutBounds = bounds
+        return bounds
     }
 
     private static func hasUsableCanvas(_ canvasSize: GraphSize) -> Bool {

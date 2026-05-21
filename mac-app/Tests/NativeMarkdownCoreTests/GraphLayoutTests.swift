@@ -38,7 +38,24 @@ func graphLayoutComponentsSeparateClustersAndOrphans() {
     #expect(layout.components.map(\.nodeIndexes) == [[0, 1], [2, 3], [4]])
     #expect(layout.components.map(\.isOrphanRing) == [false, false, true])
     #expect(abs(centerX(layout, indexes: [0, 1]) - centerX(layout, indexes: [2, 3])) > 300)
-    #expect(abs(layout.nodes[4].position.x) > 600 || abs(layout.nodes[4].position.y) > 600)
+    #expect(hypot(layout.nodes[4].position.x, layout.nodes[4].position.y) > 600)
+}
+
+@Test
+func graphLayoutOrphansUseDispersedCloudInsteadOfSingleRing() {
+    let layout = GraphLayoutMapper.map(largeLayoutFixtureSnapshot(nodeCount: 48))
+    let roundedRadii = Set(layout.nodes.map { node in
+        Int(hypot(node.position.x, node.position.y).rounded())
+    })
+    let xs = layout.nodes.map(\.position.x)
+    let ys = layout.nodes.map(\.position.y)
+    let xSpan = (xs.max() ?? 0) - (xs.min() ?? 0)
+    let ySpan = (ys.max() ?? 0) - (ys.min() ?? 0)
+
+    #expect(layout.components.map(\.isOrphanRing).allSatisfy { $0 })
+    #expect(roundedRadii.count > 12)
+    #expect(xSpan > 1_000)
+    #expect(ySpan > 1_000)
 }
 
 @Test
@@ -200,6 +217,46 @@ func graphViewportFitStateResetAlwaysReturnsFitViewport() {
 
     #expect(firstFit == resetFit)
     #expect(fitState.initialFitViewport(layout: layout, canvasSize: canvasSize) == nil)
+}
+
+@Test
+func graphViewportFitStateCachesBoundsByLayoutIdentity() {
+    let layout = GraphLayoutMapper.map(layoutFixtureSnapshot(requestID: 7))
+    let refinedLayout = GraphRendererSnapshot(
+        requestID: layout.requestID,
+        generation: layout.generation,
+        nodes: layout.nodes,
+        edges: layout.edges,
+        components: layout.components,
+        renderIdentity: layout.renderIdentity &+ 1
+    )
+    let canvasSize = GraphSize(width: 500, height: 300)
+    var fitState = GraphViewportFitState()
+
+    #expect(fitState.cachedLayoutIdentity == nil)
+    #expect(fitState.initialFitViewport(layout: layout, canvasSize: canvasSize) != nil)
+    #expect(fitState.cachedLayoutIdentity == layout.renderIdentity)
+    #expect(fitState.initialFitViewport(layout: refinedLayout, canvasSize: canvasSize) == nil)
+    #expect(fitState.cachedLayoutIdentity == layout.renderIdentity)
+
+    _ = fitState.resetViewport(layout: refinedLayout, canvasSize: canvasSize)
+
+    #expect(fitState.cachedLayoutIdentity == refinedLayout.renderIdentity)
+}
+
+@Test
+func graphViewportFitBenchmarkFitsSynthetic60kNodesUnderBudget() {
+    let result = GraphViewportFitBenchmark.run(nodeCount: 60_000)
+    let usesStrictBudget = ProcessInfo.processInfo.environment["GRANITE_STRICT_GRAPH_FIT_BENCHMARK"] == "1"
+
+    #expect(result.nodeCount == 60_000)
+    #expect(result.viewport.zoomScale > 0)
+    if usesStrictBudget {
+        #expect(result.boundsDurationMilliseconds <= 10)
+        #expect(result.totalDurationMilliseconds <= 25)
+    } else {
+        #expect(result.totalDurationMilliseconds <= 250)
+    }
 }
 
 @Test
