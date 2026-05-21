@@ -160,7 +160,10 @@ struct GraphWorkspaceView: View {
                                     searchAccessibilityLabel: showsSearch ? "Close graph search" : "Search graph",
                                     searchAccessibilityHint: showsSearch
                                         ? "Closes the graph search field"
-                                        : "Opens the graph search field",
+                                        : (searchIsActive ? "Opens the active graph search field" : "Opens the graph search field"),
+                                    searchAccessibilityValue: searchIsActive
+                                        ? "Active query"
+                                        : (showsSearch ? "Search field open" : "Inactive"),
                                     settingsIsPresented: showsSettings,
                                     toggleSearch: toggleGraphSearch,
                                     zoomOut: { zoom(by: 0.85) },
@@ -908,6 +911,7 @@ private struct GraphFloatingControlStack: View {
     let searchIsPresented: Bool
     let searchAccessibilityLabel: String
     let searchAccessibilityHint: String
+    let searchAccessibilityValue: String
     let settingsIsPresented: Bool
     let toggleSearch: () -> Void
     let zoomOut: () -> Void
@@ -924,6 +928,7 @@ private struct GraphFloatingControlStack: View {
                 action: toggleSearch
             )
             .accessibilityHint(searchAccessibilityHint)
+            .accessibilityValue(searchAccessibilityValue)
 
             ObsidianIconButton(
                 systemName: "minus.magnifyingglass",
