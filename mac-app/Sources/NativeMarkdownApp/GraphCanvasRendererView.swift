@@ -5,12 +5,34 @@ import SwiftUI
 struct GraphCanvasRendererView: View {
     let input: GraphRendererInput
     @Binding var viewport: GraphViewport
-    var callbacks = GraphRendererCallbacks()
+    let hitTestIndex: GraphHitTestIndex
+    var callbacks: GraphRendererCallbacks
+    var onHoverNode: (String?) -> Void
+    var onSelectNode: (String?) -> Void
+    var onOpenNode: (String) -> Void
 
     @State private var dragStartPanOffset: GraphPoint?
     @State private var drawReportGate = GraphCanvasDrawReportGate()
 
     private let renderer = GraphRendererContract(rendererKind: .canvas)
+
+    init(
+        input: GraphRendererInput,
+        viewport: Binding<GraphViewport>,
+        callbacks: GraphRendererCallbacks = GraphRendererCallbacks(),
+        hitTestIndex: GraphHitTestIndex? = nil,
+        onHoverNode: @escaping (String?) -> Void = { _ in },
+        onSelectNode: @escaping (String?) -> Void = { _ in },
+        onOpenNode: @escaping (String) -> Void = { _ in }
+    ) {
+        self.input = input
+        self._viewport = viewport
+        self.callbacks = callbacks
+        self.hitTestIndex = hitTestIndex ?? GraphHitTestIndex(layout: input.layout)
+        self.onHoverNode = onHoverNode
+        self.onSelectNode = onSelectNode
+        self.onOpenNode = onOpenNode
+    }
 
     @ViewBuilder
     var body: some View {
@@ -18,27 +40,34 @@ struct GraphCanvasRendererView: View {
 
         switch validationState(for: renderInput) {
         case .ready:
-            Canvas { context, size in
-                let timer = AppTelemetryTimer()
+            GeometryReader { proxy in
+                Canvas { context, size in
+                    let timer = AppTelemetryTimer()
 
-                drawEdges(input: renderInput, context: &context, size: size)
-                drawNodes(input: renderInput, context: &context, size: size)
-                drawLabels(input: renderInput, context: &context, size: size)
+                    drawEdges(input: renderInput, context: &context, size: size)
+                    drawNodes(input: renderInput, context: &context, size: size)
+                    drawLabels(input: renderInput, context: &context, size: size)
 
-                let metrics = renderer.metrics(
-                    for: renderInput,
-                    drawDurationMilliseconds: timer.elapsedMilliseconds()
-                )
-                drawReportGate.reportIfNeeded(
-                    identity: drawIdentity(for: renderInput),
-                    metrics: metrics,
-                    callbacks: callbacks
-                )
+                    let metrics = renderer.metrics(
+                        for: renderInput,
+                        drawDurationMilliseconds: timer.elapsedMilliseconds()
+                    )
+                    drawReportGate.reportIfNeeded(
+                        identity: drawIdentity(for: renderInput),
+                        metrics: metrics,
+                        callbacks: callbacks
+                    )
+                }
+                .background(ObsidianUI.editorBackground)
+                .gesture(panGesture)
+                .simultaneousGesture(tapGesture(input: renderInput, size: proxy.size))
+                .onContinuousHover { phase in
+                    updateHover(phase: phase, input: renderInput, size: proxy.size)
+                }
+                .focusable()
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(accessibilitySummary(for: renderInput))
             }
-            .background(ObsidianUI.editorBackground)
-            .gesture(panGesture)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(accessibilitySummary(for: renderInput))
         case .failed(let error):
             Color.clear
                 .onAppear {
@@ -74,6 +103,30 @@ struct GraphCanvasRendererView: View {
             }
     }
 
+    private func tapGesture(input: GraphRendererInput, size: CGSize) -> some Gesture {
+        SpatialTapGesture()
+            .onEnded { value in
+                let nodeID = hitNodeID(at: value.location, input: input, size: size)
+                onSelectNode(nodeID)
+                if let nodeID {
+                    onOpenNode(nodeID)
+                }
+            }
+    }
+
+    private func updateHover(
+        phase: HoverPhase,
+        input: GraphRendererInput,
+        size: CGSize
+    ) {
+        switch phase {
+        case .active(let location):
+            onHoverNode(hitNodeID(at: location, input: input, size: size))
+        case .ended:
+            onHoverNode(nil)
+        }
+    }
+
     private func drawEdges(
         input: GraphRendererInput,
         context: inout GraphicsContext,
@@ -102,8 +155,8 @@ struct GraphCanvasRendererView: View {
 
             context.stroke(
                 path,
-                with: .color(edgeColor(edge)),
-                lineWidth: CGFloat(max(0.5, Double(edge.weight).squareRoot() * input.presentation.linkThickness))
+                with: .color(edgeColor(edge, input: input)),
+                lineWidth: edgeLineWidth(edge, input: input)
             )
         }
     }
@@ -166,6 +219,9 @@ struct GraphCanvasRendererView: View {
         if input.selectedNodeID == node.nodeID {
             return .accentColor
         }
+        if input.hoveredNodeID == node.nodeID {
+            return .accentColor.opacity(0.85)
+        }
         if input.searchMatchedNodeIDs.contains(node.nodeID) {
             return .green
         }
@@ -178,7 +234,11 @@ struct GraphCanvasRendererView: View {
         }
     }
 
-    private func edgeColor(_ edge: GraphLayoutEdge) -> Color {
+    private func edgeColor(_ edge: GraphLayoutEdge, input: GraphRendererInput) -> Color {
+        if edgeIsActive(edge, input: input) {
+            return .accentColor.opacity(0.55)
+        }
+
         switch edge.kind {
         case .resolved:
             return Color.secondary.opacity(0.22)
@@ -187,8 +247,27 @@ struct GraphCanvasRendererView: View {
         }
     }
 
+    private func edgeLineWidth(_ edge: GraphLayoutEdge, input: GraphRendererInput) -> CGFloat {
+        let baseWidth = max(0.5, Double(edge.weight).squareRoot() * input.presentation.linkThickness)
+        return CGFloat(edgeIsActive(edge, input: input) ? baseWidth + 1.0 : baseWidth)
+    }
+
+    private func edgeIsActive(_ edge: GraphLayoutEdge, input: GraphRendererInput) -> Bool {
+        guard let activeNodeID = input.hoveredNodeID ?? input.selectedNodeID,
+              input.layout.nodes.indices.contains(edge.sourceIndex),
+              input.layout.nodes.indices.contains(edge.targetIndex)
+        else {
+            return false
+        }
+        return input.layout.nodes[edge.sourceIndex].nodeID == activeNodeID
+            || input.layout.nodes[edge.targetIndex].nodeID == activeNodeID
+    }
+
     private func accessibilitySummary(for input: GraphRendererInput) -> String {
-        "Graph canvas, \(input.layout.nodes.count) nodes, \(input.layout.edges.count) edges, zoom \(String(format: "%.1f", input.viewport.zoomScale))"
+        GraphAccessibilitySummaryBuilder.summary(
+            input: input,
+            selectedNode: input.layout.nodes.first { $0.nodeID == input.selectedNodeID }
+        )
     }
 
     private func drawIdentity(for input: GraphRendererInput) -> String {
@@ -217,20 +296,35 @@ struct GraphCanvasRendererView: View {
         case ready
         case failed(GraphRendererValidationError)
     }
+
+    private func hitNodeID(
+        at location: CGPoint,
+        input: GraphRendererInput,
+        size: CGSize
+    ) -> String? {
+        hitTestIndex.nearestNode(
+            at: GraphPoint(x: Double(location.x), y: Double(location.y)),
+            viewport: input.viewport,
+            canvasSize: GraphSize(width: Double(size.width), height: Double(size.height))
+        )?.nodeID
+    }
 }
 
 enum GraphCanvasRendererSmokeFixture {
-    static let selectedNodeID = "file:weekly"
+    static let defaultSelectedNodeID = "file:weekly"
 
     static func input(
         viewport: GraphViewport = GraphViewport(),
         presentation: GraphPresentationSettings = GraphPresentationSettings(),
-        searchText: String = ""
+        searchText: String = "",
+        hoveredNodeID: String? = nil,
+        selectedNodeID: String? = defaultSelectedNodeID
     ) -> GraphRendererInput {
         GraphRendererInput(
             layout: layout,
             viewport: viewport,
             presentation: presentation,
+            hoveredNodeID: hoveredNodeID,
             selectedNodeID: selectedNodeID,
             searchMatchedNodeIDs: searchMatchedNodeIDs(for: searchText)
         )
@@ -241,21 +335,19 @@ enum GraphCanvasRendererSmokeFixture {
         guard !query.isEmpty else {
             return []
         }
-        return Set(layout.nodes.compactMap { node in
-            node.label.localizedCaseInsensitiveContains(query) ? node.nodeID : nil
-        })
+        return GraphSearchMatcher.matchingNodeIDs(in: layout, query: query)
     }
 
     static let layout = GraphRendererSnapshot(
         requestID: 1,
         generation: 1,
         nodes: [
-            fixtureNode(index: 0, id: "file:weekly", label: "Weekly Retrospective", degree: 4, x: 0, y: 0, radius: 7),
-            fixtureNode(index: 1, id: "file:daily", label: "Daily Notes", degree: 3, x: -110, y: 45, radius: 6),
-            fixtureNode(index: 2, id: "file:projects", label: "Projects", degree: 3, x: 120, y: 40, radius: 6),
-            fixtureNode(index: 3, id: "file:docs", label: "Docs", degree: 2, x: -40, y: -115, radius: 5),
-            fixtureNode(index: 4, id: "file:compound", label: "Compound Engineering", degree: 1, x: 170, y: -80, radius: 4),
-            fixtureNode(index: 5, id: "file:archive", label: "Archive", degree: 0, x: -210, y: -120, radius: 4)
+            fixtureNode(index: 0, id: "file:weekly", fileID: "codex/weeklyretrospective/2026-04-03-weekly-retrospective.md", relativePath: "Codex/WeeklyRetrospective/2026-04-03-Weekly-Retrospective.md", label: "Weekly Retrospective", degree: 4, x: 0, y: 0, radius: 7),
+            fixtureNode(index: 1, id: "file:daily", fileID: "codex/daily/daily notes.md", relativePath: "Codex/Daily/Daily Notes.md", label: "Daily Notes", degree: 3, x: -110, y: 45, radius: 6),
+            fixtureNode(index: 2, id: "file:projects", fileID: "codex/projects/projects.md", relativePath: "Codex/Projects/Projects.md", label: "Projects", degree: 3, x: 120, y: 40, radius: 6),
+            fixtureNode(index: 3, id: "file:docs", fileID: "codex/docs/docs.md", relativePath: "Codex/docs/Docs.md", label: "Docs", degree: 2, x: -40, y: -115, radius: 5),
+            fixtureNode(index: 4, id: "file:compound", fileID: "codex/compound engineering.md", relativePath: "Codex/Compound engineering.md", label: "Compound Engineering", degree: 1, x: 170, y: -80, radius: 4),
+            fixtureNode(index: 5, id: "file:archive", fileID: "2025 archive/archive.md", relativePath: "2025 archive/Archive.md", label: "Archive", degree: 0, x: -210, y: -120, radius: 4)
         ],
         edges: [
             GraphLayoutEdge(sourceIndex: 0, targetIndex: 1, kind: .resolved, weight: 2),
@@ -269,9 +361,13 @@ enum GraphCanvasRendererSmokeFixture {
         ]
     )
 
+    static let hitTestIndex = GraphHitTestIndex(layout: layout)
+
     private static func fixtureNode(
         index: Int,
         id: String,
+        fileID: String,
+        relativePath: String,
         label: String,
         degree: Int,
         x: Double,
@@ -281,6 +377,8 @@ enum GraphCanvasRendererSmokeFixture {
         GraphLayoutNode(
             index: index,
             nodeID: id,
+            fileID: fileID,
+            relativePath: relativePath,
             label: label,
             kind: .resolved,
             degree: degree,
@@ -298,7 +396,11 @@ enum GraphCanvasRendererSmokeProbe {
         let renderer = GraphRendererContract(rendererKind: .canvas)
 
         try renderer.validate(input)
-        _ = GraphCanvasRendererView(input: input, viewport: .constant(viewport))
+        _ = GraphCanvasRendererView(
+            input: input,
+            viewport: .constant(viewport),
+            hitTestIndex: GraphCanvasRendererSmokeFixture.hitTestIndex
+        )
         viewport.reset()
 
         let metrics = renderer.metrics(for: input, drawDurationMilliseconds: 0)

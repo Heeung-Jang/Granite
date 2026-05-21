@@ -100,6 +100,7 @@ public struct WholeVaultGraphSnapshot: Codable, Equatable, Sendable {
 public struct WholeVaultGraphNode: Codable, Equatable, Sendable {
     public let nodeID: String
     public let fileID: String?
+    public let relativePath: String?
     public let label: String
     public let kind: WholeVaultGraphNodeKind
     public let degree: Int
@@ -108,6 +109,7 @@ public struct WholeVaultGraphNode: Codable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case nodeID = "node_id"
         case fileID = "file_id"
+        case relativePath = "relative_path"
         case label
         case kind
         case degree

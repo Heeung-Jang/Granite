@@ -35,6 +35,8 @@ public struct GraphRendererSnapshot: Equatable, Sendable {
 public struct GraphLayoutNode: Equatable, Sendable {
     public let index: Int
     public let nodeID: String
+    public let fileID: String?
+    public let relativePath: String?
     public let label: String
     public let kind: WholeVaultGraphNodeKind
     public let degree: Int
@@ -44,6 +46,8 @@ public struct GraphLayoutNode: Equatable, Sendable {
     public init(
         index: Int,
         nodeID: String,
+        fileID: String? = nil,
+        relativePath: String? = nil,
         label: String,
         kind: WholeVaultGraphNodeKind,
         degree: Int,
@@ -52,6 +56,8 @@ public struct GraphLayoutNode: Equatable, Sendable {
     ) {
         self.index = index
         self.nodeID = nodeID
+        self.fileID = fileID
+        self.relativePath = relativePath
         self.label = label
         self.kind = kind
         self.degree = degree
@@ -119,6 +125,8 @@ public enum GraphLayoutMapper {
             return GraphLayoutNode(
                 index: index,
                 nodeID: node.nodeID,
+                fileID: node.fileID,
+                relativePath: node.relativePath,
                 label: node.label,
                 kind: node.kind,
                 degree: node.degree,

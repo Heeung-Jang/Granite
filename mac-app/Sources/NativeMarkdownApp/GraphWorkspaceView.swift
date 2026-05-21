@@ -1,14 +1,22 @@
+import Foundation
 import NativeMarkdownCore
 import SwiftUI
 
 struct GraphWorkspaceView: View {
+    @EnvironmentObject private var appState: AppState
+
     let vaultSelection: VaultSelectionState
 
     @State private var workspaceModel = GraphWorkspaceModel()
     @State private var settings = GraphSettings()
+    @State private var interaction = GraphInteractionState(
+        selectedNodeID: GraphCanvasRendererSmokeFixture.defaultSelectedNodeID
+    )
     @State private var searchText = ""
     @State private var showsSettings = false
     @State private var viewport = GraphViewport()
+    @FocusState private var graphSurfaceFocused: Bool
+
     private let enablesParityControls = false
 
     var body: some View {
@@ -86,21 +94,69 @@ struct GraphWorkspaceView: View {
         case .selected:
             switch validatedRendererInput {
             case .ready(let input):
-                GraphCanvasRendererView(
-                    input: input,
-                    viewport: $viewport,
-                    callbacks: GraphRendererCallbacks(
-                        didCompleteFirstDraw: { metrics in
-                            AppTelemetry.graphDrawCompleted(metrics)
+                VStack(spacing: 0) {
+                    GraphCanvasRendererView(
+                        input: input,
+                        viewport: $viewport,
+                        callbacks: GraphRendererCallbacks(
+                            didCompleteFirstDraw: { metrics in
+                                AppTelemetry.graphDrawCompleted(metrics)
+                            }
+                        ),
+                        hitTestIndex: GraphCanvasRendererSmokeFixture.hitTestIndex,
+                        onHoverNode: { nodeID in
+                            interaction.hover(nodeID)
+                        },
+                        onSelectNode: { nodeID in
+                            interaction.select(nodeID)
+                        },
+                        onOpenNode: { nodeID in
+                            openNode(nodeID, in: input)
                         }
                     )
-                )
-                .onAppear {
-                    workspaceModel.applyStableGraph(GraphStableGraphSummary(
-                        generation: input.layout.generation,
-                        nodeCount: input.layout.nodes.count,
-                        edgeCount: input.layout.edges.count
-                    ))
+                    .focused($graphSurfaceFocused)
+                    .onAppear {
+                        graphSurfaceFocused = true
+                        workspaceModel.applyStableGraph(GraphStableGraphSummary(
+                            generation: input.layout.generation,
+                            nodeCount: input.layout.nodes.count,
+                            edgeCount: input.layout.edges.count
+                        ))
+                    }
+                    .onMoveCommand { direction in
+                        panGraph(direction)
+                    }
+                    .onKeyPress(.return) {
+                        openSelectedNode(in: input)
+                    }
+                    .onKeyPress("+") {
+                        zoom(by: 1.15)
+                        return .handled
+                    }
+                    .onKeyPress("-") {
+                        zoom(by: 0.85)
+                        return .handled
+                    }
+                    .onExitCommand {
+                        interaction.hover(nil)
+                        interaction.clearSelection()
+                    }
+
+                    if showsKeyboardResults(for: input) {
+                        Divider()
+
+                        GraphKeyboardResultsList(
+                            nodes: keyboardResultNodes(for: input),
+                            searchIsActive: searchIsActive,
+                            selectedNodeID: interaction.selectedNodeID,
+                            selectNode: { nodeID in
+                                interaction.select(nodeID)
+                            },
+                            openNode: { nodeID in
+                                openNode(nodeID, in: input)
+                            }
+                        )
+                    }
                 }
             case .failed(let error):
                 rendererFailureView(error)
@@ -143,7 +199,9 @@ struct GraphWorkspaceView: View {
         let input = GraphCanvasRendererSmokeFixture.input(
             viewport: viewport,
             presentation: settings.presentation,
-            searchText: searchText
+            searchText: searchText,
+            hoveredNodeID: interaction.hoveredNodeID,
+            selectedNodeID: interaction.selectedNodeID
         )
 
         do {
@@ -160,6 +218,73 @@ struct GraphWorkspaceView: View {
         viewport.zoomScale *= multiplier
     }
 
+    private func panGraph(_ direction: MoveCommandDirection) {
+        guard graphSurfaceFocused else {
+            return
+        }
+
+        let amount = 40.0
+        switch direction {
+        case .up:
+            viewport.panOffset.y += amount
+        case .down:
+            viewport.panOffset.y -= amount
+        case .left:
+            viewport.panOffset.x += amount
+        case .right:
+            viewport.panOffset.x -= amount
+        default:
+            break
+        }
+    }
+
+    private func openSelectedNode(in input: GraphRendererInput) -> KeyPress.Result {
+        guard graphSurfaceFocused,
+              let selectedNodeID = interaction.selectedNodeID
+        else {
+            return .ignored
+        }
+        openNode(selectedNodeID, in: input)
+        return .handled
+    }
+
+    private func openNode(_ nodeID: String, in input: GraphRendererInput) {
+        guard let node = input.layout.nodes.first(where: { $0.nodeID == nodeID }) else {
+            return
+        }
+
+        interaction.select(nodeID)
+        guard let file = GraphNodeOpenResolver.file(for: node) else {
+            return
+        }
+
+        _ = appState.openFile(file)
+    }
+
+    private var searchIsActive: Bool {
+        !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func showsKeyboardResults(for input: GraphRendererInput) -> Bool {
+        searchIsActive || input.selectedNodeID != nil
+    }
+
+    private func keyboardResultNodes(for input: GraphRendererInput) -> [GraphLayoutNode] {
+        if searchIsActive {
+            return input.layout.nodes
+                .filter { input.searchMatchedNodeIDs.contains($0.nodeID) }
+                .prefix(8)
+                .map { $0 }
+        }
+
+        guard let selectedNodeID = input.selectedNodeID,
+              let selectedNode = input.layout.nodes.first(where: { $0.nodeID == selectedNodeID })
+        else {
+            return []
+        }
+        return [selectedNode]
+    }
+
     private func rendererFailureText(_ error: GraphRendererValidationError) -> String {
         switch error {
         case .edgeEndpointOutOfBounds:
@@ -170,6 +295,50 @@ struct GraphWorkspaceView: View {
     private enum RendererInputState {
         case ready(GraphRendererInput)
         case failed(GraphRendererValidationError)
+    }
+}
+
+private struct GraphKeyboardResultsList: View {
+    let nodes: [GraphLayoutNode]
+    let searchIsActive: Bool
+    let selectedNodeID: String?
+    let selectNode: (String) -> Void
+    let openNode: (String) -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(searchIsActive ? "Graph results" : "Selected node")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            if nodes.isEmpty {
+                Text("No graph matches")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(nodes, id: \.nodeID) { node in
+                    Button {
+                        selectNode(node.nodeID)
+                        openNode(node.nodeID)
+                    } label: {
+                        Text(node.label)
+                            .lineLimit(1)
+                    }
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
+                    .accessibilityLabel(resultAccessibilityLabel(for: node))
+                }
+            }
+
+            Spacer()
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 34)
+        .background(ObsidianUI.sidebarBackground.opacity(0.65))
+    }
+
+    private func resultAccessibilityLabel(for node: GraphLayoutNode) -> String {
+        selectedNodeID == node.nodeID ? "Selected graph node \(node.label)" : "Graph node \(node.label)"
     }
 }
 

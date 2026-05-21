@@ -13,6 +13,8 @@ func wholeVaultGraphModelsDecodeValidFixturePayload() throws {
     #expect(payload.snapshot.nodes.count == 2)
     #expect(payload.snapshot.edges.count == 1)
     #expect(payload.snapshot.nodes[0].kind == .resolved)
+    #expect(payload.snapshot.nodes[0].fileID == "home")
+    #expect(payload.snapshot.nodes[0].relativePath == "Folder/Home.md")
     #expect(payload.snapshot.edges[0].kind == .resolved)
 }
 
@@ -84,6 +86,6 @@ private func graphEnvelope(
     let partialReasonJSON = partialReasons.map { #""\#($0)""# }.joined(separator: ",")
     let tagJSON = tags.map { #""\#($0)""# }.joined(separator: ",")
     return """
-    {"ok":true,"value":{"payload_version":1,"request_id":7,"generation":3,"state":"\(state)","metrics":{"snapshot_duration_milliseconds":1.25,"encoded_payload_bytes":512},"snapshot":{"request_id":7,"generation":3,"partial_reasons":[\(partialReasonJSON)],"node_count_total":\(nodeCountTotal),"edge_count_total":\(edgeCountTotal),"nodes":[{"node_id":"\(firstNodeID)","file_id":"home","label":"\(label)","kind":"\(nodeKind)","degree":1,"tags":[\(tagJSON)]},{"node_id":"file:2","file_id":"target","label":"Target","kind":"Resolved","degree":1,"tags":[]}],"edges":[{"source_node_id":"file:1","target_node_id":"file:2","kind":"Resolved","weight":\(edgeWeight)}]}},"error":null}
+    {"ok":true,"value":{"payload_version":1,"request_id":7,"generation":3,"state":"\(state)","metrics":{"snapshot_duration_milliseconds":1.25,"encoded_payload_bytes":512},"snapshot":{"request_id":7,"generation":3,"partial_reasons":[\(partialReasonJSON)],"node_count_total":\(nodeCountTotal),"edge_count_total":\(edgeCountTotal),"nodes":[{"node_id":"\(firstNodeID)","file_id":"home","relative_path":"Folder/Home.md","label":"\(label)","kind":"\(nodeKind)","degree":1,"tags":[\(tagJSON)]},{"node_id":"file:2","file_id":"target","relative_path":"Folder/Target.md","label":"Target","kind":"Resolved","degree":1,"tags":[]}],"edges":[{"source_node_id":"file:1","target_node_id":"file:2","kind":"Resolved","weight":\(edgeWeight)}]}},"error":null}
     """
 }

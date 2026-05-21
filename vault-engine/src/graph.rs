@@ -43,6 +43,7 @@ pub struct WholeVaultGraphSnapshot {
 pub struct WholeVaultGraphNode {
     pub node_id: String,
     pub file_id: Option<String>,
+    pub relative_path: Option<String>,
     pub label: String,
     pub kind: WholeVaultGraphNodeKind,
     pub degree: usize,
@@ -338,6 +339,7 @@ impl<'a> SnapshotBuilder<'a> {
         self.nodes.push(WholeVaultGraphNode {
             node_id,
             file_id: Some(file_id.to_string()),
+            relative_path: Some(file.relative_path.display().to_string()),
             label,
             kind: WholeVaultGraphNodeKind::Resolved,
             degree: self.degree_by_file.get(file_id).copied().unwrap_or(0),
@@ -363,6 +365,7 @@ impl<'a> SnapshotBuilder<'a> {
         self.nodes.push(WholeVaultGraphNode {
             node_id,
             file_id: None,
+            relative_path: None,
             label,
             kind: WholeVaultGraphNodeKind::Unresolved,
             degree: 0,
@@ -528,6 +531,7 @@ mod tests {
         assert_eq!(build.snapshot.edges.len(), 2);
         assert!(build.snapshot.nodes.iter().any(|node| {
             node.file_id.as_deref() == Some("home.md")
+                && node.relative_path.as_deref() == Some("Home.md")
                 && node.kind == WholeVaultGraphNodeKind::Resolved
                 && node.degree == 3
                 && node.tags == vec!["project/native"]

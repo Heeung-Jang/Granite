@@ -195,6 +195,7 @@ private func layoutNode(_ nodeID: String, degree: Int) -> WholeVaultGraphNode {
     WholeVaultGraphNode(
         nodeID: nodeID,
         fileID: nodeID,
+        relativePath: "\(nodeID).md",
         label: nodeID,
         kind: .resolved,
         degree: degree,
