@@ -17,13 +17,12 @@ struct GraphWorkspaceView: View {
     @State private var graphBannerText: String?
     @State private var pendingFirstRender: PendingGraphFirstRender?
     @State private var nextGraphRequestID: UInt64 = 1
-    @State private var searchText = ""
     @State private var showsSettings = false
     @State private var viewport = GraphViewport()
     @FocusState private var graphSurfaceFocused: Bool
 
     private let graphClient = EngineGraphClient()
-    private let enablesParityControls = false
+    private let enablesParityControls = true
 
     var body: some View {
         HStack(spacing: 0) {
@@ -59,7 +58,7 @@ struct GraphWorkspaceView: View {
 
     private var toolbar: some View {
         HStack(spacing: 10) {
-            TextField("Search", text: $searchText)
+            TextField("Search", text: $settings.searchQuery)
                 .textFieldStyle(.roundedBorder)
                 .frame(maxWidth: 260)
                 .accessibilityLabel("Graph search")
@@ -234,7 +233,11 @@ struct GraphWorkspaceView: View {
             selectedNodeID: interaction.selectedNodeID,
             searchMatchedNodeIDs: GraphSearchMatcher.matchingNodeIDs(
                 in: layout,
-                query: searchText
+                query: settings.searchQuery
+            ),
+            groupColorHexByNodeID: GraphGroupMatcher.groupColorHexByNodeID(
+                in: layout,
+                rules: settings.groupRules
             )
         )
 
@@ -501,7 +504,7 @@ struct GraphWorkspaceView: View {
     }
 
     private var searchIsActive: Bool {
-        !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !settings.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private func showsKeyboardResults(for input: GraphRendererInput) -> Bool {
@@ -703,6 +706,9 @@ private struct GraphSettingsPanel: View {
     @Binding var settings: GraphSettings
     let parityControlsEnabled: Bool
 
+    @State private var groupQuery = ""
+    @State private var groupColorHex = GraphGroupPalette.colors[0].hex
+
     private var includeUnresolved: Binding<Bool> {
         Binding {
             settings.semantic.includeUnresolved
@@ -734,10 +740,130 @@ private struct GraphSettingsPanel: View {
 
             Toggle("Arrows", isOn: $settings.presentation.showArrows)
 
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Node size")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Slider(value: $settings.presentation.nodeSize, in: 0.6...2.4, step: 0.1)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Link thickness")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Slider(value: $settings.presentation.linkThickness, in: 0.5...3.0, step: 0.1)
+            }
+
+            if parityControlsEnabled {
+                Divider()
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Groups")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+
+                    TextField("Match", text: $groupQuery)
+                        .textFieldStyle(.roundedBorder)
+
+                    Picker("Color", selection: $groupColorHex) {
+                        ForEach(GraphGroupPalette.colors) { color in
+                            HStack {
+                                Circle()
+                                    .fill(Color(graphHex: color.hex))
+                                    .frame(width: 10, height: 10)
+                                Text(color.name)
+                            }
+                            .tag(color.hex)
+                        }
+                    }
+                    .pickerStyle(.menu)
+
+                    HStack(spacing: 8) {
+                        Button {
+                            addGroupRule()
+                        } label: {
+                            Image(systemName: "plus")
+                        }
+                        .disabled(groupQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .help("Add group")
+                        .accessibilityLabel("Add graph group")
+
+                        Spacer()
+                    }
+
+                    ForEach(settings.groupRules) { rule in
+                        HStack(spacing: 8) {
+                            Circle()
+                                .fill(Color(graphHex: rule.colorHex))
+                                .frame(width: 10, height: 10)
+                            Text(rule.query)
+                                .lineLimit(1)
+                                .font(.caption)
+                            Spacer()
+                            Button {
+                                removeGroupRule(rule)
+                            } label: {
+                                Image(systemName: "trash")
+                            }
+                            .buttonStyle(.borderless)
+                            .help("Remove group")
+                            .accessibilityLabel("Remove graph group")
+                        }
+                    }
+                }
+            }
+
             Spacer()
         }
         .padding(14)
         .frame(maxHeight: .infinity, alignment: .top)
         .background(ObsidianUI.sidebarBackground)
+    }
+
+    private func addGroupRule() {
+        let query = groupQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else {
+            return
+        }
+        settings.groupRules.append(GraphGroupRule(
+            id: UUID().uuidString,
+            query: query,
+            colorHex: groupColorHex
+        ))
+        groupQuery = ""
+    }
+
+    private func removeGroupRule(_ rule: GraphGroupRule) {
+        settings.groupRules.removeAll { $0.id == rule.id }
+    }
+}
+
+private struct GraphGroupPaletteColor: Identifiable {
+    let name: String
+    let hex: String
+
+    var id: String { hex }
+}
+
+private enum GraphGroupPalette {
+    static let colors = [
+        GraphGroupPaletteColor(name: "Blue", hex: "#2f81f7"),
+        GraphGroupPaletteColor(name: "Green", hex: "#2da44e"),
+        GraphGroupPaletteColor(name: "Red", hex: "#cf222e"),
+        GraphGroupPaletteColor(name: "Gold", hex: "#bf8700"),
+        GraphGroupPaletteColor(name: "Violet", hex: "#8250df")
+    ]
+}
+
+private extension Color {
+    init(graphHex: String) {
+        let normalized = GraphColorHex.normalized(graphHex) ?? GraphColorHex.defaultHex
+        let hex = String(normalized.dropFirst())
+        let value = Int(hex, radix: 16) ?? 0x808080
+        self.init(
+            red: Double((value >> 16) & 0xff) / 255.0,
+            green: Double((value >> 8) & 0xff) / 255.0,
+            blue: Double(value & 0xff) / 255.0
+        )
     }
 }

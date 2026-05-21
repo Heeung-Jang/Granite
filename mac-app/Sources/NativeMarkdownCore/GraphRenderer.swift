@@ -85,6 +85,7 @@ public struct GraphRendererInput: Equatable, Sendable {
     public var hoveredNodeID: String?
     public var selectedNodeID: String?
     public var searchMatchedNodeIDs: Set<String>
+    public var groupColorHexByNodeID: [String: String]
 
     public init(
         layout: GraphRendererSnapshot,
@@ -92,7 +93,8 @@ public struct GraphRendererInput: Equatable, Sendable {
         presentation: GraphPresentationSettings = GraphPresentationSettings(),
         hoveredNodeID: String? = nil,
         selectedNodeID: String? = nil,
-        searchMatchedNodeIDs: Set<String> = []
+        searchMatchedNodeIDs: Set<String> = [],
+        groupColorHexByNodeID: [String: String] = [:]
     ) {
         self.layout = layout
         self.viewport = viewport
@@ -100,6 +102,7 @@ public struct GraphRendererInput: Equatable, Sendable {
         self.hoveredNodeID = hoveredNodeID
         self.selectedNodeID = selectedNodeID
         self.searchMatchedNodeIDs = searchMatchedNodeIDs
+        self.groupColorHexByNodeID = groupColorHexByNodeID
     }
 
     public func validate() throws {

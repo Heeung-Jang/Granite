@@ -163,6 +163,11 @@ struct GraphCanvasRendererView: View {
             with: .color(Color.accentColor.opacity(0.55)),
             lineWidth: max(1.5, input.presentation.linkThickness + 1.0) / zoomScale
         )
+        context.stroke(
+            paths.arrowHeads,
+            with: .color(Color.secondary.opacity(0.32)),
+            lineWidth: max(0.5, input.presentation.linkThickness) / zoomScale
+        )
     }
 
     private func drawNodes(
@@ -171,6 +176,9 @@ struct GraphCanvasRendererView: View {
     ) {
         context.fill(paths.unresolvedNodes, with: .color(Color.secondary.opacity(0.45)))
         context.fill(paths.resolvedNodes, with: .color(Color.primary.opacity(0.7)))
+        for (colorHex, path) in paths.groupNodes {
+            context.fill(path, with: .color(Color(graphHex: colorHex)))
+        }
         context.fill(paths.searchNodes, with: .color(.green))
         context.fill(paths.hoveredNodes, with: .color(Color.accentColor.opacity(0.85)))
         context.fill(paths.selectedNodes, with: .color(.accentColor))
@@ -265,12 +273,27 @@ struct GraphCanvasRendererView: View {
     }
 }
 
+private extension Color {
+    init(graphHex: String) {
+        let normalized = GraphColorHex.normalized(graphHex) ?? GraphColorHex.defaultHex
+        let hex = String(normalized.dropFirst())
+        let value = Int(hex, radix: 16) ?? 0x808080
+        self.init(
+            red: Double((value >> 16) & 0xff) / 255.0,
+            green: Double((value >> 8) & 0xff) / 255.0,
+            blue: Double(value & 0xff) / 255.0
+        )
+    }
+}
+
 private struct GraphCanvasRenderPaths {
     var resolvedEdges = Path()
     var unresolvedEdges = Path()
     var activeEdges = Path()
+    var arrowHeads = Path()
     var resolvedNodes = Path()
     var unresolvedNodes = Path()
+    var groupNodes: [String: Path] = [:]
     var searchNodes = Path()
     var hoveredNodes = Path()
     var selectedNodes = Path()
@@ -313,6 +336,9 @@ private final class GraphCanvasPathCache {
                     appendEdge(from: source, to: target, path: &paths.unresolvedEdges)
                 }
             }
+            if input.presentation.showArrows {
+                appendArrowHead(from: source, to: target, path: &paths.arrowHeads)
+            }
         }
 
         for node in input.layout.nodes {
@@ -330,6 +356,10 @@ private final class GraphCanvasPathCache {
                 paths.hoveredNodes.addEllipse(in: rect)
             } else if input.searchMatchedNodeIDs.contains(node.nodeID) {
                 paths.searchNodes.addEllipse(in: rect)
+            } else if let colorHex = input.groupColorHexByNodeID[node.nodeID] {
+                var groupPath = paths.groupNodes[colorHex] ?? Path()
+                groupPath.addEllipse(in: rect)
+                paths.groupNodes[colorHex] = groupPath
             } else {
                 switch node.kind {
                 case .resolved:
@@ -356,6 +386,8 @@ private final class GraphCanvasPathCache {
             String(input.layout.edges.count),
             String(input.presentation.nodeSize.bitPattern),
             String(input.presentation.linkThickness.bitPattern),
+            input.presentation.showArrows.description,
+            groupColorIdentity(input.groupColorHexByNodeID),
             String(searchHasher.finalize()),
             input.hoveredNodeID ?? "",
             input.selectedNodeID ?? ""
@@ -370,6 +402,33 @@ private final class GraphCanvasPathCache {
     private func appendEdge(from source: CGPoint, to target: CGPoint, path: inout Path) {
         path.move(to: source)
         path.addLine(to: target)
+    }
+
+    private func appendArrowHead(from source: CGPoint, to target: CGPoint, path: inout Path) {
+        let dx = target.x - source.x
+        let dy = target.y - source.y
+        let length = max(0.001, sqrt(dx * dx + dy * dy))
+        let unitX = dx / length
+        let unitY = dy / length
+        let normalX = -unitY
+        let normalY = unitX
+        let size: CGFloat = 10
+        let spread: CGFloat = 5
+        let base = CGPoint(x: target.x - unitX * size, y: target.y - unitY * size)
+        let left = CGPoint(x: base.x + normalX * spread, y: base.y + normalY * spread)
+        let right = CGPoint(x: base.x - normalX * spread, y: base.y - normalY * spread)
+
+        path.move(to: target)
+        path.addLine(to: left)
+        path.move(to: target)
+        path.addLine(to: right)
+    }
+
+    private func groupColorIdentity(_ colors: [String: String]) -> String {
+        colors
+            .map { "\($0.key)=\($0.value)" }
+            .sorted()
+            .joined(separator: ",")
     }
 
     private func edgeIsActive(_ edge: GraphLayoutEdge, input: GraphRendererInput) -> Bool {

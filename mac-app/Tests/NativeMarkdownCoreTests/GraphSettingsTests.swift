@@ -52,6 +52,60 @@ func graphSettingsPrivacyKeyDoesNotExposePrivateValues() {
 }
 
 @Test
+func graphGroupRuleCapsQueryAndNormalizesColor() {
+    let longQuery = String(repeating: "a", count: GraphGroupRule.maxQueryLength + 20)
+    let rule = GraphGroupRule(id: "rule", query: longQuery, colorHex: "FF00AA")
+
+    #expect(rule.query.count == GraphGroupRule.maxQueryLength)
+    #expect(rule.colorHex == "#ff00aa")
+}
+
+@Test
+func graphGroupMatcherMatchesLabelsPathsAndTags() {
+    let layout = GraphRendererSnapshot(
+        requestID: 1,
+        generation: 1,
+        nodes: [
+            GraphLayoutNode(
+                index: 0,
+                nodeID: "file:daily",
+                relativePath: "Daily/Today.md",
+                label: "Today",
+                kind: .resolved,
+                degree: 1,
+                tags: ["journal"],
+                position: GraphPoint(x: 0, y: 0),
+                radius: 4
+            ),
+            GraphLayoutNode(
+                index: 1,
+                nodeID: "file:project",
+                relativePath: "Projects/Roadmap.md",
+                label: "Roadmap",
+                kind: .resolved,
+                degree: 1,
+                tags: ["work"],
+                position: GraphPoint(x: 20, y: 0),
+                radius: 4
+            )
+        ],
+        edges: [],
+        components: []
+    )
+
+    let colors = GraphGroupMatcher.groupColorHexByNodeID(
+        in: layout,
+        rules: [
+            GraphGroupRule(id: "tag", query: "#journal", colorHex: "#2da44e"),
+            GraphGroupRule(id: "path", query: "Projects", colorHex: "#2f81f7")
+        ]
+    )
+
+    #expect(colors["file:daily"] == "#2da44e")
+    #expect(colors["file:project"] == "#2f81f7")
+}
+
+@Test
 func graphWorkspaceModelRetainsPreviousStableGraphDuringFailures() {
     let stable = GraphStableGraphSummary(generation: 7, nodeCount: 10, edgeCount: 12)
     var model = GraphWorkspaceModel()

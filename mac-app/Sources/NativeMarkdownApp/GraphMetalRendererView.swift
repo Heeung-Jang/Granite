@@ -383,7 +383,7 @@ private final class GraphMetalRenderer {
         }
 
         var edgeVertices: [GraphMetalVertex] = []
-        edgeVertices.reserveCapacity(input.layout.edges.count * 2)
+        edgeVertices.reserveCapacity(input.layout.edges.count * (input.presentation.showArrows ? 6 : 2))
         for edge in input.layout.edges {
             guard input.layout.nodes.indices.contains(edge.sourceIndex),
                   input.layout.nodes.indices.contains(edge.targetIndex)
@@ -391,16 +391,26 @@ private final class GraphMetalRenderer {
                 continue
             }
             let color = edgeColor(edge, input: input)
+            let source = metalPoint(input.layout.nodes[edge.sourceIndex].position)
+            let target = metalPoint(input.layout.nodes[edge.targetIndex].position)
             edgeVertices.append(GraphMetalVertex(
-                position: metalPoint(input.layout.nodes[edge.sourceIndex].position),
+                position: source,
                 color: color,
                 radius: 1
             ))
             edgeVertices.append(GraphMetalVertex(
-                position: metalPoint(input.layout.nodes[edge.targetIndex].position),
+                position: target,
                 color: color,
                 radius: 1
             ))
+            if input.presentation.showArrows {
+                appendArrowHeadVertices(
+                    from: source,
+                    to: target,
+                    color: color,
+                    vertices: &edgeVertices
+                )
+            }
         }
 
         var nodeVertices: [GraphMetalVertex] = []
@@ -541,6 +551,8 @@ private final class GraphMetalRenderer {
             String(input.layout.edges.count),
             String(input.presentation.nodeSize.bitPattern),
             String(input.presentation.linkThickness.bitPattern),
+            input.presentation.showArrows.description,
+            groupColorIdentity(input.groupColorHexByNodeID),
             String(searchHasher.finalize()),
             input.hoveredNodeID ?? "",
             input.selectedNodeID ?? ""
@@ -573,6 +585,10 @@ private final class GraphMetalRenderer {
         if input.searchMatchedNodeIDs.contains(node.nodeID) {
             return GraphMetalColor.searchNode
         }
+        if let colorHex = input.groupColorHexByNodeID[node.nodeID],
+           let color = metalColor(graphHex: colorHex) {
+            return color
+        }
 
         switch node.kind {
         case .resolved:
@@ -604,6 +620,47 @@ private final class GraphMetalRenderer {
         }
         return input.layout.nodes[edge.sourceIndex].nodeID == activeNodeID
             || input.layout.nodes[edge.targetIndex].nodeID == activeNodeID
+    }
+
+    private func appendArrowHeadVertices(
+        from source: SIMD2<Float>,
+        to target: SIMD2<Float>,
+        color: SIMD4<Float>,
+        vertices: inout [GraphMetalVertex]
+    ) {
+        let delta = target - source
+        let length = max(0.001, sqrt(delta.x * delta.x + delta.y * delta.y))
+        let unit = delta / length
+        let normal = SIMD2<Float>(-unit.y, unit.x)
+        let base = target - unit * 10
+        let left = base + normal * 5
+        let right = base - normal * 5
+
+        vertices.append(GraphMetalVertex(position: target, color: color, radius: 1))
+        vertices.append(GraphMetalVertex(position: left, color: color, radius: 1))
+        vertices.append(GraphMetalVertex(position: target, color: color, radius: 1))
+        vertices.append(GraphMetalVertex(position: right, color: color, radius: 1))
+    }
+
+    private func groupColorIdentity(_ colors: [String: String]) -> String {
+        colors
+            .map { "\($0.key)=\($0.value)" }
+            .sorted()
+            .joined(separator: ",")
+    }
+
+    private func metalColor(graphHex: String) -> SIMD4<Float>? {
+        guard let normalized = GraphColorHex.normalized(graphHex),
+              let value = Int(String(normalized.dropFirst()), radix: 16)
+        else {
+            return nil
+        }
+        return SIMD4<Float>(
+            Float((value >> 16) & 0xff) / 255.0,
+            Float((value >> 8) & 0xff) / 255.0,
+            Float(value & 0xff) / 255.0,
+            0.9
+        )
     }
 }
 

@@ -95,6 +95,7 @@ public struct GraphLayoutNode: Equatable, Sendable {
     public let label: String
     public let kind: WholeVaultGraphNodeKind
     public let degree: Int
+    public let tags: [String]
     public let position: GraphPoint
     public let radius: Double
 
@@ -106,6 +107,7 @@ public struct GraphLayoutNode: Equatable, Sendable {
         label: String,
         kind: WholeVaultGraphNodeKind,
         degree: Int,
+        tags: [String] = [],
         position: GraphPoint,
         radius: Double
     ) {
@@ -116,6 +118,7 @@ public struct GraphLayoutNode: Equatable, Sendable {
         self.label = label
         self.kind = kind
         self.degree = degree
+        self.tags = tags
         self.position = position
         self.radius = radius
     }
@@ -213,6 +216,7 @@ public enum GraphLayoutMapper {
                 label: node.label,
                 kind: node.kind,
                 degree: node.degree,
+                tags: node.tags,
                 position: GraphPoint(
                     x: seed.x + offset.x,
                     y: seed.y + offset.y
