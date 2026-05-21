@@ -40,6 +40,9 @@ struct LivePreviewStyleProbeReport: Codable, Equatable {
     var unorderedPlusMarkerDetected: Bool
     var unorderedNestedMarkerDetected: Bool
     var unorderedTabbedMarkerDetected: Bool
+    var obsidianUnorderedMarkerOverlayDrawsOutsideReveal: Bool
+    var obsidianUnorderedMarkerOverlaySuppressedInsideReveal: Bool
+    var markerStyleCompatibilityPreserved: Bool
     var nestedListIndentStable: Bool
     var listRenderPreservesSource: Bool
     var blockquoteParagraphIndentApplied: Bool
@@ -120,7 +123,6 @@ struct MarkerGeometryProbeReport: Codable, Equatable {
 @MainActor
 enum LivePreviewStyleProbe {
     private static let expectedFailures: Set<String> = [
-        "obsidianUnorderedMarkerConcealedOutsideReveal",
         "obsidianOrderedMarkerConcealedOutsideReveal",
         "obsidianTaskSourceTokenConcealedOutsideReveal",
         "tableActiveCellEditStateVisible",
@@ -327,6 +329,7 @@ enum LivePreviewStyleProbe {
         let headingMarkerFields = probeHeadingMarkerGeometry()
         let markerGeometryFields = probeMarkerGeometry()
         let unorderedMarkerFields = probeUnorderedMarkerDetection()
+        let unorderedOverlayFields = probeUnorderedMarkerOverlayPolicy()
 
         var report = LivePreviewStyleProbeReport(
             summary: .passed,
@@ -380,6 +383,9 @@ enum LivePreviewStyleProbe {
             unorderedPlusMarkerDetected: unorderedMarkerFields.plusDetected,
             unorderedNestedMarkerDetected: unorderedMarkerFields.nestedDetected,
             unorderedTabbedMarkerDetected: unorderedMarkerFields.tabbedDetected,
+            obsidianUnorderedMarkerOverlayDrawsOutsideReveal: unorderedOverlayFields.drawsOutsideReveal,
+            obsidianUnorderedMarkerOverlaySuppressedInsideReveal: unorderedOverlayFields.suppressedInsideReveal,
+            markerStyleCompatibilityPreserved: unorderedOverlayFields.compatibilityPreserved,
             nestedListIndentStable: nestedListParagraphStyle?.headIndent == listParagraphStyle?.headIndent,
             listRenderPreservesSource: textView.string.contains("- [x] Done item"),
             blockquoteParagraphIndentApplied: blockquoteParagraphStyle?.headIndent ?? 0 > 0,
@@ -764,6 +770,62 @@ enum LivePreviewStyleProbe {
         )
     }
 
+    private static func probeUnorderedMarkerOverlayPolicy() -> (
+        drawsOutsideReveal: Bool,
+        suppressedInsideReveal: Bool,
+        compatibilityPreserved: Bool
+    ) {
+        let source = "- Bullet\n"
+        let result = LivePreviewParser.parse(source)
+        guard let block = result.blocks.first,
+              let markerKind = LivePreviewOverlayRenderer.markerGeometries(
+                in: configuredTextView(source: source, markerStyle: .obsidian)
+              ).first?.kind,
+              let bulletOffset = utf16Offset(of: "Bullet", in: source)
+        else {
+            return (false, false, false)
+        }
+
+        let outsideState = LivePreviewOverlayState(
+            markerStyle: .obsidian,
+            revealRange: NSRange(location: (source as NSString).length, length: 0)
+        )
+        let insideState = LivePreviewOverlayState(
+            markerStyle: .obsidian,
+            revealRange: NSRange(location: bulletOffset, length: 0)
+        )
+        let accentState = LivePreviewOverlayState(
+            markerStyle: .accent,
+            revealRange: outsideState.revealRange
+        )
+        let hiddenState = LivePreviewOverlayState(
+            markerStyle: .hidden,
+            revealRange: outsideState.revealRange
+        )
+
+        return (
+            LivePreviewOverlayRenderer.shouldDrawMarkerOverlay(
+                for: block,
+                markerKind: markerKind,
+                state: outsideState
+            ),
+            !LivePreviewOverlayRenderer.shouldDrawMarkerOverlay(
+                for: block,
+                markerKind: markerKind,
+                state: insideState
+            ),
+            !LivePreviewOverlayRenderer.shouldDrawMarkerOverlay(
+                for: block,
+                markerKind: markerKind,
+                state: accentState
+            ) && !LivePreviewOverlayRenderer.shouldDrawMarkerOverlay(
+                for: block,
+                markerKind: markerKind,
+                state: hiddenState
+            )
+        )
+    }
+
     private static func probeCollapsedHeadingMarkerMarkedText(source: String, markerRange: NSRange) -> Bool {
         let textView = MarkdownEditorTextViewFactory.makeTextView()
         let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 900, height: 700))
@@ -895,6 +957,22 @@ enum LivePreviewStyleProbe {
             return nil
         }
         return textView.textStorage?.attribute(.font, at: offset, effectiveRange: nil) as? NSFont
+    }
+
+    private static func configuredTextView(
+        source: String,
+        markerStyle: LivePreviewMarkerStyle
+    ) -> NSTextView {
+        let textView = MarkdownEditorTextViewFactory.makeTextView()
+        textView.string = source
+        textView.setSelectedRange(NSRange(location: (source as NSString).length, length: 0))
+        MarkdownVisibleRangeDecorator.decorateVisibleRange(
+            in: textView,
+            livePreviewMode: .livePreview,
+            revealRange: textView.selectedRange(),
+            markerStyle: markerStyle
+        )
+        return textView
     }
 
     private static func paragraphStyle(

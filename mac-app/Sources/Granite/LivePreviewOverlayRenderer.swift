@@ -88,6 +88,8 @@ enum LivePreviewOverlayRenderer {
                 }
             case .horizontalRule:
                 drawHorizontalRule(renderBlock.block, in: textView, dirtyRect: dirtyRect, state: state)
+            case .unorderedList:
+                drawMarkerOverlay(renderBlock.block, in: textView, dirtyRect: dirtyRect, state: state)
             default:
                 continue
             }
@@ -336,6 +338,20 @@ enum LivePreviewOverlayRenderer {
         }
     }
 
+    static func shouldDrawMarkerOverlay(
+        for block: LivePreviewBlockSpan,
+        markerKind: LivePreviewMarkerGeometry.Kind,
+        state: LivePreviewOverlayState
+    ) -> Bool {
+        guard state.drawsLivePreviewChrome,
+              state.markerStyle == .obsidian,
+              markerKind == .unorderedListMarker
+        else {
+            return false
+        }
+        return !block.sourceRange.nsRange.intersectsOrContainsCaret(state.revealRange)
+    }
+
     private static func drawHorizontalRule(
         _ block: LivePreviewBlockSpan,
         in textView: NSTextView,
@@ -362,6 +378,41 @@ enum LivePreviewOverlayRenderer {
         path.move(to: NSPoint(x: x, y: y))
         path.line(to: NSPoint(x: x + width, y: y))
         path.stroke()
+    }
+
+    private static func drawMarkerOverlay(
+        _ block: LivePreviewBlockSpan,
+        in textView: NSTextView,
+        dirtyRect: NSRect,
+        state: LivePreviewOverlayState
+    ) {
+        guard let geometry = markerGeometry(for: block, source: textView.string, in: textView),
+              shouldDrawMarkerOverlay(for: block, markerKind: geometry.kind, state: state)
+        else {
+            return
+        }
+
+        switch geometry.kind {
+        case .unorderedListMarker:
+            drawUnorderedBullet(geometry, dirtyRect: dirtyRect)
+        case .orderedListMarker, .taskCheckbox:
+            return
+        }
+    }
+
+    private static func drawUnorderedBullet(_ geometry: LivePreviewMarkerGeometry, dirtyRect: NSRect) {
+        let diameter: CGFloat = 4.5
+        let rect = NSRect(
+            x: geometry.rect.minX + 2,
+            y: floor(geometry.lineRect.midY - diameter / 2),
+            width: diameter,
+            height: diameter
+        )
+        guard rect.intersects(dirtyRect) else {
+            return
+        }
+        LivePreviewTheme.secondaryTextColor.setFill()
+        NSBezierPath(ovalIn: rect).fill()
     }
 
     private static func markerGeometry(

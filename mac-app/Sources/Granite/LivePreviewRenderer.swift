@@ -653,9 +653,9 @@ enum LivePreviewRenderer {
                 ? []
                 : prefixMatches(in: source, block: block, regex: headingPrefixRegex)
         case .unorderedList:
-            ranges = markerStyle.showsListMarkersOutsideReveal
-                ? []
-                : prefixMatches(in: source, block: block, regex: unorderedListPrefixRegex)
+            ranges = markerStyle == .obsidian || !markerStyle.showsListMarkersOutsideReveal
+                ? prefixMatches(in: source, block: block, regex: unorderedListPrefixRegex)
+                : []
         case .orderedList:
             ranges = markerStyle.showsListMarkersOutsideReveal
                 ? []

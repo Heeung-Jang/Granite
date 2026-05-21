@@ -778,7 +778,7 @@ enum MarkdownEditorBridgeProbe {
             in: obsidianTextView,
             text: text,
             marker: "- Bullet"
-        ) == LivePreviewTheme.secondaryTextColor
+        ) == LivePreviewTheme.concealedColor
             && foregroundColor(in: obsidianTextView, text: text, marker: "- [x]") == LivePreviewTheme.secondaryTextColor
         let obsidianTaskCheckboxVisible = foregroundColor(
             in: obsidianTextView,
