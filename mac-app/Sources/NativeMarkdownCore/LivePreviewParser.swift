@@ -1,6 +1,9 @@
 import Foundation
 
 public enum LivePreviewParser {
+    private static let maxFrontmatterDelimiterLines = 512
+    private static let maxFrontmatterDelimiterUTF16Length = 16_384
+
     public static func parse(_ source: String, sourceVersion: UInt64 = 0) -> LivePreviewParseResult {
         let fullRange = LivePreviewSourceRange(location: 0, length: (source as NSString).length)
         return parse(source, in: fullRange, sourceVersion: sourceVersion)
@@ -542,9 +545,16 @@ public enum LivePreviewParser {
 
         var ranges = [LivePreviewRangeMapper.sourceRange(for: firstLine.contentRange, in: source)]
         var index = firstLine.fullRange.upperBound
-        while let line = LineIndex.line(in: source, startingAt: index) {
+        var scannedLineCount = 1
+        while scannedLineCount < maxFrontmatterDelimiterLines,
+              let line = LineIndex.line(in: source, startingAt: index) {
             defer { index = line.fullRange.upperBound }
+            scannedLineCount += 1
             guard line.trimmed == "---" else {
+                let scannedLength = NSRange(source.startIndex..<line.fullRange.upperBound, in: source).length
+                if scannedLength >= maxFrontmatterDelimiterUTF16Length {
+                    break
+                }
                 continue
             }
             ranges.append(LivePreviewRangeMapper.sourceRange(for: line.contentRange, in: source))
