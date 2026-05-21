@@ -72,6 +72,9 @@ struct MarkdownEditorBridgeProbeReport: Codable, Equatable {
     var tableRenderedBodyCellHitTestResolvesCell: Bool
     var tableRenderedHeaderCellHitTestResolvesCell: Bool
     var tableRenderedHitTestRejectsSyntax: Bool
+    var tableActiveCellStateTracksRenderedCell: Bool
+    var tableActiveCellStateClearsOnMiss: Bool
+    var tableActiveCellStateClearsWhenDisabled: Bool
     var tableCellEditChangesOnlyCell: Bool
     var tableCellEditUndoRestoresCell: Bool
     var tableCellEditFailurePreservesBuffer: Bool
@@ -183,6 +186,9 @@ enum MarkdownEditorBridgeProbe {
             tableRenderedBodyCellHitTestResolvesCell: tableCellProbe.renderedBodyCellHitTestResolvesCell,
             tableRenderedHeaderCellHitTestResolvesCell: tableCellProbe.renderedHeaderCellHitTestResolvesCell,
             tableRenderedHitTestRejectsSyntax: tableCellProbe.renderedHitTestRejectsSyntax,
+            tableActiveCellStateTracksRenderedCell: tableCellProbe.activeCellStateTracksRenderedCell,
+            tableActiveCellStateClearsOnMiss: tableCellProbe.activeCellStateClearsOnMiss,
+            tableActiveCellStateClearsWhenDisabled: tableCellProbe.activeCellStateClearsWhenDisabled,
             tableCellEditChangesOnlyCell: tableCellProbe.changesOnlyCell,
             tableCellEditUndoRestoresCell: tableCellProbe.undoRestoresCell,
             tableCellEditFailurePreservesBuffer: tableCellProbe.failurePreservesBuffer,
@@ -1125,6 +1131,9 @@ enum MarkdownEditorBridgeProbe {
         renderedBodyCellHitTestResolvesCell: Bool,
         renderedHeaderCellHitTestResolvesCell: Bool,
         renderedHitTestRejectsSyntax: Bool,
+        activeCellStateTracksRenderedCell: Bool,
+        activeCellStateClearsOnMiss: Bool,
+        activeCellStateClearsWhenDisabled: Bool,
         changesOnlyCell: Bool,
         undoRestoresCell: Bool,
         failurePreservesBuffer: Bool
@@ -1147,7 +1156,7 @@ enum MarkdownEditorBridgeProbe {
         window.makeFirstResponder(textView)
         textView.string = text
         guard let table = LivePreviewTableParser.parse(text).first else {
-            return (false, false, false, false, false, false, false, false)
+            return (false, false, false, false, false, false, false, false, false, false, false)
         }
         let cell = table.bodyRows[0][1]
         let cellOffset = utf16Offset(of: "Draft", in: text) ?? -1
@@ -1172,12 +1181,40 @@ enum MarkdownEditorBridgeProbe {
         }
         let renderedHitTestRejectsSyntax = pipePoint.flatMap { interactionTextView?.tableCellForEditing(at: $0) } == nil
             && alignmentPoint.flatMap { interactionTextView?.tableCellForEditing(at: $0) } == nil
+        let bodyPoint = bodyLayout.map { NSPoint(x: $0.textRect.midX, y: $0.textRect.midY) }
+        let activeCellStateTracksRenderedCell = bodyPoint.map { point in
+            interactionTextView?.setActiveTableCell(at: point) == true
+                && interactionTextView?.livePreviewOverlayState.activeTableCell == cell
+                && interactionTextView?.livePreviewOverlayState.hoveredTableCell == cell
+        } == true
+        let activeCellStateClearsOnMiss = bodyPoint.map { _ in
+            interactionTextView?.setActiveTableCell(at: NSPoint(x: 1, y: 1)) == false
+                && interactionTextView?.livePreviewOverlayState.activeTableCell == nil
+        } == true
 
         let fallbackTextView = MarkdownEditorTextViewFactory.makeTextView()
         fallbackTextView.string = text
         (fallbackTextView as? MarkdownInteractionTextView)?.livePreviewMode = .fallbackSource(reason: .tooManyTableCells)
         let fallbackCell = (fallbackTextView as? MarkdownInteractionTextView)?.tableCellForEditing(at: cellOffset)
         let contextMenuSkipsFallback = fallbackCell == nil
+        let disabledTextView = MarkdownEditorTextViewFactory.makeTextView() as! MarkdownInteractionTextView
+        disabledTextView.string = text
+        disabledTextView.livePreviewMode = .livePreview
+        if let point = bodyPoint {
+            _ = disabledTextView.setActiveTableCell(at: point)
+        }
+        disabledTextView.livePreviewMode = .source
+        disabledTextView.refreshLivePreviewOverlayState()
+        let sourceModeClearsActiveCell = disabledTextView.livePreviewOverlayState.activeTableCell == nil
+            && disabledTextView.tableCellForEditing(at: bodyPoint ?? .zero) == nil
+        disabledTextView.livePreviewMode = .livePreview
+        if let point = bodyPoint {
+            _ = disabledTextView.setActiveTableCell(at: point)
+        }
+        disabledTextView.isEditable = false
+        disabledTextView.refreshLivePreviewOverlayState()
+        let activeCellStateClearsWhenDisabled = sourceModeClearsActiveCell
+            && disabledTextView.livePreviewOverlayState.activeTableCell == nil
 
         let edited = (textView as? MarkdownInteractionTextView)?.replaceTableCell(cell, with: "Published") == true
         let expected = """
@@ -1206,6 +1243,9 @@ enum MarkdownEditorBridgeProbe {
             renderedBodyCellHitTestResolvesCell,
             renderedHeaderCellHitTestResolvesCell,
             renderedHitTestRejectsSyntax,
+            activeCellStateTracksRenderedCell,
+            activeCellStateClearsOnMiss,
+            activeCellStateClearsWhenDisabled,
             changesOnlyCell,
             undoRestoresCell,
             failurePreservesBuffer

@@ -211,6 +211,7 @@ struct MarkdownEditorView: NSViewRepresentable {
                textView.toggleTaskCheckbox(at: utf16Offset) {
                 return true
             }
+            _ = textView.setActiveTableCell(at: textView.convert(event.locationInWindow, from: nil))
 
             guard !textView.isEditable || event.modifierFlags.contains(.command),
                   let utf16Offset = textView.utf16Offset(for: event),
@@ -459,6 +460,21 @@ final class MarkdownInteractionTextView: NSTextView {
             return nil
         }
         return LivePreviewTableLayout.tableCell(at: point, in: self)
+    }
+
+    @discardableResult
+    func setActiveTableCell(at point: NSPoint) -> Bool {
+        refreshLivePreviewOverlayState()
+        guard livePreviewOverlayState.allowsTransientControls,
+              let cell = tableCellForEditing(at: point)
+        else {
+            setLivePreviewOverlayTableState(hovered: nil, active: nil)
+            needsDisplay = true
+            return false
+        }
+        setLivePreviewOverlayTableState(hovered: cell, active: cell)
+        needsDisplay = true
+        return true
     }
 
     func refreshLivePreviewOverlayState(revealRange: NSRange? = nil) {
