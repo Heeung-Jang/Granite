@@ -389,6 +389,14 @@ mod tests {
             target_markdown_count: 50,
         })
         .expect("synthetic vault");
+        fs::write(
+            vault.join("LongSynthetic.md"),
+            format!(
+                "# Long Synthetic\n\n{}",
+                "long deterministic benchmark phrase\n".repeat(4096)
+            ),
+        )
+        .expect("long synthetic note");
 
         let artifact = run_shared_backend_benchmark_from_vault(&VaultBackendBenchmarkOptions {
             corpus_id: "synthetic-performance-smoke".to_string(),
@@ -396,19 +404,28 @@ mod tests {
             queries: vec![
                 "Synthetic Note".to_string(),
                 "deterministic phrase".to_string(),
+                "long deterministic benchmark phrase".to_string(),
                 "한국어".to_string(),
                 "workflow/benchmark".to_string(),
             ],
             result_limit: 10,
             work_dir: dir.path().join("indexes"),
+            time_to_usable_sample_count: 1,
+            snippet_storage_mode: vault_engine::benchmarks::SnippetStorageMode::StoredBody,
+            include_sqlite_fts: true,
         })
         .expect("benchmark");
 
-        assert_eq!(artifact.document_count, manifest.note_count as usize);
-        assert_eq!(artifact.query_count, 4);
+        assert_eq!(artifact.document_count, manifest.note_count as usize + 1);
+        assert_eq!(artifact.query_count, 5);
         assert_eq!(artifact.backends.len(), 2);
 
         for backend in &artifact.backends {
+            assert!(
+                backend.stages.read_parse.peak_in_flight_items > 0,
+                "{} pipeline in-flight count",
+                backend.backend
+            );
             assert!(
                 backend.query_p95_micros <= upper_regression_limit(QUERY_P95_BASELINE_MICROS),
                 "{} query p95 exceeded smoke budget: {}us",

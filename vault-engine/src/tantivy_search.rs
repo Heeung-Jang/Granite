@@ -9,13 +9,44 @@ use tantivy::schema::{Field, STORED, STRING, Schema, TEXT, TantivyDocument, Valu
 use tantivy::snippet::SnippetGenerator;
 use tantivy::{Index, IndexReader, TantivyError, Term, doc};
 
+use crate::indexing_pipeline::SnippetStorageMode;
+use crate::paths::{FileIdentity, PathError, VaultRoot};
 use crate::sqlite_fts::{SearchDocument, SearchMeasurement, SearchResult};
+
+pub const DEFAULT_TANTIVY_WRITER_MEMORY_BUDGET_BYTES: usize = 50_000_000;
 
 pub struct TantivySearchIndex {
     index: Index,
     reader: IndexReader,
     fields: TantivyFields,
     index_dir: Option<PathBuf>,
+    snippet_storage_mode: SnippetStorageMode,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TantivyIndexingStageMetrics {
+    pub add_micros: u64,
+    pub commit_micros: u64,
+    pub reader_reload_micros: u64,
+    pub added_document_count: usize,
+    pub deleted_document_count: usize,
+    pub skipped_document_count: usize,
+    pub failed_document_count: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TantivyWriterOptions {
+    pub memory_budget_bytes: usize,
+    pub writer_thread_count: Option<usize>,
+}
+
+impl Default for TantivyWriterOptions {
+    fn default() -> Self {
+        Self {
+            memory_budget_bytes: DEFAULT_TANTIVY_WRITER_MEMORY_BUDGET_BYTES,
+            writer_thread_count: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -31,6 +62,7 @@ pub enum TantivySearchError {
     Tantivy(TantivyError),
     QueryParser(QueryParserError),
     Io(std::io::Error),
+    Path(PathError),
     EmptyQuery,
 }
 
@@ -38,28 +70,52 @@ pub type TantivySearchResult<T> = Result<T, TantivySearchError>;
 
 impl TantivySearchIndex {
     pub fn open_in_ram() -> TantivySearchResult<Self> {
-        let (schema, fields) = search_schema();
+        Self::open_in_ram_with_snippet_mode(SnippetStorageMode::StoredBody)
+    }
+
+    pub fn open_in_ram_with_snippet_mode(
+        snippet_storage_mode: SnippetStorageMode,
+    ) -> TantivySearchResult<Self> {
+        let (schema, fields) = search_schema_for_snippet_mode(snippet_storage_mode);
         let index = Index::builder().schema(schema).create_in_ram()?;
-        Self::from_index(index, fields, None)
+        Self::from_index(index, fields, None, snippet_storage_mode)
     }
 
     pub fn open_in_dir(path: impl AsRef<Path>) -> TantivySearchResult<Self> {
-        let (schema, fields) = search_schema();
+        Self::open_in_dir_with_snippet_mode(path, SnippetStorageMode::StoredBody)
+    }
+
+    pub fn open_in_dir_with_snippet_mode(
+        path: impl AsRef<Path>,
+        snippet_storage_mode: SnippetStorageMode,
+    ) -> TantivySearchResult<Self> {
+        let (schema, fields) = search_schema_for_snippet_mode(snippet_storage_mode);
         fs::create_dir_all(path.as_ref())?;
         let index = Index::create_in_dir(path.as_ref(), schema)?;
-        Self::from_index(index, fields, Some(path.as_ref().to_path_buf()))
+        Self::from_index(
+            index,
+            fields,
+            Some(path.as_ref().to_path_buf()),
+            snippet_storage_mode,
+        )
     }
 
     pub fn open_existing_dir(path: impl AsRef<Path>) -> TantivySearchResult<Self> {
         let (_, fields) = search_schema();
         let index = Index::open_in_dir(path.as_ref())?;
-        Self::from_index(index, fields, Some(path.as_ref().to_path_buf()))
+        Self::from_index(
+            index,
+            fields,
+            Some(path.as_ref().to_path_buf()),
+            SnippetStorageMode::StoredBody,
+        )
     }
 
     fn from_index(
         index: Index,
         fields: TantivyFields,
         index_dir: Option<PathBuf>,
+        snippet_storage_mode: SnippetStorageMode,
     ) -> TantivySearchResult<Self> {
         let reader = index.reader()?;
         Ok(Self {
@@ -67,15 +123,36 @@ impl TantivySearchIndex {
             reader,
             fields,
             index_dir,
+            snippet_storage_mode,
         })
     }
 
     pub fn replace_documents(&mut self, documents: &[SearchDocument]) -> TantivySearchResult<()> {
-        self.replace_documents_from_result_iter(
+        self.replace_documents_with_stage_durations(documents)?;
+        Ok(())
+    }
+
+    pub fn replace_documents_with_stage_durations(
+        &mut self,
+        documents: &[SearchDocument],
+    ) -> TantivySearchResult<TantivyIndexingStageMetrics> {
+        self.replace_documents_with_options_and_stage_durations(
+            documents,
+            TantivyWriterOptions::default(),
+        )
+    }
+
+    pub fn replace_documents_with_options_and_stage_durations(
+        &mut self,
+        documents: &[SearchDocument],
+        options: TantivyWriterOptions,
+    ) -> TantivySearchResult<TantivyIndexingStageMetrics> {
+        self.replace_documents_from_result_iter_with_options_and_stage_durations(
             documents
                 .iter()
                 .cloned()
                 .map(Ok::<SearchDocument, TantivySearchError>),
+            options,
         )
     }
 
@@ -84,16 +161,134 @@ impl TantivySearchIndex {
         I: IntoIterator<Item = Result<SearchDocument, E>>,
         E: From<TantivySearchError>,
     {
-        let mut writer = self
-            .index
-            .writer(50_000_000)
-            .map_err(TantivySearchError::from)?;
+        self.replace_documents_from_result_iter_with_stage_durations(documents)?;
+        Ok(())
+    }
+
+    pub fn replace_documents_from_result_iter_with_stage_durations<I, E>(
+        &mut self,
+        documents: I,
+    ) -> Result<TantivyIndexingStageMetrics, E>
+    where
+        I: IntoIterator<Item = Result<SearchDocument, E>>,
+        E: From<TantivySearchError>,
+    {
+        self.replace_documents_from_result_iter_with_options_and_stage_durations(
+            documents,
+            TantivyWriterOptions::default(),
+        )
+    }
+
+    pub fn replace_documents_from_result_iter_with_options_and_stage_durations<I, E>(
+        &mut self,
+        documents: I,
+        options: TantivyWriterOptions,
+    ) -> Result<TantivyIndexingStageMetrics, E>
+    where
+        I: IntoIterator<Item = Result<SearchDocument, E>>,
+        E: From<TantivySearchError>,
+    {
+        self.index_documents_from_result_iter(documents, options, true)
+    }
+
+    pub fn delete_documents_by_file_ids_with_options_and_stage_durations(
+        &mut self,
+        file_ids: &[String],
+        options: TantivyWriterOptions,
+    ) -> TantivySearchResult<TantivyIndexingStageMetrics> {
+        if file_ids.is_empty() {
+            return Ok(TantivyIndexingStageMetrics::default());
+        }
+
+        let mut writer: tantivy::IndexWriter<TantivyDocument> = match options.writer_thread_count {
+            Some(thread_count) => self
+                .index
+                .writer_with_num_threads(thread_count.max(1), options.memory_budget_bytes),
+            None => self.index.writer(options.memory_budget_bytes),
+        }?;
+        let mut delete_micros = 0;
+        for file_id in file_ids {
+            let delete_start = Instant::now();
+            writer.delete_term(Term::from_field_text(self.fields.file_id, file_id));
+            delete_micros += duration_micros_nonzero(delete_start.elapsed());
+        }
+        let commit_start = Instant::now();
+        writer.commit()?;
+        let commit_micros = duration_micros_nonzero(commit_start.elapsed());
+        let reload_start = Instant::now();
+        self.reader.reload()?;
+        let reader_reload_micros = duration_micros_nonzero(reload_start.elapsed());
+
+        Ok(TantivyIndexingStageMetrics {
+            add_micros: delete_micros,
+            commit_micros,
+            reader_reload_micros,
+            added_document_count: 0,
+            deleted_document_count: file_ids.len(),
+            skipped_document_count: 0,
+            failed_document_count: 0,
+        })
+    }
+
+    /// Add documents into a fresh rebuild index without deleting existing file ids first.
+    ///
+    /// This is only valid when the target index directory was just created or reset.
+    pub fn add_documents_for_rebuild_from_result_iter_with_stage_durations<I, E>(
+        &mut self,
+        documents: I,
+    ) -> Result<TantivyIndexingStageMetrics, E>
+    where
+        I: IntoIterator<Item = Result<SearchDocument, E>>,
+        E: From<TantivySearchError>,
+    {
+        self.add_documents_for_rebuild_from_result_iter_with_options_and_stage_durations(
+            documents,
+            TantivyWriterOptions::default(),
+        )
+    }
+
+    pub fn add_documents_for_rebuild_from_result_iter_with_options_and_stage_durations<I, E>(
+        &mut self,
+        documents: I,
+        options: TantivyWriterOptions,
+    ) -> Result<TantivyIndexingStageMetrics, E>
+    where
+        I: IntoIterator<Item = Result<SearchDocument, E>>,
+        E: From<TantivySearchError>,
+    {
+        self.index_documents_from_result_iter(documents, options, false)
+    }
+
+    fn index_documents_from_result_iter<I, E>(
+        &mut self,
+        documents: I,
+        options: TantivyWriterOptions,
+        delete_existing: bool,
+    ) -> Result<TantivyIndexingStageMetrics, E>
+    where
+        I: IntoIterator<Item = Result<SearchDocument, E>>,
+        E: From<TantivySearchError>,
+    {
+        let mut writer = match options.writer_thread_count {
+            Some(thread_count) => self
+                .index
+                .writer_with_num_threads(thread_count.max(1), options.memory_budget_bytes),
+            None => self.index.writer(options.memory_budget_bytes),
+        }
+        .map_err(TantivySearchError::from)?;
+        let mut add_micros = 0;
+        let mut added_document_count = 0;
+        let mut deleted_document_count = 0;
         for document in documents {
             let document = document?;
-            writer.delete_term(Term::from_field_text(
-                self.fields.file_id,
-                &document.file_id,
-            ));
+            let add_start = Instant::now();
+            if delete_existing {
+                writer.delete_term(Term::from_field_text(
+                    self.fields.file_id,
+                    &document.file_id,
+                ));
+                deleted_document_count += 1;
+            }
             writer
                 .add_document(doc!(
                     self.fields.file_id => document.file_id.as_str(),
@@ -102,10 +297,25 @@ impl TantivySearchIndex {
                     self.fields.body => document.body.as_str(),
                 ))
                 .map_err(TantivySearchError::from)?;
+            added_document_count += 1;
+            add_micros += duration_micros_nonzero(add_start.elapsed());
         }
+        let commit_start = Instant::now();
         writer.commit().map_err(TantivySearchError::from)?;
+        let commit_micros = duration_micros_nonzero(commit_start.elapsed());
+        let reload_start = Instant::now();
         self.reader.reload().map_err(TantivySearchError::from)?;
-        Ok(())
+        let reader_reload_micros = duration_micros_nonzero(reload_start.elapsed());
+
+        Ok(TantivyIndexingStageMetrics {
+            add_micros,
+            commit_micros,
+            reader_reload_micros,
+            added_document_count,
+            deleted_document_count,
+            skipped_document_count: 0,
+            failed_document_count: 0,
+        })
     }
 
     pub fn search(&self, query: &str, limit: usize) -> TantivySearchResult<Vec<SearchResult>> {
@@ -137,7 +347,12 @@ impl TantivySearchIndex {
         let mut results = Vec::with_capacity(limit.min(top_docs.len()));
         for (score, address) in top_docs.into_iter().skip(offset).take(limit) {
             let document = searcher.doc::<TantivyDocument>(address)?;
-            let snippet = snippet_generator.snippet_from_doc(&document).to_html();
+            let snippet = match self.snippet_storage_mode {
+                SnippetStorageMode::StoredBody => {
+                    snippet_generator.snippet_from_doc(&document).to_html()
+                }
+                SnippetStorageMode::LazySourceExperiment => String::new(),
+            };
             results.push(SearchResult {
                 file_id: stored_text(&document, self.fields.file_id),
                 path: stored_text(&document, self.fields.path),
@@ -177,12 +392,37 @@ impl TantivySearchIndex {
     }
 }
 
+pub fn generate_lazy_source_snippet(
+    root: &VaultRoot,
+    relative_path: &str,
+    expected_identity: &FileIdentity,
+    indexed_generation: u64,
+    current_generation: u64,
+    query: &str,
+    max_chars: usize,
+) -> TantivySearchResult<Option<String>> {
+    let resolved = root.resolve_existing_relative(relative_path)?;
+    if &resolved.file_identity != expected_identity || indexed_generation != current_generation {
+        return Ok(None);
+    }
+    let body = fs::read_to_string(&resolved.absolute_path)?;
+    let Some(term) = first_query_term(query) else {
+        return Ok(None);
+    };
+    let body_lower = body.to_lowercase();
+    let Some(byte_index) = body_lower.find(&term.to_lowercase()) else {
+        return Ok(None);
+    };
+    Ok(Some(snippet_around(&body, byte_index, max_chars.max(1))))
+}
+
 impl fmt::Display for TantivySearchError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Tantivy(error) => write!(formatter, "tantivy search error: {error}"),
             Self::QueryParser(error) => write!(formatter, "tantivy query parse error: {error}"),
             Self::Io(error) => write!(formatter, "tantivy index io error: {error}"),
+            Self::Path(error) => write!(formatter, "tantivy path error: {error}"),
             Self::EmptyQuery => write!(formatter, "search query is empty after sanitization"),
         }
     }
@@ -208,6 +448,12 @@ impl From<std::io::Error> for TantivySearchError {
     }
 }
 
+impl From<PathError> for TantivySearchError {
+    fn from(error: PathError) -> Self {
+        Self::Path(error)
+    }
+}
+
 pub fn safe_tantivy_query(input: &str) -> Option<String> {
     let bounded = input.chars().take(128).collect::<String>();
     let terms = bounded
@@ -220,12 +466,44 @@ pub fn safe_tantivy_query(input: &str) -> Option<String> {
     (!terms.is_empty()).then(|| terms.join(" "))
 }
 
+fn first_query_term(input: &str) -> Option<String> {
+    input
+        .split(|ch: char| !ch.is_alphanumeric())
+        .find(|term| !term.is_empty())
+        .map(str::to_string)
+}
+
+fn snippet_around(body: &str, byte_index: usize, max_chars: usize) -> String {
+    let mut char_positions = body
+        .char_indices()
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    char_positions.push(body.len());
+    let center_char = char_positions
+        .binary_search(&byte_index)
+        .unwrap_or_else(|index| index.saturating_sub(1));
+    let half = max_chars / 2;
+    let start_char = center_char.saturating_sub(half);
+    let end_char = (start_char + max_chars).min(char_positions.len().saturating_sub(1));
+    body[char_positions[start_char]..char_positions[end_char]].to_string()
+}
+
 fn search_schema() -> (Schema, TantivyFields) {
+    search_schema_for_snippet_mode(SnippetStorageMode::StoredBody)
+}
+
+fn search_schema_for_snippet_mode(
+    snippet_storage_mode: SnippetStorageMode,
+) -> (Schema, TantivyFields) {
     let mut builder = Schema::builder();
     let file_id = builder.add_text_field("file_id", STRING | STORED);
     let path = builder.add_text_field("path", TEXT | STORED);
     let title = builder.add_text_field("title", TEXT | STORED);
-    let body = builder.add_text_field("body", TEXT | STORED);
+    let body_options = match snippet_storage_mode {
+        SnippetStorageMode::StoredBody => TEXT | STORED,
+        SnippetStorageMode::LazySourceExperiment => TEXT,
+    };
+    let body = builder.add_text_field("body", body_options);
     (
         builder.build(),
         TantivyFields {
@@ -253,6 +531,10 @@ fn percentile_duration(values: &[Duration], percentile: usize) -> Duration {
     values[index.min(values.len() - 1)]
 }
 
+fn duration_micros_nonzero(duration: Duration) -> u64 {
+    (duration.as_micros().min(u128::from(u64::MAX)) as u64).max(1)
+}
+
 fn directory_size(path: &Path) -> TantivySearchResult<u64> {
     let mut size = 0;
     for entry in fs::read_dir(path)? {
@@ -270,7 +552,10 @@ fn directory_size(path: &Path) -> TantivySearchResult<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::paths::VaultRoot;
     use crate::sqlite_fts::SearchDocument;
+    #[cfg(unix)]
+    use std::os::unix::fs::symlink;
 
     #[test]
     fn safe_tantivy_query_bounds_and_quotes_user_input() {
@@ -279,6 +564,56 @@ mod tests {
             Some("\"Home\" \"OR\" \"title\"".to_string())
         );
         assert_eq!(safe_tantivy_query("   !!!   "), None);
+    }
+
+    #[test]
+    fn writer_options_default_preserves_current_memory_budget() {
+        assert_eq!(
+            TantivyWriterOptions::default().memory_budget_bytes,
+            DEFAULT_TANTIVY_WRITER_MEMORY_BUDGET_BYTES
+        );
+        assert_eq!(TantivyWriterOptions::default().writer_thread_count, None);
+    }
+
+    #[test]
+    fn indexes_fixture_with_explicit_single_writer_thread() {
+        let mut index = TantivySearchIndex::open_in_ram().expect("index");
+        let stages = index
+            .replace_documents_with_options_and_stage_durations(
+                &fixture_documents(),
+                TantivyWriterOptions {
+                    writer_thread_count: Some(1),
+                    ..Default::default()
+                },
+            )
+            .expect("replace docs");
+
+        assert_eq!(stages.added_document_count, 4);
+        assert_eq!(stages.deleted_document_count, 4);
+        assert!(stages.add_micros > 0);
+        assert!(index.search("Guide", 10).expect("search").len() == 1);
+    }
+
+    #[test]
+    fn add_documents_for_rebuild_indexes_fresh_index_without_deletes() {
+        let mut index = TantivySearchIndex::open_in_ram().expect("index");
+        let stages = index
+            .add_documents_for_rebuild_from_result_iter_with_stage_durations(
+                fixture_documents()
+                    .into_iter()
+                    .map(Ok::<SearchDocument, TantivySearchError>),
+            )
+            .expect("rebuild add");
+
+        assert_eq!(stages.added_document_count, 4);
+        assert_eq!(stages.deleted_document_count, 0);
+        assert!(
+            index
+                .search("compatibility fixture", 10)
+                .expect("search")
+                .len()
+                == 1
+        );
     }
 
     #[test]
@@ -300,6 +635,126 @@ mod tests {
             .expect("body search");
         assert!(body_results.iter().any(|result| result.path == "Home.md"));
         assert!(body_results.iter().any(|result| !result.snippet.is_empty()));
+    }
+
+    #[test]
+    fn lazy_source_experiment_indexes_body_without_stored_snippets() {
+        let mut index = TantivySearchIndex::open_in_ram_with_snippet_mode(
+            SnippetStorageMode::LazySourceExperiment,
+        )
+        .expect("index");
+        index
+            .replace_documents(&fixture_documents())
+            .expect("replace docs");
+
+        let body_results = index
+            .search("compatibility fixture", 10)
+            .expect("body search");
+
+        assert!(body_results.iter().any(|result| result.path == "Home.md"));
+        assert!(body_results.iter().all(|result| result.snippet.is_empty()));
+    }
+
+    #[test]
+    fn lazy_source_snippet_validates_path_and_file_identity() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let vault = dir.path().join("vault");
+        fs::create_dir_all(&vault).expect("vault");
+        fs::write(
+            vault.join("Home.md"),
+            "# Home\nExpected lazy snippet phrase inside source.",
+        )
+        .expect("note");
+        let root = VaultRoot::open(&vault).expect("root");
+        let resolved = root
+            .resolve_existing_relative("Home.md")
+            .expect("resolved note");
+
+        let snippet = generate_lazy_source_snippet(
+            &root,
+            "Home.md",
+            &resolved.file_identity,
+            7,
+            7,
+            "lazy phrase",
+            80,
+        )
+        .expect("snippet")
+        .expect("snippet text");
+        assert!(snippet.contains("lazy snippet phrase"));
+
+        assert!(
+            generate_lazy_source_snippet(
+                &root,
+                "Home.md",
+                &resolved.file_identity,
+                7,
+                8,
+                "lazy phrase",
+                80
+            )
+            .expect("generation check")
+            .is_none()
+        );
+
+        fs::remove_file(vault.join("Home.md")).expect("remove note");
+        fs::write(vault.join("Home.md"), "# Home\nChanged content").expect("changed");
+        assert!(
+            generate_lazy_source_snippet(
+                &root,
+                "Home.md",
+                &resolved.file_identity,
+                7,
+                7,
+                "Changed",
+                80
+            )
+            .expect("stale check")
+            .is_none()
+        );
+        assert!(matches!(
+            generate_lazy_source_snippet(
+                &root,
+                "../outside.md",
+                &resolved.file_identity,
+                7,
+                7,
+                "x",
+                80
+            ),
+            Err(TantivySearchError::Path(_))
+        ));
+        assert!(matches!(
+            generate_lazy_source_snippet(
+                &root,
+                &vault.join("Home.md").display().to_string(),
+                &resolved.file_identity,
+                7,
+                7,
+                "x",
+                80
+            ),
+            Err(TantivySearchError::Path(_))
+        ));
+
+        #[cfg(unix)]
+        {
+            let outside = dir.path().join("outside.md");
+            fs::write(&outside, "outside lazy phrase").expect("outside note");
+            symlink(&outside, vault.join("Outside.md")).expect("outside symlink");
+            assert!(matches!(
+                generate_lazy_source_snippet(
+                    &root,
+                    "Outside.md",
+                    &resolved.file_identity,
+                    7,
+                    7,
+                    "lazy",
+                    80
+                ),
+                Err(TantivySearchError::Path(_))
+            ));
+        }
     }
 
     #[test]

@@ -543,6 +543,37 @@ mod tests {
     }
 
     #[test]
+    fn snippet_storage_mismatch_starts_rebuild_without_touching_vault() {
+        let fixture = RebuildFixture::new();
+        fixture.write_vault_note("private");
+        fs::create_dir_all(&fixture.paths.data_directory).expect("data");
+        let metadata_path = fixture.paths.data_directory.join("metadata.sqlite");
+        let stored = IndexSchemaMetadata::new("sqlite+tantivy", "metadata-v1", "stored_body", 1);
+        let expected =
+            IndexSchemaMetadata::new("sqlite+tantivy", "metadata-v1", "lazy_source_experiment", 1);
+        let store = MetadataStore::open(&metadata_path, &stored).expect("stored metadata");
+        drop(store);
+        let scan = synthetic_scan(1, 1);
+        let mut queue = IndexingQueue::open_in_memory().expect("queue");
+
+        let recovery = open_metadata_or_start_rebuild(
+            &metadata_path,
+            &expected,
+            &mut queue,
+            &scan,
+            &fixture.paths,
+            1,
+        )
+        .expect("recover snippet mismatch");
+
+        let MetadataOpenRecovery::RebuildStarted(start) = recovery else {
+            panic!("expected rebuild");
+        };
+        assert_eq!(start.reason, IndexRebuildReason::SchemaMismatch);
+        assert_eq!(fixture.read_vault_note(), "private");
+    }
+
+    #[test]
     fn backend_mismatch_starts_rebuild_without_touching_vault() {
         let fixture = RebuildFixture::new();
         fixture.write_vault_note("private");
