@@ -455,38 +455,6 @@ private struct ObsidianTabBar: View {
     }
 }
 
-private struct GraphWorkspaceView: View {
-    let vaultSelection: VaultSelectionState
-
-    var body: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "point.3.connected.trianglepath.dotted")
-                .font(.system(size: 32))
-                .foregroundStyle(.secondary)
-            Text("Graph view")
-                .font(.title3)
-                .foregroundStyle(.primary)
-            Text(statusText)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Graph view")
-    }
-
-    private var statusText: String {
-        switch vaultSelection {
-        case .selected:
-            "Graph data not loaded"
-        case .noVault:
-            "No vault open"
-        case .unavailable(let issue):
-            issue.displayTitle
-        }
-    }
-}
-
 private struct ObsidianEditorPane: View {
     let vaultURL: URL
     let file: FileTreeItem

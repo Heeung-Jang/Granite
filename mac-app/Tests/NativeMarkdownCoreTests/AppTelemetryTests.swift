@@ -52,6 +52,8 @@ func telemetrySchemaDefinesAllowedAndDisallowedFields() {
     #expect(schema.rejectsRawField("linkTarget"))
     #expect(schema.rejectsRawField("tagName"))
     #expect(schema.rejectsRawField("embedName"))
+    #expect(schema.rejectsRawField("searchQuery"))
+    #expect(schema.rejectsRawField("groupQuery"))
     #expect(!schema.allowsPublicField("noteText"))
     #expect(!schema.allowsPublicField("absolutePath"))
 }

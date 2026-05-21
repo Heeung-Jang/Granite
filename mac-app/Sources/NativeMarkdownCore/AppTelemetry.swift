@@ -76,10 +76,13 @@ public enum AppTelemetry {
             "embedName",
             "fileName",
             "frontmatterValue",
+            "groupQuery",
+            "groupRule",
             "linkTarget",
             "noteText",
             "rawPath",
             "renderedSnippet",
+            "searchQuery",
             "selectedText",
             "tagName"
         ]
