@@ -63,6 +63,7 @@ public enum AppTelemetry {
             "memoryDeltaBytes",
             "mode",
             "resultCount",
+            "source",
             "stageName",
             "state",
             "tableCellCount",
@@ -145,6 +146,10 @@ public enum AppTelemetry {
         durationMilliseconds: Double
     ) {
         graphLogger.info("Graph rendered id=\(redactedIdentifier(for: file.relativePath), privacy: .public) state=\(state.rawValue, privacy: .public) nodes=\(nodeCount, privacy: .public) edges=\(edgeCount, privacy: .public) duration_ms=\(durationMilliseconds, privacy: .public)")
+    }
+
+    public static func graphOpened(source: GraphOpenSource) {
+        graphLogger.info("graph_opened source=\(source.rawValue, privacy: .public)")
     }
 
     public static func saveRequested(file: FileTreeItem?, available: Bool) {

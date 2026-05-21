@@ -45,6 +45,7 @@ func telemetrySchemaDefinesAllowedAndDisallowedFields() {
     #expect(schema.allowsPublicField("hardCeilingPassed"))
     #expect(schema.allowsPublicField("hardCeilingViolations"))
     #expect(schema.allowsPublicField("memoryDeltaBytes"))
+    #expect(schema.allowsPublicField("source"))
     #expect(schema.rejectsRawField("absolutePath"))
     #expect(schema.rejectsRawField("fileName"))
     #expect(schema.rejectsRawField("noteText"))

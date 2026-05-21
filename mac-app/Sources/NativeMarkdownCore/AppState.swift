@@ -52,11 +52,23 @@ public struct DirtyLifecycleWarning: Equatable, Identifiable, Sendable {
     }
 }
 
+public enum WorkspaceSelection: Equatable, Sendable {
+    case empty
+    case note(FileTreeItem)
+    case graph
+}
+
+public enum GraphOpenSource: String, Equatable, Sendable {
+    case ribbon
+    case keyboard
+}
+
 public final class AppState: ObservableObject {
     @Published public private(set) var vaultSelection: VaultSelectionState
     @Published public private(set) var engineHealth: EngineHealthStatus
     @Published public private(set) var indexLocation: AppOwnedIndexLocation?
     @Published public private(set) var recentVaults: [RecentVault]
+    @Published public private(set) var workspaceSelection: WorkspaceSelection
     @Published public private(set) var selectedFile: FileTreeItem?
     @Published public private(set) var requestedSearch: WorkspaceSearchRequest?
     @Published public private(set) var dirtyNavigationWarning: DirtyNavigationWarning?
@@ -83,6 +95,7 @@ public final class AppState: ObservableObject {
         self.vaultAccessValidator = vaultAccessValidator
         self.recentVaultStorage = recentVaultStorage
         self.maxRecentVaults = max(1, maxRecentVaults)
+        self.workspaceSelection = .empty
         self.recentVaults = Self.normalizedRecentVaults(
             from: recentVaultStorage.loadRecentVaultURLs(),
             limit: self.maxRecentVaults
@@ -93,6 +106,7 @@ public final class AppState: ObservableObject {
         let vaultURL = url.standardizedFileURL
         if let issue = vaultAccessValidator.validateVault(at: vaultURL) {
             indexLocation = nil
+            workspaceSelection = .empty
             selectedFile = nil
             dirtyEditorFile = nil
             dirtyNavigationWarning = nil
@@ -104,6 +118,7 @@ public final class AppState: ObservableObject {
 
         indexLocation = try indexDirectoryResolver.prepareIndexLocation(forVaultAt: vaultURL)
         vaultSelection = .selected(vaultURL)
+        workspaceSelection = .empty
         selectedFile = nil
         dirtyEditorFile = nil
         dirtyNavigationWarning = nil
@@ -117,6 +132,7 @@ public final class AppState: ObservableObject {
 
     public func markStaleBookmark(for url: URL) {
         indexLocation = nil
+        workspaceSelection = .empty
         selectedFile = nil
         dirtyEditorFile = nil
         dirtyNavigationWarning = nil
@@ -136,6 +152,7 @@ public final class AppState: ObservableObject {
     public func clearVault() {
         vaultSelection = .noVault
         indexLocation = nil
+        workspaceSelection = .empty
         selectedFile = nil
         dirtyEditorFile = nil
         dirtyNavigationWarning = nil
@@ -173,9 +190,31 @@ public final class AppState: ObservableObject {
         }
 
         selectedFile = item
+        workspaceSelection = .note(item)
         dirtyNavigationWarning = nil
         AppTelemetry.noteOpened(item)
         return true
+    }
+
+    public func openGraph(source: GraphOpenSource) {
+        workspaceSelection = .graph
+        dirtyNavigationWarning = nil
+        AppTelemetry.graphOpened(source: source)
+    }
+
+    public func closeWorkspaceSelection() {
+        switch workspaceSelection {
+        case .graph:
+            workspaceSelection = selectedFile.map(WorkspaceSelection.note) ?? .empty
+        case .note(let file):
+            guard dirtyEditorFile != file else {
+                return
+            }
+            workspaceSelection = .empty
+            selectedFile = nil
+        case .empty:
+            break
+        }
     }
 
     public func updateEditorDirtyState(file: FileTreeItem, isDirty: Bool) {
@@ -203,6 +242,7 @@ public final class AppState: ObservableObject {
         dirtyEditorFile = nil
         dirtyNavigationWarning = nil
         selectedFile = warning.requestedFile
+        workspaceSelection = .note(warning.requestedFile)
         AppTelemetry.noteOpened(warning.requestedFile)
     }
 

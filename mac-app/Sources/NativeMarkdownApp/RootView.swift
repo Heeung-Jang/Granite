@@ -11,7 +11,8 @@ struct RootView: View {
         HStack(spacing: 0) {
             ObsidianRibbonView(
                 selectedPanel: $leftPanel,
-                openVault: openVaultPanel
+                openVault: openVaultPanel,
+                openGraph: openGraphFromRibbon
             )
 
             Divider()
@@ -58,6 +59,11 @@ struct RootView: View {
         .background(DirtyLifecycleWindowGuard())
         .onAppear {
             AppLifecycleController.shared.appState = appState
+        }
+        .onChange(of: appState.workspaceSelection) { _, selection in
+            if selection == .graph {
+                leftPanel = .graph
+            }
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Workspace")
@@ -130,17 +136,24 @@ struct RootView: View {
             }
         }
     }
+
+    private func openGraphFromRibbon() {
+        leftPanel = .graph
+        appState.openGraph(source: .ribbon)
+    }
 }
 
 private enum ObsidianLeftPanel {
     case files
     case search
     case bookmarks
+    case graph
 }
 
 private struct ObsidianRibbonView: View {
     @Binding var selectedPanel: ObsidianLeftPanel
     let openVault: () -> Void
+    let openGraph: () -> Void
 
     var body: some View {
         VStack(spacing: 8) {
@@ -167,6 +180,13 @@ private struct ObsidianRibbonView: View {
             ) {
                 selectedPanel = .bookmarks
             }
+
+            ObsidianIconButton(
+                systemName: "point.3.connected.trianglepath.dotted",
+                accessibilityLabel: "Graph view",
+                isSelected: selectedPanel == .graph,
+                action: openGraph
+            )
 
             Spacer()
 
@@ -215,6 +235,8 @@ private struct ObsidianLeftSidebar: View {
                     SearchPanelView()
                 case .bookmarks:
                     ObsidianBookmarksPlaceholder()
+                case .graph:
+                    ObsidianGraphSidebarPlaceholder()
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -251,10 +273,27 @@ private struct ObsidianSidebarToolbar: View {
                 Text("Bookmarks")
                     .font(.headline)
                 Spacer()
+            case .graph:
+                Text("Graph")
+                    .font(.headline)
+                Spacer()
             }
         }
         .padding(.horizontal, 12)
         .frame(height: ObsidianUI.noteToolbarHeight)
+    }
+}
+
+private struct ObsidianGraphSidebarPlaceholder: View {
+    var body: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "point.3.connected.trianglepath.dotted")
+                .foregroundStyle(.secondary)
+            Text("Graph")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
@@ -327,29 +366,36 @@ private struct ObsidianWorkspaceDetail: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ObsidianTabBar(file: appState.selectedFile)
+            ObsidianTabBar(
+                selection: appState.workspaceSelection,
+                close: appState.closeWorkspaceSelection
+            )
 
             Divider()
 
-            switch appState.vaultSelection {
-            case .noVault:
-                ObsidianEmptyWorkspace(
-                    title: "Open a vault",
-                    systemImage: "folder"
-                )
-            case .unavailable(let issue):
-                ObsidianEmptyWorkspace(
-                    title: issue.displayTitle,
-                    systemImage: "exclamationmark.triangle"
-                )
-            case .selected(let url):
-                if let selectedFile = appState.selectedFile {
-                    ObsidianEditorPane(vaultURL: url, file: selectedFile)
-                } else {
+            if appState.workspaceSelection == .graph {
+                GraphWorkspaceView(vaultSelection: appState.vaultSelection)
+            } else {
+                switch appState.vaultSelection {
+                case .noVault:
                     ObsidianEmptyWorkspace(
-                        title: url.lastPathComponent,
-                        systemImage: "doc.text"
+                        title: "Open a vault",
+                        systemImage: "folder"
                     )
+                case .unavailable(let issue):
+                    ObsidianEmptyWorkspace(
+                        title: issue.displayTitle,
+                        systemImage: "exclamationmark.triangle"
+                    )
+                case .selected(let url):
+                    if case .note(let selectedFile) = appState.workspaceSelection {
+                        ObsidianEditorPane(vaultURL: url, file: selectedFile)
+                    } else {
+                        ObsidianEmptyWorkspace(
+                            title: url.lastPathComponent,
+                            systemImage: "doc.text"
+                        )
+                    }
                 }
             }
         }
@@ -359,17 +405,22 @@ private struct ObsidianWorkspaceDetail: View {
 }
 
 private struct ObsidianTabBar: View {
-    let file: FileTreeItem?
+    let selection: WorkspaceSelection
+    let close: () -> Void
 
     var body: some View {
         HStack(spacing: 0) {
-            if let file {
+            if let title = tabTitle {
                 HStack(spacing: 10) {
-                    Text(displayTitle(for: file))
+                    Text(title)
                         .lineLimit(1)
-                    Image(systemName: "xmark")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    Button(action: close) {
+                        Image(systemName: "xmark")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Close tab")
                 }
                 .padding(.horizontal, 14)
                 .frame(height: ObsidianUI.tabBarHeight)
@@ -392,8 +443,47 @@ private struct ObsidianTabBar: View {
         .background(ObsidianUI.sidebarBackground.opacity(0.55))
     }
 
-    private func displayTitle(for file: FileTreeItem) -> String {
-        (file.displayName as NSString).deletingPathExtension
+    private var tabTitle: String? {
+        switch selection {
+        case .empty:
+            nil
+        case .graph:
+            "Graph view"
+        case .note(let file):
+            (file.displayName as NSString).deletingPathExtension
+        }
+    }
+}
+
+private struct GraphWorkspaceView: View {
+    let vaultSelection: VaultSelectionState
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "point.3.connected.trianglepath.dotted")
+                .font(.system(size: 32))
+                .foregroundStyle(.secondary)
+            Text("Graph view")
+                .font(.title3)
+                .foregroundStyle(.primary)
+            Text(statusText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Graph view")
+    }
+
+    private var statusText: String {
+        switch vaultSelection {
+        case .selected:
+            "Graph data not loaded"
+        case .noVault:
+            "No vault open"
+        case .unavailable(let issue):
+            issue.displayTitle
+        }
     }
 }
 

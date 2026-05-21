@@ -24,6 +24,7 @@ struct NativeMarkdownApp: App {
             let file = FileTreeItem(relativePath: "Telemetry/Smoke.md")
             AppTelemetry.searchInputChanged(mode: .fileName, queryLength: 5)
             AppTelemetry.searchCompleted(mode: .fileName, state: .complete, resultCount: 1, durationMilliseconds: 1)
+            AppTelemetry.graphOpened(source: .keyboard)
             AppTelemetry.noteOpened(file)
             AppTelemetry.noteLoadCompleted(file, success: true, durationMilliseconds: 1)
             AppTelemetry.sidebarRefreshCompleted(state: .complete, itemCount: 1, durationMilliseconds: 1)
@@ -86,6 +87,7 @@ struct NativeMarkdownApp: App {
         .defaultSize(width: 1440, height: 900)
         .commands {
             EditorCommands()
+            GraphCommands(appState: appState)
         }
     }
 }
