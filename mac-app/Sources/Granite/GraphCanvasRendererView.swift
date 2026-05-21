@@ -294,9 +294,16 @@ struct GraphCanvasRendererView: View {
     private func accessibilitySummary(for input: GraphRendererInput) -> String {
         GraphAccessibilitySummaryBuilder.summary(
             input: input,
-            selectedNode: input.layout.nodes.first { $0.nodeID == input.selectedNodeID },
-            hoveredNode: input.layout.nodes.first { $0.nodeID == input.hoveredNodeID }
+            selectedNode: accessibilityNode(id: input.selectedNodeID, input: input),
+            hoveredNode: accessibilityNode(id: input.hoveredNodeID, input: input)
         )
+    }
+
+    private func accessibilityNode(id nodeID: String?, input: GraphRendererInput) -> GraphLayoutNode? {
+        guard let nodeID else {
+            return nil
+        }
+        return input.layout.nodes.first { $0.nodeID == nodeID }
     }
 
     private func drawIdentity(for input: GraphRendererInput) -> String {
