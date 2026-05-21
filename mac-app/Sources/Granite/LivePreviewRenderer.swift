@@ -220,6 +220,11 @@ enum LivePreviewRenderer {
                 .font: LivePreviewTheme.baseFont,
                 .paragraphStyle: LivePreviewTheme.tableParagraphStyle
             ], range: range)
+        case .horizontalRule:
+            plan.addAttributes([
+                .foregroundColor: LivePreviewTheme.secondaryTextColor,
+                .paragraphStyle: LivePreviewTheme.horizontalRuleParagraphStyle
+            ], range: range)
         case .embed:
             plan.addAttributes([
                 .foregroundColor: LivePreviewTheme.embedFallbackColor,
@@ -263,16 +268,17 @@ enum LivePreviewRenderer {
         for block: LivePreviewBlockSpan,
         markerStyle: LivePreviewMarkerStyle
     ) -> NSColor {
-        if markerStyle == .muted {
-            return LivePreviewTheme.secondaryTextColor
-        }
-
         switch block.kind {
+        case .horizontalRule:
+            return LivePreviewTheme.secondaryTextColor
         case .blockquote:
             return LivePreviewTheme.quoteBarColor
         case .callout:
             return LivePreviewTheme.calloutAccentColor(for: block.kind)
         default:
+            if markerStyle.usesMutedMarkerColor {
+                return LivePreviewTheme.secondaryTextColor
+            }
             return LivePreviewTheme.listMarkerColor
         }
     }
@@ -567,7 +573,7 @@ enum LivePreviewRenderer {
         revealRange: NSRange,
         markerStyle: LivePreviewMarkerStyle
     ) {
-        guard !shouldRevealSyntax(for: block, revealRange: revealRange) else {
+        guard !shouldRevealSyntax(for: block, revealRange: revealRange, markerStyle: markerStyle) else {
             return
         }
 
@@ -600,21 +606,23 @@ enum LivePreviewRenderer {
         var ranges: [NSRange]
         switch block.kind {
         case .heading:
-            ranges = markerStyle.showsBlockMarkersOutsideReveal
+            ranges = markerStyle.showsHeadingMarkersOutsideReveal
                 ? []
                 : prefixMatches(in: source, block: block, regex: headingPrefixRegex)
         case .unorderedList:
-            ranges = markerStyle.showsBlockMarkersOutsideReveal
+            ranges = markerStyle.showsListMarkersOutsideReveal
                 ? []
                 : prefixMatches(in: source, block: block, regex: unorderedListPrefixRegex)
         case .orderedList:
-            ranges = markerStyle.showsBlockMarkersOutsideReveal
+            ranges = markerStyle.showsListMarkersOutsideReveal
                 ? []
                 : prefixMatches(in: source, block: block, regex: orderedListPrefixRegex)
         case .taskList:
             ranges = taskListConcealmentRanges(for: block, source: source, markerStyle: markerStyle)
         case .blockquote:
-            ranges = []
+            ranges = markerStyle.keepsBlockquoteMarkersConcealed
+                ? prefixMatches(in: source, block: block, regex: blockquotePrefixRegex)
+                : []
         case .callout:
             ranges = prefixMatches(in: source, block: block, regex: calloutQuotePrefixRegex)
             ranges += prefixMatches(in: source, block: block, regex: calloutPrefixRegex)
@@ -624,6 +632,8 @@ enum LivePreviewRenderer {
             return embedTokenRanges(for: block, source: source, preview: embedPreview)
         case .paragraph:
             ranges = []
+        case .horizontalRule:
+            ranges = [block.contentRange.nsRange]
         case .fencedCode:
             return matches(in: source, range: block.sourceRange.nsRange, regex: fenceLineRegex)
         case .frontmatter:
@@ -633,10 +643,16 @@ enum LivePreviewRenderer {
         return ranges
     }
 
-    private static func shouldRevealSyntax(for block: LivePreviewBlockSpan, revealRange: NSRange) -> Bool {
+    private static func shouldRevealSyntax(
+        for block: LivePreviewBlockSpan,
+        revealRange: NSRange,
+        markerStyle: LivePreviewMarkerStyle
+    ) -> Bool {
         switch block.kind {
         case .heading:
             return block.sourceRange.nsRange.intersectsOrContainsCaret(revealRange)
+        case .blockquote where markerStyle.keepsBlockquoteMarkersConcealed:
+            return false
         case .frontmatter, .callout, .table:
             return false
         default:
@@ -658,6 +674,8 @@ enum LivePreviewRenderer {
             return prefixMatches(in: source, block: block, regex: orderedListPrefixRegex)
         case .taskList:
             return prefixMatches(in: source, block: block, regex: taskListPrefixRegex)
+        case .horizontalRule:
+            return [block.contentRange.nsRange]
         default:
             return []
         }
@@ -673,9 +691,9 @@ enum LivePreviewRenderer {
                 .firstMatch(in: source, range: prefixRange)?
                 .range
             else {
-                return markerStyle.showsBlockMarkersOutsideReveal ? [] : [prefixRange]
+                return markerStyle.showsListMarkersOutsideReveal ? [] : [prefixRange]
             }
-            if markerStyle.showsBlockMarkersOutsideReveal {
+            if markerStyle.showsListMarkersOutsideReveal {
                 let markerRange = taskListMarkerRange(in: prefixRange, source: source)
                 let markerEnd = markerRange.map { $0.location + $0.length } ?? prefixRange.location
                 let beforeCheckbox = NSRange(

@@ -24,6 +24,8 @@ struct LivePreviewStyleProbeReport: Codable, Equatable {
     var calloutChromeApplied: Bool
     var calloutSyntaxConcealedOutsideReveal: Bool
     var calloutSyntaxStaysConcealedInsideBlock: Bool
+    var calloutVariantAccentColorsResolved: Bool
+    var calloutBackgroundUsesAccentAlpha: Bool
     var calloutRenderPreservesSource: Bool
     var propertiesChromeApplied: Bool
     var propertiesTitleSpacingApplied: Bool
@@ -294,6 +296,11 @@ enum LivePreviewStyleProbe {
                 && (calloutAttributes?[.paragraphStyle] as? NSParagraphStyle)?.headIndent ?? 0 > 0,
             calloutSyntaxConcealedOutsideReveal: hiddenCalloutSyntaxColor == LivePreviewTheme.concealedColor,
             calloutSyntaxStaysConcealedInsideBlock: revealedCalloutSyntaxColor == LivePreviewTheme.concealedColor,
+            calloutVariantAccentColorsResolved: LivePreviewTheme.calloutAccentColor(for: .callout(kind: "warning")) == NSColor.systemOrange
+                && LivePreviewTheme.calloutAccentColor(for: .callout(kind: "success")) == NSColor.systemGreen
+                && LivePreviewTheme.calloutAccentColor(for: .callout(kind: "danger")) == NSColor.systemRed
+                && LivePreviewTheme.calloutAccentColor(for: .callout(kind: "quote")) == NSColor.systemGray,
+            calloutBackgroundUsesAccentAlpha: LivePreviewTheme.calloutBackgroundColor(for: .callout(kind: "warning")) == NSColor.systemOrange.withAlphaComponent(0.12),
             calloutRenderPreservesSource: textView.string.contains("> [!note] Callout body"),
             propertiesChromeApplied: propertyKeyAttributes?[.foregroundColor] as? NSColor == LivePreviewTheme.concealedColor
                 && propertyValueAttributes?[.foregroundColor] as? NSColor == LivePreviewTheme.concealedColor

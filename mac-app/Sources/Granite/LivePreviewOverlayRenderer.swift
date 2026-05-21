@@ -73,6 +73,8 @@ enum LivePreviewOverlayRenderer {
                 if let table = renderBlock.table {
                     drawTableForeground(table, in: textView, dirtyRect: dirtyRect)
                 }
+            case .horizontalRule:
+                drawHorizontalRule(renderBlock.block, in: textView, dirtyRect: dirtyRect)
             default:
                 continue
             }
@@ -302,6 +304,40 @@ enum LivePreviewOverlayRenderer {
                 ).draw(with: cellRect, options: [.usesLineFragmentOrigin, .usesFontLeading])
             }
         }
+    }
+
+    static func shouldDrawHorizontalRule(_ block: LivePreviewBlockSpan, selectedRange: NSRange) -> Bool {
+        guard block.kind == .horizontalRule else {
+            return false
+        }
+        return !block.sourceRange.nsRange.intersectsOrContainsCaret(selectedRange)
+    }
+
+    private static func drawHorizontalRule(
+        _ block: LivePreviewBlockSpan,
+        in textView: NSTextView,
+        dirtyRect: NSRect
+    ) {
+        guard shouldDrawHorizontalRule(block, selectedRange: textView.selectedRange()),
+              let lineRect = unionLineRect(for: block.sourceRange.nsRange, in: textView)
+        else {
+            return
+        }
+
+        let x = lineRect.minX
+        let width = min(760, max(120, textView.bounds.width - x - 36))
+        let y = floor(lineRect.midY) + 0.5
+        let rect = NSRect(x: x, y: y - 1, width: width, height: 2)
+        guard rect.intersects(dirtyRect) else {
+            return
+        }
+
+        let path = NSBezierPath()
+        path.lineWidth = 1
+        LivePreviewTheme.horizontalRuleColor.setStroke()
+        path.move(to: NSPoint(x: x, y: y))
+        path.line(to: NSPoint(x: x + width, y: y))
+        path.stroke()
     }
 
     private struct TableLayout {
@@ -641,5 +677,12 @@ enum LivePreviewOverlayRenderer {
 private extension NSRange {
     func intersects(_ other: NSRange) -> Bool {
         location < other.location + other.length && other.location < location + length
+    }
+
+    func intersectsOrContainsCaret(_ other: NSRange) -> Bool {
+        if other.length == 0 {
+            return other.location >= location && other.location < location + length
+        }
+        return intersects(other)
     }
 }

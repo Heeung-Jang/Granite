@@ -33,6 +33,7 @@ enum LivePreviewTheme {
     static let tableHeaderBackgroundColor = NSColor.controlBackgroundColor
     static let tableCellBackgroundColor = NSColor.textBackgroundColor
     static let tableBorderColor = NSColor.separatorColor
+    static let horizontalRuleColor = NSColor.separatorColor.withAlphaComponent(0.8)
     static let codeColor = NSColor.systemBrown
     static let inlineCodeBackgroundColor = NSColor.controlBackgroundColor
     static let codeBlockBackgroundColor = NSColor.controlBackgroundColor
@@ -180,6 +181,17 @@ enum LivePreviewTheme {
         style.headIndent = 12
         style.paragraphSpacingBefore = 3
         style.paragraphSpacing = 3
+        return style.copy() as! NSParagraphStyle
+    }
+
+    static var horizontalRuleParagraphStyle: NSParagraphStyle {
+        let style = NSMutableParagraphStyle()
+        style.minimumLineHeight = 24
+        style.maximumLineHeight = 24
+        style.firstLineHeadIndent = 0
+        style.headIndent = 0
+        style.paragraphSpacingBefore = 6
+        style.paragraphSpacing = 8
         return style.copy() as! NSParagraphStyle
     }
 

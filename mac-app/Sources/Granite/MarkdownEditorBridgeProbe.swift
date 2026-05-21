@@ -23,6 +23,22 @@ struct MarkdownEditorBridgeProbeReport: Codable, Equatable {
     var tagMarkersConcealed: Bool
     var markerStyleShowsHeadingAndListMarkers: Bool
     var markerStyleCanHideHeadingAndListMarkers: Bool
+    var obsidianHeadingMarkerConcealedOutsideReveal: Bool
+    var obsidianHeadingMarkerRevealedInsideLine: Bool
+    var obsidianListMarkersMutedOutsideReveal: Bool
+    var obsidianTaskCheckboxVisibleOutsideReveal: Bool
+    var obsidianBlockquoteMarkerConcealedOutsideReveal: Bool
+    var obsidianBlockquoteMarkerStaysConcealedInsideBlock: Bool
+    var obsidianCalloutSyntaxConcealedOutsideReveal: Bool
+    var obsidianCalloutSyntaxStaysConcealedInsideBlock: Bool
+    var horizontalRuleSyntaxConcealedOutsideReveal: Bool
+    var horizontalRuleSyntaxRevealedInsideLine: Bool
+    var horizontalRuleParagraphStyleApplied: Bool
+    var horizontalRuleOverlayDrawsOutsideReveal: Bool
+    var horizontalRuleOverlaySuppressedInsideReveal: Bool
+    var horizontalRuleRenderPreservesSource: Bool
+    var markerStyleDefaultIsObsidian: Bool
+    var markerStyleRawValuesRemainCompatible: Bool
     var markedTextRenderDeferred: Bool
     var sourceModeClearsLivePreviewAttributes: Bool
     var sourceEquivalentSelectionText: Bool
@@ -62,6 +78,7 @@ enum MarkdownEditorBridgeProbe {
         let coordinatorProbe = probeCoordinatorBinding()
         let modeProbe = probeModeTransitions()
         let renderProbe = probeLivePreviewRendering()
+        let markerStyleProbe = probeMarkerStyleStorageCompatibility()
         let selectionChangeProbe = probeSelectionChangeDecorationDoesNotReenter()
         let checkboxProbe = probeCheckboxToggle()
         let tableCellProbe = probeTableCellEdit()
@@ -88,6 +105,22 @@ enum MarkdownEditorBridgeProbe {
             tagMarkersConcealed: renderProbe.tagMarkersConcealed,
             markerStyleShowsHeadingAndListMarkers: renderProbe.markerStyleShowsHeadingAndListMarkers,
             markerStyleCanHideHeadingAndListMarkers: renderProbe.markerStyleCanHideHeadingAndListMarkers,
+            obsidianHeadingMarkerConcealedOutsideReveal: renderProbe.obsidianHeadingMarkerConcealedOutsideReveal,
+            obsidianHeadingMarkerRevealedInsideLine: renderProbe.obsidianHeadingMarkerRevealedInsideLine,
+            obsidianListMarkersMutedOutsideReveal: renderProbe.obsidianListMarkersMutedOutsideReveal,
+            obsidianTaskCheckboxVisibleOutsideReveal: renderProbe.obsidianTaskCheckboxVisibleOutsideReveal,
+            obsidianBlockquoteMarkerConcealedOutsideReveal: renderProbe.obsidianBlockquoteMarkerConcealedOutsideReveal,
+            obsidianBlockquoteMarkerStaysConcealedInsideBlock: renderProbe.obsidianBlockquoteMarkerStaysConcealedInsideBlock,
+            obsidianCalloutSyntaxConcealedOutsideReveal: renderProbe.obsidianCalloutSyntaxConcealedOutsideReveal,
+            obsidianCalloutSyntaxStaysConcealedInsideBlock: renderProbe.obsidianCalloutSyntaxStaysConcealedInsideBlock,
+            horizontalRuleSyntaxConcealedOutsideReveal: renderProbe.horizontalRuleSyntaxConcealedOutsideReveal,
+            horizontalRuleSyntaxRevealedInsideLine: renderProbe.horizontalRuleSyntaxRevealedInsideLine,
+            horizontalRuleParagraphStyleApplied: renderProbe.horizontalRuleParagraphStyleApplied,
+            horizontalRuleOverlayDrawsOutsideReveal: renderProbe.horizontalRuleOverlayDrawsOutsideReveal,
+            horizontalRuleOverlaySuppressedInsideReveal: renderProbe.horizontalRuleOverlaySuppressedInsideReveal,
+            horizontalRuleRenderPreservesSource: renderProbe.horizontalRuleRenderPreservesSource,
+            markerStyleDefaultIsObsidian: markerStyleProbe.defaultIsObsidian,
+            markerStyleRawValuesRemainCompatible: markerStyleProbe.rawValuesRemainCompatible,
             markedTextRenderDeferred: renderProbe.markedTextRenderDeferred,
             sourceModeClearsLivePreviewAttributes: renderProbe.sourceModeClearsLivePreviewAttributes,
             sourceEquivalentSelectionText: renderProbe.sourceEquivalentSelectionText,
@@ -108,6 +141,21 @@ enum MarkdownEditorBridgeProbe {
             tableCellEditFailurePreservesBuffer: tableCellProbe.failurePreservesBuffer,
             frontmatterBoundaryDeleteUndoPreservesBuffer: frontmatterBoundaryProbe,
             editorAccessibilityHelpMentionsInteractions: accessibilityProbe
+        )
+    }
+
+    private static func probeMarkerStyleStorageCompatibility() -> (
+        defaultIsObsidian: Bool,
+        rawValuesRemainCompatible: Bool
+    ) {
+        let rawValuesRemainCompatible = LivePreviewMarkerStyle(rawValue: "obsidian") == .obsidian
+            && LivePreviewMarkerStyle(rawValue: "accent") == .accent
+            && LivePreviewMarkerStyle(rawValue: "muted") == .muted
+            && LivePreviewMarkerStyle(rawValue: "hidden") == .hidden
+
+        return (
+            LivePreviewMarkerStyle.defaultValue == .obsidian,
+            rawValuesRemainCompatible
         )
     }
 
@@ -221,6 +269,20 @@ enum MarkdownEditorBridgeProbe {
         tagMarkersConcealed: Bool,
         markerStyleShowsHeadingAndListMarkers: Bool,
         markerStyleCanHideHeadingAndListMarkers: Bool,
+        obsidianHeadingMarkerConcealedOutsideReveal: Bool,
+        obsidianHeadingMarkerRevealedInsideLine: Bool,
+        obsidianListMarkersMutedOutsideReveal: Bool,
+        obsidianTaskCheckboxVisibleOutsideReveal: Bool,
+        obsidianBlockquoteMarkerConcealedOutsideReveal: Bool,
+        obsidianBlockquoteMarkerStaysConcealedInsideBlock: Bool,
+        obsidianCalloutSyntaxConcealedOutsideReveal: Bool,
+        obsidianCalloutSyntaxStaysConcealedInsideBlock: Bool,
+        horizontalRuleSyntaxConcealedOutsideReveal: Bool,
+        horizontalRuleSyntaxRevealedInsideLine: Bool,
+        horizontalRuleParagraphStyleApplied: Bool,
+        horizontalRuleOverlayDrawsOutsideReveal: Bool,
+        horizontalRuleOverlaySuppressedInsideReveal: Bool,
+        horizontalRuleRenderPreservesSource: Bool,
         markedTextRenderDeferred: Bool,
         sourceModeClearsLivePreviewAttributes: Bool,
         sourceEquivalentSelectionText: Bool,
@@ -378,6 +440,7 @@ enum MarkdownEditorBridgeProbe {
             && foregroundColor(in: safeTextView, text: safeText, marker: "https://obsidian.md") == LivePreviewTheme.concealedColor
         let embedPreviewMapUpdatePreservesSelection = probeEmbedPreviewMapUpdatePreservesSelection()
         let markerStyleProbe = probeMarkerStyleRendering()
+        let horizontalRuleProbe = probeHorizontalRuleRendering()
 
         return (
             hiddenResult.changedRangeCount > 0 && hiddenResult.changedUTF16Length > 0,
@@ -390,6 +453,20 @@ enum MarkdownEditorBridgeProbe {
             hiddenTagMarkerColor == LivePreviewTheme.concealedColor,
             markerStyleProbe.showsMarkers,
             markerStyleProbe.hidesMarkers,
+            markerStyleProbe.obsidianHeadingConcealed,
+            markerStyleProbe.obsidianHeadingRevealed,
+            markerStyleProbe.obsidianListMarkersMuted,
+            markerStyleProbe.obsidianTaskCheckboxVisible,
+            markerStyleProbe.obsidianBlockquoteConcealed,
+            markerStyleProbe.obsidianBlockquoteConcealedInsideBlock,
+            markerStyleProbe.obsidianCalloutConcealed,
+            markerStyleProbe.obsidianCalloutConcealedInsideBlock,
+            horizontalRuleProbe.syntaxConcealed,
+            horizontalRuleProbe.syntaxRevealed,
+            horizontalRuleProbe.paragraphStyleApplied,
+            horizontalRuleProbe.overlayDrawsOutsideReveal,
+            horizontalRuleProbe.overlaySuppressedInsideReveal,
+            horizontalRuleProbe.sourcePreserved,
             markedTextWasActive && markedResult.mode == "marked-text-deferred",
             sourceModeClearsLivePreviewAttributes,
             selectedSource == "Heading",
@@ -402,8 +479,74 @@ enum MarkdownEditorBridgeProbe {
         )
     }
 
-    private static func probeMarkerStyleRendering() -> (showsMarkers: Bool, hidesMarkers: Bool) {
-        let text = "# Heading\n- Bullet\n- [x] Done\n"
+    private static func probeHorizontalRuleRendering() -> (
+        syntaxConcealed: Bool,
+        syntaxRevealed: Bool,
+        paragraphStyleApplied: Bool,
+        overlayDrawsOutsideReveal: Bool,
+        overlaySuppressedInsideReveal: Bool,
+        sourcePreserved: Bool
+    ) {
+        let text = "Before\n---\nAfter\n"
+        let endSelection = NSRange(location: (text as NSString).length, length: 0)
+        let textView = MarkdownEditorTextViewFactory.makeTextView()
+        textView.string = text
+        textView.setSelectedRange(endSelection)
+        MarkdownVisibleRangeDecorator.decorateVisibleRange(
+            in: textView,
+            livePreviewMode: .livePreview,
+            revealRange: textView.selectedRange(),
+            markerStyle: .obsidian
+        )
+
+        let ruleOffset = (text as NSString).range(of: "---").location
+        let hiddenColor = foregroundColor(in: textView, text: text, marker: "---")
+        let paragraphStyle = textView.textStorage?.attribute(
+            .paragraphStyle,
+            at: ruleOffset,
+            effectiveRange: nil
+        ) as? NSParagraphStyle
+        let parsedRule = LivePreviewParser.parse(text).blocks.first { $0.kind == .horizontalRule }
+        let overlayDrawsOutsideReveal = parsedRule.map {
+            LivePreviewOverlayRenderer.shouldDrawHorizontalRule($0, selectedRange: endSelection)
+        } ?? false
+
+        let revealSelection = NSRange(location: ruleOffset, length: 0)
+        textView.setSelectedRange(revealSelection)
+        MarkdownVisibleRangeDecorator.decorateVisibleRange(
+            in: textView,
+            livePreviewMode: .livePreview,
+            revealRange: textView.selectedRange(),
+            markerStyle: .obsidian
+        )
+        let revealedColor = foregroundColor(in: textView, text: text, marker: "---")
+        let overlaySuppressedInsideReveal = parsedRule.map {
+            !LivePreviewOverlayRenderer.shouldDrawHorizontalRule($0, selectedRange: revealSelection)
+        } ?? false
+
+        return (
+            hiddenColor == LivePreviewTheme.concealedColor,
+            revealedColor != LivePreviewTheme.concealedColor,
+            paragraphStyle?.minimumLineHeight == LivePreviewTheme.horizontalRuleParagraphStyle.minimumLineHeight,
+            overlayDrawsOutsideReveal,
+            overlaySuppressedInsideReveal,
+            textView.string == text
+        )
+    }
+
+    private static func probeMarkerStyleRendering() -> (
+        showsMarkers: Bool,
+        hidesMarkers: Bool,
+        obsidianHeadingConcealed: Bool,
+        obsidianHeadingRevealed: Bool,
+        obsidianListMarkersMuted: Bool,
+        obsidianTaskCheckboxVisible: Bool,
+        obsidianBlockquoteConcealed: Bool,
+        obsidianBlockquoteConcealedInsideBlock: Bool,
+        obsidianCalloutConcealed: Bool,
+        obsidianCalloutConcealedInsideBlock: Bool
+    ) {
+        let text = "# Heading\n- Bullet\n- [x] Done\n> Quote\n> [!note] Callout\n"
         let endSelection = NSRange(location: (text as NSString).length, length: 0)
 
         let visibleTextView = MarkdownEditorTextViewFactory.makeTextView()
@@ -434,7 +577,96 @@ enum MarkdownEditorBridgeProbe {
             && foregroundColor(in: hiddenTextView, text: text, marker: "- [x]") == LivePreviewTheme.concealedColor
             && foregroundColor(in: hiddenTextView, text: text, marker: "[x]") != LivePreviewTheme.concealedColor
 
-        return (showsMarkers, hidesMarkers)
+        let obsidianTextView = MarkdownEditorTextViewFactory.makeTextView()
+        obsidianTextView.string = text
+        obsidianTextView.setSelectedRange(endSelection)
+        MarkdownVisibleRangeDecorator.decorateVisibleRange(
+            in: obsidianTextView,
+            livePreviewMode: .livePreview,
+            revealRange: obsidianTextView.selectedRange(),
+            markerStyle: .obsidian
+        )
+        let obsidianHeadingConcealed = foregroundColor(
+            in: obsidianTextView,
+            text: text,
+            marker: "# Heading"
+        ) == LivePreviewTheme.concealedColor
+        let obsidianListMarkersMuted = foregroundColor(
+            in: obsidianTextView,
+            text: text,
+            marker: "- Bullet"
+        ) == LivePreviewTheme.secondaryTextColor
+            && foregroundColor(in: obsidianTextView, text: text, marker: "- [x]") == LivePreviewTheme.secondaryTextColor
+        let obsidianTaskCheckboxVisible = foregroundColor(
+            in: obsidianTextView,
+            text: text,
+            marker: "[x]"
+        ) != LivePreviewTheme.concealedColor
+        let obsidianBlockquoteConcealed = foregroundColor(
+            in: obsidianTextView,
+            text: text,
+            marker: "> Quote"
+        ) == LivePreviewTheme.concealedColor
+        let obsidianCalloutConcealed = foregroundColor(
+            in: obsidianTextView,
+            text: text,
+            marker: "> [!note]"
+        ) == LivePreviewTheme.concealedColor
+
+        let headingOffset = (text as NSString).range(of: "Heading").location
+        obsidianTextView.setSelectedRange(NSRange(location: headingOffset, length: 0))
+        MarkdownVisibleRangeDecorator.decorateVisibleRange(
+            in: obsidianTextView,
+            livePreviewMode: .livePreview,
+            revealRange: obsidianTextView.selectedRange(),
+            markerStyle: .obsidian
+        )
+        let obsidianHeadingRevealed = foregroundColor(
+            in: obsidianTextView,
+            text: text,
+            marker: "# Heading"
+        ) != LivePreviewTheme.concealedColor
+
+        let quoteOffset = (text as NSString).range(of: "Quote").location
+        obsidianTextView.setSelectedRange(NSRange(location: quoteOffset, length: 0))
+        MarkdownVisibleRangeDecorator.decorateVisibleRange(
+            in: obsidianTextView,
+            livePreviewMode: .livePreview,
+            revealRange: obsidianTextView.selectedRange(),
+            markerStyle: .obsidian
+        )
+        let obsidianBlockquoteConcealedInsideBlock = foregroundColor(
+            in: obsidianTextView,
+            text: text,
+            marker: "> Quote"
+        ) == LivePreviewTheme.concealedColor
+
+        let calloutOffset = (text as NSString).range(of: "Callout").location
+        obsidianTextView.setSelectedRange(NSRange(location: calloutOffset, length: 0))
+        MarkdownVisibleRangeDecorator.decorateVisibleRange(
+            in: obsidianTextView,
+            livePreviewMode: .livePreview,
+            revealRange: obsidianTextView.selectedRange(),
+            markerStyle: .obsidian
+        )
+        let obsidianCalloutConcealedInsideBlock = foregroundColor(
+            in: obsidianTextView,
+            text: text,
+            marker: "> [!note]"
+        ) == LivePreviewTheme.concealedColor
+
+        return (
+            showsMarkers,
+            hidesMarkers,
+            obsidianHeadingConcealed,
+            obsidianHeadingRevealed,
+            obsidianListMarkersMuted,
+            obsidianTaskCheckboxVisible,
+            obsidianBlockquoteConcealed,
+            obsidianBlockquoteConcealedInsideBlock,
+            obsidianCalloutConcealed,
+            obsidianCalloutConcealedInsideBlock
+        )
     }
 
     private static func foregroundColor(in textView: NSTextView, text: String, marker: String) -> NSColor? {
