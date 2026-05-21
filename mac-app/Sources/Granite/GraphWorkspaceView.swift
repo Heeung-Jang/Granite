@@ -9,9 +9,7 @@ struct GraphWorkspaceView: View {
 
     @State private var workspaceModel = GraphWorkspaceModel()
     @State private var settings = GraphSettings()
-    @State private var interaction = GraphInteractionState(
-        selectedNodeID: GraphCanvasRendererSmokeFixture.defaultSelectedNodeID
-    )
+    @State private var interaction = GraphInteractionState()
     @State private var loadedLayout: GraphRendererSnapshot?
     @State private var loadedHitTestIndex: GraphHitTestIndex?
     @State private var graphBannerText: String?
@@ -795,14 +793,18 @@ private struct GraphSettingsPanel: View {
                 Text("Node size")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
-                Slider(value: $settings.presentation.nodeSize, in: 0.6...2.4, step: 0.1)
+                Slider(value: $settings.presentation.nodeSize, in: 0.6...1.8, step: 0.1)
             }
 
             VStack(alignment: .leading, spacing: 6) {
                 Text("Link thickness")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
-                Slider(value: $settings.presentation.linkThickness, in: 0.5...3.0, step: 0.1)
+                Slider(
+                    value: $settings.presentation.linkThickness,
+                    in: GraphVisualMetrics.minimumLinkThickness...1.8,
+                    step: 0.05
+                )
             }
 
             if parityControlsEnabled {

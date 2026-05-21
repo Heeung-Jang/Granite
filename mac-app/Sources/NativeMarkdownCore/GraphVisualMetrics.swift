@@ -7,6 +7,10 @@ public enum GraphVisualMetrics {
     public static let minimumLinkThickness = 0.35
     public static let activeLinkThicknessBonus = 0.8
 
+    public static let resolvedNodeAlpha = 0.7
+    public static let unresolvedNodeAlpha = 0.36
+    public static let activeNodeAlpha = 0.95
+
     public static let resolvedEdgeAlpha = 0.16
     public static let unresolvedEdgeAlpha = 0.08
     public static let activeEdgeAlpha = 0.38
@@ -23,6 +27,13 @@ public enum GraphVisualMetrics {
 
     public static func drawRadius(forNodeRadius nodeRadius: Double, nodeSize: Double) -> Double {
         max(minimumDrawRadius, nodeRadius * nodeSize)
+    }
+
+    public static func linkThickness(base: Double, isActive: Bool) -> Double {
+        max(
+            minimumLinkThickness,
+            base + (isActive ? activeLinkThicknessBonus : 0)
+        )
     }
 
     public static func hitRadius(

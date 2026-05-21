@@ -146,27 +146,37 @@ struct GraphCanvasRendererView: View {
         paths: GraphCanvasRenderPaths,
         context: inout GraphicsContext
     ) {
-        let zoomScale = max(0.01, input.viewport.zoomScale)
-
         context.stroke(
             paths.resolvedEdges,
-            with: .color(Color.secondary.opacity(0.22)),
-            lineWidth: max(0.5, input.presentation.linkThickness) / zoomScale
+            with: .color(Color.secondary.opacity(GraphVisualMetrics.resolvedEdgeAlpha)),
+            lineWidth: GraphVisualMetrics.linkThickness(
+                base: input.presentation.linkThickness,
+                isActive: false
+            )
         )
         context.stroke(
             paths.unresolvedEdges,
-            with: .color(Color.secondary.opacity(0.12)),
-            lineWidth: max(0.5, input.presentation.linkThickness) / zoomScale
+            with: .color(Color.secondary.opacity(GraphVisualMetrics.unresolvedEdgeAlpha)),
+            lineWidth: GraphVisualMetrics.linkThickness(
+                base: input.presentation.linkThickness,
+                isActive: false
+            )
         )
         context.stroke(
             paths.activeEdges,
-            with: .color(Color.accentColor.opacity(0.55)),
-            lineWidth: max(1.5, input.presentation.linkThickness + 1.0) / zoomScale
+            with: .color(Color.green.opacity(GraphVisualMetrics.activeEdgeAlpha)),
+            lineWidth: GraphVisualMetrics.linkThickness(
+                base: input.presentation.linkThickness,
+                isActive: true
+            )
         )
         context.stroke(
             paths.arrowHeads,
-            with: .color(Color.secondary.opacity(0.32)),
-            lineWidth: max(0.5, input.presentation.linkThickness) / zoomScale
+            with: .color(Color.secondary.opacity(GraphVisualMetrics.resolvedEdgeAlpha)),
+            lineWidth: GraphVisualMetrics.linkThickness(
+                base: input.presentation.linkThickness,
+                isActive: false
+            )
         )
     }
 
@@ -174,14 +184,14 @@ struct GraphCanvasRendererView: View {
         paths: GraphCanvasRenderPaths,
         context: inout GraphicsContext
     ) {
-        context.fill(paths.unresolvedNodes, with: .color(Color.secondary.opacity(0.45)))
-        context.fill(paths.resolvedNodes, with: .color(Color.primary.opacity(0.7)))
+        context.fill(paths.unresolvedNodes, with: .color(Color.secondary.opacity(GraphVisualMetrics.unresolvedNodeAlpha)))
+        context.fill(paths.resolvedNodes, with: .color(Color.primary.opacity(GraphVisualMetrics.resolvedNodeAlpha)))
         for (colorHex, path) in paths.groupNodes {
             context.fill(path, with: .color(Color(graphHex: colorHex)))
         }
         context.fill(paths.searchNodes, with: .color(.green))
-        context.fill(paths.hoveredNodes, with: .color(Color.accentColor.opacity(0.85)))
-        context.fill(paths.selectedNodes, with: .color(.accentColor))
+        context.fill(paths.hoveredNodes, with: .color(Color.green.opacity(GraphVisualMetrics.activeNodeAlpha)))
+        context.fill(paths.selectedNodes, with: .color(Color.green))
     }
 
     private func drawLabels(

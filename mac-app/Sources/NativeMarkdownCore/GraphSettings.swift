@@ -51,7 +51,7 @@ public struct GraphPresentationSettings: Equatable, Sendable {
         labelVisibility: GraphLabelVisibility = .automatic,
         showArrows: Bool = false,
         nodeSize: Double = 1.0,
-        linkThickness: Double = 1.0,
+        linkThickness: Double = GraphVisualMetrics.defaultLinkThickness,
         force: GraphForceSettings = GraphForceSettings()
     ) {
         self.labelVisibility = labelVisibility

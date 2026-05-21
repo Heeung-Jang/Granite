@@ -347,7 +347,6 @@ private final class GraphMetalRenderer {
     private var nodeBuffer: (any MTLBuffer)?
     private var edgeVertexCount = 0
     private var nodeVertexCount = 0
-    private var edgePrimitiveType: MTLPrimitiveType = .line
 
     init(device: any MTLDevice) throws {
         self.device = device
@@ -383,46 +382,35 @@ private final class GraphMetalRenderer {
             return
         }
 
-        let usesExpandedEdges = input.presentation.showArrows
-            || input.presentation.linkThickness > 1.0
         var edgeVertices: [GraphMetalVertex] = []
-        edgeVertices.reserveCapacity(input.layout.edges.count * (usesExpandedEdges ? 9 : 2))
+        edgeVertices.reserveCapacity(input.layout.edges.count * (input.presentation.showArrows ? 9 : 6))
         for edge in input.layout.edges {
             guard input.layout.nodes.indices.contains(edge.sourceIndex),
                   input.layout.nodes.indices.contains(edge.targetIndex)
             else {
                 continue
             }
+            let isActiveEdge = edgeIsActive(edge, input: input)
             let color = edgeColor(edge, input: input)
             let source = metalPoint(input.layout.nodes[edge.sourceIndex].position)
             let target = metalPoint(input.layout.nodes[edge.targetIndex].position)
-            if usesExpandedEdges {
-                appendThickEdgeVertices(
+            appendThickEdgeVertices(
+                from: source,
+                to: target,
+                color: color,
+                thickness: Float(GraphVisualMetrics.linkThickness(
+                    base: input.presentation.linkThickness,
+                    isActive: isActiveEdge
+                )),
+                vertices: &edgeVertices
+            )
+            if input.presentation.showArrows {
+                appendArrowHeadVertices(
                     from: source,
                     to: target,
                     color: color,
-                    thickness: Float(max(0.5, input.presentation.linkThickness)),
                     vertices: &edgeVertices
                 )
-                if input.presentation.showArrows {
-                    appendArrowHeadVertices(
-                        from: source,
-                        to: target,
-                        color: color,
-                        vertices: &edgeVertices
-                    )
-                }
-            } else {
-                edgeVertices.append(GraphMetalVertex(
-                    position: source,
-                    color: color,
-                    radius: 1
-                ))
-                edgeVertices.append(GraphMetalVertex(
-                    position: target,
-                    color: color,
-                    radius: 1
-                ))
             }
         }
 
@@ -443,7 +431,6 @@ private final class GraphMetalRenderer {
         nodeBuffer = Self.makeBuffer(device: device, vertices: nodeVertices)
         edgeVertexCount = edgeVertices.count
         nodeVertexCount = nodeVertices.count
-        edgePrimitiveType = usesExpandedEdges ? .triangle : .line
         cachedIdentity = identity
     }
 
@@ -489,7 +476,7 @@ private final class GraphMetalRenderer {
                 index: 1
             )
             encoder.drawPrimitives(
-                type: edgePrimitiveType,
+                type: .triangle,
                 vertexStart: 0,
                 vertexCount: edgeVertexCount
             )
@@ -672,7 +659,7 @@ private final class GraphMetalRenderer {
         let delta = target - source
         let length = max(0.001, sqrt(delta.x * delta.x + delta.y * delta.y))
         let unit = delta / length
-        let normal = SIMD2<Float>(-unit.y, unit.x) * max(0.25, thickness * 0.5)
+        let normal = SIMD2<Float>(-unit.y, unit.x) * (thickness * 0.5)
         let sourceLeft = source + normal
         let sourceRight = source - normal
         let targetLeft = target + normal
@@ -766,14 +753,14 @@ private struct GraphMetalUniforms {
 }
 
 private enum GraphMetalColor {
-    static let resolvedNode = SIMD4<Float>(0.18, 0.18, 0.18, 0.72)
-    static let unresolvedNode = SIMD4<Float>(0.42, 0.42, 0.42, 0.45)
+    static let resolvedNode = SIMD4<Float>(0.18, 0.18, 0.18, Float(GraphVisualMetrics.resolvedNodeAlpha))
+    static let unresolvedNode = SIMD4<Float>(0.42, 0.42, 0.42, Float(GraphVisualMetrics.unresolvedNodeAlpha))
     static let searchNode = SIMD4<Float>(0.07, 0.72, 0.28, 1.0)
-    static let hoveredNode = SIMD4<Float>(0.0, 0.48, 1.0, 0.85)
-    static let selectedNode = SIMD4<Float>(0.0, 0.48, 1.0, 1.0)
-    static let resolvedEdge = SIMD4<Float>(0.25, 0.25, 0.25, 0.22)
-    static let unresolvedEdge = SIMD4<Float>(0.25, 0.25, 0.25, 0.12)
-    static let activeEdge = SIMD4<Float>(0.0, 0.48, 1.0, 0.55)
+    static let hoveredNode = SIMD4<Float>(0.07, 0.72, 0.28, Float(GraphVisualMetrics.activeNodeAlpha))
+    static let selectedNode = SIMD4<Float>(0.07, 0.72, 0.28, 1.0)
+    static let resolvedEdge = SIMD4<Float>(0.25, 0.25, 0.25, Float(GraphVisualMetrics.resolvedEdgeAlpha))
+    static let unresolvedEdge = SIMD4<Float>(0.25, 0.25, 0.25, Float(GraphVisualMetrics.unresolvedEdgeAlpha))
+    static let activeEdge = SIMD4<Float>(0.07, 0.72, 0.28, Float(GraphVisualMetrics.activeEdgeAlpha))
 
     static func clearColor() -> MTLClearColor {
         let color = NSColor.textBackgroundColor.usingColorSpace(.deviceRGB)
