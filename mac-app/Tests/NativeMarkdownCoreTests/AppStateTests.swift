@@ -207,16 +207,55 @@ func indexDirectoryResolverCreatesOnlyAppOwnedDirectories() throws {
 
     #expect(location.rootDirectory.path.hasPrefix(supportRoot.path))
     #expect(location.dataDirectory.path.hasPrefix(supportRoot.path))
+    #expect(location.metadataStoreFile.path == location.dataDirectory.appendingPathComponent("metadata.sqlite").path)
+    #expect(location.tantivyIndexDirectory.path == location.dataDirectory.appendingPathComponent("tantivy").path)
     #expect(location.indexingQueueFile.path.hasPrefix(location.dataDirectory.path))
     #expect(location.rebuildDirectory.path.hasPrefix(supportRoot.path))
     #expect(location.lockFile.path.hasPrefix(supportRoot.path))
     #expect(FileManager.default.fileExists(atPath: location.dataDirectory.path))
     #expect(FileManager.default.fileExists(atPath: location.rebuildDirectory.path))
+    #expect(!FileManager.default.fileExists(atPath: location.metadataStoreFile.path))
+    #expect(!FileManager.default.fileExists(atPath: location.tantivyIndexDirectory.path))
     #expect(!FileManager.default.fileExists(atPath: location.lockFile.path))
     #expect(try FileManager.default.contentsOfDirectory(atPath: vaultURL.path).isEmpty)
     #expect(!location.rootDirectory.path.contains("schema/v1"))
     #expect(!location.rootDirectory.path.contains("sqlite-fts/v1"))
     #expect(!location.rootDirectory.path.contains("unicode61 default"))
+}
+
+@Test
+func indexConfigurationDefaultsMatchSelectedReadBackend() {
+    let configuration = IndexConfiguration()
+
+    #expect(configuration.schemaVersion == "metadata-v1")
+    #expect(configuration.backendVersion == "sqlite+tantivy")
+    #expect(configuration.tokenizerConfig == "tantivy")
+}
+
+@Test
+func indexDirectoryResolverKeepsLegacyConfigurationExplicit() throws {
+    let temporaryRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let vaultURL = temporaryRoot.appendingPathComponent("vault", isDirectory: true)
+    let supportRoot = temporaryRoot.appendingPathComponent("support", isDirectory: true)
+    try FileManager.default.createDirectory(at: vaultURL, withIntermediateDirectories: true)
+
+    let legacyConfiguration = IndexConfiguration(
+        schemaVersion: "schema-v1",
+        backendVersion: "backend-unselected-v1",
+        tokenizerConfig: "tokenizer-default-v1"
+    )
+    let resolver = AppOwnedIndexDirectoryResolver(
+        applicationSupportRoot: supportRoot,
+        configuration: legacyConfiguration
+    )
+
+    let location = try resolver.prepareIndexLocation(forVaultAt: vaultURL)
+
+    #expect(location.configuration == legacyConfiguration)
+    #expect(location.rootDirectory.path.contains("schema-v1"))
+    #expect(location.rootDirectory.path.contains("backend-unselected-v1"))
+    #expect(location.rootDirectory.path.contains("tokenizer-default-v1"))
 }
 
 @Test
