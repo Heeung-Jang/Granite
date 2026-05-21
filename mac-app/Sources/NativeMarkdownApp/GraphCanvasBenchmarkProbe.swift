@@ -4,7 +4,16 @@ import Foundation
 import NativeMarkdownCore
 import SwiftUI
 
+enum GraphBenchmarkCodeRevision {
+    static var current: String {
+        let revision = ProcessInfo.processInfo.environment["GRAPH_BENCHMARK_CODE_REVISION"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return revision.isEmpty ? "unknown" : revision
+    }
+}
+
 struct GraphRendererBenchmarkResult: Codable {
+    let codeRevision: String
     let rendererKind: String
     let nodeCount: Int
     let edgeCount: Int
@@ -346,6 +355,7 @@ private final class GraphRendererBenchmarkDriver {
         let interactionFrameDurations = Array(frameDurations.dropFirst())
         let interactionDrawDurations = Array(drawDurations.dropFirst())
         return GraphRendererBenchmarkResult(
+            codeRevision: GraphBenchmarkCodeRevision.current,
             rendererKind: rendererKind.rawValue,
             nodeCount: nodeCount,
             edgeCount: edgeCount,

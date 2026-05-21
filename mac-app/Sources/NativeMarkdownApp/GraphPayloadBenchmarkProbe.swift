@@ -3,6 +3,7 @@ import Foundation
 import NativeMarkdownCore
 
 struct GraphPayloadBenchmarkResult: Codable {
+    let codeRevision: String
     let nodeCount: Int
     let edgeCount: Int
     let encodedPayloadBytes: Int
@@ -52,6 +53,7 @@ enum GraphPayloadBenchmarkProbe {
         let totalDuration = totalTimer.elapsedMilliseconds()
 
         return GraphPayloadBenchmarkResult(
+            codeRevision: GraphBenchmarkCodeRevision.current,
             nodeCount: layout.nodes.count,
             edgeCount: layout.edges.count,
             encodedPayloadBytes: payloadData.count,
