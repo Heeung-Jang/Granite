@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import NativeMarkdownCore
 
@@ -28,6 +29,20 @@ func graphLayoutComponentsSeparateClustersAndOrphans() {
     #expect(layout.components.map(\.isOrphanRing) == [false, false, true])
     #expect(abs(centerX(layout, indexes: [0, 1]) - centerX(layout, indexes: [2, 3])) > 300)
     #expect(abs(layout.nodes[4].position.x) > 600 || abs(layout.nodes[4].position.y) > 600)
+}
+
+@Test
+func graphLayoutMapperPropagatesCancellation() {
+    var checks = 0
+
+    #expect(throws: CancellationError.self) {
+        _ = try GraphLayoutMapper.map(largeLayoutFixtureSnapshot(nodeCount: 3_000)) {
+            checks += 1
+            if checks == 2 {
+                throw CancellationError()
+            }
+        }
+    }
 }
 
 @Test
@@ -188,6 +203,20 @@ private func layoutFixtureSnapshot(
                 weight: 1
             )
         ]
+    )
+}
+
+private func largeLayoutFixtureSnapshot(nodeCount: Int) -> WholeVaultGraphSnapshot {
+    WholeVaultGraphSnapshot(
+        requestID: 1,
+        generation: 9,
+        partialReasons: [],
+        nodeCountTotal: nodeCount,
+        edgeCountTotal: 0,
+        nodes: (0..<nodeCount).map { index in
+            layoutNode("file:\(index)", degree: 0)
+        },
+        edges: []
     )
 }
 

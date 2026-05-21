@@ -12,11 +12,17 @@ struct GraphWorkspaceView: View {
     @State private var interaction = GraphInteractionState(
         selectedNodeID: GraphCanvasRendererSmokeFixture.defaultSelectedNodeID
     )
+    @State private var loadedLayout: GraphRendererSnapshot?
+    @State private var loadedHitTestIndex: GraphHitTestIndex?
+    @State private var graphBannerText: String?
+    @State private var pendingFirstRender: PendingGraphFirstRender?
+    @State private var nextGraphRequestID: UInt64 = 1
     @State private var searchText = ""
     @State private var showsSettings = false
     @State private var viewport = GraphViewport()
     @FocusState private var graphSurfaceFocused: Bool
 
+    private let graphClient = EngineGraphClient()
     private let enablesParityControls = false
 
     var body: some View {
@@ -43,6 +49,12 @@ struct GraphWorkspaceView: View {
         .background(ObsidianUI.editorBackground)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Graph view")
+        .task(id: graphLoadKey) {
+            await loadGraphIfNeeded()
+        }
+        .onDisappear {
+            cancelPendingFirstRender()
+        }
     }
 
     private var toolbar: some View {
@@ -92,77 +104,95 @@ struct GraphWorkspaceView: View {
     private var graphContent: some View {
         switch vaultSelection {
         case .selected:
-            switch validatedRendererInput {
-            case .ready(let input):
-                VStack(spacing: 0) {
-                    GraphCanvasRendererView(
-                        input: input,
-                        viewport: $viewport,
-                        callbacks: GraphRendererCallbacks(
-                            didCompleteFirstDraw: { metrics in
-                                AppTelemetry.graphDrawCompleted(metrics)
-                            }
-                        ),
-                        hitTestIndex: GraphCanvasRendererSmokeFixture.hitTestIndex,
-                        onHoverNode: { nodeID in
-                            interaction.hover(nodeID)
-                        },
-                        onSelectNode: { nodeID in
-                            interaction.select(nodeID)
-                        },
-                        onOpenNode: { nodeID in
-                            openNode(nodeID, in: input)
+            if let loadedLayout, let loadedHitTestIndex {
+                switch validatedRendererInput(layout: loadedLayout) {
+                case .ready(let input):
+                    VStack(spacing: 0) {
+                        if let graphBannerText {
+                            GraphStateBanner(text: graphBannerText)
+
+                            Divider()
                         }
-                    )
-                    .focused($graphSurfaceFocused)
-                    .onAppear {
-                        graphSurfaceFocused = true
-                        workspaceModel.applyStableGraph(GraphStableGraphSummary(
-                            generation: input.layout.generation,
-                            nodeCount: input.layout.nodes.count,
-                            edgeCount: input.layout.edges.count
-                        ))
-                    }
-                    .onMoveCommand { direction in
-                        panGraph(direction)
-                    }
-                    .onKeyPress(.return) {
-                        openSelectedNode(in: input)
-                    }
-                    .onKeyPress("+") {
-                        zoom(by: 1.15)
-                        return .handled
-                    }
-                    .onKeyPress("-") {
-                        zoom(by: 0.85)
-                        return .handled
-                    }
-                    .onExitCommand {
-                        interaction.hover(nil)
-                        interaction.clearSelection()
-                    }
 
-                    if showsKeyboardResults(for: input) {
-                        Divider()
-
-                        GraphKeyboardResultsList(
-                            nodes: keyboardResultNodes(for: input),
-                            searchIsActive: searchIsActive,
-                            selectedNodeID: interaction.selectedNodeID,
-                            selectNode: { nodeID in
+                        GraphCanvasRendererView(
+                            input: input,
+                            viewport: $viewport,
+                            callbacks: GraphRendererCallbacks(
+                                didCompleteFirstDraw: { metrics in
+                                    Task { @MainActor in
+                                        handleFirstDraw(
+                                            metrics,
+                                            requestID: input.layout.requestID
+                                        )
+                                    }
+                                }
+                            ),
+                            hitTestIndex: loadedHitTestIndex,
+                            onHoverNode: { nodeID in
+                                interaction.hover(nodeID)
+                            },
+                            onSelectNode: { nodeID in
                                 interaction.select(nodeID)
                             },
-                            openNode: { nodeID in
+                            onOpenNode: { nodeID in
                                 openNode(nodeID, in: input)
                             }
                         )
+                        .focused($graphSurfaceFocused)
+                        .onAppear {
+                            graphSurfaceFocused = true
+                            workspaceModel.applyStableGraph(GraphStableGraphSummary(
+                                generation: input.layout.generation,
+                                nodeCount: input.layout.nodes.count,
+                                edgeCount: input.layout.edges.count
+                            ))
+                        }
+                        .onMoveCommand { direction in
+                            panGraph(direction)
+                        }
+                        .onKeyPress(.return) {
+                            openSelectedNode(in: input)
+                        }
+                        .onKeyPress("+") {
+                            zoom(by: 1.15)
+                            return .handled
+                        }
+                        .onKeyPress("-") {
+                            zoom(by: 0.85)
+                            return .handled
+                        }
+                        .onExitCommand {
+                            interaction.hover(nil)
+                            interaction.clearSelection()
+                        }
+
+                        if showsKeyboardResults(for: input) {
+                            Divider()
+
+                            GraphKeyboardResultsList(
+                                nodes: keyboardResultNodes(for: input),
+                                searchIsActive: searchIsActive,
+                                selectedNodeID: interaction.selectedNodeID,
+                                selectNode: { nodeID in
+                                    interaction.select(nodeID)
+                                },
+                                openNode: { nodeID in
+                                    openNode(nodeID, in: input)
+                                }
+                            )
+                        }
                     }
+                case .failed(let error):
+                    rendererFailureView(error)
+                        .onAppear {
+                            workspaceModel.fail(.rendererFailed)
+                        }
                 }
-            case .failed(let error):
-                rendererFailureView(error)
-                    .onAppear {
-                        workspaceModel.fail(.rendererFailed)
-                    }
+            } else {
+                graphStatusPlaceholder(
+                    title: graphStatusTitle,
+                    detail: graphStatusDetail
+                )
             }
         case .noVault:
             graphStatusPlaceholder(title: "Graph view", detail: "No vault open")
@@ -195,13 +225,17 @@ struct GraphWorkspaceView: View {
         .accessibilityLabel("Graph view")
     }
 
-    private var validatedRendererInput: RendererInputState {
-        let input = GraphCanvasRendererSmokeFixture.input(
+    private func validatedRendererInput(layout: GraphRendererSnapshot) -> RendererInputState {
+        let input = GraphRendererInput(
+            layout: layout,
             viewport: viewport,
             presentation: settings.presentation,
-            searchText: searchText,
             hoveredNodeID: interaction.hoveredNodeID,
-            selectedNodeID: interaction.selectedNodeID
+            selectedNodeID: interaction.selectedNodeID,
+            searchMatchedNodeIDs: GraphSearchMatcher.matchingNodeIDs(
+                in: layout,
+                query: searchText
+            )
         )
 
         do {
@@ -212,6 +246,211 @@ struct GraphWorkspaceView: View {
         } catch {
             return .failed(.edgeEndpointOutOfBounds)
         }
+    }
+
+    @MainActor
+    private func loadGraphIfNeeded() async {
+        guard case .selected = vaultSelection else {
+            cancelPendingFirstRender()
+            loadedLayout = nil
+            loadedHitTestIndex = nil
+            graphBannerText = nil
+            workspaceModel.clear(.noVault)
+            return
+        }
+
+        guard let metadataURL = appState.indexLocation?.metadataFile,
+              FileManager.default.fileExists(atPath: metadataURL.path)
+        else {
+            cancelPendingFirstRender()
+            loadedLayout = nil
+            loadedHitTestIndex = nil
+            graphBannerText = nil
+            workspaceModel.clear(.missingIndex)
+            return
+        }
+
+        cancelPendingFirstRender()
+        let requestID = nextGraphRequestID
+        nextGraphRequestID += 1
+        let totalTimer = AppTelemetryTimer()
+        let loadTimer = AppTelemetryTimer()
+        let request = WholeVaultGraphRequest(
+            requestID: requestID,
+            includeUnresolved: settings.semantic.includeUnresolved,
+            includeOrphans: settings.semantic.includeOrphans
+        )
+        let totalSignpost = AppTelemetry.beginGraphStage(.totalFirstRender)
+        var shouldEndTotalSignpost = true
+        defer {
+            if shouldEndTotalSignpost {
+                AppTelemetry.endGraphStage(totalSignpost)
+            }
+        }
+
+        workspaceModel.beginRecompute()
+        if loadedLayout != nil {
+            graphBannerText = "Refreshing graph"
+        }
+
+        do {
+            let payload = try await graphClient.loadSnapshot(
+                metadataURL: metadataURL,
+                request: request
+            )
+            let clientDuration = loadTimer.elapsedMilliseconds()
+            AppTelemetry.graphStageCompleted(
+                stage: .snapshot,
+                state: payload.state.telemetryState,
+                nodeCount: payload.snapshot.nodeCountTotal,
+                edgeCount: payload.snapshot.edgeCountTotal,
+                durationMilliseconds: payload.metrics.snapshotDurationMilliseconds
+            )
+            AppTelemetry.graphStageCompleted(
+                stage: .decode,
+                state: payload.state.telemetryState,
+                nodeCount: payload.snapshot.nodes.count,
+                edgeCount: payload.snapshot.edges.count,
+                durationMilliseconds: max(
+                    0,
+                    clientDuration - payload.metrics.snapshotDurationMilliseconds
+                )
+            )
+
+            let preparedGraph = try await prepareGraphLayout(from: payload.snapshot)
+            let layout = preparedGraph.layout
+            AppTelemetry.graphStageCompleted(
+                stage: .layout,
+                state: payload.state.telemetryState,
+                nodeCount: layout.nodes.count,
+                edgeCount: layout.edges.count,
+                durationMilliseconds: preparedGraph.layoutDurationMilliseconds
+            )
+            try Task.checkCancellation()
+
+            loadedLayout = layout
+            loadedHitTestIndex = preparedGraph.hitTestIndex
+            let stableGraph = GraphStableGraphSummary(
+                generation: layout.generation,
+                nodeCount: layout.nodes.count,
+                edgeCount: layout.edges.count
+            )
+            if let selectedNodeID = interaction.selectedNodeID,
+               !layout.nodes.contains(where: { $0.nodeID == selectedNodeID }) {
+                interaction.select(nil)
+            }
+            workspaceModel.applyStableGraph(stableGraph)
+            if payload.state == .partial {
+                workspaceModel.markPartial()
+                graphBannerText = partialBannerText(for: payload)
+            } else {
+                graphBannerText = nil
+            }
+            pendingFirstRender = PendingGraphFirstRender(
+                requestID: layout.requestID,
+                timer: totalTimer,
+                signpost: totalSignpost,
+                state: payload.state.telemetryState,
+                nodeCount: layout.nodes.count,
+                edgeCount: layout.edges.count
+            )
+            shouldEndTotalSignpost = false
+        } catch is CancellationError {
+            workspaceModel.fail(.cancelled)
+            if loadedLayout != nil {
+                graphBannerText = "Graph refresh cancelled; showing previous graph"
+            }
+        } catch let error as EngineGraphClientError {
+            handleGraphLoadFailure(error)
+        } catch is WholeVaultGraphValidationError {
+            workspaceModel.fail(.decodeFailed)
+            if loadedLayout != nil {
+                graphBannerText = "Graph refresh failed; showing previous graph"
+            }
+        } catch {
+            workspaceModel.fail(.snapshotFailed)
+            if loadedLayout != nil {
+                graphBannerText = "Graph refresh failed; showing previous graph"
+            }
+        }
+    }
+
+    private func prepareGraphLayout(
+        from snapshot: WholeVaultGraphSnapshot
+    ) async throws -> PreparedGraphLayout {
+        let task = Task.detached(priority: .userInitiated) {
+            try Task.checkCancellation()
+            let layoutTimer = AppTelemetryTimer()
+            let layoutSignpost = AppTelemetry.beginGraphStage(.layout)
+            let layout: GraphRendererSnapshot
+            let hitTestIndex: GraphHitTestIndex
+            do {
+                layout = try GraphLayoutMapper.map(
+                    snapshot,
+                    checkCancellation: Task.checkCancellation
+                )
+                hitTestIndex = try GraphHitTestIndex(
+                    layout: layout,
+                    checkCancellation: Task.checkCancellation
+                )
+                AppTelemetry.endGraphStage(layoutSignpost)
+            } catch {
+                AppTelemetry.endGraphStage(layoutSignpost)
+                throw error
+            }
+            try Task.checkCancellation()
+            return PreparedGraphLayout(
+                layout: layout,
+                hitTestIndex: hitTestIndex,
+                layoutDurationMilliseconds: layoutTimer.elapsedMilliseconds()
+            )
+        }
+
+        return try await withTaskCancellationHandler {
+            try await task.value
+        } onCancel: {
+            task.cancel()
+        }
+    }
+
+    @MainActor
+    private func handleFirstDraw(_ metrics: GraphRendererMetrics, requestID: UInt64) {
+        let state = pendingFirstRender?.state ?? currentTelemetryState
+        AppTelemetry.graphDrawCompleted(metrics)
+        AppTelemetry.graphStageCompleted(
+            stage: .draw,
+            state: state,
+            nodeCount: metrics.nodeCount,
+            edgeCount: metrics.edgeCount,
+            durationMilliseconds: metrics.drawDurationMilliseconds
+        )
+
+        guard let pending = pendingFirstRender else {
+            return
+        }
+        guard pending.requestID == requestID else {
+            return
+        }
+
+        AppTelemetry.graphStageCompleted(
+            stage: .totalFirstRender,
+            state: pending.state,
+            nodeCount: pending.nodeCount,
+            edgeCount: pending.edgeCount,
+            durationMilliseconds: pending.timer.elapsedMilliseconds()
+        )
+        AppTelemetry.endGraphStage(pending.signpost)
+        pendingFirstRender = nil
+    }
+
+    @MainActor
+    private func cancelPendingFirstRender() {
+        guard let pending = pendingFirstRender else {
+            return
+        }
+
+        AppTelemetry.endGraphStage(pending.signpost)
+        pendingFirstRender = nil
     }
 
     private func zoom(by multiplier: Double) {
@@ -292,10 +531,106 @@ struct GraphWorkspaceView: View {
         }
     }
 
+    private var graphLoadKey: String {
+        switch vaultSelection {
+        case .selected:
+            let metadataPath = appState.indexLocation?.metadataFile.path ?? "missing-index"
+            return [
+                metadataPath,
+                settings.semantic.includeUnresolved.description,
+                settings.semantic.includeOrphans.description
+            ].joined(separator: "|")
+        case .noVault:
+            return "no-vault"
+        case .unavailable(let issue):
+            return "unavailable|\(issue.displayTitle)"
+        }
+    }
+
+    private var graphStatusTitle: String {
+        switch workspaceModel.state {
+        case .building:
+            return "Loading graph"
+        case .missingIndex:
+            return "Graph index unavailable"
+        case .snapshotFailed, .decodeFailed, .layoutFailed:
+            return "Graph load failed"
+        case .cancelled:
+            return "Graph load cancelled"
+        default:
+            return "Graph view"
+        }
+    }
+
+    private var graphStatusDetail: String {
+        switch workspaceModel.state {
+        case .building:
+            return "Loading indexed graph data"
+        case .missingIndex:
+            return "Graph index is not ready"
+        case .snapshotFailed:
+            return "Snapshot could not be loaded"
+        case .decodeFailed:
+            return "Snapshot response could not be decoded"
+        case .layoutFailed:
+            return "Graph layout could not be prepared"
+        case .cancelled:
+            return "Graph request was cancelled"
+        default:
+            return "Graph data not loaded"
+        }
+    }
+
+    private func handleGraphLoadFailure(_ error: EngineGraphClientError) {
+        switch error {
+        case .invalidResponse:
+            workspaceModel.fail(.decodeFailed)
+        case .engine(let payload) where payload.code == "missing_index":
+            workspaceModel.clear(.missingIndex)
+            loadedLayout = nil
+            loadedHitTestIndex = nil
+            graphBannerText = nil
+            return
+        default:
+            workspaceModel.fail(.snapshotFailed)
+        }
+
+        if loadedLayout != nil {
+            graphBannerText = "Graph refresh failed; showing previous graph"
+        }
+    }
+
+    private func partialBannerText(for payload: WholeVaultGraphPayload) -> String {
+        let reasons = payload.snapshot.partialReasons
+            .map(\.rawValue)
+            .sorted()
+            .joined(separator: ", ")
+        return reasons.isEmpty ? "Partial graph" : "Partial graph: \(reasons)"
+    }
+
+    private var currentTelemetryState: SearchResultState {
+        workspaceModel.state == .partial ? .partial : .complete
+    }
+
     private enum RendererInputState {
         case ready(GraphRendererInput)
         case failed(GraphRendererValidationError)
     }
+}
+
+private struct PreparedGraphLayout: Sendable {
+    let layout: GraphRendererSnapshot
+    let hitTestIndex: GraphHitTestIndex
+    let layoutDurationMilliseconds: Double
+}
+
+private struct PendingGraphFirstRender {
+    let requestID: UInt64
+    let timer: AppTelemetryTimer
+    let signpost: GraphStageSignpostInterval
+    let state: SearchResultState
+    let nodeCount: Int
+    let edgeCount: Int
 }
 
 private struct GraphKeyboardResultsList: View {
@@ -339,6 +674,28 @@ private struct GraphKeyboardResultsList: View {
 
     private func resultAccessibilityLabel(for node: GraphLayoutNode) -> String {
         selectedNodeID == node.nodeID ? "Selected graph node \(node.label)" : "Graph node \(node.label)"
+    }
+}
+
+private struct GraphStateBanner: View {
+    let text: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(text)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Spacer()
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 30)
+        .background(ObsidianUI.sidebarBackground.opacity(0.65))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(text)
     }
 }
 

@@ -2,6 +2,7 @@ import Foundation
 
 public struct WholeVaultGraphRequest: Codable, Equatable, Sendable {
     public static let payloadVersion: UInt32 = 1
+    public static let currentGeneration: UInt64 = 0
     public static let defaultByteCapBytes = 128 * 1024 * 1024
 
     public let payloadVersion: UInt32
@@ -15,7 +16,7 @@ public struct WholeVaultGraphRequest: Codable, Equatable, Sendable {
 
     public init(
         requestID: UInt64,
-        generation: UInt64,
+        generation: UInt64 = Self.currentGeneration,
         includeUnresolved: Bool = false,
         includeOrphans: Bool = false,
         maxNodes: Int = 100_000,
@@ -30,6 +31,10 @@ public struct WholeVaultGraphRequest: Codable, Equatable, Sendable {
         self.maxNodes = maxNodes
         self.maxEdges = maxEdges
         self.byteCapBytes = byteCapBytes
+    }
+
+    public var expectedGeneration: UInt64? {
+        generation == Self.currentGeneration ? nil : generation
     }
 
     enum CodingKeys: String, CodingKey {
@@ -65,6 +70,15 @@ public struct WholeVaultGraphPayload: Codable, Equatable, Sendable {
 public enum WholeVaultGraphState: String, Codable, Equatable, Sendable {
     case complete
     case partial
+
+    public var telemetryState: SearchResultState {
+        switch self {
+        case .complete:
+            return .complete
+        case .partial:
+            return .partial
+        }
+    }
 }
 
 public struct WholeVaultGraphMetrics: Codable, Equatable, Sendable {

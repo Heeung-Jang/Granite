@@ -43,10 +43,12 @@ struct GraphCanvasRendererView: View {
             GeometryReader { proxy in
                 Canvas { context, size in
                     let timer = AppTelemetryTimer()
+                    let drawSignpost = AppTelemetry.beginGraphStage(.draw)
 
                     drawEdges(input: renderInput, context: &context, size: size)
                     drawNodes(input: renderInput, context: &context, size: size)
                     drawLabels(input: renderInput, context: &context, size: size)
+                    AppTelemetry.endGraphStage(drawSignpost)
 
                     let metrics = renderer.metrics(
                         for: renderInput,

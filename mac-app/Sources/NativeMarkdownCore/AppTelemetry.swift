@@ -36,6 +36,35 @@ public struct AppTelemetryPrivacySchema: Codable, Equatable, Sendable {
     }
 }
 
+public enum GraphTelemetryStage: String, Equatable, Sendable {
+    case snapshot
+    case decode
+    case layout
+    case draw
+    case totalFirstRender
+
+    public var signpostName: String {
+        switch self {
+        case .snapshot:
+            return "graph.snapshot"
+        case .decode:
+            return "graph.decode"
+        case .layout:
+            return "graph.layout"
+        case .draw:
+            return "graph.draw"
+        case .totalFirstRender:
+            return "graph.first_render"
+        }
+    }
+}
+
+public struct GraphStageSignpostInterval {
+    fileprivate let stage: GraphTelemetryStage
+    fileprivate let name: StaticString
+    fileprivate let state: OSSignpostIntervalState
+}
+
 public enum AppTelemetry {
     private static let subsystem = Bundle.main.bundleIdentifier ?? "NativeMarkdownMacApp"
     private static let searchLogger = Logger(subsystem: subsystem, category: "Search")
@@ -45,6 +74,7 @@ public enum AppTelemetry {
     private static let editorLogger = Logger(subsystem: subsystem, category: "Editor")
     private static let saveLogger = Logger(subsystem: subsystem, category: "Save")
     private static let graphLogger = Logger(subsystem: subsystem, category: "Graph")
+    private static let graphSignposter = OSSignposter(logger: graphLogger)
 
     public static let privacySchema = AppTelemetryPrivacySchema(
         allowedPublicFields: [
@@ -160,6 +190,54 @@ public enum AppTelemetry {
 
     public static func graphDrawCompleted(_ metrics: GraphRendererMetrics) {
         graphLogger.info("first_draw_completed renderer=\(metrics.rendererKind.rawValue, privacy: .public) nodes=\(metrics.nodeCount, privacy: .public) edges=\(metrics.edgeCount, privacy: .public) duration_ms=\(metrics.drawDurationMilliseconds, privacy: .public)")
+    }
+
+    public static func graphStageCompleted(
+        stage: GraphTelemetryStage,
+        state: SearchResultState,
+        nodeCount: Int,
+        edgeCount: Int,
+        durationMilliseconds: Double
+    ) {
+        graphSignposter.emitEvent("graph_stage_completed", "stageName=\(stage.rawValue, privacy: .public)")
+        graphLogger.info("graph_stage_completed stageName=\(stage.rawValue, privacy: .public) state=\(state.rawValue, privacy: .public) nodes=\(nodeCount, privacy: .public) edges=\(edgeCount, privacy: .public) duration_ms=\(durationMilliseconds, privacy: .public)")
+    }
+
+    public static func beginGraphStage(_ stage: GraphTelemetryStage) -> GraphStageSignpostInterval {
+        switch stage {
+        case .snapshot:
+            return beginGraphStage(stage, name: "graph.snapshot")
+        case .decode:
+            return beginGraphStage(stage, name: "graph.decode")
+        case .layout:
+            return beginGraphStage(stage, name: "graph.layout")
+        case .draw:
+            return beginGraphStage(stage, name: "graph.draw")
+        case .totalFirstRender:
+            return beginGraphStage(stage, name: "graph.first_render")
+        }
+    }
+
+    private static func beginGraphStage(
+        _ stage: GraphTelemetryStage,
+        name: StaticString
+    ) -> GraphStageSignpostInterval {
+        GraphStageSignpostInterval(
+            stage: stage,
+            name: name,
+            state: graphSignposter.beginInterval(
+                name,
+                "stageName=\(stage.rawValue, privacy: .public)"
+            )
+        )
+    }
+
+    public static func endGraphStage(_ interval: GraphStageSignpostInterval) {
+        graphSignposter.endInterval(
+            interval.name,
+            interval.state,
+            "stageName=\(interval.stage.rawValue, privacy: .public)"
+        )
     }
 
     public static func saveRequested(file: FileTreeItem?, available: Bool) {

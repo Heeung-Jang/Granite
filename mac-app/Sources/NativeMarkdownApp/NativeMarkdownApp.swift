@@ -49,6 +49,13 @@ struct NativeMarkdownApp: App {
                 edgeCount: 0,
                 drawDurationMilliseconds: 1
             ))
+            AppTelemetry.graphStageCompleted(
+                stage: .layout,
+                state: .complete,
+                nodeCount: 1,
+                edgeCount: 0,
+                durationMilliseconds: 1
+            )
             AppTelemetry.saveRequested(file: file, available: false)
             AppTelemetry.editorDecorationCompleted(textLength: 128, durationMilliseconds: 1)
             print("NativeMarkdownApp telemetry smoke test")
@@ -63,6 +70,17 @@ struct NativeMarkdownApp: App {
                 Foundation.exit(0)
             } catch {
                 print("Graph canvas smoke test failed")
+                Foundation.exit(2)
+            }
+        }
+
+        if CommandLine.arguments.contains("--graph-load-smoke-test") {
+            do {
+                let metrics = try GraphLoadSmokeProbe.run()
+                print("Graph load smoke test renderer=\(metrics.rendererKind.rawValue) nodes=\(metrics.nodeCount) edges=\(metrics.edgeCount)")
+                Foundation.exit(0)
+            } catch {
+                print("Graph load smoke test failed")
                 Foundation.exit(2)
             }
         }

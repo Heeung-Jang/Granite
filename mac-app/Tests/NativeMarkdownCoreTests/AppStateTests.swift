@@ -290,6 +290,8 @@ func indexDirectoryResolverCreatesOnlyAppOwnedDirectories() throws {
     #expect(location.rootDirectory.path.hasPrefix(supportRoot.path))
     #expect(location.dataDirectory.path.hasPrefix(supportRoot.path))
     #expect(location.indexingQueueFile.path.hasPrefix(location.dataDirectory.path))
+    #expect(location.metadataFile.path.hasPrefix(location.dataDirectory.path))
+    #expect(location.metadataFile.lastPathComponent == "metadata.sqlite")
     #expect(location.rebuildDirectory.path.hasPrefix(supportRoot.path))
     #expect(location.lockFile.path.hasPrefix(supportRoot.path))
     #expect(FileManager.default.fileExists(atPath: location.dataDirectory.path))

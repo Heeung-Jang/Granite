@@ -97,32 +97,60 @@ public struct GraphLayoutComponent: Equatable, Sendable {
 
 public enum GraphLayoutMapper {
     public static func map(_ snapshot: WholeVaultGraphSnapshot) -> GraphRendererSnapshot {
-        let nodeIndexByID = Dictionary(
-            uniqueKeysWithValues: snapshot.nodes.enumerated().map { index, node in
-                (node.nodeID, index)
+        try! map(snapshot, checkCancellation: {})
+    }
+
+    public static func map(
+        _ snapshot: WholeVaultGraphSnapshot,
+        checkCancellation: () throws -> Void
+    ) throws -> GraphRendererSnapshot {
+        var nodeIndexByID: [String: Int] = [:]
+        nodeIndexByID.reserveCapacity(snapshot.nodes.count)
+        for (index, node) in snapshot.nodes.enumerated() {
+            if index.isMultiple(of: 2_048) {
+                try checkCancellation()
             }
-        )
-        let edges = snapshot.edges.compactMap { edge -> GraphLayoutEdge? in
+            nodeIndexByID[node.nodeID] = index
+        }
+
+        var edges: [GraphLayoutEdge] = []
+        edges.reserveCapacity(snapshot.edges.count)
+        for (index, edge) in snapshot.edges.enumerated() {
+            if index.isMultiple(of: 2_048) {
+                try checkCancellation()
+            }
             guard let sourceIndex = nodeIndexByID[edge.sourceNodeID],
                   let targetIndex = nodeIndexByID[edge.targetNodeID]
             else {
-                return nil
+                continue
             }
-            return GraphLayoutEdge(
+            edges.append(GraphLayoutEdge(
                 sourceIndex: sourceIndex,
                 targetIndex: targetIndex,
                 kind: edge.kind,
                 weight: edge.weight
-            )
+            ))
         }
-        let components = connectedComponents(nodeCount: snapshot.nodes.count, edges: edges)
-        let componentIndexByNode = componentIndexesByNode(components)
+        let components = try connectedComponents(
+            nodeCount: snapshot.nodes.count,
+            edges: edges,
+            checkCancellation: checkCancellation
+        )
+        let componentIndexByNode = try componentIndexesByNode(
+            components,
+            checkCancellation: checkCancellation
+        )
         let componentOffsets = componentOffsets(for: components)
-        let nodes = snapshot.nodes.enumerated().map { index, node in
+        var nodes: [GraphLayoutNode] = []
+        nodes.reserveCapacity(snapshot.nodes.count)
+        for (index, node) in snapshot.nodes.enumerated() {
+            if index.isMultiple(of: 2_048) {
+                try checkCancellation()
+            }
             let componentIndex = componentIndexByNode[index] ?? 0
             let offset = componentOffsets[componentIndex]
             let seed = seedPosition(nodeID: node.nodeID, degree: node.degree)
-            return GraphLayoutNode(
+            nodes.append(GraphLayoutNode(
                 index: index,
                 nodeID: node.nodeID,
                 fileID: node.fileID,
@@ -135,7 +163,7 @@ public enum GraphLayoutMapper {
                     y: seed.y + offset.y
                 ),
                 radius: radius(forDegree: node.degree)
-            )
+            ))
         }
         return GraphRendererSnapshot(
             requestID: snapshot.requestID,
@@ -158,11 +186,15 @@ public enum GraphLayoutMapper {
     }
 
     private static func componentIndexesByNode(
-        _ components: [GraphLayoutComponent]
-    ) -> [Int: Int] {
+        _ components: [GraphLayoutComponent],
+        checkCancellation: () throws -> Void
+    ) throws -> [Int: Int] {
         var indexes: [Int: Int] = [:]
         for (componentIndex, component) in components.enumerated() {
-            for nodeIndex in component.nodeIndexes {
+            for (offset, nodeIndex) in component.nodeIndexes.enumerated() {
+                if offset.isMultiple(of: 2_048) {
+                    try checkCancellation()
+                }
                 indexes[nodeIndex] = componentIndex
             }
         }
@@ -193,10 +225,14 @@ public enum GraphLayoutMapper {
 
     private static func connectedComponents(
         nodeCount: Int,
-        edges: [GraphLayoutEdge]
-    ) -> [GraphLayoutComponent] {
+        edges: [GraphLayoutEdge],
+        checkCancellation: () throws -> Void
+    ) throws -> [GraphLayoutComponent] {
         var adjacency = Array(repeating: Set<Int>(), count: nodeCount)
-        for edge in edges {
+        for (index, edge) in edges.enumerated() {
+            if index.isMultiple(of: 2_048) {
+                try checkCancellation()
+            }
             adjacency[edge.sourceIndex].insert(edge.targetIndex)
             adjacency[edge.targetIndex].insert(edge.sourceIndex)
         }
@@ -204,10 +240,18 @@ public enum GraphLayoutMapper {
         var visited = Set<Int>()
         var components: [GraphLayoutComponent] = []
         for index in 0..<nodeCount where !visited.contains(index) {
+            if index.isMultiple(of: 2_048) {
+                try checkCancellation()
+            }
             var stack = [index]
             var component: [Int] = []
             visited.insert(index)
+            var visitedInComponent = 0
             while let current = stack.popLast() {
+                if visitedInComponent.isMultiple(of: 2_048) {
+                    try checkCancellation()
+                }
+                visitedInComponent += 1
                 component.append(current)
                 for neighbor in adjacency[current] where !visited.contains(neighbor) {
                     visited.insert(neighbor)

@@ -32,10 +32,25 @@ public struct GraphHitTestIndex: Equatable, Sendable {
     }
 
     public init(layout: GraphRendererSnapshot, bucketCellSize: Double = 96) {
+        try! self.init(
+            layout: layout,
+            bucketCellSize: bucketCellSize,
+            checkCancellation: {}
+        )
+    }
+
+    public init(
+        layout: GraphRendererSnapshot,
+        bucketCellSize: Double = 96,
+        checkCancellation: () throws -> Void
+    ) throws {
         self.layout = layout
         self.bucketCellSize = max(24, bucketCellSize)
         var buckets: [GraphGridCell: [Int]] = [:]
         for (arrayIndex, node) in layout.nodes.enumerated() {
+            if arrayIndex.isMultiple(of: 2_048) {
+                try checkCancellation()
+            }
             buckets[Self.gridCell(for: node.position, bucketCellSize: self.bucketCellSize), default: []]
                 .append(arrayIndex)
         }

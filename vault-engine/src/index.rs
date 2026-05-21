@@ -255,6 +255,13 @@ impl MetadataStore {
         Self::from_connection(Connection::open(path)?, expected)
     }
 
+    pub fn stored_schema_metadata(
+        path: impl AsRef<std::path::Path>,
+    ) -> MetadataStoreResult<Option<IndexSchemaMetadata>> {
+        let connection = Connection::open(path)?;
+        read_schema_metadata(&connection)
+    }
+
     pub fn open_in_memory(expected: &IndexSchemaMetadata) -> MetadataStoreResult<Self> {
         Self::from_connection(Connection::open_in_memory()?, expected)
     }

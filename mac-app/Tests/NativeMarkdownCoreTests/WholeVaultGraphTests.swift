@@ -19,6 +19,22 @@ func wholeVaultGraphModelsDecodeValidFixturePayload() throws {
 }
 
 @Test
+func wholeVaultGraphStateMapsToTelemetryState() {
+    #expect(WholeVaultGraphState.complete.telemetryState == .complete)
+    #expect(WholeVaultGraphState.partial.telemetryState == .partial)
+}
+
+@Test
+func wholeVaultGraphRequestSupportsCurrentGenerationSentinel() {
+    let request = WholeVaultGraphRequest(requestID: 9)
+    let pinned = WholeVaultGraphRequest(requestID: 10, generation: 3)
+
+    #expect(request.generation == WholeVaultGraphRequest.currentGeneration)
+    #expect(request.expectedGeneration == nil)
+    #expect(pinned.expectedGeneration == 3)
+}
+
+@Test
 func wholeVaultGraphValidationRejectsMalformedPayloads() throws {
     #expect(throws: Error.self) {
         _ = try EngineGraphClient.decodeEnvelope(graphEnvelope(nodeIDOverride: "file:2"))

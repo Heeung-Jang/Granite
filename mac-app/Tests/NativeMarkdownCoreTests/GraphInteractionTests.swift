@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import NativeMarkdownCore
 
@@ -32,6 +33,20 @@ func graphHitTestBuildsSpatialBuckets() {
     let index = GraphHitTestIndex(layout: interactionLayout(), bucketCellSize: 40)
 
     #expect(index.bucketCount > 1)
+}
+
+@Test
+func graphHitTestIndexPropagatesCancellation() {
+    var checks = 0
+
+    #expect(throws: CancellationError.self) {
+        _ = try GraphHitTestIndex(layout: largeInteractionLayout(nodeCount: 3_000)) {
+            checks += 1
+            if checks == 2 {
+                throw CancellationError()
+            }
+        }
+    }
 }
 
 @Test
@@ -115,6 +130,32 @@ private func interactionLayout() -> GraphRendererSnapshot {
         ],
         components: [
             GraphLayoutComponent(nodeIndexes: [0, 1, 2], isOrphanRing: false)
+        ]
+    )
+}
+
+private func largeInteractionLayout(nodeCount: Int) -> GraphRendererSnapshot {
+    GraphRendererSnapshot(
+        requestID: 1,
+        generation: 1,
+        nodes: (0..<nodeCount).map { index in
+            interactionNode(
+                index: index,
+                id: "file:\(index)",
+                label: "Node \(index)",
+                fileID: "\(index).md",
+                relativePath: "\(index).md",
+                kind: .resolved,
+                x: Double(index),
+                y: 0
+            )
+        },
+        edges: [],
+        components: [
+            GraphLayoutComponent(
+                nodeIndexes: Array(0..<nodeCount),
+                isOrphanRing: false
+            )
         ]
     )
 }

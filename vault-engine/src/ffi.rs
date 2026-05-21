@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_uchar};
-use std::panic::{self, catch_unwind, AssertUnwindSafe};
+use std::panic::{self, AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 use std::slice;
 use std::sync::Mutex;
@@ -9,9 +9,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
+use crate::ENGINE_ABI_VERSION;
 use crate::graph::{
-    build_whole_vault_graph_snapshot, WholeVaultGraphInputs, WholeVaultGraphRequest,
-    WholeVaultGraphSnapshot,
+    WholeVaultGraphInputs, WholeVaultGraphRequest, WholeVaultGraphSnapshot,
+    build_whole_vault_graph_snapshot,
 };
 use crate::index::{
     GraphFileRecord, GraphResolvedEdgeRecord, GraphUnresolvedEdgeRecord, IndexSchemaMetadata,
@@ -20,11 +21,10 @@ use crate::index::{
 use crate::indexing_queue::{IndexingQueue, IndexingQueueItem};
 use crate::paths::{FileIdentity, PathError, VaultRoot};
 use crate::save::{
-    keep_conflicted_buffer_as_new_note, overwrite_after_conflict, reload_after_conflict, safe_save,
     SafeSaveError, SaveBaseline, SaveChoiceOutcome, SaveConflict, SaveConflictChoiceError,
     SaveConflictKind, SaveConflictSnapshot, SaveOutcome, SaveReloadOutcome, SaveRequest,
+    keep_conflicted_buffer_as_new_note, overwrite_after_conflict, reload_after_conflict, safe_save,
 };
-use crate::ENGINE_ABI_VERSION;
 
 static FFI_PANIC_HOOK_LOCK: Mutex<()> = Mutex::new(());
 
@@ -577,12 +577,8 @@ fn graph_snapshot_payload(
         return Err(FfiError::missing_index());
     }
 
-    let expected = IndexSchemaMetadata::new(
-        "sqlite+tantivy",
-        "metadata-v2",
-        "tantivy",
-        request.generation,
-    );
+    let generation = graph_request_generation(metadata_path, request.generation)?;
+    let expected = IndexSchemaMetadata::new("sqlite+tantivy", "metadata-v2", "tantivy", generation);
     let metadata = MetadataStore::open(metadata_path, &expected).map_err(graph_metadata_error)?;
     let graph_request = WholeVaultGraphRequest::with_request_id(
         request.request_id,
@@ -595,11 +591,11 @@ fn graph_snapshot_payload(
     let edge_fetch_limit = graph_request.edge_limit().saturating_add(1);
     let node_fetch_limit = graph_request.node_limit().saturating_add(1);
     let resolved_edges = metadata
-        .graph_resolved_edges(request.generation, edge_fetch_limit)
+        .graph_resolved_edges(generation, edge_fetch_limit)
         .map_err(graph_metadata_error)?;
     let unresolved_edges = if graph_request.include_unresolved {
         metadata
-            .graph_unresolved_edges(request.generation, edge_fetch_limit)
+            .graph_unresolved_edges(generation, edge_fetch_limit)
             .map_err(graph_metadata_error)?
     } else {
         Vec::new()
@@ -607,7 +603,7 @@ fn graph_snapshot_payload(
     let orphan_files = if graph_request.include_orphans {
         metadata
             .graph_orphan_files(
-                request.generation,
+                generation,
                 graph_request.include_unresolved,
                 node_fetch_limit,
             )
@@ -630,17 +626,17 @@ fn graph_snapshot_payload(
         .map_err(graph_metadata_error)?;
     let node_count_total = metadata
         .graph_visible_node_count(
-            request.generation,
+            generation,
             graph_request.include_unresolved,
             graph_request.include_orphans,
         )
         .map_err(graph_metadata_error)?;
     let edge_count_total = metadata
-        .graph_visible_edge_count(request.generation, graph_request.include_unresolved)
+        .graph_visible_edge_count(generation, graph_request.include_unresolved)
         .map_err(graph_metadata_error)?;
     let graph = build_whole_vault_graph_snapshot(
         graph_request,
-        request.generation,
+        generation,
         WholeVaultGraphInputs {
             node_count_total,
             edge_count_total,
@@ -655,7 +651,7 @@ fn graph_snapshot_payload(
     let payload = FfiWholeVaultGraphPayload {
         payload_version: 1,
         request_id: request.request_id,
-        generation: request.generation,
+        generation,
         state: if graph.partial {
             "partial".to_string()
         } else {
@@ -669,6 +665,21 @@ fn graph_snapshot_payload(
     };
 
     finalize_graph_payload(payload, request.byte_cap_bytes)
+}
+
+fn graph_request_generation(
+    metadata_path: &Path,
+    requested_generation: u64,
+) -> Result<u64, FfiError> {
+    if requested_generation != 0 {
+        return Ok(requested_generation);
+    }
+
+    let metadata =
+        MetadataStore::stored_schema_metadata(metadata_path).map_err(graph_metadata_error)?;
+    metadata
+        .map(|metadata| metadata.generation)
+        .ok_or_else(FfiError::graph_index_error)
 }
 
 fn finalize_graph_payload(
@@ -941,6 +952,25 @@ mod tests {
                 .expect("payload bytes") as usize,
             response.len()
         );
+    }
+
+    #[test]
+    fn graph_ffi_uses_current_metadata_generation() {
+        let dir = tempdir().expect("tempdir");
+        let metadata_path = dir.path().join("metadata.sqlite");
+        write_graph_metadata(&metadata_path, "metadata-v2", 7);
+        let metadata = CString::new(metadata_path.to_string_lossy().as_bytes()).expect("metadata");
+        let request = CString::new(graph_request_json(1, 0, 1024 * 1024)).expect("request");
+
+        let response =
+            unsafe { take_response(engine_graph_snapshot(metadata.as_ptr(), request.as_ptr())) };
+        let json: Value = serde_json::from_str(&response).expect("response json");
+
+        assert_eq!(json["ok"], true);
+        assert_eq!(json["value"]["generation"], 7);
+        assert_eq!(json["value"]["snapshot"]["generation"], 7);
+        assert_eq!(json["value"]["snapshot"]["node_count_total"], 2);
+        assert_eq!(json["value"]["snapshot"]["edge_count_total"], 1);
     }
 
     #[test]

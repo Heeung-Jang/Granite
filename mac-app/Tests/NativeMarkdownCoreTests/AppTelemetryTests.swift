@@ -91,3 +91,17 @@ func telemetryTimerReportsMilliseconds() {
     #expect(timer.elapsedMilliseconds(nowNanoseconds: 9_000_000) == 8)
     #expect(timer.elapsedMilliseconds(nowNanoseconds: 500_000) == 0)
 }
+
+@Test
+func graphTelemetryStagesUsePublicStageNames() {
+    #expect(GraphTelemetryStage.snapshot.rawValue == "snapshot")
+    #expect(GraphTelemetryStage.decode.rawValue == "decode")
+    #expect(GraphTelemetryStage.layout.rawValue == "layout")
+    #expect(GraphTelemetryStage.draw.rawValue == "draw")
+    #expect(GraphTelemetryStage.totalFirstRender.rawValue == "totalFirstRender")
+    #expect(GraphTelemetryStage.snapshot.signpostName == "graph.snapshot")
+    #expect(GraphTelemetryStage.decode.signpostName == "graph.decode")
+    #expect(GraphTelemetryStage.layout.signpostName == "graph.layout")
+    #expect(GraphTelemetryStage.draw.signpostName == "graph.draw")
+    #expect(GraphTelemetryStage.totalFirstRender.signpostName == "graph.first_render")
+}

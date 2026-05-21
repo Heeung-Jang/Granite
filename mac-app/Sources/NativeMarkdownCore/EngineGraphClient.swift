@@ -71,18 +71,34 @@ public actor EngineGraphClient {
         latestRequestID = request.requestID
 
         let requestJSON = try Self.encodedJSONString(request)
-        let response = try await transport.snapshot(
-            metadataPath: metadataURL.path,
-            requestJSON: requestJSON
-        )
+        let snapshotSignpost = AppTelemetry.beginGraphStage(.snapshot)
+        let response: String
+        do {
+            response = try await transport.snapshot(
+                metadataPath: metadataURL.path,
+                requestJSON: requestJSON
+            )
+            AppTelemetry.endGraphStage(snapshotSignpost)
+        } catch {
+            AppTelemetry.endGraphStage(snapshotSignpost)
+            throw error
+        }
         try Task.checkCancellation()
 
-        let payload = try Self.decodeEnvelope(
-            response,
-            expectedRequestID: request.requestID,
-            expectedGeneration: request.generation,
-            byteCapBytes: request.byteCapBytes
-        )
+        let decodeSignpost = AppTelemetry.beginGraphStage(.decode)
+        let payload: WholeVaultGraphPayload
+        do {
+            payload = try Self.decodeEnvelope(
+                response,
+                expectedRequestID: request.requestID,
+                expectedGeneration: request.expectedGeneration,
+                byteCapBytes: request.byteCapBytes
+            )
+            AppTelemetry.endGraphStage(decodeSignpost)
+        } catch {
+            AppTelemetry.endGraphStage(decodeSignpost)
+            throw error
+        }
         try Task.checkCancellation()
 
         guard payload.requestID == latestRequestID else {
