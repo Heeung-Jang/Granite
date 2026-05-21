@@ -1,33 +1,30 @@
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::sync_channel;
-use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 
-use crate::attachments::{AttachmentReferenceSource, AttachmentResolutionState};
-use crate::index::{
-    AttachmentRecord, FileIndexStatus, FileMetadataRecords, FileRecord, HeadingRecord,
-    IndexSchemaMetadata, LinkEdgeRecord, MetadataStore, MetadataStoreError, MetadataTable,
-    PropertyRecord, TagRecord, TagSource, slugify_heading,
+use crate::index::{IndexSchemaMetadata, MetadataStore, MetadataStoreError, MetadataTable};
+#[cfg(test)]
+use crate::indexing_pipeline::read_parse_source;
+pub use crate::indexing_pipeline::{
+    IndexingMode, IndexingPipelineOptions, MAX_DEFAULT_READ_PARSE_WORKERS, SnippetStorageMode,
 };
-use crate::parser::{ParsedMarkdown, PropertyValue, parse_markdown};
-use crate::paths::{FileIdentity, PathError, VaultRoot, lookup_key};
-use crate::scanner::{ScanEntryKind, ScanError, scan_vault};
+use crate::indexing_pipeline::{
+    IndexingPipelineError, PipelineCorpusStageMetrics, PipelineCorpusStats, SearchDocumentSource,
+    load_search_document_sources, read_search_document, run_read_parse_pipeline,
+    run_tantivy_rebuild_pipeline,
+};
+#[cfg(test)]
+use crate::paths::{FileIdentity, lookup_key};
+use crate::paths::{PathError, VaultRoot};
+#[cfg(test)]
+use crate::scanner::ScanEntryKind;
 use crate::sqlite_fts::{SearchDocument, SearchResult, SqliteFtsError, SqliteFtsIndex};
-use crate::tantivy_search::{
-    TantivyIndexingStageMetrics, TantivySearchError, TantivySearchIndex, TantivyWriterOptions,
-};
+use crate::tantivy_search::{TantivyIndexingStageMetrics, TantivySearchError, TantivySearchIndex};
 
 pub const BACKEND_BENCHMARK_ARTIFACT_SCHEMA_VERSION: u32 = 6;
-
-const MAX_DEFAULT_READ_PARSE_WORKERS: usize = 4;
-const DEFAULT_CHANNEL_CAPACITY: usize = 32;
-const DEFAULT_METADATA_BATCH_SIZE: usize = 256;
 
 #[derive(Debug, Clone)]
 pub struct BackendBenchmarkOptions {
@@ -45,57 +42,6 @@ pub struct VaultBackendBenchmarkOptions {
     pub queries: Vec<String>,
     pub result_limit: usize,
     pub work_dir: PathBuf,
-}
-
-#[derive(Debug, Clone)]
-pub struct IndexingPipelineOptions {
-    pub read_parse_workers: usize,
-    pub channel_capacity: usize,
-    pub writer_options: TantivyWriterOptions,
-    pub metadata_batch_size: usize,
-    pub snippet_storage_mode: SnippetStorageMode,
-}
-
-impl Default for IndexingPipelineOptions {
-    fn default() -> Self {
-        let workers = thread::available_parallelism()
-            .map(usize::from)
-            .unwrap_or(1)
-            .clamp(1, MAX_DEFAULT_READ_PARSE_WORKERS);
-        Self {
-            read_parse_workers: workers,
-            channel_capacity: DEFAULT_CHANNEL_CAPACITY,
-            writer_options: TantivyWriterOptions::default(),
-            metadata_batch_size: DEFAULT_METADATA_BATCH_SIZE,
-            snippet_storage_mode: SnippetStorageMode::StoredBody,
-        }
-    }
-}
-
-impl IndexingPipelineOptions {
-    pub fn serial() -> Self {
-        Self {
-            read_parse_workers: 1,
-            ..Default::default()
-        }
-    }
-
-    fn normalized(&self) -> Self {
-        Self {
-            read_parse_workers: self
-                .read_parse_workers
-                .clamp(1, MAX_DEFAULT_READ_PARSE_WORKERS),
-            channel_capacity: self.channel_capacity.max(1),
-            writer_options: self.writer_options,
-            metadata_batch_size: self.metadata_batch_size.max(1),
-            snippet_storage_mode: self.snippet_storage_mode,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
-pub enum SnippetStorageMode {
-    StoredBody,
 }
 
 #[derive(Debug, Serialize)]
@@ -334,7 +280,7 @@ pub fn run_shared_backend_benchmark_from_vault(
         corpus_id: options.corpus_id.clone(),
         run_metadata: benchmark_run_metadata("streaming_vault", options.queries.len()),
         pipeline_config: BenchmarkPipelineConfig::from(&pipeline_options),
-        corpus_stages: loaded_sources.stages,
+        corpus_stages: BenchmarkCorpusStageMetrics::from(loaded_sources.stages),
         document_count: loaded_sources.sources.len(),
         query_count: options.queries.len(),
         total_document_bytes: sqlite.total_document_bytes,
@@ -434,63 +380,20 @@ impl From<TantivySearchError> for BackendBenchmarkError {
     }
 }
 
+impl From<IndexingPipelineError> for BackendBenchmarkError {
+    fn from(error: IndexingPipelineError) -> Self {
+        match error {
+            IndexingPipelineError::Io(error) => Self::Io(error),
+            IndexingPipelineError::Scan(error) => Self::Scan(error),
+            IndexingPipelineError::Tantivy(error) => Self::Tantivy(error),
+        }
+    }
+}
+
 impl From<serde_json::Error> for BackendBenchmarkError {
     fn from(error: serde_json::Error) -> Self {
         Self::Json(error)
     }
-}
-
-#[derive(Debug, Clone)]
-struct SearchDocumentSource {
-    relative_path: PathBuf,
-    absolute_path: PathBuf,
-    file_id: String,
-    kind: ScanEntryKind,
-    size_bytes: u64,
-    modified: Option<SystemTime>,
-    file_identity: FileIdentity,
-}
-
-struct LoadedSearchDocumentSources {
-    sources: Vec<SearchDocumentSource>,
-    stages: BenchmarkCorpusStageMetrics,
-}
-
-struct TimedSearchDocument {
-    document: SearchDocument,
-    work_item: ParsedSearchWorkItem,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ParsedSearchWorkItem {
-    source_index: usize,
-    file_id: String,
-    relative_path: PathBuf,
-    title: String,
-    body_len: usize,
-    metadata_counts: ParsedMetadataCounts,
-    metadata_records: FileMetadataRecords,
-    file_identity: FileIdentity,
-    size_bytes: u64,
-    modified: Option<SystemTime>,
-    timing: ReadParseTiming,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct ParsedMetadataCounts {
-    link_count: usize,
-    tag_count: usize,
-    property_count: usize,
-    heading_count: usize,
-    attachment_count: usize,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct ReadParseTiming {
-    read_micros: u64,
-    parse_micros: u64,
-    combined_micros: u64,
-    bytes: u64,
 }
 
 struct StreamingBenchmarkResult {
@@ -498,432 +401,26 @@ struct StreamingBenchmarkResult {
     total_document_bytes: u64,
 }
 
-struct ReadParsePipelineRun {
-    stats: StreamingCorpusStats,
+impl From<PipelineCorpusStageMetrics> for BenchmarkCorpusStageMetrics {
+    fn from(stages: PipelineCorpusStageMetrics) -> Self {
+        Self {
+            scan_micros: stages.scan_micros,
+            source_collection_micros: stages.source_collection_micros,
+        }
+    }
+}
+
+fn read_parse_metrics(
+    stats: &PipelineCorpusStats,
     peak_in_flight_items: usize,
-}
-
-struct TantivyPipelineRun {
-    stats: StreamingCorpusStats,
-    peak_in_flight_items: usize,
-    stages: TantivyIndexingStageMetrics,
-}
-
-#[derive(Default)]
-struct StreamingCorpusStats {
-    document_count: usize,
-    total_document_bytes: u64,
-    first_document_index: Option<usize>,
-    first_document: Option<SearchDocument>,
-    read_micros: Vec<u64>,
-    parse_micros: Vec<u64>,
-    combined_micros: Vec<u64>,
-    read_parse_bytes: u64,
-}
-
-impl StreamingCorpusStats {
-    fn record(&mut self, document: &SearchDocument) {
-        self.document_count += 1;
-        self.total_document_bytes += document_bytes(document);
-    }
-
-    fn record_timed(&mut self, timed: &TimedSearchDocument) {
-        self.record(&timed.document);
-        if self
-            .first_document_index
-            .is_none_or(|index| timed.work_item.source_index < index)
-        {
-            self.first_document_index = Some(timed.work_item.source_index);
-            self.first_document = Some(timed.document.clone());
-        }
-        self.read_micros.push(timed.work_item.timing.read_micros);
-        self.parse_micros.push(timed.work_item.timing.parse_micros);
-        self.combined_micros
-            .push(timed.work_item.timing.combined_micros);
-        self.read_parse_bytes += timed.work_item.timing.bytes;
-    }
-
-    fn first_document(&self) -> BackendBenchmarkResultType<&SearchDocument> {
-        self.first_document
-            .as_ref()
-            .ok_or(BackendBenchmarkError::EmptyDocuments)
-    }
-
-    fn read_parse_metrics(&self, peak_in_flight_items: usize) -> BenchmarkReadParseStageMetrics {
-        BenchmarkReadParseStageMetrics {
-            sample_count: self.read_micros.len(),
-            total_bytes: self.read_parse_bytes,
-            peak_in_flight_items,
-            read: duration_summary(&self.read_micros),
-            parse: duration_summary(&self.parse_micros),
-            combined: duration_summary(&self.combined_micros),
-        }
-    }
-}
-
-fn load_search_document_sources(
-    root: &VaultRoot,
-) -> BackendBenchmarkResultType<LoadedSearchDocumentSources> {
-    let scan_start = Instant::now();
-    let scan = scan_vault(root).map_err(scan_error_to_string)?;
-    let scan_micros = duration_micros_nonzero(scan_start.elapsed());
-    let source_collection_start = Instant::now();
-    let sources = scan
-        .entries
-        .into_iter()
-        .filter(|entry| entry.kind == ScanEntryKind::Markdown)
-        .map(|entry| {
-            let relative_path = entry.relative_path;
-            let absolute_path = root.canonical_root().join(&relative_path);
-            SearchDocumentSource {
-                file_id: lookup_key(&relative_path),
-                relative_path,
-                absolute_path,
-                kind: entry.kind,
-                size_bytes: entry.size_bytes,
-                modified: entry.modified,
-                file_identity: entry.file_identity,
-            }
-        })
-        .collect();
-    let source_collection_micros = duration_micros_nonzero(source_collection_start.elapsed());
-
-    Ok(LoadedSearchDocumentSources {
-        sources,
-        stages: BenchmarkCorpusStageMetrics {
-            scan_micros,
-            source_collection_micros,
-        },
-    })
-}
-
-fn read_search_document(
-    source: &SearchDocumentSource,
-) -> BackendBenchmarkResultType<SearchDocument> {
-    Ok(read_parse_source(source)?.document)
-}
-
-fn read_parse_source(
-    source: &SearchDocumentSource,
-) -> BackendBenchmarkResultType<TimedSearchDocument> {
-    read_parse_source_at(0, source)
-}
-
-fn read_parse_source_at(
-    source_index: usize,
-    source: &SearchDocumentSource,
-) -> BackendBenchmarkResultType<TimedSearchDocument> {
-    debug_assert_eq!(source.kind, ScanEntryKind::Markdown);
-    let combined_start = Instant::now();
-    let (body, read_micros) = read_markdown_body(&source.absolute_path)?;
-    let parse_start = Instant::now();
-    let parsed = parse_markdown(&body);
-    let parse_micros = duration_micros_nonzero(parse_start.elapsed());
-    let combined_micros = duration_micros_nonzero(combined_start.elapsed());
-    let bytes = body.len() as u64;
-    let title = parsed
-        .headings
-        .first()
-        .map(|heading| heading.text.clone())
-        .unwrap_or_else(|| fallback_title(&source.relative_path));
-    let metadata_counts = parsed_metadata_counts(&parsed);
-    let metadata_records = parsed_metadata_records(source, &parsed);
-    Ok(TimedSearchDocument {
-        document: SearchDocument {
-            file_id: source.file_id.clone(),
-            path: source.relative_path.to_string_lossy().to_string(),
-            title: title.clone(),
-            body,
-        },
-        work_item: ParsedSearchWorkItem {
-            source_index,
-            file_id: source.file_id.clone(),
-            relative_path: source.relative_path.clone(),
-            title,
-            body_len: bytes as usize,
-            metadata_counts,
-            metadata_records,
-            file_identity: source.file_identity.clone(),
-            size_bytes: source.size_bytes,
-            modified: source.modified,
-            timing: ReadParseTiming {
-                read_micros,
-                parse_micros,
-                combined_micros,
-                bytes,
-            },
-        },
-    })
-}
-
-fn read_markdown_body(path: &Path) -> BackendBenchmarkResultType<(String, u64)> {
-    let start = Instant::now();
-    let body = fs::read_to_string(path)?;
-    let read_micros = duration_micros_nonzero(start.elapsed());
-    Ok((body, read_micros))
-}
-
-fn parsed_metadata_counts(parsed: &ParsedMarkdown) -> ParsedMetadataCounts {
-    ParsedMetadataCounts {
-        link_count: parsed.wikilinks.len()
-            + parsed.embeds.len()
-            + parsed
-                .markdown_links
-                .iter()
-                .filter(|link| !link.image)
-                .count(),
-        tag_count: parsed.tags.len(),
-        property_count: parsed.properties.len(),
-        heading_count: parsed.headings.len(),
-        attachment_count: parsed.embeds.len()
-            + parsed
-                .markdown_links
-                .iter()
-                .filter(|link| link.image)
-                .count(),
-    }
-}
-
-fn parsed_metadata_records(
-    source: &SearchDocumentSource,
-    parsed: &ParsedMarkdown,
-) -> FileMetadataRecords {
-    let file_id = source.file_id.clone();
-    let frontmatter_tags = frontmatter_tags(parsed);
-    let mut links = Vec::new();
-    let mut attachments = Vec::new();
-
-    for link in &parsed.wikilinks {
-        links.push(LinkEdgeRecord {
-            source_file_id: file_id.clone(),
-            target_text: link.target.clone(),
-            resolved_target_file_id: None,
-            heading: link.heading.clone(),
-            alias: link.alias.clone(),
-            is_embed: false,
-        });
-    }
-
-    for embed in &parsed.embeds {
-        links.push(LinkEdgeRecord {
-            source_file_id: file_id.clone(),
-            target_text: embed.target.clone(),
-            resolved_target_file_id: None,
-            heading: embed.heading.clone(),
-            alias: embed.alias.clone(),
-            is_embed: true,
-        });
-        attachments.push(AttachmentRecord {
-            source_file_id: file_id.clone(),
-            source: AttachmentReferenceSource::WikiEmbed,
-            raw_target: embed.target.clone(),
-            state: AttachmentResolutionState::Unsupported,
-        });
-    }
-
-    for link in &parsed.markdown_links {
-        if link.image {
-            attachments.push(AttachmentRecord {
-                source_file_id: file_id.clone(),
-                source: AttachmentReferenceSource::MarkdownImage,
-                raw_target: link.target.clone(),
-                state: AttachmentResolutionState::Unsupported,
-            });
-        } else {
-            links.push(LinkEdgeRecord {
-                source_file_id: file_id.clone(),
-                target_text: link.target.clone(),
-                resolved_target_file_id: None,
-                heading: None,
-                alias: Some(link.text.clone()),
-                is_embed: false,
-            });
-            if !link.target.ends_with(".md") {
-                attachments.push(AttachmentRecord {
-                    source_file_id: file_id.clone(),
-                    source: AttachmentReferenceSource::MarkdownLink,
-                    raw_target: link.target.clone(),
-                    state: AttachmentResolutionState::Unsupported,
-                });
-            }
-        }
-    }
-
-    FileMetadataRecords {
-        file: FileRecord {
-            file_id: file_id.clone(),
-            relative_path: source.relative_path.clone(),
-            kind: source.kind,
-            size_bytes: source.size_bytes,
-            modified: source.modified,
-            file_identity: source.file_identity.clone(),
-            content_hash: None,
-            generation: 0,
-            status: FileIndexStatus::Parsed,
-            last_error: None,
-        },
-        links,
-        tags: parsed
-            .tags
-            .iter()
-            .map(|tag| TagRecord {
-                file_id: file_id.clone(),
-                tag: tag.clone(),
-                source: if frontmatter_tags.contains(tag) {
-                    TagSource::Frontmatter
-                } else {
-                    TagSource::Inline
-                },
-            })
-            .collect(),
-        properties: parsed
-            .properties
-            .iter()
-            .map(|(key, value)| PropertyRecord::from_property_value(file_id.clone(), key, value))
-            .collect(),
-        headings: parsed
-            .headings
-            .iter()
-            .map(|heading| HeadingRecord {
-                file_id: file_id.clone(),
-                slug: slugify_heading(&heading.text),
-                title: heading.text.clone(),
-                level: heading.level,
-                byte_offset: None,
-            })
-            .collect(),
-        attachments,
-    }
-}
-
-fn frontmatter_tags(parsed: &ParsedMarkdown) -> Vec<String> {
-    match parsed.properties.get("tags") {
-        Some(PropertyValue::String(value)) => vec![value.clone()],
-        Some(PropertyValue::List(values)) => values.clone(),
-        _ => Vec::new(),
-    }
-}
-
-fn run_read_parse_pipeline<F>(
-    sources: &[SearchDocumentSource],
-    options: &IndexingPipelineOptions,
-    mut consume: F,
-) -> BackendBenchmarkResultType<ReadParsePipelineRun>
-where
-    F: FnMut(TimedSearchDocument) -> BackendBenchmarkResultType<()>,
-{
-    let options = options.normalized();
-    let (sender, receiver) =
-        sync_channel::<BackendBenchmarkResultType<TimedSearchDocument>>(options.channel_capacity);
-    let next_source = AtomicUsize::new(0);
-    let in_flight = Arc::new(AtomicUsize::new(0));
-    let peak_in_flight = Arc::new(AtomicUsize::new(0));
-    let mut stats = StreamingCorpusStats::default();
-
-    thread::scope(|scope| {
-        for _ in 0..options.read_parse_workers {
-            let sender = sender.clone();
-            let in_flight = Arc::clone(&in_flight);
-            let peak_in_flight = Arc::clone(&peak_in_flight);
-            let next_source = &next_source;
-            scope.spawn(move || {
-                loop {
-                    let index = next_source.fetch_add(1, Ordering::Relaxed);
-                    let Some(source) = sources.get(index) else {
-                        break;
-                    };
-                    let result = read_parse_source_at(index, source);
-                    let current_in_flight = in_flight.fetch_add(1, Ordering::AcqRel) + 1;
-                    update_peak_in_flight(&peak_in_flight, current_in_flight);
-                    if sender.send(result).is_err() {
-                        in_flight.fetch_sub(1, Ordering::AcqRel);
-                        break;
-                    }
-                }
-            });
-        }
-        drop(sender);
-
-        for result in receiver {
-            in_flight.fetch_sub(1, Ordering::AcqRel);
-            let timed = result?;
-            stats.record_timed(&timed);
-            consume(timed)?;
-        }
-
-        Ok::<(), BackendBenchmarkError>(())
-    })?;
-
-    Ok(ReadParsePipelineRun {
-        stats,
-        peak_in_flight_items: peak_in_flight.load(Ordering::Acquire),
-    })
-}
-
-fn run_tantivy_rebuild_pipeline(
-    index: &mut TantivySearchIndex,
-    sources: &[SearchDocumentSource],
-    options: &IndexingPipelineOptions,
-) -> BackendBenchmarkResultType<TantivyPipelineRun> {
-    let options = options.normalized();
-    let (sender, receiver) =
-        sync_channel::<BackendBenchmarkResultType<TimedSearchDocument>>(options.channel_capacity);
-    let next_source = AtomicUsize::new(0);
-    let in_flight = Arc::new(AtomicUsize::new(0));
-    let peak_in_flight = Arc::new(AtomicUsize::new(0));
-    let mut stats = StreamingCorpusStats::default();
-
-    let stages = thread::scope(|scope| {
-        for _ in 0..options.read_parse_workers {
-            let sender = sender.clone();
-            let in_flight = Arc::clone(&in_flight);
-            let peak_in_flight = Arc::clone(&peak_in_flight);
-            let next_source = &next_source;
-            scope.spawn(move || {
-                loop {
-                    let index = next_source.fetch_add(1, Ordering::Relaxed);
-                    let Some(source) = sources.get(index) else {
-                        break;
-                    };
-                    let result = read_parse_source_at(index, source);
-                    let current_in_flight = in_flight.fetch_add(1, Ordering::AcqRel) + 1;
-                    update_peak_in_flight(&peak_in_flight, current_in_flight);
-                    if sender.send(result).is_err() {
-                        in_flight.fetch_sub(1, Ordering::AcqRel);
-                        break;
-                    }
-                }
-            });
-        }
-        drop(sender);
-
-        let documents = receiver.into_iter().map(|result| {
-            in_flight.fetch_sub(1, Ordering::AcqRel);
-            let timed = result?;
-            stats.record_timed(&timed);
-            Ok::<SearchDocument, BackendBenchmarkError>(timed.document)
-        });
-
-        index.add_documents_for_rebuild_from_result_iter_with_options_and_stage_durations(
-            documents,
-            options.writer_options,
-        )
-    })?;
-
-    Ok(TantivyPipelineRun {
-        stats,
-        peak_in_flight_items: peak_in_flight.load(Ordering::Acquire),
-        stages,
-    })
-}
-
-fn update_peak_in_flight(peak: &AtomicUsize, candidate: usize) {
-    let mut current = peak.load(Ordering::Acquire);
-    while candidate > current {
-        match peak.compare_exchange(current, candidate, Ordering::AcqRel, Ordering::Acquire) {
-            Ok(_) => break,
-            Err(observed) => current = observed,
-        }
+) -> BenchmarkReadParseStageMetrics {
+    BenchmarkReadParseStageMetrics {
+        sample_count: stats.read_micros.len(),
+        total_bytes: stats.read_parse_bytes,
+        peak_in_flight_items,
+        read: duration_summary(&stats.read_micros),
+        parse: duration_summary(&stats.parse_micros),
+        combined: duration_summary(&stats.combined_micros),
     }
 }
 
@@ -997,7 +494,7 @@ fn run_sqlite_metadata_benchmark_from_sources(
             sqlite_metadata_write_micros += duration_micros_nonzero(start.elapsed());
             pending.clear();
         }
-        Ok(())
+        Ok::<(), BackendBenchmarkError>(())
     })?;
 
     if !pending.is_empty() {
@@ -1040,7 +537,7 @@ fn run_sqlite_benchmark_from_sources(
         let upsert_start = Instant::now();
         index.upsert_document(&timed.document)?;
         sqlite_upsert_micros += duration_micros_nonzero(upsert_start.elapsed());
-        Ok(())
+        Ok::<(), BackendBenchmarkError>(())
     })?;
     let stats = pipeline.stats;
     let rebuild_start = Instant::now();
@@ -1058,8 +555,12 @@ fn run_sqlite_benchmark_from_sources(
             .search(query, options.result_limit)
             .map_err(Into::into)
     })?;
-    let incremental_update_micros =
-        measure_sqlite_incremental_update_doc(&mut index, stats.first_document()?)?;
+    let incremental_update_micros = measure_sqlite_incremental_update_doc(
+        &mut index,
+        stats
+            .first_document()
+            .ok_or(BackendBenchmarkError::EmptyDocuments)?,
+    )?;
 
     Ok(StreamingBenchmarkResult {
         result: backend_result(
@@ -1075,7 +576,7 @@ fn run_sqlite_benchmark_from_sources(
                 sqlite_rebuild_micros: Some(sqlite_rebuild_micros),
                 sqlite_integrity_check_micros: Some(sqlite_integrity_check_micros),
                 sqlite_optimize_micros: Some(sqlite_optimize_micros),
-                read_parse: stats.read_parse_metrics(pipeline.peak_in_flight_items),
+                read_parse: read_parse_metrics(&stats, pipeline.peak_in_flight_items),
                 ..Default::default()
             },
         ),
@@ -1131,8 +632,12 @@ fn run_tantivy_benchmark_from_sources(
             .search(query, options.result_limit)
             .map_err(Into::into)
     })?;
-    let incremental_update_micros =
-        measure_tantivy_incremental_update_doc(&mut index, stats.first_document()?)?;
+    let incremental_update_micros = measure_tantivy_incremental_update_doc(
+        &mut index,
+        stats
+            .first_document()
+            .ok_or(BackendBenchmarkError::EmptyDocuments)?,
+    )?;
 
     Ok(StreamingBenchmarkResult {
         result: backend_result(
@@ -1144,7 +649,7 @@ fn run_tantivy_benchmark_from_sources(
             incremental_update_micros,
             index.estimated_size_bytes()?,
             BenchmarkBackendStageMetrics {
-                read_parse: stats.read_parse_metrics(pipeline.peak_in_flight_items),
+                read_parse: read_parse_metrics(&stats, pipeline.peak_in_flight_items),
                 ..tantivy_stage_metrics(pipeline.stages)
             },
         ),
@@ -1283,14 +788,6 @@ fn is_empty_query_error(error: &BackendBenchmarkError) -> bool {
     )
 }
 
-fn fallback_title(relative_path: &Path) -> String {
-    relative_path
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .unwrap_or("Untitled")
-        .to_string()
-}
-
 fn total_document_bytes(documents: &[SearchDocument]) -> u64 {
     documents.iter().map(document_bytes).sum()
 }
@@ -1362,10 +859,6 @@ fn reset_directory(path: &Path) -> std::io::Result<()> {
         fs::remove_dir_all(path)?;
     }
     fs::create_dir_all(path)
-}
-
-fn scan_error_to_string(error: ScanError) -> BackendBenchmarkError {
-    BackendBenchmarkError::Scan(format!("{error:?}"))
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -1585,7 +1078,7 @@ mod tests {
 
         let run = run_read_parse_pipeline(&sources, &options, |_| {
             drained += 1;
-            Ok(())
+            Ok::<(), BackendBenchmarkError>(())
         })
         .expect("pipeline");
 
@@ -1604,8 +1097,9 @@ mod tests {
         )];
 
         let error =
-            match run_read_parse_pipeline(&sources, &IndexingPipelineOptions::serial(), |_| Ok(()))
-            {
+            match run_read_parse_pipeline(&sources, &IndexingPipelineOptions::serial(), |_| {
+                Ok::<(), BackendBenchmarkError>(())
+            }) {
                 Ok(_) => panic!("missing file should fail"),
                 Err(error) => error,
             };
