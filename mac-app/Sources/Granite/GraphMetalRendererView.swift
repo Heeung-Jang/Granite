@@ -138,8 +138,10 @@ struct GraphMetalRendererView: View {
                     updateHover(phase: phase, input: renderInput, size: proxy.size)
                 }
                 .focusable()
+                .focusEffectDisabled()
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(accessibilitySummary(for: renderInput))
+                .accessibilityHint("Use arrow keys to pan, plus or minus to zoom, Return to open the selected node, and Escape to clear selection.")
             }
         case .failed(let error):
             Color.clear

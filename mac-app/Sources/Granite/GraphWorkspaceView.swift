@@ -50,6 +50,7 @@ struct GraphWorkspaceView: View {
         .background(ObsidianUI.editorBackground)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(graphViewTitle)
+        .focusedSceneValue(\.graphCommandActions, graphCommandActions)
         .task(id: graphLoadKey) {
             await loadGraphIfNeeded()
         }
@@ -100,6 +101,18 @@ struct GraphWorkspaceView: View {
         .padding(.horizontal, 14)
         .frame(height: ObsidianUI.noteToolbarHeight)
         .background(ObsidianUI.editorBackground)
+    }
+
+    private var graphCommandActions: GraphCommandActions {
+        GraphCommandActions(
+            resetView: resetViewportToFit,
+            zoomIn: { zoom(by: 1.15) },
+            zoomOut: { zoom(by: 0.85) },
+            clearSelection: clearGraphSelection,
+            openSelectedNode: openSelectedGraphNodeFromCommand,
+            toggleControls: { showsSettings.toggle() },
+            canOpenSelectedNode: interaction.selectedNodeID != nil
+        )
     }
 
     @ViewBuilder
@@ -172,10 +185,9 @@ struct GraphWorkspaceView: View {
                                 zoom(by: 0.85)
                                 return .handled
                             }
-                            .onExitCommand {
-                                interaction.hover(nil)
-                                interaction.clearSelection()
-                            }
+                        .onExitCommand {
+                            clearGraphSelection()
+                        }
                         }
 
                         if showsKeyboardResults(for: input) {
@@ -592,6 +604,16 @@ struct GraphWorkspaceView: View {
         return .handled
     }
 
+    private func openSelectedGraphNodeFromCommand() {
+        guard let loadedLayout,
+              let selectedNodeID = interaction.selectedNodeID,
+              case .ready(let input) = validatedRendererInput(layout: loadedLayout)
+        else {
+            return
+        }
+        openNode(selectedNodeID, in: input)
+    }
+
     private func openNode(_ nodeID: String, in input: GraphRendererInput) {
         guard let node = input.layout.nodes.first(where: { $0.nodeID == nodeID }) else {
             return
@@ -603,6 +625,11 @@ struct GraphWorkspaceView: View {
         }
 
         _ = appState.openFile(file)
+    }
+
+    private func clearGraphSelection() {
+        interaction.hover(nil)
+        interaction.clearSelection()
     }
 
     private var searchIsActive: Bool {
