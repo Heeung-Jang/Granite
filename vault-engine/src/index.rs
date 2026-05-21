@@ -267,6 +267,11 @@ impl MetadataStore {
         Self::from_connection(Connection::open_in_memory()?, expected)
     }
 
+    pub fn release_memory(&self) -> MetadataStoreResult<()> {
+        self.connection.execute_batch("PRAGMA shrink_memory;")?;
+        Ok(())
+    }
+
     fn from_connection(
         connection: Connection,
         expected: &IndexSchemaMetadata,

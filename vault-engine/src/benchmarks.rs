@@ -305,6 +305,8 @@ pub fn run_whole_vault_graph_snapshot_benchmark(
     let request = WholeVaultGraphRequest::with_request_id(1, options.max_nodes, options.max_edges)
         .including_unresolved(options.include_unresolved)
         .including_orphans(options.include_orphans);
+    store.release_memory()?;
+    release_benchmark_allocator_memory();
     let rss_before = current_rss_bytes();
     let snapshot_start = Instant::now();
     let node_fetch_limit = request.node_limit().saturating_add(1);
@@ -371,6 +373,8 @@ pub fn run_whole_vault_graph_snapshot_benchmark(
     let snapshot_duration = snapshot_start.elapsed();
     let snapshot_ms = duration_millis(snapshot_duration);
     let encoded_payload_bytes = graph_payload_bytes(&build.snapshot, snapshot_ms)?;
+    store.release_memory()?;
+    release_benchmark_allocator_memory();
     let rss_after = current_rss_bytes();
     let rss_delta = rss_before
         .zip(rss_after)
@@ -1476,6 +1480,27 @@ fn current_rss_bytes() -> Option<u64> {
 fn current_rss_bytes() -> Option<u64> {
     None
 }
+
+#[cfg(target_os = "macos")]
+unsafe extern "C" {
+    fn malloc_zone_pressure_relief(
+        zone: *mut libc::malloc_zone_t,
+        goal: libc::size_t,
+    ) -> libc::size_t;
+}
+
+#[cfg(target_os = "macos")]
+fn release_benchmark_allocator_memory() {
+    unsafe {
+        let zone = libc::malloc_default_zone();
+        if !zone.is_null() {
+            let _ = malloc_zone_pressure_relief(zone, 0);
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn release_benchmark_allocator_memory() {}
 
 #[cfg(test)]
 mod tests {
