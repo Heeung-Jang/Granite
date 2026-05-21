@@ -9,7 +9,13 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 
-use crate::parser::{ParsedMarkdown, parse_markdown};
+use crate::attachments::{AttachmentReferenceSource, AttachmentResolutionState};
+use crate::index::{
+    AttachmentRecord, FileIndexStatus, FileMetadataRecords, FileRecord, HeadingRecord,
+    IndexSchemaMetadata, LinkEdgeRecord, MetadataStore, MetadataStoreError, MetadataTable,
+    PropertyRecord, TagRecord, TagSource, slugify_heading,
+};
+use crate::parser::{ParsedMarkdown, PropertyValue, parse_markdown};
 use crate::paths::{FileIdentity, PathError, VaultRoot, lookup_key};
 use crate::scanner::{ScanEntryKind, ScanError, scan_vault};
 use crate::sqlite_fts::{SearchDocument, SearchResult, SqliteFtsError, SqliteFtsIndex};
@@ -17,7 +23,7 @@ use crate::tantivy_search::{
     TantivyIndexingStageMetrics, TantivySearchError, TantivySearchIndex, TantivyWriterOptions,
 };
 
-pub const BACKEND_BENCHMARK_ARTIFACT_SCHEMA_VERSION: u32 = 5;
+pub const BACKEND_BENCHMARK_ARTIFACT_SCHEMA_VERSION: u32 = 6;
 
 const MAX_DEFAULT_READ_PARSE_WORKERS: usize = 4;
 const DEFAULT_CHANNEL_CAPACITY: usize = 32;
@@ -103,7 +109,25 @@ pub struct BackendBenchmarkArtifact {
     pub document_count: usize,
     pub query_count: usize,
     pub total_document_bytes: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata_store: Option<BenchmarkMetadataStoreMetrics>,
     pub backends: Vec<BackendBenchmarkResult>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct BenchmarkMetadataStoreMetrics {
+    pub sqlite_metadata_write_micros: u64,
+    pub table_counts: BenchmarkMetadataTableCounts,
+}
+
+#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
+pub struct BenchmarkMetadataTableCounts {
+    pub files: usize,
+    pub links: usize,
+    pub tags: usize,
+    pub properties: usize,
+    pub headings: usize,
+    pub attachments: usize,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -220,6 +244,7 @@ pub enum BackendBenchmarkError {
     Io(std::io::Error),
     Path(PathError),
     Scan(String),
+    Metadata(MetadataStoreError),
     Sqlite(SqliteFtsError),
     Tantivy(TantivySearchError),
     Json(serde_json::Error),
@@ -270,6 +295,7 @@ pub fn run_shared_backend_benchmark(
         document_count: options.documents.len(),
         query_count: options.queries.len(),
         total_document_bytes,
+        metadata_store: None,
         backends: vec![sqlite, tantivy],
     })
 }
@@ -289,6 +315,11 @@ pub fn run_shared_backend_benchmark_from_vault(
 
     fs::create_dir_all(&options.work_dir)?;
     let pipeline_options = IndexingPipelineOptions::default();
+    let metadata_store = run_sqlite_metadata_benchmark_from_sources(
+        options,
+        &loaded_sources.sources,
+        &pipeline_options,
+    )?;
     let sqlite =
         run_sqlite_benchmark_from_sources(options, &loaded_sources.sources, &pipeline_options)?;
     let tantivy =
@@ -307,6 +338,7 @@ pub fn run_shared_backend_benchmark_from_vault(
         document_count: loaded_sources.sources.len(),
         query_count: options.queries.len(),
         total_document_bytes: sqlite.total_document_bytes,
+        metadata_store: Some(metadata_store),
         backends: vec![sqlite.result, tantivy.result],
     })
 }
@@ -366,6 +398,9 @@ impl fmt::Display for BackendBenchmarkError {
             Self::Io(error) => write!(formatter, "backend benchmark io error: {error}"),
             Self::Path(error) => write!(formatter, "backend benchmark path error: {error}"),
             Self::Scan(error) => write!(formatter, "backend benchmark scan error: {error}"),
+            Self::Metadata(error) => {
+                write!(formatter, "backend benchmark metadata error: {error}")
+            }
             Self::Sqlite(error) => write!(formatter, "backend benchmark sqlite error: {error}"),
             Self::Tantivy(error) => write!(formatter, "backend benchmark tantivy error: {error}"),
             Self::Json(error) => write!(formatter, "backend benchmark json error: {error}"),
@@ -384,6 +419,12 @@ impl From<std::io::Error> for BackendBenchmarkError {
 impl From<SqliteFtsError> for BackendBenchmarkError {
     fn from(error: SqliteFtsError) -> Self {
         Self::Sqlite(error)
+    }
+}
+
+impl From<MetadataStoreError> for BackendBenchmarkError {
+    fn from(error: MetadataStoreError) -> Self {
+        Self::Metadata(error)
     }
 }
 
@@ -428,6 +469,7 @@ struct ParsedSearchWorkItem {
     title: String,
     body_len: usize,
     metadata_counts: ParsedMetadataCounts,
+    metadata_records: FileMetadataRecords,
     file_identity: FileIdentity,
     size_bytes: u64,
     modified: Option<SystemTime>,
@@ -585,6 +627,7 @@ fn read_parse_source_at(
         .map(|heading| heading.text.clone())
         .unwrap_or_else(|| fallback_title(&source.relative_path));
     let metadata_counts = parsed_metadata_counts(&parsed);
+    let metadata_records = parsed_metadata_records(source, &parsed);
     Ok(TimedSearchDocument {
         document: SearchDocument {
             file_id: source.file_id.clone(),
@@ -599,6 +642,7 @@ fn read_parse_source_at(
             title,
             body_len: bytes as usize,
             metadata_counts,
+            metadata_records,
             file_identity: source.file_identity.clone(),
             size_bytes: source.size_bytes,
             modified: source.modified,
@@ -622,6 +666,7 @@ fn read_markdown_body(path: &Path) -> BackendBenchmarkResultType<(String, u64)> 
 fn parsed_metadata_counts(parsed: &ParsedMarkdown) -> ParsedMetadataCounts {
     ParsedMetadataCounts {
         link_count: parsed.wikilinks.len()
+            + parsed.embeds.len()
             + parsed
                 .markdown_links
                 .iter()
@@ -636,6 +681,126 @@ fn parsed_metadata_counts(parsed: &ParsedMarkdown) -> ParsedMetadataCounts {
                 .iter()
                 .filter(|link| link.image)
                 .count(),
+    }
+}
+
+fn parsed_metadata_records(
+    source: &SearchDocumentSource,
+    parsed: &ParsedMarkdown,
+) -> FileMetadataRecords {
+    let file_id = source.file_id.clone();
+    let frontmatter_tags = frontmatter_tags(parsed);
+    let mut links = Vec::new();
+    let mut attachments = Vec::new();
+
+    for link in &parsed.wikilinks {
+        links.push(LinkEdgeRecord {
+            source_file_id: file_id.clone(),
+            target_text: link.target.clone(),
+            resolved_target_file_id: None,
+            heading: link.heading.clone(),
+            alias: link.alias.clone(),
+            is_embed: false,
+        });
+    }
+
+    for embed in &parsed.embeds {
+        links.push(LinkEdgeRecord {
+            source_file_id: file_id.clone(),
+            target_text: embed.target.clone(),
+            resolved_target_file_id: None,
+            heading: embed.heading.clone(),
+            alias: embed.alias.clone(),
+            is_embed: true,
+        });
+        attachments.push(AttachmentRecord {
+            source_file_id: file_id.clone(),
+            source: AttachmentReferenceSource::WikiEmbed,
+            raw_target: embed.target.clone(),
+            state: AttachmentResolutionState::Unsupported,
+        });
+    }
+
+    for link in &parsed.markdown_links {
+        if link.image {
+            attachments.push(AttachmentRecord {
+                source_file_id: file_id.clone(),
+                source: AttachmentReferenceSource::MarkdownImage,
+                raw_target: link.target.clone(),
+                state: AttachmentResolutionState::Unsupported,
+            });
+        } else {
+            links.push(LinkEdgeRecord {
+                source_file_id: file_id.clone(),
+                target_text: link.target.clone(),
+                resolved_target_file_id: None,
+                heading: None,
+                alias: Some(link.text.clone()),
+                is_embed: false,
+            });
+            if !link.target.ends_with(".md") {
+                attachments.push(AttachmentRecord {
+                    source_file_id: file_id.clone(),
+                    source: AttachmentReferenceSource::MarkdownLink,
+                    raw_target: link.target.clone(),
+                    state: AttachmentResolutionState::Unsupported,
+                });
+            }
+        }
+    }
+
+    FileMetadataRecords {
+        file: FileRecord {
+            file_id: file_id.clone(),
+            relative_path: source.relative_path.clone(),
+            kind: source.kind,
+            size_bytes: source.size_bytes,
+            modified: source.modified,
+            file_identity: source.file_identity.clone(),
+            content_hash: None,
+            generation: 0,
+            status: FileIndexStatus::Parsed,
+            last_error: None,
+        },
+        links,
+        tags: parsed
+            .tags
+            .iter()
+            .map(|tag| TagRecord {
+                file_id: file_id.clone(),
+                tag: tag.clone(),
+                source: if frontmatter_tags.contains(tag) {
+                    TagSource::Frontmatter
+                } else {
+                    TagSource::Inline
+                },
+            })
+            .collect(),
+        properties: parsed
+            .properties
+            .iter()
+            .map(|(key, value)| PropertyRecord::from_property_value(file_id.clone(), key, value))
+            .collect(),
+        headings: parsed
+            .headings
+            .iter()
+            .map(|heading| HeadingRecord {
+                file_id: file_id.clone(),
+                slug: slugify_heading(&heading.text),
+                title: heading.text.clone(),
+                level: heading.level,
+                byte_offset: None,
+            })
+            .collect(),
+        attachments,
+    }
+}
+
+fn frontmatter_tags(parsed: &ParsedMarkdown) -> Vec<String> {
+    match parsed.properties.get("tags") {
+        Some(PropertyValue::String(value)) => vec![value.clone()],
+        Some(PropertyValue::List(values)) => values.clone(),
+        _ => Vec::new(),
     }
 }
 
@@ -809,6 +974,55 @@ fn run_sqlite_benchmark(
             ..Default::default()
         },
     ))
+}
+
+fn run_sqlite_metadata_benchmark_from_sources(
+    options: &VaultBackendBenchmarkOptions,
+    sources: &[SearchDocumentSource],
+    pipeline_options: &IndexingPipelineOptions,
+) -> BackendBenchmarkResultType<BenchmarkMetadataStoreMetrics> {
+    let db_path = options.work_dir.join("sqlite-metadata.sqlite");
+    remove_sqlite_files(&db_path)?;
+    let metadata = IndexSchemaMetadata::new("sqlite", "metadata-v1", "none", 0);
+    let mut store = MetadataStore::open(&db_path, &metadata)?;
+    let batch_size = pipeline_options.normalized().metadata_batch_size;
+    let mut pending = Vec::with_capacity(batch_size);
+    let mut sqlite_metadata_write_micros = 0;
+
+    run_read_parse_pipeline(sources, pipeline_options, |timed| {
+        pending.push(timed.work_item.metadata_records);
+        if pending.len() >= batch_size {
+            let start = Instant::now();
+            store.replace_file_records_batch(&pending)?;
+            sqlite_metadata_write_micros += duration_micros_nonzero(start.elapsed());
+            pending.clear();
+        }
+        Ok(())
+    })?;
+
+    if !pending.is_empty() {
+        let start = Instant::now();
+        store.replace_file_records_batch(&pending)?;
+        sqlite_metadata_write_micros += duration_micros_nonzero(start.elapsed());
+    }
+
+    Ok(BenchmarkMetadataStoreMetrics {
+        sqlite_metadata_write_micros,
+        table_counts: metadata_table_counts(&store)?,
+    })
+}
+
+fn metadata_table_counts(
+    store: &MetadataStore,
+) -> BackendBenchmarkResultType<BenchmarkMetadataTableCounts> {
+    Ok(BenchmarkMetadataTableCounts {
+        files: store.row_count(MetadataTable::Files)?,
+        links: store.row_count(MetadataTable::Links)?,
+        tags: store.row_count(MetadataTable::Tags)?,
+        properties: store.row_count(MetadataTable::Properties)?,
+        headings: store.row_count(MetadataTable::Headings)?,
+        attachments: store.row_count(MetadataTable::Attachments)?,
+    })
 }
 
 fn run_sqlite_benchmark_from_sources(
@@ -1323,6 +1537,26 @@ mod tests {
         assert!(counts.property_count > 0);
         assert!(counts.heading_count > 0);
         assert!(counts.attachment_count > 0);
+        assert_eq!(
+            timed.work_item.metadata_records.links.len(),
+            counts.link_count
+        );
+        assert_eq!(
+            timed.work_item.metadata_records.tags.len(),
+            counts.tag_count
+        );
+        assert_eq!(
+            timed.work_item.metadata_records.properties.len(),
+            counts.property_count
+        );
+        assert_eq!(
+            timed.work_item.metadata_records.headings.len(),
+            counts.heading_count
+        );
+        assert_eq!(
+            timed.work_item.metadata_records.attachments.len(),
+            counts.attachment_count
+        );
     }
 
     #[test]
@@ -1464,6 +1698,9 @@ mod tests {
         };
 
         let artifact = run_shared_backend_benchmark_from_vault(&options).expect("benchmark");
+        let artifact_path = temp.path().join("vault-benchmark.json");
+        write_backend_benchmark_artifact(&artifact_path, &artifact, true).expect("artifact");
+        let json = fs::read_to_string(&artifact_path).expect("artifact json");
 
         assert_eq!(artifact.document_count, 2);
         assert_eq!(artifact.query_count, 2);
@@ -1474,6 +1711,15 @@ mod tests {
         );
         assert!(artifact.corpus_stages.scan_micros > 0);
         assert!(artifact.corpus_stages.source_collection_micros > 0);
+        let metadata_store = artifact.metadata_store.as_ref().expect("metadata store");
+        assert!(metadata_store.sqlite_metadata_write_micros > 0);
+        assert_eq!(metadata_store.table_counts.files, artifact.document_count);
+        assert_eq!(
+            metadata_store.table_counts.headings,
+            artifact.document_count
+        );
+        assert!(json.contains("\"sqlite_metadata_write_micros\""));
+        assert!(json.contains("\"table_counts\""));
         assert_eq!(artifact.run_metadata.run_condition, "streaming_vault");
         assert_eq!(artifact.run_metadata.sample_count, options.queries.len());
         assert!(artifact.run_metadata.redaction_enabled);
