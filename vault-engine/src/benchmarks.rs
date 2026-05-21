@@ -9,11 +9,9 @@ use crate::parser::parse_markdown;
 use crate::paths::{PathError, VaultRoot, lookup_key};
 use crate::scanner::{ScanEntryKind, ScanError, scan_vault};
 use crate::sqlite_fts::{SearchDocument, SearchResult, SqliteFtsError, SqliteFtsIndex};
-use crate::tantivy_search::{
-    TantivyIndexingStageDurations, TantivySearchError, TantivySearchIndex,
-};
+use crate::tantivy_search::{TantivyIndexingStageMetrics, TantivySearchError, TantivySearchIndex};
 
-pub const BACKEND_BENCHMARK_ARTIFACT_SCHEMA_VERSION: u32 = 3;
+pub const BACKEND_BENCHMARK_ARTIFACT_SCHEMA_VERSION: u32 = 4;
 
 #[derive(Debug, Clone)]
 pub struct BackendBenchmarkOptions {
@@ -87,6 +85,14 @@ pub struct BenchmarkBackendStageMetrics {
     pub tantivy_commit_micros: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tantivy_reader_reload_micros: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub added_document_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deleted_document_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skipped_document_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failed_document_count: Option<usize>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
@@ -597,7 +603,7 @@ fn run_tantivy_benchmark_from_sources(
     let mut stats = StreamingCorpusStats::default();
 
     let index_start = Instant::now();
-    let tantivy_stages = index.replace_documents_from_result_iter_with_stage_durations(
+    let tantivy_stages = index.add_documents_for_rebuild_from_result_iter_with_stage_durations(
         sources.iter().map(|source| {
             let timed = read_search_document_timed(source)?;
             stats.record_timed(&timed);
@@ -741,11 +747,15 @@ fn backend_result(
     }
 }
 
-fn tantivy_stage_metrics(stages: TantivyIndexingStageDurations) -> BenchmarkBackendStageMetrics {
+fn tantivy_stage_metrics(stages: TantivyIndexingStageMetrics) -> BenchmarkBackendStageMetrics {
     BenchmarkBackendStageMetrics {
         tantivy_add_micros: Some(stages.add_micros),
         tantivy_commit_micros: Some(stages.commit_micros),
         tantivy_reader_reload_micros: Some(stages.reader_reload_micros),
+        added_document_count: Some(stages.added_document_count),
+        deleted_document_count: Some(stages.deleted_document_count),
+        skipped_document_count: Some(stages.skipped_document_count),
+        failed_document_count: Some(stages.failed_document_count),
         ..Default::default()
     }
 }
@@ -1049,6 +1059,13 @@ mod tests {
                 .expect("tantivy reload")
                 > 0
         );
+        assert_eq!(
+            tantivy.stages.added_document_count,
+            Some(artifact.document_count)
+        );
+        assert_eq!(tantivy.stages.deleted_document_count, Some(0));
+        assert_eq!(tantivy.stages.skipped_document_count, Some(0));
+        assert_eq!(tantivy.stages.failed_document_count, Some(0));
     }
 
     #[test]
@@ -1088,6 +1105,10 @@ mod tests {
         assert!(json.contains("\"tantivy_add_micros\""));
         assert!(json.contains("\"tantivy_commit_micros\""));
         assert!(json.contains("\"tantivy_reader_reload_micros\""));
+        assert!(json.contains("\"added_document_count\""));
+        assert!(json.contains("\"deleted_document_count\""));
+        assert!(json.contains("\"skipped_document_count\""));
+        assert!(json.contains("\"failed_document_count\""));
         assert!(json.contains("\"snippet_result_count\""));
     }
 

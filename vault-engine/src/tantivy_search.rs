@@ -11,6 +11,8 @@ use tantivy::{Index, IndexReader, TantivyError, Term, doc};
 
 use crate::sqlite_fts::{SearchDocument, SearchMeasurement, SearchResult};
 
+pub const DEFAULT_TANTIVY_WRITER_MEMORY_BUDGET_BYTES: usize = 50_000_000;
+
 pub struct TantivySearchIndex {
     index: Index,
     reader: IndexReader,
@@ -19,10 +21,29 @@ pub struct TantivySearchIndex {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct TantivyIndexingStageDurations {
+pub struct TantivyIndexingStageMetrics {
     pub add_micros: u64,
     pub commit_micros: u64,
     pub reader_reload_micros: u64,
+    pub added_document_count: usize,
+    pub deleted_document_count: usize,
+    pub skipped_document_count: usize,
+    pub failed_document_count: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TantivyWriterOptions {
+    pub memory_budget_bytes: usize,
+    pub writer_thread_count: Option<usize>,
+}
+
+impl Default for TantivyWriterOptions {
+    fn default() -> Self {
+        Self {
+            memory_budget_bytes: DEFAULT_TANTIVY_WRITER_MEMORY_BUDGET_BYTES,
+            writer_thread_count: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -85,12 +106,24 @@ impl TantivySearchIndex {
     pub fn replace_documents_with_stage_durations(
         &mut self,
         documents: &[SearchDocument],
-    ) -> TantivySearchResult<TantivyIndexingStageDurations> {
-        self.replace_documents_from_result_iter_with_stage_durations(
+    ) -> TantivySearchResult<TantivyIndexingStageMetrics> {
+        self.replace_documents_with_options_and_stage_durations(
+            documents,
+            TantivyWriterOptions::default(),
+        )
+    }
+
+    pub fn replace_documents_with_options_and_stage_durations(
+        &mut self,
+        documents: &[SearchDocument],
+        options: TantivyWriterOptions,
+    ) -> TantivySearchResult<TantivyIndexingStageMetrics> {
+        self.replace_documents_from_result_iter_with_options_and_stage_durations(
             documents
                 .iter()
                 .cloned()
                 .map(Ok::<SearchDocument, TantivySearchError>),
+            options,
         )
     }
 
@@ -106,23 +139,73 @@ impl TantivySearchIndex {
     pub fn replace_documents_from_result_iter_with_stage_durations<I, E>(
         &mut self,
         documents: I,
-    ) -> Result<TantivyIndexingStageDurations, E>
+    ) -> Result<TantivyIndexingStageMetrics, E>
     where
         I: IntoIterator<Item = Result<SearchDocument, E>>,
         E: From<TantivySearchError>,
     {
-        let mut writer = self
-            .index
-            .writer(50_000_000)
-            .map_err(TantivySearchError::from)?;
+        self.replace_documents_from_result_iter_with_options_and_stage_durations(
+            documents,
+            TantivyWriterOptions::default(),
+        )
+    }
+
+    pub fn replace_documents_from_result_iter_with_options_and_stage_durations<I, E>(
+        &mut self,
+        documents: I,
+        options: TantivyWriterOptions,
+    ) -> Result<TantivyIndexingStageMetrics, E>
+    where
+        I: IntoIterator<Item = Result<SearchDocument, E>>,
+        E: From<TantivySearchError>,
+    {
+        self.index_documents_from_result_iter(documents, options, true)
+    }
+
+    /// Add documents into a fresh rebuild index without deleting existing file ids first.
+    ///
+    /// This is only valid when the target index directory was just created or reset.
+    pub fn add_documents_for_rebuild_from_result_iter_with_stage_durations<I, E>(
+        &mut self,
+        documents: I,
+    ) -> Result<TantivyIndexingStageMetrics, E>
+    where
+        I: IntoIterator<Item = Result<SearchDocument, E>>,
+        E: From<TantivySearchError>,
+    {
+        self.index_documents_from_result_iter(documents, TantivyWriterOptions::default(), false)
+    }
+
+    fn index_documents_from_result_iter<I, E>(
+        &mut self,
+        documents: I,
+        options: TantivyWriterOptions,
+        delete_existing: bool,
+    ) -> Result<TantivyIndexingStageMetrics, E>
+    where
+        I: IntoIterator<Item = Result<SearchDocument, E>>,
+        E: From<TantivySearchError>,
+    {
+        let mut writer = match options.writer_thread_count {
+            Some(thread_count) => self
+                .index
+                .writer_with_num_threads(thread_count.max(1), options.memory_budget_bytes),
+            None => self.index.writer(options.memory_budget_bytes),
+        }
+        .map_err(TantivySearchError::from)?;
         let mut add_micros = 0;
+        let mut added_document_count = 0;
+        let mut deleted_document_count = 0;
         for document in documents {
             let document = document?;
             let add_start = Instant::now();
-            writer.delete_term(Term::from_field_text(
-                self.fields.file_id,
-                &document.file_id,
-            ));
+            if delete_existing {
+                writer.delete_term(Term::from_field_text(
+                    self.fields.file_id,
+                    &document.file_id,
+                ));
+                deleted_document_count += 1;
+            }
             writer
                 .add_document(doc!(
                     self.fields.file_id => document.file_id.as_str(),
@@ -131,6 +214,7 @@ impl TantivySearchIndex {
                     self.fields.body => document.body.as_str(),
                 ))
                 .map_err(TantivySearchError::from)?;
+            added_document_count += 1;
             add_micros += duration_micros_nonzero(add_start.elapsed());
         }
         let commit_start = Instant::now();
@@ -140,10 +224,14 @@ impl TantivySearchIndex {
         self.reader.reload().map_err(TantivySearchError::from)?;
         let reader_reload_micros = duration_micros_nonzero(reload_start.elapsed());
 
-        Ok(TantivyIndexingStageDurations {
+        Ok(TantivyIndexingStageMetrics {
             add_micros,
             commit_micros,
             reader_reload_micros,
+            added_document_count,
+            deleted_document_count,
+            skipped_document_count: 0,
+            failed_document_count: 0,
         })
     }
 
@@ -322,6 +410,56 @@ mod tests {
             Some("\"Home\" \"OR\" \"title\"".to_string())
         );
         assert_eq!(safe_tantivy_query("   !!!   "), None);
+    }
+
+    #[test]
+    fn writer_options_default_preserves_current_memory_budget() {
+        assert_eq!(
+            TantivyWriterOptions::default().memory_budget_bytes,
+            DEFAULT_TANTIVY_WRITER_MEMORY_BUDGET_BYTES
+        );
+        assert_eq!(TantivyWriterOptions::default().writer_thread_count, None);
+    }
+
+    #[test]
+    fn indexes_fixture_with_explicit_single_writer_thread() {
+        let mut index = TantivySearchIndex::open_in_ram().expect("index");
+        let stages = index
+            .replace_documents_with_options_and_stage_durations(
+                &fixture_documents(),
+                TantivyWriterOptions {
+                    writer_thread_count: Some(1),
+                    ..Default::default()
+                },
+            )
+            .expect("replace docs");
+
+        assert_eq!(stages.added_document_count, 4);
+        assert_eq!(stages.deleted_document_count, 4);
+        assert!(stages.add_micros > 0);
+        assert!(index.search("Guide", 10).expect("search").len() == 1);
+    }
+
+    #[test]
+    fn add_documents_for_rebuild_indexes_fresh_index_without_deletes() {
+        let mut index = TantivySearchIndex::open_in_ram().expect("index");
+        let stages = index
+            .add_documents_for_rebuild_from_result_iter_with_stage_durations(
+                fixture_documents()
+                    .into_iter()
+                    .map(Ok::<SearchDocument, TantivySearchError>),
+            )
+            .expect("rebuild add");
+
+        assert_eq!(stages.added_document_count, 4);
+        assert_eq!(stages.deleted_document_count, 0);
+        assert!(
+            index
+                .search("compatibility fixture", 10)
+                .expect("search")
+                .len()
+                == 1
+        );
     }
 
     #[test]
