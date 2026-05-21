@@ -31,6 +31,12 @@ struct MarkdownEditorBridgeProbeReport: Codable, Equatable {
     var obsidianBlockquoteMarkerStaysConcealedInsideBlock: Bool
     var obsidianCalloutSyntaxConcealedOutsideReveal: Bool
     var obsidianCalloutSyntaxStaysConcealedInsideBlock: Bool
+    var horizontalRuleSyntaxConcealedOutsideReveal: Bool
+    var horizontalRuleSyntaxRevealedInsideLine: Bool
+    var horizontalRuleParagraphStyleApplied: Bool
+    var horizontalRuleOverlayDrawsOutsideReveal: Bool
+    var horizontalRuleOverlaySuppressedInsideReveal: Bool
+    var horizontalRuleRenderPreservesSource: Bool
     var markerStyleDefaultIsObsidian: Bool
     var markerStyleRawValuesRemainCompatible: Bool
     var markedTextRenderDeferred: Bool
@@ -107,6 +113,12 @@ enum MarkdownEditorBridgeProbe {
             obsidianBlockquoteMarkerStaysConcealedInsideBlock: renderProbe.obsidianBlockquoteMarkerStaysConcealedInsideBlock,
             obsidianCalloutSyntaxConcealedOutsideReveal: renderProbe.obsidianCalloutSyntaxConcealedOutsideReveal,
             obsidianCalloutSyntaxStaysConcealedInsideBlock: renderProbe.obsidianCalloutSyntaxStaysConcealedInsideBlock,
+            horizontalRuleSyntaxConcealedOutsideReveal: renderProbe.horizontalRuleSyntaxConcealedOutsideReveal,
+            horizontalRuleSyntaxRevealedInsideLine: renderProbe.horizontalRuleSyntaxRevealedInsideLine,
+            horizontalRuleParagraphStyleApplied: renderProbe.horizontalRuleParagraphStyleApplied,
+            horizontalRuleOverlayDrawsOutsideReveal: renderProbe.horizontalRuleOverlayDrawsOutsideReveal,
+            horizontalRuleOverlaySuppressedInsideReveal: renderProbe.horizontalRuleOverlaySuppressedInsideReveal,
+            horizontalRuleRenderPreservesSource: renderProbe.horizontalRuleRenderPreservesSource,
             markerStyleDefaultIsObsidian: markerStyleProbe.defaultIsObsidian,
             markerStyleRawValuesRemainCompatible: markerStyleProbe.rawValuesRemainCompatible,
             markedTextRenderDeferred: renderProbe.markedTextRenderDeferred,
@@ -265,6 +277,12 @@ enum MarkdownEditorBridgeProbe {
         obsidianBlockquoteMarkerStaysConcealedInsideBlock: Bool,
         obsidianCalloutSyntaxConcealedOutsideReveal: Bool,
         obsidianCalloutSyntaxStaysConcealedInsideBlock: Bool,
+        horizontalRuleSyntaxConcealedOutsideReveal: Bool,
+        horizontalRuleSyntaxRevealedInsideLine: Bool,
+        horizontalRuleParagraphStyleApplied: Bool,
+        horizontalRuleOverlayDrawsOutsideReveal: Bool,
+        horizontalRuleOverlaySuppressedInsideReveal: Bool,
+        horizontalRuleRenderPreservesSource: Bool,
         markedTextRenderDeferred: Bool,
         sourceModeClearsLivePreviewAttributes: Bool,
         sourceEquivalentSelectionText: Bool,
@@ -422,6 +440,7 @@ enum MarkdownEditorBridgeProbe {
             && foregroundColor(in: safeTextView, text: safeText, marker: "https://obsidian.md") == LivePreviewTheme.concealedColor
         let embedPreviewMapUpdatePreservesSelection = probeEmbedPreviewMapUpdatePreservesSelection()
         let markerStyleProbe = probeMarkerStyleRendering()
+        let horizontalRuleProbe = probeHorizontalRuleRendering()
 
         return (
             hiddenResult.changedRangeCount > 0 && hiddenResult.changedUTF16Length > 0,
@@ -442,6 +461,12 @@ enum MarkdownEditorBridgeProbe {
             markerStyleProbe.obsidianBlockquoteConcealedInsideBlock,
             markerStyleProbe.obsidianCalloutConcealed,
             markerStyleProbe.obsidianCalloutConcealedInsideBlock,
+            horizontalRuleProbe.syntaxConcealed,
+            horizontalRuleProbe.syntaxRevealed,
+            horizontalRuleProbe.paragraphStyleApplied,
+            horizontalRuleProbe.overlayDrawsOutsideReveal,
+            horizontalRuleProbe.overlaySuppressedInsideReveal,
+            horizontalRuleProbe.sourcePreserved,
             markedTextWasActive && markedResult.mode == "marked-text-deferred",
             sourceModeClearsLivePreviewAttributes,
             selectedSource == "Heading",
@@ -451,6 +476,61 @@ enum MarkdownEditorBridgeProbe {
             unsafeMarkdownLinkTargetsRemainVisible,
             unsafeWikiLinkTargetsRemainVisible,
             !textView.isRichText && !textView.importsGraphics
+        )
+    }
+
+    private static func probeHorizontalRuleRendering() -> (
+        syntaxConcealed: Bool,
+        syntaxRevealed: Bool,
+        paragraphStyleApplied: Bool,
+        overlayDrawsOutsideReveal: Bool,
+        overlaySuppressedInsideReveal: Bool,
+        sourcePreserved: Bool
+    ) {
+        let text = "Before\n---\nAfter\n"
+        let endSelection = NSRange(location: (text as NSString).length, length: 0)
+        let textView = MarkdownEditorTextViewFactory.makeTextView()
+        textView.string = text
+        textView.setSelectedRange(endSelection)
+        MarkdownVisibleRangeDecorator.decorateVisibleRange(
+            in: textView,
+            livePreviewMode: .livePreview,
+            revealRange: textView.selectedRange(),
+            markerStyle: .obsidian
+        )
+
+        let ruleOffset = (text as NSString).range(of: "---").location
+        let hiddenColor = foregroundColor(in: textView, text: text, marker: "---")
+        let paragraphStyle = textView.textStorage?.attribute(
+            .paragraphStyle,
+            at: ruleOffset,
+            effectiveRange: nil
+        ) as? NSParagraphStyle
+        let parsedRule = LivePreviewParser.parse(text).blocks.first { $0.kind == .horizontalRule }
+        let overlayDrawsOutsideReveal = parsedRule.map {
+            LivePreviewOverlayRenderer.shouldDrawHorizontalRule($0, selectedRange: endSelection)
+        } ?? false
+
+        let revealSelection = NSRange(location: ruleOffset, length: 0)
+        textView.setSelectedRange(revealSelection)
+        MarkdownVisibleRangeDecorator.decorateVisibleRange(
+            in: textView,
+            livePreviewMode: .livePreview,
+            revealRange: textView.selectedRange(),
+            markerStyle: .obsidian
+        )
+        let revealedColor = foregroundColor(in: textView, text: text, marker: "---")
+        let overlaySuppressedInsideReveal = parsedRule.map {
+            !LivePreviewOverlayRenderer.shouldDrawHorizontalRule($0, selectedRange: revealSelection)
+        } ?? false
+
+        return (
+            hiddenColor == LivePreviewTheme.concealedColor,
+            revealedColor != LivePreviewTheme.concealedColor,
+            paragraphStyle?.minimumLineHeight == LivePreviewTheme.horizontalRuleParagraphStyle.minimumLineHeight,
+            overlayDrawsOutsideReveal,
+            overlaySuppressedInsideReveal,
+            textView.string == text
         )
     }
 

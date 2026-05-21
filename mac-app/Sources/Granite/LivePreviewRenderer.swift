@@ -223,7 +223,7 @@ enum LivePreviewRenderer {
         case .horizontalRule:
             plan.addAttributes([
                 .foregroundColor: LivePreviewTheme.secondaryTextColor,
-                .paragraphStyle: LivePreviewTheme.listParagraphStyle
+                .paragraphStyle: LivePreviewTheme.horizontalRuleParagraphStyle
             ], range: range)
         case .embed:
             plan.addAttributes([
@@ -268,16 +268,17 @@ enum LivePreviewRenderer {
         for block: LivePreviewBlockSpan,
         markerStyle: LivePreviewMarkerStyle
     ) -> NSColor {
-        if markerStyle.usesMutedMarkerColor {
-            return LivePreviewTheme.secondaryTextColor
-        }
-
         switch block.kind {
+        case .horizontalRule:
+            return LivePreviewTheme.secondaryTextColor
         case .blockquote:
             return LivePreviewTheme.quoteBarColor
         case .callout:
             return LivePreviewTheme.calloutAccentColor(for: block.kind)
         default:
+            if markerStyle.usesMutedMarkerColor {
+                return LivePreviewTheme.secondaryTextColor
+            }
             return LivePreviewTheme.listMarkerColor
         }
     }
@@ -632,7 +633,7 @@ enum LivePreviewRenderer {
         case .paragraph:
             ranges = []
         case .horizontalRule:
-            ranges = []
+            ranges = [block.contentRange.nsRange]
         case .fencedCode:
             return matches(in: source, range: block.sourceRange.nsRange, regex: fenceLineRegex)
         case .frontmatter:
@@ -673,6 +674,8 @@ enum LivePreviewRenderer {
             return prefixMatches(in: source, block: block, regex: orderedListPrefixRegex)
         case .taskList:
             return prefixMatches(in: source, block: block, regex: taskListPrefixRegex)
+        case .horizontalRule:
+            return [block.contentRange.nsRange]
         default:
             return []
         }
