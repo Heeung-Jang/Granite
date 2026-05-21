@@ -7,6 +7,7 @@ struct RootView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.openSettings) private var openSettings
     @State private var leftPanel: ObsidianLeftPanel = .files
+    @State private var selectedInspectorPanel: NoteInspectorPanel = .backlinks
     @State private var vaultSelectionError: String?
     @State private var presentedSheet: RootSheet?
 
@@ -40,10 +41,12 @@ struct RootView: View {
                 newTab: newTab
             )
 
-            Divider()
+            if appState.workspaceSelection != .graph {
+                Divider()
 
-            ObsidianRightSidebar()
-                .frame(width: ObsidianUI.rightSidebarWidth)
+                ObsidianRightSidebar(selectedPanel: $selectedInspectorPanel)
+                    .frame(width: ObsidianUI.rightSidebarWidth)
+            }
         }
         .background(ObsidianUI.editorBackground)
         .alert("Unsaved Changes", isPresented: dirtyNavigationAlertBinding) {
@@ -903,12 +906,17 @@ private struct ObsidianMarkerStyleMenu: View {
 
 private struct ObsidianRightSidebar: View {
     @EnvironmentObject private var appState: AppState
+    @Binding var selectedPanel: NoteInspectorPanel
 
     var body: some View {
         switch appState.vaultSelection {
         case .selected(let url):
             if let selectedFile = appState.selectedFile {
-                NoteInspectorView(vaultURL: url, file: selectedFile)
+                NoteInspectorView(
+                    vaultURL: url,
+                    file: selectedFile,
+                    selectedPanel: $selectedPanel
+                )
             } else {
                 ObsidianEmptySidebar(title: "No note selected")
             }

@@ -6,8 +6,8 @@ struct NoteInspectorView: View {
     @EnvironmentObject private var appState: AppState
     let vaultURL: URL
     let file: FileTreeItem
+    @Binding var selectedPanel: NoteInspectorPanel
 
-    @State private var selectedPanel: NoteInspectorPanel = .backlinks
     @State private var backlinksState: InspectorPanelState<[BacklinkItem]> = .idle
     @State private var outgoingState: InspectorPanelState<[OutgoingLinkItem]> = .idle
     @State private var tagsState: InspectorPanelState<TagsPropertiesPayload> = .idle
@@ -91,8 +91,7 @@ struct NoteInspectorView: View {
         outgoingState = .idle
         tagsState = .idle
         attachmentsState = .idle
-        selectedPanel = .backlinks
-        await load(.backlinks)
+        await load(selectedPanel)
     }
 
     private func load(_ panel: NoteInspectorPanel) async {
@@ -416,7 +415,7 @@ private struct TagsPropertiesPayload: Equatable {
     let properties: [PropertyItem]
 }
 
-private enum NoteInspectorPanel: CaseIterable {
+enum NoteInspectorPanel: CaseIterable {
     case backlinks
     case outgoing
     case tags

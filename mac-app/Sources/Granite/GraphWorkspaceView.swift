@@ -24,6 +24,7 @@ struct GraphWorkspaceView: View {
 
     private let graphClient = EngineGraphClient()
     private let enablesParityControls = true
+    private let graphViewTitle = "그래프 뷰"
 
     var body: some View {
         HStack(spacing: 0) {
@@ -48,7 +49,7 @@ struct GraphWorkspaceView: View {
         }
         .background(ObsidianUI.editorBackground)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Graph view")
+        .accessibilityLabel(graphViewTitle)
         .task(id: graphLoadKey) {
             await loadGraphIfNeeded()
         }
@@ -206,9 +207,9 @@ struct GraphWorkspaceView: View {
                 )
             }
         case .noVault:
-            graphStatusPlaceholder(title: "Graph view", detail: "No vault open")
+            graphStatusPlaceholder(title: graphViewTitle, detail: "No vault open")
         case .unavailable(let issue):
-            graphStatusPlaceholder(title: "Graph view", detail: issue.displayTitle)
+            graphStatusPlaceholder(title: graphViewTitle, detail: issue.displayTitle)
         }
     }
 
@@ -233,7 +234,7 @@ struct GraphWorkspaceView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Graph view")
+        .accessibilityLabel(graphViewTitle)
     }
 
     private func validatedRendererInput(layout: GraphRendererSnapshot) -> RendererInputState {
@@ -662,7 +663,7 @@ struct GraphWorkspaceView: View {
         case .cancelled:
             return "Graph load cancelled"
         default:
-            return "Graph view"
+            return graphViewTitle
         }
     }
 

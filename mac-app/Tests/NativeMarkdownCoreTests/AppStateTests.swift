@@ -201,6 +201,22 @@ func appStateSelectingGraphPreservesSelectedFileAndDirtyState() {
 }
 
 @Test
+func appStateClosingGraphRestoresSelectedDirtyNote() {
+    let state = AppState()
+    let file = FileTreeItem(relativePath: "Draft.md")
+
+    #expect(state.openFile(file))
+    state.updateEditorDirtyState(file: file, isDirty: true)
+    state.openGraph(source: .ribbon)
+
+    #expect(state.closeWorkspaceSelection())
+
+    #expect(state.workspaceSelection == .note(file))
+    #expect(state.selectedFile == file)
+    #expect(state.isEditorDirty(file: file))
+}
+
+@Test
 func appStateDirtyNavigationFromGraphKeepsGraphSelectedWhenCancelled() {
     let state = AppState()
     let dirty = FileTreeItem(relativePath: "Dirty.md")
