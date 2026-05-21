@@ -8,7 +8,8 @@ use std::path::{Path, PathBuf};
 use std::process;
 use std::time::Instant;
 use vault_engine::benchmarks::{
-    VaultBackendBenchmarkOptions, run_shared_backend_benchmark_from_vault,
+    VaultBackendBenchmarkOptions, WholeVaultGraphBenchmarkOptions,
+    run_shared_backend_benchmark_from_vault, run_whole_vault_graph_snapshot_benchmark,
 };
 use vault_engine::tantivy_search::{TantivySearchError, TantivySearchIndex};
 use vault_profiler::corpus::{QueryCorpusOptions, generate_query_corpus_bundle};
@@ -103,6 +104,26 @@ fn run() -> Result<(), Box<dyn Error>> {
         }
         Command::ObsidianRunbook(command) => write_obsidian_runbook(&command),
         Command::TantivyQueryBenchmark(command) => run_tantivy_query_benchmark(&command),
+        Command::GraphSnapshotBenchmark(command) => {
+            let artifact =
+                run_whole_vault_graph_snapshot_benchmark(&WholeVaultGraphBenchmarkOptions {
+                    vault_alias: command.vault_alias,
+                    code_revision: command.code_revision,
+                    vault_root: command.vault_root.clone(),
+                    max_nodes: command.max_nodes,
+                    max_edges: command.max_edges,
+                    include_unresolved: command.include_unresolved,
+                    include_orphans: command.include_orphans,
+                    swift_decode_duration_milliseconds: command.swift_decode_duration_milliseconds,
+                    swift_decode_memory_bytes: command.swift_decode_memory_bytes,
+                })?;
+            write_json(
+                &command.vault_root,
+                command.output_path,
+                &artifact,
+                command.pretty,
+            )
+        }
     }
 }
 
@@ -140,12 +161,12 @@ fn write_json<T: serde::Serialize>(
     Ok(())
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 struct Cli {
     command: Command,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 enum Command {
     Profile(ProfileCommand),
     QueryCorpus(QueryCorpusCommand),
@@ -153,6 +174,7 @@ enum Command {
     BackendBenchmark(BackendBenchmarkCommand),
     ObsidianRunbook(ObsidianRunbookCommand),
     TantivyQueryBenchmark(TantivyQueryBenchmarkCommand),
+    GraphSnapshotBenchmark(GraphSnapshotBenchmarkCommand),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -209,6 +231,21 @@ struct TantivyQueryBenchmarkCommand {
     runbook_path: PathBuf,
     output_path: PathBuf,
     result_limit: usize,
+    pretty: bool,
+}
+
+#[derive(Debug, PartialEq)]
+struct GraphSnapshotBenchmarkCommand {
+    vault_root: PathBuf,
+    output_path: Option<PathBuf>,
+    vault_alias: String,
+    code_revision: String,
+    max_nodes: usize,
+    max_edges: usize,
+    include_unresolved: bool,
+    include_orphans: bool,
+    swift_decode_duration_milliseconds: f64,
+    swift_decode_memory_bytes: u64,
     pretty: bool,
 }
 
@@ -298,6 +335,9 @@ impl Cli {
             "obsidian-runbook" => Command::ObsidianRunbook(ObsidianRunbookCommand::parse(args)?),
             "tantivy-query-benchmark" => {
                 Command::TantivyQueryBenchmark(TantivyQueryBenchmarkCommand::parse(args)?)
+            }
+            "graph-snapshot-benchmark" => {
+                Command::GraphSnapshotBenchmark(GraphSnapshotBenchmarkCommand::parse(args)?)
             }
             _ => return Err(usage().into()),
         };
@@ -567,6 +607,98 @@ impl TantivyQueryBenchmarkCommand {
             result_limit,
             pretty,
         })
+    }
+}
+
+impl GraphSnapshotBenchmarkCommand {
+    fn parse<I>(args: I) -> Result<Self, Box<dyn Error>>
+    where
+        I: Iterator<Item = OsString>,
+    {
+        let mut parser = CommonParser::new(args);
+        let mut vault_alias = "small-fixture".to_string();
+        let mut code_revision = "0000000".to_string();
+        let mut max_nodes = 100_000;
+        let mut max_edges = 250_000;
+        let mut include_unresolved = true;
+        let mut include_orphans = true;
+        let mut swift_decode_duration_milliseconds: Option<f64> = None;
+        let mut swift_decode_memory_bytes = None;
+
+        while let Some(arg) = parser.next_arg() {
+            match arg.as_str() {
+                "--vault-alias" => vault_alias = parser.required_string_arg("--vault-alias")?,
+                "--code-revision" => {
+                    code_revision = parser.required_string_arg("--code-revision")?
+                }
+                "--max-nodes" => {
+                    let value = parser.required_string_arg("--max-nodes")?;
+                    max_nodes = value.parse()?;
+                }
+                "--max-edges" => {
+                    let value = parser.required_string_arg("--max-edges")?;
+                    max_edges = value.parse()?;
+                }
+                "--swift-decode-duration-ms" => {
+                    let value = parser.required_string_arg("--swift-decode-duration-ms")?;
+                    swift_decode_duration_milliseconds = Some(value.parse()?);
+                }
+                "--swift-decode-memory-bytes" => {
+                    let value = parser.required_string_arg("--swift-decode-memory-bytes")?;
+                    swift_decode_memory_bytes = Some(value.parse()?);
+                }
+                "--exclude-unresolved" => include_unresolved = false,
+                "--exclude-orphans" => include_orphans = false,
+                _ => parser.parse_common_arg(arg)?,
+            }
+        }
+
+        let vault_root = parser.required_vault()?;
+        validate_graph_vault_alias(&vault_alias)?;
+        validate_code_revision(&code_revision)?;
+        let Some(swift_decode_duration_milliseconds) = swift_decode_duration_milliseconds else {
+            return Err("missing required --swift-decode-duration-ms argument".into());
+        };
+        let Some(swift_decode_memory_bytes) = swift_decode_memory_bytes else {
+            return Err("missing required --swift-decode-memory-bytes argument".into());
+        };
+        if !swift_decode_duration_milliseconds.is_finite()
+            || swift_decode_duration_milliseconds < 0.0
+        {
+            return Err("swift decode duration must be a finite non-negative number".into());
+        }
+        Ok(Self {
+            vault_root,
+            output_path: parser.output_path,
+            vault_alias,
+            code_revision,
+            max_nodes,
+            max_edges,
+            include_unresolved,
+            include_orphans,
+            swift_decode_duration_milliseconds,
+            swift_decode_memory_bytes,
+            pretty: parser.pretty,
+        })
+    }
+}
+
+fn validate_graph_vault_alias(alias: &str) -> Result<(), Box<dyn Error>> {
+    match alias {
+        "real-vault-large" | "synthetic-64k" | "small-fixture" => Ok(()),
+        _ => Err("invalid graph vault alias".into()),
+    }
+}
+
+fn validate_code_revision(revision: &str) -> Result<(), Box<dyn Error>> {
+    let valid_length = (7..=40).contains(&revision.len());
+    let valid_chars = revision
+        .bytes()
+        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
+    if valid_length && valid_chars {
+        Ok(())
+    } else {
+        Err("code revision must be 7-40 lowercase hex characters".into())
     }
 }
 
@@ -849,7 +981,7 @@ where
 }
 
 fn usage() -> &'static str {
-    "usage: vault-profiler <profile|query-corpus|synthetic-vault|backend-benchmark|obsidian-runbook|tantivy-query-benchmark> [options]"
+    "usage: vault-profiler <profile|query-corpus|synthetic-vault|backend-benchmark|obsidian-runbook|tantivy-query-benchmark|graph-snapshot-benchmark> [options]"
 }
 
 #[cfg(test)]
@@ -1070,6 +1202,105 @@ mod tests {
                     pretty: true,
                 }),
             }
+        );
+    }
+
+    #[test]
+    fn parses_graph_snapshot_benchmark_args() {
+        let cli = Cli::parse(
+            [
+                "graph-snapshot-benchmark",
+                "--vault",
+                "/tmp/vault",
+                "--output",
+                "/tmp/graph.json",
+                "--vault-alias",
+                "small-fixture",
+                "--code-revision",
+                "abcdef0",
+                "--max-nodes",
+                "64000",
+                "--max-edges",
+                "128000",
+                "--swift-decode-duration-ms",
+                "42.5",
+                "--swift-decode-memory-bytes",
+                "8388608",
+                "--exclude-unresolved",
+                "--pretty",
+            ]
+            .into_iter()
+            .map(OsString::from),
+        )
+        .expect("cli");
+
+        assert_eq!(
+            cli,
+            Cli {
+                command: Command::GraphSnapshotBenchmark(GraphSnapshotBenchmarkCommand {
+                    vault_root: PathBuf::from("/tmp/vault"),
+                    output_path: Some(PathBuf::from("/tmp/graph.json")),
+                    vault_alias: "small-fixture".to_string(),
+                    code_revision: "abcdef0".to_string(),
+                    max_nodes: 64_000,
+                    max_edges: 128_000,
+                    include_unresolved: false,
+                    include_orphans: true,
+                    swift_decode_duration_milliseconds: 42.5,
+                    swift_decode_memory_bytes: 8_388_608,
+                    pretty: true,
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_graph_snapshot_schema_fields() {
+        let invalid_alias = Cli::parse(
+            [
+                "graph-snapshot-benchmark",
+                "--vault",
+                "/tmp/vault",
+                "--vault-alias",
+                "/Users/example/private-vault",
+            ]
+            .into_iter()
+            .map(OsString::from),
+        )
+        .expect_err("invalid alias");
+        let invalid_alias_message = invalid_alias.to_string();
+        assert_eq!(invalid_alias_message, "invalid graph vault alias");
+        assert!(!invalid_alias_message.contains("/Users/example/private-vault"));
+
+        assert!(
+            Cli::parse(
+                [
+                    "graph-snapshot-benchmark",
+                    "--vault",
+                    "/tmp/vault",
+                    "--code-revision",
+                    "not-a-revision",
+                ]
+                .into_iter()
+                .map(OsString::from),
+            )
+            .is_err()
+        );
+        assert!(
+            Cli::parse(
+                [
+                    "graph-snapshot-benchmark",
+                    "--vault",
+                    "/tmp/vault",
+                    "--swift-decode-duration-ms",
+                    "NaN",
+                    "--swift-decode-memory-bytes",
+                    "1",
+                ]
+                .into_iter()
+                .map(OsString::from),
+            )
+            .is_err()
         );
     }
 

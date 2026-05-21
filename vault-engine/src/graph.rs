@@ -4,6 +4,7 @@ use crate::graph_key::unresolved_target_key;
 use crate::index::{
     GraphFileRecord, GraphResolvedEdgeRecord, GraphTagRecord, GraphUnresolvedEdgeRecord,
 };
+use serde::Serialize;
 
 pub const MAX_WHOLE_VAULT_GRAPH_NODES: usize = 100_000;
 pub const MAX_WHOLE_VAULT_GRAPH_EDGES: usize = 250_000;
@@ -27,7 +28,7 @@ pub struct WholeVaultGraphRequest {
     pub longest_group_rule_length: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct WholeVaultGraphSnapshot {
     pub request_id: u64,
     pub generation: u64,
@@ -38,7 +39,7 @@ pub struct WholeVaultGraphSnapshot {
     pub edges: Vec<WholeVaultGraphEdge>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct WholeVaultGraphNode {
     pub node_id: String,
     pub file_id: Option<String>,
@@ -48,13 +49,13 @@ pub struct WholeVaultGraphNode {
     pub tags: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum WholeVaultGraphNodeKind {
     Resolved,
     Unresolved,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct WholeVaultGraphEdge {
     pub source_node_id: String,
     pub target_node_id: String,
@@ -62,13 +63,13 @@ pub struct WholeVaultGraphEdge {
     pub weight: usize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum WholeVaultGraphEdgeKind {
     Resolved,
     Unresolved,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum WholeVaultGraphPartialReason {
     MaxNodes,
     MaxEdges,
