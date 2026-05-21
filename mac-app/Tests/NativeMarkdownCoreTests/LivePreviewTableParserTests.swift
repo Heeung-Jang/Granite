@@ -171,6 +171,78 @@ func livePreviewTableCellEditRejectsStaleCellContent() throws {
     #expect(LivePreviewTableCellEdit.replacing(cell: cell, with: "Final", in: changedSource) == nil)
 }
 
+@Test
+func livePreviewTableRowInsertAddsBlankRowAfterHeaderAndBodyRows() throws {
+    let source = """
+    | Name | Status |
+    | --- | --- |
+    | Alpha | Draft |
+    """
+    let table = try #require(LivePreviewTableParser.parse(source).first)
+    let afterHeader = try #require(LivePreviewTableRowInsert.insertingRow(after: table.header[0], in: source))
+    let afterBody = try #require(LivePreviewTableRowInsert.insertingRow(after: table.bodyRows[0][0], in: source))
+
+    #expect(afterHeader == """
+    | Name | Status |
+    | --- | --- |
+    |  |  |
+    | Alpha | Draft |
+    """)
+    #expect(afterBody == """
+    | Name | Status |
+    | --- | --- |
+    | Alpha | Draft |
+    |  |  |
+    """)
+}
+
+@Test
+func livePreviewTableRowInsertPreservesCRLFAndSurroundingText() throws {
+    let source = "BOM\n| Name | Status |\r\n| --- | --- |\r\n| Alpha | Draft |\r\nEOF"
+    let table = try #require(LivePreviewTableParser.parse(source).first)
+    let edited = try #require(LivePreviewTableRowInsert.insertingRow(after: table.bodyRows[0][0], in: source))
+
+    #expect(edited.hasPrefix("BOM\n"))
+    #expect(edited.hasSuffix("EOF"))
+    #expect(edited.contains("| Alpha | Draft |\r\n|  |  |\r\nEOF"))
+}
+
+@Test
+func livePreviewTableColumnInsertAddsBlankColumnAfterTarget() throws {
+    let source = """
+    | Name | Status |
+    | --- | --- |
+    | Alpha | Draft |
+    """
+    let table = try #require(LivePreviewTableParser.parse(source).first)
+    let edited = try #require(LivePreviewTableColumnInsert.insertingColumn(after: table.header[0], in: source))
+
+    #expect(edited == """
+    | Name |  | Status |
+    | --- | --- | --- |
+    | Alpha |  | Draft |
+    """)
+}
+
+@Test
+func livePreviewTableColumnInsertRejectsMalformedOrStaleTargets() throws {
+    let source = """
+    | Name | Status |
+    | --- | --- |
+    | Alpha |
+    """
+    let table = try #require(LivePreviewTableParser.parse(source).first)
+    #expect(LivePreviewTableColumnInsert.insertingColumn(after: table.header[0], in: source) == nil)
+
+    let validSource = """
+    | Name | Status |
+    | --- | --- |
+    | Alpha | Draft |
+    """
+    let validTable = try #require(LivePreviewTableParser.parse(validSource).first)
+    #expect(LivePreviewTableColumnInsert.insertingColumn(after: validTable.header[0], in: "Prefix\n" + validSource) == nil)
+}
+
 private func fixture(_ name: String) throws -> String {
     let repoRoot = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()
