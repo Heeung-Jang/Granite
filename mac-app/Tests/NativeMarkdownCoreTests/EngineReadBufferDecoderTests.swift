@@ -28,6 +28,23 @@ func engineReadHeaderRejectsShortAndUnsupportedBuffers() {
 }
 
 @Test
+func engineReadDecodesErrorPayload() throws {
+    var builder = ReadTestBufferBuilder(
+        rowKind: EngineReadABI.RowKind.searchHit,
+        state: EngineReadABI.State.indexUnavailable
+    )
+    builder.setError(code: "index_unavailable", message: "metadata store missing")
+
+    let payload = try EngineReadBufferDecoder.decodeErrorPayload(builder.finish(rowStride: 40))
+
+    #expect(payload == EngineReadErrorPayload(
+        code: "index_unavailable",
+        message: "metadata store missing",
+        state: EngineReadABI.State.indexUnavailable
+    ))
+}
+
+@Test
 func engineReadStringArenaRejectsInvalidRefsAndUTF8() {
     var invalidRef = ReadTestBufferBuilder(rowKind: EngineReadABI.RowKind.fileTree)
     let badRef = TestStringRef(offset: 9_999, length: 4)
@@ -87,6 +104,27 @@ func engineReadDecodesFileTreeAndSearchRows() throws {
     #expect(page.nextOffset == 3)
     #expect(page.items.first?.title == "Home")
     #expect(page.items.first?.rank == 2.5)
+}
+
+@Test
+func engineReadDecodesAllSearchStates() throws {
+    let cases: [(UInt32, SearchResultState)] = [
+        (EngineReadABI.State.complete, .complete),
+        (EngineReadABI.State.partial, .partial),
+        (EngineReadABI.State.stale, .stale),
+        (EngineReadABI.State.cancelled, .cancelled),
+        (EngineReadABI.State.error, .error),
+        (EngineReadABI.State.indexUnavailable, .error)
+    ]
+
+    for (state, expected) in cases {
+        var builder = ReadTestBufferBuilder(rowKind: EngineReadABI.RowKind.searchHit, state: state)
+        builder.appendSearch(relativePath: "Home.md", title: "Home", snippet: "body", rank: 1)
+
+        let page = try EngineReadBufferDecoder.decodeSearch(builder.finish(rowStride: 40))
+
+        #expect(page.state == expected)
+    }
 }
 
 @Test
@@ -199,12 +237,12 @@ func engineReadLivePreviewMetadataBuildsMaps() throws {
     #expect(previewMap.preview(for: block)?.status == .nonImage)
 }
 
-private struct TestStringRef {
+struct TestStringRef {
     var offset: UInt32
     var length: UInt32
 }
 
-private struct ReadTestBufferBuilder {
+struct ReadTestBufferBuilder {
     var rowKind: UInt32
     var requestID: UInt64
     var generation: UInt64
@@ -213,6 +251,8 @@ private struct ReadTestBufferBuilder {
     private var rows = Data()
     private var strings = Data()
     private var rowCount: UInt32 = 0
+    private var errorCode = TestStringRef(offset: 0, length: 0)
+    private var errorMessage = TestStringRef(offset: 0, length: 0)
 
     init(
         rowKind: UInt32,
@@ -236,6 +276,11 @@ private struct ReadTestBufferBuilder {
         let ref = TestStringRef(offset: UInt32(strings.count), length: UInt32(bytes.count))
         strings.append(contentsOf: bytes)
         return ref
+    }
+
+    mutating func setError(code: String, message: String) {
+        errorCode = string(code)
+        errorMessage = string(message)
     }
 
     mutating func appendFileTree(relativePath: TestStringRef, displayName: TestStringRef) {
@@ -352,8 +397,8 @@ private struct ReadTestBufferBuilder {
         writeUInt32(UInt32(72 + rows.count), to: &data)
         writeUInt32(UInt32(strings.count), to: &data)
         writeUInt64(nextOffset, to: &data)
-        writeRef(TestStringRef(offset: 0, length: 0), to: &data)
-        writeRef(TestStringRef(offset: 0, length: 0), to: &data)
+        writeRef(errorCode, to: &data)
+        writeRef(errorMessage, to: &data)
         data.append(rows)
         data.append(strings)
         return data
@@ -380,17 +425,17 @@ private struct ReadTestBufferBuilder {
     }
 }
 
-private func writeRef(_ ref: TestStringRef, to data: inout Data) {
+func writeRef(_ ref: TestStringRef, to data: inout Data) {
     writeUInt32(ref.offset, to: &data)
     writeUInt32(ref.length, to: &data)
 }
 
-private func writeUInt32(_ value: UInt32, to data: inout Data) {
+func writeUInt32(_ value: UInt32, to data: inout Data) {
     var value = value.littleEndian
     withUnsafeBytes(of: &value) { data.append(contentsOf: $0) }
 }
 
-private func writeUInt64(_ value: UInt64, to data: inout Data) {
+func writeUInt64(_ value: UInt64, to data: inout Data) {
     var value = value.littleEndian
     withUnsafeBytes(of: &value) { data.append(contentsOf: $0) }
 }

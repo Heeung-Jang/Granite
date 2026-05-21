@@ -80,6 +80,18 @@ public struct EngineReadResultHeader: Equatable, Sendable {
     public let errorMessage: EngineReadStringRef
 }
 
+public struct EngineReadErrorPayload: Equatable, Sendable {
+    public let code: String
+    public let message: String
+    public let state: UInt32
+
+    public init(code: String, message: String, state: UInt32) {
+        self.code = code
+        self.message = message
+        self.state = state
+    }
+}
+
 public struct EngineLivePreviewMetadata: Equatable, Sendable {
     public let outgoingLinks: [OutgoingLinkItem]
     public let attachments: [AttachmentReferenceItem]
@@ -112,6 +124,14 @@ public enum EngineReadBufferDecoder {
 
     public static func decodeHeader(_ buffer: UnsafeRawBufferPointer) throws -> EngineReadResultHeader {
         try EngineReadBinaryDecoder(buffer: buffer).decodeHeader()
+    }
+
+    public static func decodeErrorPayload(_ data: Data) throws -> EngineReadErrorPayload? {
+        try data.withUnsafeBytes { try decodeErrorPayload($0) }
+    }
+
+    public static func decodeErrorPayload(_ buffer: UnsafeRawBufferPointer) throws -> EngineReadErrorPayload? {
+        try EngineReadBinaryDecoder(buffer: buffer).decodeErrorPayload()
     }
 
     public static func decodeFileTree(_ data: Data) throws -> FileTreeSnapshot {
@@ -222,6 +242,20 @@ private struct EngineReadBinaryDecoder {
             throw EngineReadDecodeError.unsupportedABIVersion(header.abiVersion)
         }
         return header
+    }
+
+    func decodeErrorPayload() throws -> EngineReadErrorPayload? {
+        let header = try decodeHeader()
+        guard header.state == EngineReadABI.State.error ||
+            header.state == EngineReadABI.State.indexUnavailable
+        else {
+            return nil
+        }
+        return EngineReadErrorPayload(
+            code: try string(header.errorCode, header: header),
+            message: try string(header.errorMessage, header: header),
+            state: header.state
+        )
     }
 
     func decodeFileTree() throws -> FileTreeSnapshot {
