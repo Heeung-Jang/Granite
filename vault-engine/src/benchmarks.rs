@@ -378,7 +378,7 @@ pub fn run_whole_vault_graph_snapshot_benchmark(
     let rss_after = current_rss_bytes();
     let rss_delta = rss_before
         .zip(rss_after)
-        .and_then(|(before, after)| after.checked_sub(before));
+        .map(|(before, after)| after.saturating_sub(before));
     if let Some(path) = &options.private_payload_output {
         write_private_graph_payload(path, &build.snapshot, snapshot_ms, encoded_payload_bytes)?;
     }
