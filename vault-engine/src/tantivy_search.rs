@@ -162,6 +162,45 @@ impl TantivySearchIndex {
         self.index_documents_from_result_iter(documents, options, true)
     }
 
+    pub fn delete_documents_by_file_ids_with_options_and_stage_durations(
+        &mut self,
+        file_ids: &[String],
+        options: TantivyWriterOptions,
+    ) -> TantivySearchResult<TantivyIndexingStageMetrics> {
+        if file_ids.is_empty() {
+            return Ok(TantivyIndexingStageMetrics::default());
+        }
+
+        let mut writer: tantivy::IndexWriter<TantivyDocument> = match options.writer_thread_count {
+            Some(thread_count) => self
+                .index
+                .writer_with_num_threads(thread_count.max(1), options.memory_budget_bytes),
+            None => self.index.writer(options.memory_budget_bytes),
+        }?;
+        let mut delete_micros = 0;
+        for file_id in file_ids {
+            let delete_start = Instant::now();
+            writer.delete_term(Term::from_field_text(self.fields.file_id, file_id));
+            delete_micros += duration_micros_nonzero(delete_start.elapsed());
+        }
+        let commit_start = Instant::now();
+        writer.commit()?;
+        let commit_micros = duration_micros_nonzero(commit_start.elapsed());
+        let reload_start = Instant::now();
+        self.reader.reload()?;
+        let reader_reload_micros = duration_micros_nonzero(reload_start.elapsed());
+
+        Ok(TantivyIndexingStageMetrics {
+            add_micros: delete_micros,
+            commit_micros,
+            reader_reload_micros,
+            added_document_count: 0,
+            deleted_document_count: file_ids.len(),
+            skipped_document_count: 0,
+            failed_document_count: 0,
+        })
+    }
+
     /// Add documents into a fresh rebuild index without deleting existing file ids first.
     ///
     /// This is only valid when the target index directory was just created or reset.

@@ -12,10 +12,14 @@ use serde::Serialize;
 use crate::attachments::{AttachmentReferenceSource, AttachmentResolutionState};
 use crate::index::{
     AttachmentRecord, FileIndexStatus, FileMetadataRecords, FileRecord, HeadingRecord,
-    LinkEdgeRecord, PropertyRecord, TagRecord, TagSource, slugify_heading,
+    LinkEdgeRecord, MetadataStore, MetadataStoreError, PropertyRecord, TagRecord, TagSource,
+    slugify_heading,
+};
+use crate::indexing_queue::{
+    IndexingQueue, IndexingQueueError, IndexingQueueItem, IndexingQueueReason,
 };
 use crate::parser::{ParsedMarkdown, PropertyValue, parse_markdown};
-use crate::paths::{FileIdentity, VaultRoot, lookup_key};
+use crate::paths::{FileIdentity, PathError, VaultRoot, lookup_key};
 use crate::scanner::{ScanEntryKind, scan_vault};
 use crate::sqlite_fts::SearchDocument;
 use crate::tantivy_search::{
@@ -131,16 +135,45 @@ impl ProductionIndexingPipelineResult {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QueueBatchIndexOptions {
+    pub lease_limit: usize,
+    pub max_attempts: u32,
+}
+
+impl Default for QueueBatchIndexOptions {
+    fn default() -> Self {
+        Self {
+            lease_limit: 32,
+            max_attempts: 3,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QueueLeaseBatch {
+    pub items: Vec<QueuePipelineItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QueuePipelineItem {
+    pub queue_item: IndexingQueueItem,
+    pub source: Option<SearchDocumentSource>,
+}
+
 #[derive(Debug)]
 pub enum IndexingPipelineError {
     Io(std::io::Error),
+    Path(PathError),
     Scan(String),
+    Metadata(MetadataStoreError),
+    Queue(IndexingQueueError),
     Tantivy(TantivySearchError),
 }
 
 pub type IndexingPipelineResult<T> = Result<T, IndexingPipelineError>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchDocumentSource {
     pub relative_path: PathBuf,
     pub absolute_path: PathBuf,
@@ -284,6 +317,197 @@ pub fn load_search_document_sources(
             source_collection_micros,
         },
     })
+}
+
+pub fn lease_queue_batch(
+    queue: &mut IndexingQueue,
+    root: &VaultRoot,
+    limit: usize,
+) -> IndexingPipelineResult<QueueLeaseBatch> {
+    let queue_items = queue.lease_batch(limit)?;
+    let mut items = Vec::with_capacity(queue_items.len());
+    for queue_item in queue_items {
+        let source = source_for_queue_item(root, &queue_item)?;
+        items.push(QueuePipelineItem { queue_item, source });
+    }
+    Ok(QueueLeaseBatch { items })
+}
+
+pub fn process_indexing_queue_batch(
+    queue: &mut IndexingQueue,
+    metadata_store: &mut MetadataStore,
+    tantivy_index: &mut TantivySearchIndex,
+    root: &VaultRoot,
+    batch_options: QueueBatchIndexOptions,
+    pipeline_options: &IndexingPipelineOptions,
+) -> IndexingPipelineResult<ProductionIndexingPipelineResult> {
+    let queue_items = queue.lease_batch(batch_options.lease_limit)?;
+    let mut generation = 0;
+    let mut processed_count = 0;
+    let mut failed_count = 0;
+    let mut stats = PipelineCorpusStats::default();
+    let mut metadata_records = Vec::new();
+    let mut documents = Vec::new();
+    let mut successful_item_ids = Vec::new();
+    let mut deleted_file_ids = Vec::new();
+    let mut deleted_item_ids = Vec::new();
+    let options = pipeline_options.normalized();
+
+    for queue_item in queue_items {
+        generation = generation.max(queue_item.generation);
+        if queue_item.reason == IndexingQueueReason::FileDeleted {
+            deleted_file_ids.push(queue_item.file_id.clone());
+            deleted_item_ids.push(queue_item.item_id);
+            continue;
+        }
+
+        let source = match source_for_queue_item(root, &queue_item) {
+            Ok(Some(source)) => source,
+            Ok(None) => {
+                successful_item_ids.push(queue_item.item_id);
+                continue;
+            }
+            Err(error) => {
+                record_queue_failure(
+                    queue,
+                    queue_item.item_id,
+                    &error,
+                    batch_options.max_attempts,
+                )?;
+                failed_count += 1;
+                continue;
+            }
+        };
+
+        match read_parse_source(&source) {
+            Ok(timed) => {
+                stats.record_timed(&timed);
+                let mut records = timed.work_item.metadata_records;
+                records.file.generation = queue_item.generation;
+                records.file.mark_search_indexed();
+                metadata_records.push(records);
+                documents.push(timed.document);
+                successful_item_ids.push(queue_item.item_id);
+            }
+            Err(error) => {
+                record_queue_failure(
+                    queue,
+                    queue_item.item_id,
+                    &error,
+                    batch_options.max_attempts,
+                )?;
+                failed_count += 1;
+            }
+        }
+    }
+
+    let mut sqlite_metadata_write_micros = 0;
+    if !metadata_records.is_empty() {
+        let start = Instant::now();
+        if let Err(error) = metadata_store.replace_file_records_batch(&metadata_records) {
+            record_queue_failures(
+                queue,
+                &successful_item_ids,
+                &error,
+                batch_options.max_attempts,
+            )?;
+            failed_count += successful_item_ids.len();
+            return Ok(production_result(
+                generation,
+                processed_count,
+                failed_count,
+                stats,
+                0,
+                TantivyIndexingStageMetrics::default(),
+            ));
+        }
+        sqlite_metadata_write_micros = duration_micros_nonzero(start.elapsed());
+    }
+
+    let mut tantivy_stages = TantivyIndexingStageMetrics::default();
+    if !documents.is_empty() {
+        match tantivy_index
+            .replace_documents_with_options_and_stage_durations(&documents, options.writer_options)
+        {
+            Ok(stages) => tantivy_stages = merge_tantivy_metrics(tantivy_stages, stages),
+            Err(error) => {
+                record_queue_failures(
+                    queue,
+                    &successful_item_ids,
+                    &error,
+                    batch_options.max_attempts,
+                )?;
+                failed_count += successful_item_ids.len();
+                return Ok(production_result(
+                    generation,
+                    processed_count,
+                    failed_count,
+                    stats,
+                    sqlite_metadata_write_micros,
+                    tantivy_stages,
+                ));
+            }
+        }
+    }
+
+    if !deleted_file_ids.is_empty() {
+        for file_id in &deleted_file_ids {
+            if let Err(error) = metadata_store.delete_file(file_id) {
+                record_queue_failures(
+                    queue,
+                    &deleted_item_ids,
+                    &error,
+                    batch_options.max_attempts,
+                )?;
+                failed_count += deleted_item_ids.len();
+                return Ok(production_result(
+                    generation,
+                    processed_count,
+                    failed_count,
+                    stats,
+                    sqlite_metadata_write_micros,
+                    tantivy_stages,
+                ));
+            }
+        }
+        match tantivy_index.delete_documents_by_file_ids_with_options_and_stage_durations(
+            &deleted_file_ids,
+            options.writer_options,
+        ) {
+            Ok(stages) => tantivy_stages = merge_tantivy_metrics(tantivy_stages, stages),
+            Err(error) => {
+                record_queue_failures(
+                    queue,
+                    &deleted_item_ids,
+                    &error,
+                    batch_options.max_attempts,
+                )?;
+                failed_count += deleted_item_ids.len();
+                return Ok(production_result(
+                    generation,
+                    processed_count,
+                    failed_count,
+                    stats,
+                    sqlite_metadata_write_micros,
+                    tantivy_stages,
+                ));
+            }
+        }
+    }
+
+    for item_id in successful_item_ids.iter().chain(deleted_item_ids.iter()) {
+        queue.complete(*item_id)?;
+        processed_count += 1;
+    }
+
+    Ok(production_result(
+        generation,
+        processed_count,
+        failed_count,
+        stats,
+        sqlite_metadata_write_micros,
+        tantivy_stages,
+    ))
 }
 
 pub fn read_search_document(
@@ -459,11 +683,96 @@ pub fn run_tantivy_rebuild_pipeline(
     })
 }
 
+fn source_for_queue_item(
+    root: &VaultRoot,
+    queue_item: &IndexingQueueItem,
+) -> IndexingPipelineResult<Option<SearchDocumentSource>> {
+    if queue_item.reason == IndexingQueueReason::FileDeleted {
+        return Ok(None);
+    }
+    let relative_path = queue_item.relative_path.to_string_lossy();
+    let resolved = root.resolve_existing_relative(relative_path.as_ref())?;
+
+    Ok(Some(SearchDocumentSource {
+        relative_path: resolved.relative_path,
+        absolute_path: resolved.absolute_path,
+        file_id: queue_item.file_id.clone(),
+        kind: queue_item.kind,
+        size_bytes: queue_item.size_bytes,
+        modified: queue_item.modified,
+        file_identity: resolved.file_identity,
+    }))
+}
+
+fn record_queue_failure(
+    queue: &mut IndexingQueue,
+    item_id: i64,
+    error: &impl fmt::Display,
+    max_attempts: u32,
+) -> IndexingPipelineResult<()> {
+    queue.record_failure(item_id, error.to_string(), max_attempts)?;
+    Ok(())
+}
+
+fn record_queue_failures(
+    queue: &mut IndexingQueue,
+    item_ids: &[i64],
+    error: &impl fmt::Display,
+    max_attempts: u32,
+) -> IndexingPipelineResult<()> {
+    for item_id in item_ids {
+        record_queue_failure(queue, *item_id, error, max_attempts)?;
+    }
+    Ok(())
+}
+
+fn production_result(
+    generation: u64,
+    processed_count: usize,
+    failed_count: usize,
+    stats: PipelineCorpusStats,
+    sqlite_metadata_write_micros: u64,
+    tantivy: TantivyIndexingStageMetrics,
+) -> ProductionIndexingPipelineResult {
+    ProductionIndexingPipelineResult::new(
+        generation,
+        processed_count,
+        failed_count,
+        ProductionIndexingStageMetrics {
+            read_parse_sample_count: stats.read_micros.len(),
+            read_parse_total_bytes: stats.read_parse_bytes,
+            read_parse_peak_in_flight_items: 0,
+            sqlite_metadata_write_micros,
+            tantivy,
+        },
+    )
+}
+
+fn merge_tantivy_metrics(
+    left: TantivyIndexingStageMetrics,
+    right: TantivyIndexingStageMetrics,
+) -> TantivyIndexingStageMetrics {
+    TantivyIndexingStageMetrics {
+        add_micros: left.add_micros + right.add_micros,
+        commit_micros: left.commit_micros + right.commit_micros,
+        reader_reload_micros: left.reader_reload_micros + right.reader_reload_micros,
+        added_document_count: left.added_document_count + right.added_document_count,
+        deleted_document_count: left.deleted_document_count + right.deleted_document_count,
+        skipped_document_count: left.skipped_document_count + right.skipped_document_count,
+        failed_document_count: left.failed_document_count + right.failed_document_count,
+    }
+}
+
 impl fmt::Display for IndexingPipelineError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Io(error) => write!(formatter, "indexing pipeline io error: {error}"),
+            Self::Path(error) => write!(formatter, "indexing pipeline path error: {error}"),
             Self::Scan(error) => write!(formatter, "indexing pipeline scan error: {error}"),
+            Self::Metadata(error) => {
+                write!(formatter, "indexing pipeline metadata error: {error}")
+            }
+            Self::Queue(error) => write!(formatter, "indexing pipeline queue error: {error}"),
             Self::Tantivy(error) => write!(formatter, "indexing pipeline tantivy error: {error}"),
         }
     }
@@ -474,6 +783,24 @@ impl std::error::Error for IndexingPipelineError {}
 impl From<std::io::Error> for IndexingPipelineError {
     fn from(error: std::io::Error) -> Self {
         Self::Io(error)
+    }
+}
+
+impl From<PathError> for IndexingPipelineError {
+    fn from(error: PathError) -> Self {
+        Self::Path(error)
+    }
+}
+
+impl From<MetadataStoreError> for IndexingPipelineError {
+    fn from(error: MetadataStoreError) -> Self {
+        Self::Metadata(error)
+    }
+}
+
+impl From<IndexingQueueError> for IndexingPipelineError {
+    fn from(error: IndexingQueueError) -> Self {
+        Self::Queue(error)
     }
 }
 
@@ -664,6 +991,10 @@ fn duration_micros_nonzero(duration: Duration) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::index::{FileIndexStatus, IndexSchemaMetadata};
+    use crate::indexing_queue::{IndexingQueueReason, IndexingQueueStatus};
+    use std::path::{Path, PathBuf};
+    use tempfile::tempdir;
 
     #[test]
     fn production_pipeline_result_marks_success_and_partial_tiers() {
@@ -695,5 +1026,283 @@ mod tests {
         assert_eq!(partial.processed_count, 2);
         assert_eq!(partial.failed_count, 1);
         assert_eq!(partial.tier, IndexingPipelineTier::Error);
+    }
+
+    #[test]
+    fn queue_adapter_leases_limit_and_preserves_generation_reason() {
+        let temp = tempdir().expect("tempdir");
+        let root = fixture_vault(temp.path(), &["Home.md", "Guide.md", "Later.md"]);
+        let mut queue = IndexingQueue::open_in_memory().expect("queue");
+        queue
+            .enqueue_file(
+                &file_record(&root, "Home.md", 3),
+                IndexingQueueReason::FileCreated,
+            )
+            .expect("home");
+        queue
+            .enqueue_file(
+                &file_record(&root, "Guide.md", 3),
+                IndexingQueueReason::FileChanged,
+            )
+            .expect("guide");
+        queue
+            .enqueue_file(
+                &file_record(&root, "Later.md", 3),
+                IndexingQueueReason::OwnSave,
+            )
+            .expect("later");
+
+        let batch = lease_queue_batch(&mut queue, &root, 2).expect("lease");
+
+        assert_eq!(batch.items.len(), 2);
+        assert_eq!(batch.items[0].queue_item.generation, 3);
+        assert_eq!(
+            batch.items[0].queue_item.reason,
+            IndexingQueueReason::FileCreated
+        );
+        assert!(batch.items[0].source.is_some());
+        assert_eq!(queue.summary().expect("summary").in_progress, 2);
+    }
+
+    #[test]
+    fn process_queue_batch_marks_created_and_changed_files_complete() {
+        let temp = tempdir().expect("tempdir");
+        let root = fixture_vault(temp.path(), &["Home.md", "Guide.md"]);
+        let mut queue = IndexingQueue::open_in_memory().expect("queue");
+        queue
+            .enqueue_file(
+                &file_record(&root, "Home.md", 1),
+                IndexingQueueReason::FileCreated,
+            )
+            .expect("home");
+        queue
+            .enqueue_file(
+                &file_record(&root, "Guide.md", 1),
+                IndexingQueueReason::FileChanged,
+            )
+            .expect("guide");
+        let mut metadata_store = metadata_store();
+        let mut tantivy = TantivySearchIndex::open_in_ram().expect("tantivy");
+
+        let result = process_indexing_queue_batch(
+            &mut queue,
+            &mut metadata_store,
+            &mut tantivy,
+            &root,
+            QueueBatchIndexOptions {
+                lease_limit: 2,
+                max_attempts: 2,
+            },
+            &IndexingPipelineOptions::serial(),
+        )
+        .expect("process");
+
+        assert_eq!(result.processed_count, 2);
+        assert_eq!(result.failed_count, 0);
+        assert_eq!(result.tier, IndexingPipelineTier::Complete);
+        assert_eq!(queue.summary().expect("summary").completed, 2);
+        assert_eq!(
+            metadata_store
+                .row_count(crate::index::MetadataTable::Files)
+                .expect("files"),
+            2
+        );
+        assert_eq!(
+            metadata_store
+                .get_file(&lookup_key(Path::new("Home.md")))
+                .expect("get")
+                .expect("home")
+                .status,
+            FileIndexStatus::SearchIndexed
+        );
+        assert_eq!(tantivy.search("Home", 10).expect("search").len(), 1);
+    }
+
+    #[test]
+    fn process_queue_batch_deletes_metadata_and_search_hits() {
+        let temp = tempdir().expect("tempdir");
+        let root = fixture_vault(temp.path(), &["Home.md"]);
+        let mut queue = IndexingQueue::open_in_memory().expect("queue");
+        let home_generation_one = file_record(&root, "Home.md", 1);
+        queue
+            .enqueue_file(&home_generation_one, IndexingQueueReason::FileCreated)
+            .expect("home");
+        let mut metadata_store = metadata_store();
+        let mut tantivy = TantivySearchIndex::open_in_ram().expect("tantivy");
+        process_indexing_queue_batch(
+            &mut queue,
+            &mut metadata_store,
+            &mut tantivy,
+            &root,
+            QueueBatchIndexOptions::default(),
+            &IndexingPipelineOptions::serial(),
+        )
+        .expect("initial process");
+        assert_eq!(tantivy.search("Home", 10).expect("search").len(), 1);
+
+        std::fs::remove_file(root.canonical_root().join("Home.md")).expect("delete file");
+        let mut home_generation_two = home_generation_one;
+        home_generation_two.mark_tombstoned(2);
+        queue
+            .enqueue_file(&home_generation_two, IndexingQueueReason::FileDeleted)
+            .expect("delete enqueue");
+
+        let result = process_indexing_queue_batch(
+            &mut queue,
+            &mut metadata_store,
+            &mut tantivy,
+            &root,
+            QueueBatchIndexOptions::default(),
+            &IndexingPipelineOptions::serial(),
+        )
+        .expect("delete process");
+
+        assert_eq!(result.processed_count, 1);
+        assert_eq!(result.failed_count, 0);
+        assert!(
+            metadata_store
+                .get_file(&lookup_key(Path::new("Home.md")))
+                .expect("get")
+                .is_none()
+        );
+        assert_eq!(tantivy.search("Home", 10).expect("search").len(), 0);
+    }
+
+    #[test]
+    fn process_queue_batch_records_retryable_failures() {
+        let temp = tempdir().expect("tempdir");
+        let root = fixture_vault(temp.path(), &[]);
+        let mut queue = IndexingQueue::open_in_memory().expect("queue");
+        queue
+            .enqueue_file(
+                &missing_file_record("Missing.md", 1),
+                IndexingQueueReason::FileChanged,
+            )
+            .expect("missing");
+        let mut metadata_store = metadata_store();
+        let mut tantivy = TantivySearchIndex::open_in_ram().expect("tantivy");
+        let batch_options = QueueBatchIndexOptions {
+            lease_limit: 1,
+            max_attempts: 2,
+        };
+
+        let retry = process_indexing_queue_batch(
+            &mut queue,
+            &mut metadata_store,
+            &mut tantivy,
+            &root,
+            batch_options,
+            &IndexingPipelineOptions::serial(),
+        )
+        .expect("retry");
+        let item = queue
+            .get_by_file_id(&lookup_key(Path::new("Missing.md")))
+            .expect("lookup")
+            .expect("item");
+        assert_eq!(retry.failed_count, 1);
+        assert_eq!(item.status, IndexingQueueStatus::Pending);
+        assert_eq!(item.attempts, 1);
+
+        let failed = process_indexing_queue_batch(
+            &mut queue,
+            &mut metadata_store,
+            &mut tantivy,
+            &root,
+            batch_options,
+            &IndexingPipelineOptions::serial(),
+        )
+        .expect("failed");
+        let item = queue
+            .get_by_file_id(&lookup_key(Path::new("Missing.md")))
+            .expect("lookup")
+            .expect("item");
+        assert_eq!(failed.failed_count, 1);
+        assert_eq!(item.status, IndexingQueueStatus::Failed);
+        assert_eq!(item.attempts, 2);
+        assert!(item.last_error.is_some());
+    }
+
+    #[test]
+    fn interrupted_queue_batch_recovers_and_leases_again() {
+        let temp = tempdir().expect("tempdir");
+        let root = fixture_vault(temp.path(), &["Home.md"]);
+        let mut queue = IndexingQueue::open_in_memory().expect("queue");
+        queue
+            .enqueue_file(
+                &file_record(&root, "Home.md", 1),
+                IndexingQueueReason::InitialScan,
+            )
+            .expect("home");
+        let first = lease_queue_batch(&mut queue, &root, 1).expect("lease");
+        let item_id = first.items[0].queue_item.item_id;
+
+        assert_eq!(queue.recover_interrupted().expect("recover"), 1);
+        let second = lease_queue_batch(&mut queue, &root, 1).expect("lease again");
+
+        assert_eq!(second.items[0].queue_item.item_id, item_id);
+        assert_eq!(
+            second.items[0].queue_item.status,
+            IndexingQueueStatus::InProgress
+        );
+    }
+
+    fn metadata_store() -> MetadataStore {
+        MetadataStore::open_in_memory(&IndexSchemaMetadata::new(
+            "sqlite",
+            "metadata-v1",
+            "none",
+            1,
+        ))
+        .expect("metadata store")
+    }
+
+    fn fixture_vault(parent: &Path, files: &[&str]) -> VaultRoot {
+        let vault = parent.join("vault");
+        std::fs::create_dir_all(&vault).expect("vault dir");
+        for file in files {
+            std::fs::write(
+                vault.join(file),
+                format!("# {}\nBody", file.trim_end_matches(".md")),
+            )
+            .expect("write fixture");
+        }
+        VaultRoot::open(&vault).expect("vault root")
+    }
+
+    fn file_record(root: &VaultRoot, relative_path: &str, generation: u64) -> FileRecord {
+        let resolved = root
+            .resolve_existing_relative(relative_path)
+            .expect("resolved path");
+        let metadata = std::fs::metadata(&resolved.absolute_path).expect("metadata");
+        FileRecord {
+            file_id: lookup_key(&PathBuf::from(relative_path)),
+            relative_path: PathBuf::from(relative_path),
+            kind: ScanEntryKind::Markdown,
+            size_bytes: metadata.len(),
+            modified: metadata.modified().ok(),
+            file_identity: resolved.file_identity,
+            content_hash: None,
+            generation,
+            status: FileIndexStatus::SeenMetadata,
+            last_error: None,
+        }
+    }
+
+    fn missing_file_record(relative_path: &str, generation: u64) -> FileRecord {
+        FileRecord {
+            file_id: lookup_key(&PathBuf::from(relative_path)),
+            relative_path: PathBuf::from(relative_path),
+            kind: ScanEntryKind::Markdown,
+            size_bytes: 0,
+            modified: None,
+            file_identity: FileIdentity {
+                device: 0,
+                inode: 0,
+            },
+            content_hash: None,
+            generation,
+            status: FileIndexStatus::SeenMetadata,
+            last_error: None,
+        }
     }
 }

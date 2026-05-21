@@ -384,7 +384,10 @@ impl From<IndexingPipelineError> for BackendBenchmarkError {
     fn from(error: IndexingPipelineError) -> Self {
         match error {
             IndexingPipelineError::Io(error) => Self::Io(error),
+            IndexingPipelineError::Path(error) => Self::Path(error),
             IndexingPipelineError::Scan(error) => Self::Scan(error),
+            IndexingPipelineError::Metadata(error) => Self::Metadata(error),
+            IndexingPipelineError::Queue(error) => Self::Scan(error.to_string()),
             IndexingPipelineError::Tantivy(error) => Self::Tantivy(error),
         }
     }
