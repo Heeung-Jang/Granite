@@ -84,6 +84,9 @@ struct MarkdownEditorBridgeProbeReport: Codable, Equatable {
     var tableCellEditorRejectsInvalidText: Bool
     var tableCellEditorBlocksMarkedTextCommit: Bool
     var tableCellEditorRejectsStaleCell: Bool
+    var tableRowAddControlClickInsertsRow: Bool
+    var tableColumnAddControlClickInsertsColumn: Bool
+    var tableControlsHiddenInSourceMode: Bool
     var tableCellEditChangesOnlyCell: Bool
     var tableCellEditUndoRestoresCell: Bool
     var tableCellEditFailurePreservesBuffer: Bool
@@ -203,6 +206,9 @@ enum MarkdownEditorBridgeProbe {
             tableCellEditorRejectsInvalidText: tableCellProbe.cellEditorRejectsInvalidText,
             tableCellEditorBlocksMarkedTextCommit: tableCellProbe.cellEditorBlocksMarkedTextCommit,
             tableCellEditorRejectsStaleCell: tableCellProbe.cellEditorRejectsStaleCell,
+            tableRowAddControlClickInsertsRow: tableCellProbe.rowAddControlClickInsertsRow,
+            tableColumnAddControlClickInsertsColumn: tableCellProbe.columnAddControlClickInsertsColumn,
+            tableControlsHiddenInSourceMode: tableCellProbe.controlsHiddenInSourceMode,
             tableCellEditChangesOnlyCell: tableCellProbe.changesOnlyCell,
             tableCellEditUndoRestoresCell: tableCellProbe.undoRestoresCell,
             tableCellEditFailurePreservesBuffer: tableCellProbe.failurePreservesBuffer,
@@ -1158,6 +1164,9 @@ enum MarkdownEditorBridgeProbe {
         cellEditorRejectsInvalidText: Bool,
         cellEditorBlocksMarkedTextCommit: Bool,
         cellEditorRejectsStaleCell: Bool,
+        rowAddControlClickInsertsRow: Bool,
+        columnAddControlClickInsertsColumn: Bool,
+        controlsHiddenInSourceMode: Bool,
         inPlaceEditSelectionPreserved: Bool,
         inPlaceEditUndoPreservesSelection: Bool,
         changesOnlyCell: Bool,
@@ -1185,7 +1194,7 @@ enum MarkdownEditorBridgeProbe {
             return (
                 false, false, false, false, false, false, false, false, false, false,
                 false, false, false, false, false, false, false, false, false, false,
-                false, false, false
+                false, false, false, false, false, false
             )
         }
         let cell = table.bodyRows[0][1]
@@ -1369,6 +1378,40 @@ enum MarkdownEditorBridgeProbe {
             && staleTextView?.string.contains("Changed") == true
             && staleTextView?.string.contains("Published") == false
 
+        let rowControlProbe = makeInPlaceEditor()
+        let rowControlTextView = rowControlProbe?.textView
+        _ = rowControlProbe.map { $0.textView.setActiveTableCell(at: $0.point) }
+        let rowControlRect = rowControlProbe.flatMap { probe -> NSRect? in
+            LivePreviewTableParser.parse(probe.textView.string).compactMap {
+                LivePreviewTableLayout.make(for: $0, in: probe.textView)
+            }.first?.rowAddControlRect(for: probe.cell)
+        }
+        let rowAddControlClickInsertsRow = rowControlRect.map {
+            rowControlTextView?.performTableControl(at: NSPoint(x: $0.midX, y: $0.midY)) == true
+        } == true && rowControlTextView?.string.contains("| Alpha | Draft |\n|  |  |") == true
+
+        let columnControlProbe = makeInPlaceEditor()
+        let columnControlTextView = columnControlProbe?.textView
+        _ = columnControlProbe.map { $0.textView.setActiveTableCell(at: $0.point) }
+        let columnControlRect = columnControlProbe.flatMap { probe -> NSRect? in
+            LivePreviewTableParser.parse(probe.textView.string).compactMap {
+                LivePreviewTableLayout.make(for: $0, in: probe.textView)
+            }.first?.columnAddControlRect(for: probe.cell)
+        }
+        let columnAddControlClickInsertsColumn = columnControlRect.map {
+            columnControlTextView?.performTableControl(at: NSPoint(x: $0.midX, y: $0.midY)) == true
+        } == true && columnControlTextView?.string.contains("| Alpha | Draft |  |") == true
+
+        let sourceModeControlProbe = makeInPlaceEditor()
+        let sourceModeTextView = sourceModeControlProbe?.textView
+        _ = sourceModeControlProbe.map { $0.textView.setActiveTableCell(at: $0.point) }
+        sourceModeTextView?.livePreviewMode = .source
+        sourceModeTextView?.refreshLivePreviewOverlayState()
+        let controlsHiddenInSourceMode = sourceModeTextView.map {
+            !LivePreviewOverlayRenderer.shouldDrawTableControls(state: $0.livePreviewOverlayState)
+                && $0.performTableControl(at: sourceModeControlProbe?.point ?? .zero) == false
+        } == true
+
         let disabledTextView = MarkdownEditorTextViewFactory.makeTextView() as! MarkdownInteractionTextView
         disabledTextView.string = text
         disabledTextView.livePreviewMode = .livePreview
@@ -1429,6 +1472,9 @@ enum MarkdownEditorBridgeProbe {
             cellEditorRejectsInvalidText,
             cellEditorBlocksMarkedTextCommit,
             cellEditorRejectsStaleCell,
+            rowAddControlClickInsertsRow,
+            columnAddControlClickInsertsColumn,
+            controlsHiddenInSourceMode,
             inPlaceEditSelectionPreserved,
             inPlaceEditUndoPreservesSelection,
             changesOnlyCell,

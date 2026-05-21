@@ -211,6 +211,9 @@ struct MarkdownEditorView: NSViewRepresentable {
                textView.toggleTaskCheckbox(at: utf16Offset) {
                 return true
             }
+            if textView.performTableControl(at: textView.convert(event.locationInWindow, from: nil)) {
+                return true
+            }
             if textView.setActiveTableCell(at: textView.convert(event.locationInWindow, from: nil)) {
                 return true
             }
@@ -487,6 +490,29 @@ final class MarkdownInteractionTextView: NSTextView, NSTextFieldDelegate {
         return true
     }
 
+    @discardableResult
+    func performTableControl(at point: NSPoint) -> Bool {
+        refreshLivePreviewOverlayState()
+        guard livePreviewOverlayState.allowsTransientControls,
+              let cell = livePreviewOverlayState.activeTableCell,
+              let layoutCell = LivePreviewTableLayout.layoutCell(for: cell, in: self)
+        else {
+            return false
+        }
+        let layout = LivePreviewTableParser.parse(string).compactMap { LivePreviewTableLayout.make(for: $0, in: self) }
+            .first { $0.layoutCell(for: cell) != nil }
+        guard let layout else {
+            return false
+        }
+        if layout.rowAddControlRect(for: cell)?.contains(point) == true {
+            return applyTableControlEdit(LivePreviewTableRowInsert.insertingRow(after: layoutCell.tableCell, in: string))
+        }
+        if layout.columnAddControlRect(for: cell)?.contains(point) == true {
+            return applyTableControlEdit(LivePreviewTableColumnInsert.insertingColumn(after: layoutCell.tableCell, in: string))
+        }
+        return false
+    }
+
     func refreshLivePreviewOverlayState(revealRange: NSRange? = nil, syncEditor: Bool = true) {
         livePreviewOverlayState = livePreviewOverlayState.synchronized(
             mode: livePreviewMode,
@@ -578,6 +604,24 @@ final class MarkdownInteractionTextView: NSTextView, NSTextFieldDelegate {
             location: min(selection.location, (string as NSString).length),
             length: min(selection.length, max(0, (string as NSString).length - min(selection.location, (string as NSString).length)))
         ))
+    }
+
+    private func applyTableControlEdit(_ edited: String?) -> Bool {
+        guard let edited,
+              edited != string,
+              shouldChangeText(in: NSRange(location: 0, length: (string as NSString).length), replacementString: edited)
+        else {
+            return false
+        }
+        let selection = selectedRange()
+        replaceCharacters(in: NSRange(location: 0, length: (string as NSString).length), with: edited)
+        didChangeText()
+        setSelectedRange(NSRange(
+            location: min(selection.location, (string as NSString).length),
+            length: min(selection.length, max(0, (string as NSString).length - min(selection.location, (string as NSString).length)))
+        ))
+        setLivePreviewOverlayTableState(hovered: nil, active: nil)
+        return true
     }
 
     private func presentTableCellEditor(for cell: LivePreviewTableCell) {

@@ -130,8 +130,6 @@ struct MarkerGeometryProbeReport: Codable, Equatable {
 @MainActor
 enum LivePreviewStyleProbe {
     private static let expectedFailures: Set<String> = [
-        "tableRowAddControlVisibleWhenFocused",
-        "tableColumnAddControlVisibleWhenFocused"
     ]
 
     static func encodedReport(_ report: LivePreviewStyleProbeReport = run()) -> String {
@@ -337,7 +335,7 @@ enum LivePreviewStyleProbe {
         let orderedMarkerFields = probeOrderedMarkerDetection()
         let orderedOverlayFields = probeOrderedMarkerOverlayPolicy()
         let taskOverlayFields = probeTaskCheckboxOverlayPolicy()
-        let tableActiveCellEditStateVisible = probeTableActiveCellEditState()
+        let tableActiveCellControls = probeTableActiveCellControls()
 
         var report = LivePreviewStyleProbeReport(
             summary: .passed,
@@ -470,9 +468,9 @@ enum LivePreviewStyleProbe {
                 && tableBodyAttributes?[.backgroundColor] as? NSColor == LivePreviewTheme.tableCellBackgroundColor
                 && hiddenTablePipeColor == LivePreviewTheme.concealedColor
                 && hiddenTableAlignmentColor == LivePreviewTheme.concealedColor,
-            tableActiveCellEditStateVisible: tableActiveCellEditStateVisible,
-            tableRowAddControlVisibleWhenFocused: false,
-            tableColumnAddControlVisibleWhenFocused: false,
+            tableActiveCellEditStateVisible: tableActiveCellControls.editStateVisible,
+            tableRowAddControlVisibleWhenFocused: tableActiveCellControls.rowControlVisible,
+            tableColumnAddControlVisibleWhenFocused: tableActiveCellControls.columnControlVisible,
             wikiLinkAliasVisible: wikiAliasColor == LivePreviewTheme.linkColor,
             wikiLinkSourceConcealedOutsideReveal: hiddenWikiSourceColor == LivePreviewTheme.concealedColor,
             wikiLinkRenderPreservesSource: textView.string.contains("[[Target#Heading|Alias]]"),
@@ -952,7 +950,11 @@ enum LivePreviewStyleProbe {
         )
     }
 
-    private static func probeTableActiveCellEditState() -> Bool {
+    private static func probeTableActiveCellControls() -> (
+        editStateVisible: Bool,
+        rowControlVisible: Bool,
+        columnControlVisible: Bool
+    ) {
         let source = """
         | Name | Status |
         | --- | --- |
@@ -974,13 +976,20 @@ enum LivePreviewStyleProbe {
               let layout = LivePreviewTableLayout.make(for: table, in: textView),
               let cell = layout.cells.first(where: { !$0.isHeader && $0.tableCell.text == "Draft" })
         else {
-            return false
+            return (false, false, false)
         }
 
         let activated = textView.setActiveTableCell(at: NSPoint(x: cell.textRect.midX, y: cell.textRect.midY))
-        return activated
+        let editStateVisible = activated
             && textView.activeTableCellEditorFrame?.intersects(cell.textRect) == true
             && !LivePreviewOverlayRenderer.shouldDrawTableCellText(cell.tableCell, state: textView.livePreviewOverlayState)
+        return (
+            editStateVisible,
+            LivePreviewOverlayRenderer.shouldDrawTableControls(state: textView.livePreviewOverlayState)
+                && layout.rowAddControlRect(for: cell.tableCell) != nil,
+            LivePreviewOverlayRenderer.shouldDrawTableControls(state: textView.livePreviewOverlayState)
+                && layout.columnAddControlRect(for: cell.tableCell) != nil
+        )
     }
 
     private static func probeCollapsedHeadingMarkerMarkedText(source: String, markerRange: NSRange) -> Bool {

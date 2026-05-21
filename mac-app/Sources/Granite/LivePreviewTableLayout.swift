@@ -26,6 +26,20 @@ struct LivePreviewTableLayout {
         cells.first { $0.tableCell == cell }
     }
 
+    func rowAddControlRect(for cell: LivePreviewTableCell) -> NSRect? {
+        guard let layoutCell = layoutCell(for: cell) else {
+            return nil
+        }
+        return NSRect(x: outerRect.maxX + 6, y: layoutCell.rowRect.midY - 8, width: 16, height: 16)
+    }
+
+    func columnAddControlRect(for cell: LivePreviewTableCell) -> NSRect? {
+        guard let layoutCell = layoutCell(for: cell) else {
+            return nil
+        }
+        return NSRect(x: layoutCell.columnRect.midX - 8, y: outerRect.minY - 22, width: 16, height: 16)
+    }
+
     static func tableCell(at point: NSPoint, in textView: NSTextView) -> LivePreviewTableCell? {
         LivePreviewTableParser.parse(textView.string).lazy.compactMap { table -> LivePreviewTableCell? in
             guard let layout = make(for: table, in: textView),

@@ -313,6 +313,7 @@ enum LivePreviewOverlayRenderer {
                 isHeader: cell.isHeader
             ).draw(with: cell.textRect, options: [.usesLineFragmentOrigin, .usesFontLeading])
         }
+        drawTableControls(layout, state: state)
     }
 
     static func shouldDrawTableCellText(
@@ -320,6 +321,34 @@ enum LivePreviewOverlayRenderer {
         state: LivePreviewOverlayState
     ) -> Bool {
         !(state.allowsTransientControls && state.activeTableCell == cell)
+    }
+
+    static func shouldDrawTableControls(state: LivePreviewOverlayState) -> Bool {
+        state.allowsTransientControls && state.activeTableCell != nil
+    }
+
+    private static func drawTableControls(_ layout: LivePreviewTableLayout, state: LivePreviewOverlayState) {
+        guard shouldDrawTableControls(state: state),
+              let cell = state.activeTableCell
+        else {
+            return
+        }
+        [layout.rowAddControlRect(for: cell), layout.columnAddControlRect(for: cell)].compactMap { $0 }.forEach { rect in
+            LivePreviewTheme.tableHeaderBackgroundColor.setFill()
+            NSBezierPath(ovalIn: rect).fill()
+            LivePreviewTheme.tableBorderColor.setStroke()
+            let path = NSBezierPath(ovalIn: rect)
+            path.lineWidth = 1
+            path.stroke()
+            LivePreviewTheme.textColor.setStroke()
+            let plus = NSBezierPath()
+            plus.lineWidth = 1.2
+            plus.move(to: NSPoint(x: rect.midX - 4, y: rect.midY))
+            plus.line(to: NSPoint(x: rect.midX + 4, y: rect.midY))
+            plus.move(to: NSPoint(x: rect.midX, y: rect.midY - 4))
+            plus.line(to: NSPoint(x: rect.midX, y: rect.midY + 4))
+            plus.stroke()
+        }
     }
 
     static func shouldDrawHorizontalRule(_ block: LivePreviewBlockSpan, selectedRange: NSRange) -> Bool {
