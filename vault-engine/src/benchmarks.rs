@@ -1,6 +1,10 @@
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::sync_channel;
+use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
@@ -9,9 +13,15 @@ use crate::parser::{ParsedMarkdown, parse_markdown};
 use crate::paths::{FileIdentity, PathError, VaultRoot, lookup_key};
 use crate::scanner::{ScanEntryKind, ScanError, scan_vault};
 use crate::sqlite_fts::{SearchDocument, SearchResult, SqliteFtsError, SqliteFtsIndex};
-use crate::tantivy_search::{TantivyIndexingStageMetrics, TantivySearchError, TantivySearchIndex};
+use crate::tantivy_search::{
+    TantivyIndexingStageMetrics, TantivySearchError, TantivySearchIndex, TantivyWriterOptions,
+};
 
-pub const BACKEND_BENCHMARK_ARTIFACT_SCHEMA_VERSION: u32 = 4;
+pub const BACKEND_BENCHMARK_ARTIFACT_SCHEMA_VERSION: u32 = 5;
+
+const MAX_DEFAULT_READ_PARSE_WORKERS: usize = 4;
+const DEFAULT_CHANNEL_CAPACITY: usize = 32;
+const DEFAULT_METADATA_BATCH_SIZE: usize = 256;
 
 #[derive(Debug, Clone)]
 pub struct BackendBenchmarkOptions {
@@ -31,17 +41,93 @@ pub struct VaultBackendBenchmarkOptions {
     pub work_dir: PathBuf,
 }
 
+#[derive(Debug, Clone)]
+pub struct IndexingPipelineOptions {
+    pub read_parse_workers: usize,
+    pub channel_capacity: usize,
+    pub writer_options: TantivyWriterOptions,
+    pub metadata_batch_size: usize,
+    pub snippet_storage_mode: SnippetStorageMode,
+}
+
+impl Default for IndexingPipelineOptions {
+    fn default() -> Self {
+        let workers = thread::available_parallelism()
+            .map(usize::from)
+            .unwrap_or(1)
+            .clamp(1, MAX_DEFAULT_READ_PARSE_WORKERS);
+        Self {
+            read_parse_workers: workers,
+            channel_capacity: DEFAULT_CHANNEL_CAPACITY,
+            writer_options: TantivyWriterOptions::default(),
+            metadata_batch_size: DEFAULT_METADATA_BATCH_SIZE,
+            snippet_storage_mode: SnippetStorageMode::StoredBody,
+        }
+    }
+}
+
+impl IndexingPipelineOptions {
+    pub fn serial() -> Self {
+        Self {
+            read_parse_workers: 1,
+            ..Default::default()
+        }
+    }
+
+    fn normalized(&self) -> Self {
+        Self {
+            read_parse_workers: self
+                .read_parse_workers
+                .clamp(1, MAX_DEFAULT_READ_PARSE_WORKERS),
+            channel_capacity: self.channel_capacity.max(1),
+            writer_options: self.writer_options,
+            metadata_batch_size: self.metadata_batch_size.max(1),
+            snippet_storage_mode: self.snippet_storage_mode,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+pub enum SnippetStorageMode {
+    StoredBody,
+}
+
 #[derive(Debug, Serialize)]
 pub struct BackendBenchmarkArtifact {
     pub schema_version: u32,
     pub generated_at_unix_seconds: u64,
     pub corpus_id: String,
     pub run_metadata: BenchmarkRunMetadata,
+    pub pipeline_config: BenchmarkPipelineConfig,
     pub corpus_stages: BenchmarkCorpusStageMetrics,
     pub document_count: usize,
     pub query_count: usize,
     pub total_document_bytes: u64,
     pub backends: Vec<BackendBenchmarkResult>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct BenchmarkPipelineConfig {
+    pub read_parse_workers: usize,
+    pub channel_capacity: usize,
+    pub writer_memory_budget_bytes: usize,
+    pub writer_thread_count: Option<usize>,
+    pub metadata_batch_size: usize,
+    pub snippet_storage_mode: SnippetStorageMode,
+}
+
+impl From<&IndexingPipelineOptions> for BenchmarkPipelineConfig {
+    fn from(options: &IndexingPipelineOptions) -> Self {
+        let options = options.normalized();
+        Self {
+            read_parse_workers: options.read_parse_workers,
+            channel_capacity: options.channel_capacity,
+            writer_memory_budget_bytes: options.writer_options.memory_budget_bytes,
+            writer_thread_count: options.writer_options.writer_thread_count,
+            metadata_batch_size: options.metadata_batch_size,
+            snippet_storage_mode: options.snippet_storage_mode,
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -99,6 +185,7 @@ pub struct BenchmarkBackendStageMetrics {
 pub struct BenchmarkReadParseStageMetrics {
     pub sample_count: usize,
     pub total_bytes: u64,
+    pub peak_in_flight_items: usize,
     pub read: BenchmarkDurationSummary,
     pub parse: BenchmarkDurationSummary,
     pub combined: BenchmarkDurationSummary,
@@ -165,6 +252,7 @@ pub fn run_shared_backend_benchmark(
     }
 
     fs::create_dir_all(&options.work_dir)?;
+    let pipeline_options = IndexingPipelineOptions::default();
     let total_document_bytes = total_document_bytes(&options.documents);
     let sqlite = run_sqlite_benchmark(options, total_document_bytes)?;
     let tantivy = run_tantivy_benchmark(options, total_document_bytes)?;
@@ -177,6 +265,7 @@ pub fn run_shared_backend_benchmark(
             .as_secs(),
         corpus_id: options.corpus_id.clone(),
         run_metadata: benchmark_run_metadata("in_memory_documents", options.queries.len()),
+        pipeline_config: BenchmarkPipelineConfig::from(&pipeline_options),
         corpus_stages: BenchmarkCorpusStageMetrics::default(),
         document_count: options.documents.len(),
         query_count: options.queries.len(),
@@ -199,8 +288,11 @@ pub fn run_shared_backend_benchmark_from_vault(
     }
 
     fs::create_dir_all(&options.work_dir)?;
-    let sqlite = run_sqlite_benchmark_from_sources(options, &loaded_sources.sources)?;
-    let tantivy = run_tantivy_benchmark_from_sources(options, &loaded_sources.sources)?;
+    let pipeline_options = IndexingPipelineOptions::default();
+    let sqlite =
+        run_sqlite_benchmark_from_sources(options, &loaded_sources.sources, &pipeline_options)?;
+    let tantivy =
+        run_tantivy_benchmark_from_sources(options, &loaded_sources.sources, &pipeline_options)?;
 
     Ok(BackendBenchmarkArtifact {
         schema_version: BACKEND_BENCHMARK_ARTIFACT_SCHEMA_VERSION,
@@ -210,6 +302,7 @@ pub fn run_shared_backend_benchmark_from_vault(
             .as_secs(),
         corpus_id: options.corpus_id.clone(),
         run_metadata: benchmark_run_metadata("streaming_vault", options.queries.len()),
+        pipeline_config: BenchmarkPipelineConfig::from(&pipeline_options),
         corpus_stages: loaded_sources.stages,
         document_count: loaded_sources.sources.len(),
         query_count: options.queries.len(),
@@ -329,6 +422,7 @@ struct TimedSearchDocument {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ParsedSearchWorkItem {
+    source_index: usize,
     file_id: String,
     relative_path: PathBuf,
     title: String,
@@ -362,10 +456,22 @@ struct StreamingBenchmarkResult {
     total_document_bytes: u64,
 }
 
+struct ReadParsePipelineRun {
+    stats: StreamingCorpusStats,
+    peak_in_flight_items: usize,
+}
+
+struct TantivyPipelineRun {
+    stats: StreamingCorpusStats,
+    peak_in_flight_items: usize,
+    stages: TantivyIndexingStageMetrics,
+}
+
 #[derive(Default)]
 struct StreamingCorpusStats {
     document_count: usize,
     total_document_bytes: u64,
+    first_document_index: Option<usize>,
     first_document: Option<SearchDocument>,
     read_micros: Vec<u64>,
     parse_micros: Vec<u64>,
@@ -377,13 +483,17 @@ impl StreamingCorpusStats {
     fn record(&mut self, document: &SearchDocument) {
         self.document_count += 1;
         self.total_document_bytes += document_bytes(document);
-        if self.first_document.is_none() {
-            self.first_document = Some(document.clone());
-        }
     }
 
     fn record_timed(&mut self, timed: &TimedSearchDocument) {
         self.record(&timed.document);
+        if self
+            .first_document_index
+            .is_none_or(|index| timed.work_item.source_index < index)
+        {
+            self.first_document_index = Some(timed.work_item.source_index);
+            self.first_document = Some(timed.document.clone());
+        }
         self.read_micros.push(timed.work_item.timing.read_micros);
         self.parse_micros.push(timed.work_item.timing.parse_micros);
         self.combined_micros
@@ -397,10 +507,11 @@ impl StreamingCorpusStats {
             .ok_or(BackendBenchmarkError::EmptyDocuments)
     }
 
-    fn read_parse_metrics(&self) -> BenchmarkReadParseStageMetrics {
+    fn read_parse_metrics(&self, peak_in_flight_items: usize) -> BenchmarkReadParseStageMetrics {
         BenchmarkReadParseStageMetrics {
             sample_count: self.read_micros.len(),
             total_bytes: self.read_parse_bytes,
+            peak_in_flight_items,
             read: duration_summary(&self.read_micros),
             parse: duration_summary(&self.parse_micros),
             combined: duration_summary(&self.combined_micros),
@@ -453,6 +564,13 @@ fn read_search_document(
 fn read_parse_source(
     source: &SearchDocumentSource,
 ) -> BackendBenchmarkResultType<TimedSearchDocument> {
+    read_parse_source_at(0, source)
+}
+
+fn read_parse_source_at(
+    source_index: usize,
+    source: &SearchDocumentSource,
+) -> BackendBenchmarkResultType<TimedSearchDocument> {
     debug_assert_eq!(source.kind, ScanEntryKind::Markdown);
     let combined_start = Instant::now();
     let (body, read_micros) = read_markdown_body(&source.absolute_path)?;
@@ -475,6 +593,7 @@ fn read_parse_source(
             body,
         },
         work_item: ParsedSearchWorkItem {
+            source_index,
             file_id: source.file_id.clone(),
             relative_path: source.relative_path.clone(),
             title,
@@ -517,6 +636,129 @@ fn parsed_metadata_counts(parsed: &ParsedMarkdown) -> ParsedMetadataCounts {
                 .iter()
                 .filter(|link| link.image)
                 .count(),
+    }
+}
+
+fn run_read_parse_pipeline<F>(
+    sources: &[SearchDocumentSource],
+    options: &IndexingPipelineOptions,
+    mut consume: F,
+) -> BackendBenchmarkResultType<ReadParsePipelineRun>
+where
+    F: FnMut(TimedSearchDocument) -> BackendBenchmarkResultType<()>,
+{
+    let options = options.normalized();
+    let (sender, receiver) =
+        sync_channel::<BackendBenchmarkResultType<TimedSearchDocument>>(options.channel_capacity);
+    let next_source = AtomicUsize::new(0);
+    let in_flight = Arc::new(AtomicUsize::new(0));
+    let peak_in_flight = Arc::new(AtomicUsize::new(0));
+    let mut stats = StreamingCorpusStats::default();
+
+    thread::scope(|scope| {
+        for _ in 0..options.read_parse_workers {
+            let sender = sender.clone();
+            let in_flight = Arc::clone(&in_flight);
+            let peak_in_flight = Arc::clone(&peak_in_flight);
+            let next_source = &next_source;
+            scope.spawn(move || {
+                loop {
+                    let index = next_source.fetch_add(1, Ordering::Relaxed);
+                    let Some(source) = sources.get(index) else {
+                        break;
+                    };
+                    let result = read_parse_source_at(index, source);
+                    let current_in_flight = in_flight.fetch_add(1, Ordering::AcqRel) + 1;
+                    update_peak_in_flight(&peak_in_flight, current_in_flight);
+                    if sender.send(result).is_err() {
+                        in_flight.fetch_sub(1, Ordering::AcqRel);
+                        break;
+                    }
+                }
+            });
+        }
+        drop(sender);
+
+        for result in receiver {
+            in_flight.fetch_sub(1, Ordering::AcqRel);
+            let timed = result?;
+            stats.record_timed(&timed);
+            consume(timed)?;
+        }
+
+        Ok::<(), BackendBenchmarkError>(())
+    })?;
+
+    Ok(ReadParsePipelineRun {
+        stats,
+        peak_in_flight_items: peak_in_flight.load(Ordering::Acquire),
+    })
+}
+
+fn run_tantivy_rebuild_pipeline(
+    index: &mut TantivySearchIndex,
+    sources: &[SearchDocumentSource],
+    options: &IndexingPipelineOptions,
+) -> BackendBenchmarkResultType<TantivyPipelineRun> {
+    let options = options.normalized();
+    let (sender, receiver) =
+        sync_channel::<BackendBenchmarkResultType<TimedSearchDocument>>(options.channel_capacity);
+    let next_source = AtomicUsize::new(0);
+    let in_flight = Arc::new(AtomicUsize::new(0));
+    let peak_in_flight = Arc::new(AtomicUsize::new(0));
+    let mut stats = StreamingCorpusStats::default();
+
+    let stages = thread::scope(|scope| {
+        for _ in 0..options.read_parse_workers {
+            let sender = sender.clone();
+            let in_flight = Arc::clone(&in_flight);
+            let peak_in_flight = Arc::clone(&peak_in_flight);
+            let next_source = &next_source;
+            scope.spawn(move || {
+                loop {
+                    let index = next_source.fetch_add(1, Ordering::Relaxed);
+                    let Some(source) = sources.get(index) else {
+                        break;
+                    };
+                    let result = read_parse_source_at(index, source);
+                    let current_in_flight = in_flight.fetch_add(1, Ordering::AcqRel) + 1;
+                    update_peak_in_flight(&peak_in_flight, current_in_flight);
+                    if sender.send(result).is_err() {
+                        in_flight.fetch_sub(1, Ordering::AcqRel);
+                        break;
+                    }
+                }
+            });
+        }
+        drop(sender);
+
+        let documents = receiver.into_iter().map(|result| {
+            in_flight.fetch_sub(1, Ordering::AcqRel);
+            let timed = result?;
+            stats.record_timed(&timed);
+            Ok::<SearchDocument, BackendBenchmarkError>(timed.document)
+        });
+
+        index.add_documents_for_rebuild_from_result_iter_with_options_and_stage_durations(
+            documents,
+            options.writer_options,
+        )
+    })?;
+
+    Ok(TantivyPipelineRun {
+        stats,
+        peak_in_flight_items: peak_in_flight.load(Ordering::Acquire),
+        stages,
+    })
+}
+
+fn update_peak_in_flight(peak: &AtomicUsize, candidate: usize) {
+    let mut current = peak.load(Ordering::Acquire);
+    while candidate > current {
+        match peak.compare_exchange(current, candidate, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => break,
+            Err(observed) => current = observed,
+        }
     }
 }
 
@@ -572,21 +814,21 @@ fn run_sqlite_benchmark(
 fn run_sqlite_benchmark_from_sources(
     options: &VaultBackendBenchmarkOptions,
     sources: &[SearchDocumentSource],
+    pipeline_options: &IndexingPipelineOptions,
 ) -> BackendBenchmarkResultType<StreamingBenchmarkResult> {
     let db_path = options.work_dir.join("sqlite-fts.sqlite");
     remove_sqlite_files(&db_path)?;
     let mut index = SqliteFtsIndex::open(&db_path)?;
-    let mut stats = StreamingCorpusStats::default();
 
     let index_start = Instant::now();
     let mut sqlite_upsert_micros = 0;
-    for source in sources {
-        let timed = read_parse_source(source)?;
-        stats.record_timed(&timed);
+    let pipeline = run_read_parse_pipeline(sources, pipeline_options, |timed| {
         let upsert_start = Instant::now();
         index.upsert_document(&timed.document)?;
         sqlite_upsert_micros += duration_micros_nonzero(upsert_start.elapsed());
-    }
+        Ok(())
+    })?;
+    let stats = pipeline.stats;
     let rebuild_start = Instant::now();
     index.rebuild()?;
     let sqlite_rebuild_micros = duration_micros_nonzero(rebuild_start.elapsed());
@@ -615,11 +857,11 @@ fn run_sqlite_benchmark_from_sources(
             incremental_update_micros,
             index.estimated_size_bytes()?,
             BenchmarkBackendStageMetrics {
-                read_parse: stats.read_parse_metrics(),
                 sqlite_upsert_micros: Some(sqlite_upsert_micros),
                 sqlite_rebuild_micros: Some(sqlite_rebuild_micros),
                 sqlite_integrity_check_micros: Some(sqlite_integrity_check_micros),
                 sqlite_optimize_micros: Some(sqlite_optimize_micros),
+                read_parse: stats.read_parse_metrics(pipeline.peak_in_flight_items),
                 ..Default::default()
             },
         ),
@@ -660,20 +902,15 @@ fn run_tantivy_benchmark(
 fn run_tantivy_benchmark_from_sources(
     options: &VaultBackendBenchmarkOptions,
     sources: &[SearchDocumentSource],
+    pipeline_options: &IndexingPipelineOptions,
 ) -> BackendBenchmarkResultType<StreamingBenchmarkResult> {
     let index_dir = options.work_dir.join("tantivy");
     reset_directory(&index_dir)?;
     let mut index = TantivySearchIndex::open_in_dir(&index_dir)?;
-    let mut stats = StreamingCorpusStats::default();
 
     let index_start = Instant::now();
-    let tantivy_stages = index.add_documents_for_rebuild_from_result_iter_with_stage_durations(
-        sources.iter().map(|source| {
-            let timed = read_parse_source(source)?;
-            stats.record_timed(&timed);
-            Ok::<SearchDocument, BackendBenchmarkError>(timed.document)
-        }),
-    )?;
+    let pipeline = run_tantivy_rebuild_pipeline(&mut index, sources, pipeline_options)?;
+    let stats = pipeline.stats;
     let index_duration = index_start.elapsed();
     let query_stats = measure_queries(&options.queries, |query| {
         index
@@ -693,8 +930,8 @@ fn run_tantivy_benchmark_from_sources(
             incremental_update_micros,
             index.estimated_size_bytes()?,
             BenchmarkBackendStageMetrics {
-                read_parse: stats.read_parse_metrics(),
-                ..tantivy_stage_metrics(tantivy_stages)
+                read_parse: stats.read_parse_metrics(pipeline.peak_in_flight_items),
+                ..tantivy_stage_metrics(pipeline.stages)
             },
         ),
         total_document_bytes: stats.total_document_bytes,
@@ -974,6 +1211,8 @@ mod tests {
         assert_eq!(artifact.run_metadata.run_condition, "in_memory_documents");
         assert_eq!(artifact.run_metadata.sample_count, options.queries.len());
         assert!(artifact.run_metadata.redaction_enabled);
+        assert!(artifact.pipeline_config.read_parse_workers > 0);
+        assert!(artifact.pipeline_config.channel_capacity > 0);
         assert_eq!(artifact.backends.len(), 2);
         assert!(artifact.backends.iter().all(|backend| {
             backend.query_p95_micros <= backend.query_p99_micros
@@ -996,6 +1235,17 @@ mod tests {
                 .sample_count,
             0
         );
+    }
+
+    #[test]
+    fn pipeline_options_defaults_are_bounded() {
+        let options = IndexingPipelineOptions::default();
+
+        assert!(options.read_parse_workers > 0);
+        assert!(options.read_parse_workers <= MAX_DEFAULT_READ_PARSE_WORKERS);
+        assert!(options.channel_capacity > 0);
+        assert!(options.metadata_batch_size > 0);
+        assert_eq!(options.snippet_storage_mode, SnippetStorageMode::StoredBody);
     }
 
     #[test]
@@ -1076,6 +1326,101 @@ mod tests {
     }
 
     #[test]
+    fn bounded_read_parse_pipeline_drains_more_items_than_capacity() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut sources = Vec::new();
+        for index in 0..5 {
+            let file_name = format!("Note{index}.md");
+            fs::write(
+                temp.path().join(&file_name),
+                format!("# Note {index}\nBody"),
+            )
+            .expect("write note");
+            sources.push(source_fixture(
+                temp.path(),
+                &file_name,
+                ScanEntryKind::Markdown,
+            ));
+        }
+        let options = IndexingPipelineOptions {
+            read_parse_workers: 1,
+            channel_capacity: 2,
+            ..IndexingPipelineOptions::serial()
+        };
+        let mut drained = 0;
+
+        let run = run_read_parse_pipeline(&sources, &options, |_| {
+            drained += 1;
+            Ok(())
+        })
+        .expect("pipeline");
+
+        assert_eq!(drained, 5);
+        assert_eq!(run.stats.document_count, 5);
+        assert!(run.peak_in_flight_items > 0);
+    }
+
+    #[test]
+    fn read_parse_pipeline_propagates_missing_file_error() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let sources = vec![source_fixture(
+            temp.path(),
+            "Missing.md",
+            ScanEntryKind::Markdown,
+        )];
+
+        let error =
+            match run_read_parse_pipeline(&sources, &IndexingPipelineOptions::serial(), |_| Ok(()))
+            {
+                Ok(_) => panic!("missing file should fail"),
+                Err(error) => error,
+            };
+
+        assert!(matches!(error, BackendBenchmarkError::Io(_)));
+    }
+
+    #[test]
+    fn fixture_query_counts_match_serial_and_worker_pipeline() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let vault = temp.path().join("vault");
+        fs::create_dir_all(vault.join("Docs")).expect("docs dir");
+        fs::write(vault.join("Home.md"), "# Home\nShared phrase.").expect("home");
+        fs::write(
+            vault.join("Docs").join("Guide.md"),
+            "# Guide\nShared phrase.",
+        )
+        .expect("guide");
+        let root = VaultRoot::open(&vault).expect("vault root");
+        let loaded = load_search_document_sources(&root).expect("sources");
+        let base_options = VaultBackendBenchmarkOptions {
+            corpus_id: "deterministic-pipeline".to_string(),
+            vault_root: vault,
+            queries: vec!["Shared phrase".to_string()],
+            result_limit: 10,
+            work_dir: temp.path().join("indexes"),
+        };
+        let serial_options = IndexingPipelineOptions::serial();
+        let worker_options = IndexingPipelineOptions {
+            read_parse_workers: 2,
+            channel_capacity: 1,
+            ..IndexingPipelineOptions::default()
+        };
+
+        let serial =
+            run_tantivy_benchmark_from_sources(&base_options, &loaded.sources, &serial_options)
+                .expect("serial");
+        let worker =
+            run_tantivy_benchmark_from_sources(&base_options, &loaded.sources, &worker_options)
+                .expect("worker");
+
+        assert_eq!(
+            serial.result.query_result_count,
+            worker.result.query_result_count
+        );
+        assert_eq!(worker.result.stages.added_document_count, Some(2));
+    }
+
+    #[test]
     fn duration_summary_handles_empty_single_and_multi_item_inputs() {
         assert_eq!(duration_summary(&[]), BenchmarkDurationSummary::default());
 
@@ -1122,6 +1467,11 @@ mod tests {
 
         assert_eq!(artifact.document_count, 2);
         assert_eq!(artifact.query_count, 2);
+        assert!(artifact.pipeline_config.read_parse_workers > 0);
+        assert_eq!(
+            artifact.pipeline_config.snippet_storage_mode,
+            SnippetStorageMode::StoredBody
+        );
         assert!(artifact.corpus_stages.scan_micros > 0);
         assert!(artifact.corpus_stages.source_collection_micros > 0);
         assert_eq!(artifact.run_metadata.run_condition, "streaming_vault");
@@ -1135,6 +1485,7 @@ mod tests {
         assert!(artifact.backends.iter().all(|backend| {
             backend.stages.read_parse.sample_count == artifact.document_count
                 && backend.stages.read_parse.total_bytes > 0
+                && backend.stages.read_parse.peak_in_flight_items > 0
                 && backend.stages.read_parse.read.sample_count == artifact.document_count
                 && backend.stages.read_parse.parse.sample_count == artifact.document_count
                 && backend.stages.read_parse.combined.sample_count == artifact.document_count
@@ -1215,6 +1566,9 @@ mod tests {
         assert!(!json.contains("Secret Note"));
         assert!(!json.contains("private-file-id"));
         assert!(json.contains("\"run_metadata\""));
+        assert!(json.contains("\"pipeline_config\""));
+        assert!(json.contains("\"read_parse_workers\""));
+        assert!(json.contains("\"channel_capacity\""));
         assert!(json.contains("\"sample_count\": 1"));
         assert!(json.contains("\"redaction_enabled\": true"));
         assert!(json.contains("\"corpus_stages\""));

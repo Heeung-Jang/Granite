@@ -173,7 +173,22 @@ impl TantivySearchIndex {
         I: IntoIterator<Item = Result<SearchDocument, E>>,
         E: From<TantivySearchError>,
     {
-        self.index_documents_from_result_iter(documents, TantivyWriterOptions::default(), false)
+        self.add_documents_for_rebuild_from_result_iter_with_options_and_stage_durations(
+            documents,
+            TantivyWriterOptions::default(),
+        )
+    }
+
+    pub fn add_documents_for_rebuild_from_result_iter_with_options_and_stage_durations<I, E>(
+        &mut self,
+        documents: I,
+        options: TantivyWriterOptions,
+    ) -> Result<TantivyIndexingStageMetrics, E>
+    where
+        I: IntoIterator<Item = Result<SearchDocument, E>>,
+        E: From<TantivySearchError>,
+    {
+        self.index_documents_from_result_iter(documents, options, false)
     }
 
     fn index_documents_from_result_iter<I, E>(
