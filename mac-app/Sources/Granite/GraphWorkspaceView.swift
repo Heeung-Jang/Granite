@@ -16,6 +16,7 @@ struct GraphWorkspaceView: View {
     @State private var pendingFirstRender: PendingGraphFirstRender?
     @State private var forceRefinementTask: Task<Void, Never>?
     @State private var nextGraphRequestID: UInt64 = 1
+    @State private var showsSearch = false
     @State private var showsSettings = false
     @State private var viewport = GraphViewport()
     @State private var viewportFitState = GraphViewportFitState()
@@ -143,13 +144,21 @@ struct GraphWorkspaceView: View {
                                 }
 
                                 GraphCanvasHeader(
-                                    title: graphViewTitle,
-                                    searchQuery: $settings.searchQuery,
-                                    width: proxy.size.width
+                                    title: graphViewTitle
                                 )
 
+                                if showsSearch {
+                                    GraphSearchOverlay(
+                                        searchQuery: $settings.searchQuery,
+                                        close: closeGraphSearch
+                                    )
+                                    .position(x: min(154, max(130, proxy.size.width / 2)), y: 24)
+                                }
+
                                 GraphFloatingControlStack(
+                                    searchIsPresented: showsSearch || searchIsActive,
                                     settingsIsPresented: showsSettings,
+                                    toggleSearch: toggleGraphSearch,
                                     zoomOut: { zoom(by: 0.85) },
                                     zoomIn: { zoom(by: 1.15) },
                                     resetView: resetViewportToFit,
@@ -550,6 +559,22 @@ struct GraphWorkspaceView: View {
         viewport.zoomScale *= multiplier
     }
 
+    private func toggleGraphSearch() {
+        if showsSearch {
+            closeGraphSearch()
+        } else {
+            showsSearch = true
+        }
+    }
+
+    private func closeGraphSearch() {
+        showsSearch = false
+        Task { @MainActor in
+            await Task.yield()
+            graphSurfaceFocused = true
+        }
+    }
+
     private func panGraph(_ direction: MoveCommandDirection) {
         guard graphSurfaceFocused else {
             return
@@ -802,81 +827,81 @@ private struct PendingGraphFirstRender {
 
 private struct GraphCanvasHeader: View {
     let title: String
-    @Binding var searchQuery: String
-    let width: CGFloat
-
-    private var usesCenteredTitle: Bool {
-        width >= 640
-    }
-
-    private var showsCompactTitle: Bool {
-        width >= 460
-    }
-
-    private var searchFieldWidth: CGFloat {
-        if usesCenteredTitle {
-            return min(260, max(180, width * 0.32))
-        }
-
-        let titleWidth: CGFloat = showsCompactTitle ? 60 : 0
-        let spacing: CGFloat = showsCompactTitle ? 8 : 0
-        let horizontalPadding: CGFloat = 28
-        let availableWidth = width - horizontalPadding - titleWidth - spacing
-        return min(260, max(120, availableWidth))
-    }
 
     var body: some View {
-        Group {
-            if usesCenteredTitle {
-                ZStack {
-                    headerTitle
-                        .frame(maxWidth: .infinity, alignment: .center)
-
-                    HStack(spacing: 8) {
-                        searchField
-
-                        Spacer(minLength: 0)
-                    }
-                }
-            } else {
-                HStack(spacing: 8) {
-                    if showsCompactTitle {
-                        headerTitle
-                    }
-
-                    searchField
-
-                    Spacer(minLength: 0)
-                }
-            }
-        }
-        .frame(height: 32)
-        .frame(maxWidth: .infinity)
-        .padding(.horizontal, 14)
-        .padding(.top, 8)
-    }
-
-    private var headerTitle: some View {
         Text(title)
             .font(.caption.weight(.semibold))
             .foregroundStyle(.primary)
             .lineLimit(1)
+            .frame(maxWidth: .infinity, alignment: .center)
+            .frame(height: 32)
+            .frame(maxWidth: .infinity)
+            .padding(.top, 8)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
     }
+}
 
-    private var searchField: some View {
-        TextField("Search", text: $searchQuery)
-            .textFieldStyle(.roundedBorder)
-            .frame(width: searchFieldWidth)
-            .accessibilityLabel("Graph search")
+private struct GraphSearchOverlay: View {
+    @Binding var searchQuery: String
+    let close: () -> Void
+
+    @FocusState private var searchFieldFocused: Bool
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+
+            TextField("Search", text: $searchQuery)
+                .textFieldStyle(.plain)
+                .focused($searchFieldFocused)
+                .accessibilityLabel("Graph search")
+
+            if !searchQuery.isEmpty {
+                Button {
+                    searchQuery = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 12))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("Clear graph search")
+                .accessibilityLabel("Clear graph search")
+            }
+
+            Button(action: close) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 12))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .help("Close graph search")
+            .accessibilityLabel("Close graph search")
+        }
+        .padding(.horizontal, 8)
+        .frame(width: 280, height: 32)
+        .background(ObsidianUI.sidebarBackground.opacity(0.94))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(ObsidianUI.border)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .onAppear {
+            searchFieldFocused = true
+        }
+        .onExitCommand(perform: close)
     }
 }
 
 private struct GraphFloatingControlStack: View {
-    static let centerY: CGFloat = 121
+    static let centerY: CGFloat = 139
 
+    let searchIsPresented: Bool
     let settingsIsPresented: Bool
+    let toggleSearch: () -> Void
     let zoomOut: () -> Void
     let zoomIn: () -> Void
     let resetView: () -> Void
@@ -884,6 +909,13 @@ private struct GraphFloatingControlStack: View {
 
     var body: some View {
         VStack(spacing: 6) {
+            ObsidianIconButton(
+                systemName: "magnifyingglass",
+                accessibilityLabel: "Search graph",
+                isSelected: searchIsPresented,
+                action: toggleSearch
+            )
+
             ObsidianIconButton(
                 systemName: "minus.magnifyingglass",
                 accessibilityLabel: "Zoom out graph",
