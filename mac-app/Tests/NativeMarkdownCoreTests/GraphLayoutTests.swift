@@ -22,6 +22,16 @@ func graphLayoutSeedPositionsAreDeterministic() {
 }
 
 @Test
+func graphLayoutUsesSmallObsidianLikeNodeRadii() {
+    let layout = GraphLayoutMapper.map(radiusFixtureSnapshot())
+
+    #expect(layout.nodes[0].radius == GraphVisualMetrics.defaultNodeRadius)
+    #expect(layout.nodes[1].radius < 4.0)
+    #expect(layout.nodes[2].radius == GraphVisualMetrics.maximumHubNodeRadius)
+    #expect(layout.nodes.allSatisfy { $0.radius < 12.0 })
+}
+
+@Test
 func graphLayoutComponentsSeparateClustersAndOrphans() {
     let layout = GraphLayoutMapper.map(layoutFixtureSnapshot())
 
@@ -216,6 +226,22 @@ private func largeLayoutFixtureSnapshot(nodeCount: Int) -> WholeVaultGraphSnapsh
         nodes: (0..<nodeCount).map { index in
             layoutNode("file:\(index)", degree: 0)
         },
+        edges: []
+    )
+}
+
+private func radiusFixtureSnapshot() -> WholeVaultGraphSnapshot {
+    WholeVaultGraphSnapshot(
+        requestID: 1,
+        generation: 9,
+        partialReasons: [],
+        nodeCountTotal: 3,
+        edgeCountTotal: 0,
+        nodes: [
+            layoutNode("file:zero", degree: 0),
+            layoutNode("file:moderate", degree: 4),
+            layoutNode("file:hub", degree: 100)
+        ],
         edges: []
     )
 }

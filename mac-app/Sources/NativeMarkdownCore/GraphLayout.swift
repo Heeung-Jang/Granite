@@ -241,7 +241,7 @@ public enum GraphLayoutMapper {
     }
 
     private static func radius(forDegree degree: Int) -> Double {
-        min(12.0, 4.0 + Double(max(0, degree)).squareRoot())
+        GraphVisualMetrics.nodeRadius(forDegree: degree)
     }
 
     private static func componentIndexesByNode(

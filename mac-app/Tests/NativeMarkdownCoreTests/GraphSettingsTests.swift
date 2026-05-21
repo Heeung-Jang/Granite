@@ -2,6 +2,23 @@ import Testing
 @testable import NativeMarkdownCore
 
 @Test
+func graphVisualMetricsMatchObsidianDensityTargets() {
+    #expect(GraphVisualMetrics.defaultNodeRadius == 2.2)
+    #expect(GraphVisualMetrics.maximumHubNodeRadius == 5.0)
+    #expect(GraphVisualMetrics.minimumDrawRadius == 1.25)
+    #expect(GraphVisualMetrics.defaultLinkThickness == 0.6)
+    #expect(GraphVisualMetrics.minimumLinkThickness == 0.35)
+    #expect(GraphVisualMetrics.activeLinkThicknessBonus == 0.8)
+    #expect(GraphVisualMetrics.resolvedEdgeAlpha == 0.16)
+    #expect(GraphVisualMetrics.unresolvedEdgeAlpha == 0.08)
+    #expect(GraphVisualMetrics.activeEdgeAlpha == 0.38)
+    #expect(GraphVisualMetrics.defaultHitRadius == 8.0)
+    #expect(GraphVisualMetrics.hitRadiusPadding == 4.0)
+    #expect(GraphVisualMetrics.nodeRadius(forDegree: 0) == GraphVisualMetrics.defaultNodeRadius)
+    #expect(GraphVisualMetrics.nodeRadius(forDegree: 100) == GraphVisualMetrics.maximumHubNodeRadius)
+}
+
+@Test
 func graphSettingsDefaultsMatchMvpGate() {
     let settings = GraphSettings()
 
