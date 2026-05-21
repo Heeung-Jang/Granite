@@ -11,6 +11,8 @@ struct SourceNoteView: View {
     let vaultURL: URL
     let file: FileTreeItem
     let chrome: SourceNoteChrome
+    let isActive: Bool
+    let focusRequestID: WorkspaceTab.ID?
     private let noteSaver: any EngineNoteSaving
 
     @State private var state: SourceNoteViewState = .loading
@@ -32,11 +34,15 @@ struct SourceNoteView: View {
         vaultURL: URL,
         file: FileTreeItem,
         chrome: SourceNoteChrome = .native,
+        isActive: Bool = true,
+        focusRequestID: WorkspaceTab.ID? = nil,
         noteSaver: any EngineNoteSaving = EngineSaveClient()
     ) {
         self.vaultURL = vaultURL
         self.file = file
         self.chrome = chrome
+        self.isActive = isActive
+        self.focusRequestID = focusRequestID
         self.noteSaver = noteSaver
     }
 
@@ -60,6 +66,8 @@ struct SourceNoteView: View {
                     embedPreviewMap: livePreviewEmbedPreviewMap,
                     markerStyle: livePreviewMarkerStyle,
                     documentTitle: file.displayName,
+                    isActive: isActive,
+                    focusRequestID: focusRequestID,
                     interactionHandler: handleEditorInteraction
                 )
                     .frame(minHeight: 320)
@@ -733,11 +741,11 @@ struct SourceNoteView: View {
         }
     }
 
-    private func handleEditorInteraction(_ interaction: MarkdownEditorInteraction) {
-        switch interaction {
+    private func handleEditorInteraction(_ request: MarkdownEditorInteractionRequest) {
+        switch request.interaction {
         case .wikiLink(let link):
             Task {
-                await resolveAndOpen(link)
+                await resolveAndOpen(link, disposition: request.disposition)
             }
         case .externalLink(let link):
             guard link.isUserConfirmableExternalURL, let url = link.url else {
@@ -754,7 +762,10 @@ struct SourceNoteView: View {
     }
 
     @MainActor
-    private func resolveAndOpen(_ link: EditorWikiLink) async {
+    private func resolveAndOpen(
+        _ link: EditorWikiLink,
+        disposition: WorkspaceTabOpenDisposition
+    ) async {
         do {
             let state = try await Task.detached(priority: .userInitiated) {
                 try FileSystemEditorWikiLinkResolver().resolve(link, at: vaultURL)
@@ -762,7 +773,7 @@ struct SourceNoteView: View {
 
             switch state {
             case .resolved(let file):
-                appState.openFile(file)
+                appState.openFile(file, disposition: disposition)
             case .missing:
                 interactionNotice = EditorInteractionNotice(
                     title: "Missing Link",

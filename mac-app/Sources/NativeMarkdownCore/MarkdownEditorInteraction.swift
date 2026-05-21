@@ -6,6 +6,19 @@ public enum MarkdownEditorInteraction: Equatable, Sendable {
     case tag(String)
 }
 
+public struct MarkdownEditorInteractionRequest: Equatable, Sendable {
+    public let interaction: MarkdownEditorInteraction
+    public let disposition: WorkspaceTabOpenDisposition
+
+    public init(
+        interaction: MarkdownEditorInteraction,
+        disposition: WorkspaceTabOpenDisposition
+    ) {
+        self.interaction = interaction
+        self.disposition = disposition
+    }
+}
+
 public struct EditorWikiLink: Equatable, Sendable {
     public let raw: String
     public let target: String

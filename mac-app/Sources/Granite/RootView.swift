@@ -1,6 +1,7 @@
 import AppKit
 import NativeMarkdownCore
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct RootView: View {
     @EnvironmentObject private var appState: AppState
@@ -32,8 +33,9 @@ struct RootView: View {
             Divider()
 
             ObsidianWorkspaceDetail(
-                closeSelectedFile: closeSelectedFile,
-                showBlankWorkspace: showBlankWorkspace
+                closeTab: closeTab,
+                moveTab: appState.moveTab(from:to:),
+                newTab: newTab
             )
 
             Divider()
@@ -74,6 +76,16 @@ struct RootView: View {
         } message: {
             Text(dirtyEditorActionMessage)
         }
+        .alert("Unsaved Changes", isPresented: dirtyTabCloseAlertBinding) {
+            Button("Stay", role: .cancel) {
+                appState.dismissDirtyTabCloseWarning()
+            }
+            Button("Discard and Close", role: .destructive) {
+                appState.discardDirtyChangesForTabCloseWarning()
+            }
+        } message: {
+            Text(dirtyTabCloseMessage)
+        }
         .sheet(item: $presentedSheet) { sheet in
             switch sheet {
             case .help:
@@ -86,6 +98,8 @@ struct RootView: View {
             }
         }
         .background(DirtyLifecycleWindowGuard())
+        .background(WorkspaceTabKeyCommandGuard(action: workspaceTabAction))
+        .focusedValue(\.workspaceTabAction, workspaceTabAction)
         .onAppear {
             AppLifecycleController.shared.appState = appState
         }
@@ -176,6 +190,23 @@ struct RootView: View {
         }
     }
 
+    private var dirtyTabCloseAlertBinding: Binding<Bool> {
+        Binding {
+            appState.dirtyTabCloseWarning != nil
+        } set: { isPresented in
+            if !isPresented {
+                appState.dismissDirtyTabCloseWarning()
+            }
+        }
+    }
+
+    private var dirtyTabCloseMessage: String {
+        guard let warning = appState.dirtyTabCloseWarning else {
+            return ""
+        }
+        return "Discard unsaved changes in \"\(warning.dirtyFile.displayName)\" and close this tab?"
+    }
+
     private func openVaultPanel() {
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
@@ -224,12 +255,36 @@ struct RootView: View {
         appState.requestCloseVault()
     }
 
-    private func closeSelectedFile() {
-        appState.requestClearSelectedFile()
+    private func closeTab(_ tabID: WorkspaceTab.ID) {
+        appState.requestCloseTab(tabID)
     }
 
-    private func showBlankWorkspace() {
-        appState.requestClearSelectedFile()
+    private func newTab() {
+        appState.newEmptyTab()
+    }
+
+    private var workspaceTabAction: WorkspaceTabAction {
+        WorkspaceTabAction(
+            isAvailable: appState.vaultSelection.url != nil,
+            newTab: {
+                appState.newEmptyTab()
+            },
+            closeActiveTab: {
+                appState.requestCloseActiveTab()
+            },
+            restoreClosedTab: {
+                appState.restoreRecentlyClosedTab()
+            },
+            activateNextTab: {
+                appState.activateNextTab()
+            },
+            activatePreviousTab: {
+                appState.activatePreviousTab()
+            },
+            activateTabAtShortcutIndex: { index in
+                appState.activateTab(atShortcutIndex: index)
+            }
+        )
     }
 }
 
@@ -472,15 +527,20 @@ private struct ObsidianVaultFooter: View {
 
 private struct ObsidianWorkspaceDetail: View {
     @EnvironmentObject private var appState: AppState
-    let closeSelectedFile: () -> Void
-    let showBlankWorkspace: () -> Void
+    let closeTab: (WorkspaceTab.ID) -> Void
+    let moveTab: (Int, Int) -> Void
+    let newTab: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
             ObsidianTabBar(
-                file: appState.selectedFile,
-                closeSelectedFile: closeSelectedFile,
-                showBlankWorkspace: showBlankWorkspace
+                tabs: appState.workspaceTabs,
+                activeTabID: appState.activeTabID,
+                isDirty: appState.isEditorDirty(file:),
+                activateTab: appState.activateTab(id:),
+                closeTab: closeTab,
+                moveTab: moveTab,
+                newTab: newTab
             )
 
             Divider()
@@ -497,8 +557,13 @@ private struct ObsidianWorkspaceDetail: View {
                     systemImage: "exclamationmark.triangle"
                 )
             case .selected(let url):
-                if let selectedFile = appState.selectedFile {
-                    ObsidianEditorPane(vaultURL: url, file: selectedFile)
+                if let activeFile = appState.activeFile {
+                    EditorTabContentStack(
+                        vaultURL: url,
+                        tabs: appState.workspaceTabs,
+                        activeTabID: appState.activeTabID,
+                        activeFile: activeFile
+                    )
                 } else {
                     ObsidianEmptyWorkspace(
                         title: url.lastPathComponent,
@@ -513,39 +578,66 @@ private struct ObsidianWorkspaceDetail: View {
 }
 
 private struct ObsidianTabBar: View {
-    let file: FileTreeItem?
-    let closeSelectedFile: () -> Void
-    let showBlankWorkspace: () -> Void
+    let tabs: [WorkspaceTab]
+    let activeTabID: WorkspaceTab.ID?
+    let isDirty: (FileTreeItem) -> Bool
+    let activateTab: (WorkspaceTab.ID) -> Void
+    let closeTab: (WorkspaceTab.ID) -> Void
+    let moveTab: (Int, Int) -> Void
+    let newTab: () -> Void
+    @State private var draggedTabID: WorkspaceTab.ID?
 
     var body: some View {
         HStack(spacing: 0) {
-            if let file {
-                HStack(spacing: 10) {
-                    Text(displayTitle(for: file))
-                        .lineLimit(1)
-                    Button(action: closeSelectedFile) {
-                        Image(systemName: "xmark")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .frame(width: 18, height: 18)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Close tab")
-                    .accessibilityLabel("Close tab")
-                }
-                .padding(.horizontal, 14)
-                .frame(height: ObsidianUI.tabBarHeight)
-                .frame(maxWidth: 280, alignment: .leading)
-                .background(ObsidianUI.editorBackground)
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 0) {
+                        ForEach(tabs) { tab in
+                            ObsidianTabItem(
+                                tab: tab,
+                                isActive: tab.id == activeTabID,
+                                isDirty: tab.file.map(isDirty) ?? false,
+                                activate: {
+                                    activateTab(tab.id)
+                                },
+                                close: {
+                                    closeTab(tab.id)
+                                }
+                            )
+                            .id(tab.id)
+                            .onDrag {
+                                draggedTabID = tab.id
+                                return NSItemProvider(object: tab.id.uuidString as NSString)
+                            }
+                            .onDrop(
+                                of: [UTType.text],
+                                delegate: ObsidianTabDropDelegate(
+                                    targetTabID: tab.id,
+                                    tabs: tabs,
+                                    draggedTabID: $draggedTabID,
+                                    moveTab: moveTab
+                                )
+                            )
 
-                Divider()
-                    .frame(height: ObsidianUI.tabBarHeight)
+                            Divider()
+                                .frame(height: ObsidianUI.tabBarHeight)
+                        }
+                    }
+                }
+                .onChange(of: activeTabID) { _, newValue in
+                    guard let newValue else {
+                        return
+                    }
+                    withAnimation(.snappy(duration: 0.12)) {
+                        proxy.scrollTo(newValue, anchor: .center)
+                    }
+                }
             }
 
             ObsidianIconButton(
                 systemName: "plus",
                 accessibilityLabel: "New tab",
-                action: showBlankWorkspace
+                action: newTab
             )
 
             Spacer()
@@ -557,15 +649,169 @@ private struct ObsidianTabBar: View {
         .frame(height: ObsidianUI.tabBarHeight)
         .background(ObsidianUI.sidebarBackground.opacity(0.55))
     }
+}
 
-    private func displayTitle(for file: FileTreeItem) -> String {
-        (file.displayName as NSString).deletingPathExtension
+private struct ObsidianTabDropDelegate: DropDelegate {
+    let targetTabID: WorkspaceTab.ID
+    let tabs: [WorkspaceTab]
+    @Binding var draggedTabID: WorkspaceTab.ID?
+    let moveTab: (Int, Int) -> Void
+
+    func dropEntered(info: DropInfo) {
+        guard let draggedTabID,
+              draggedTabID != targetTabID,
+              let sourceIndex = tabs.firstIndex(where: { $0.id == draggedTabID }),
+              let targetIndex = tabs.firstIndex(where: { $0.id == targetTabID })
+        else {
+            return
+        }
+        moveTab(sourceIndex, targetIndex)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        draggedTabID = nil
+        return true
+    }
+}
+
+private struct ObsidianTabItem: View {
+    let tab: WorkspaceTab
+    let isActive: Bool
+    let isDirty: Bool
+    let activate: () -> Void
+    let close: () -> Void
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Button(action: activate) {
+                Text(displayTitle)
+                    .lineLimit(1)
+                    .foregroundStyle(isActive ? .primary : .secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if isDirty {
+                Circle()
+                    .fill(.secondary)
+                    .frame(width: 6, height: 6)
+                    .accessibilityLabel("Unsaved changes")
+                    .padding(.leading, 8)
+            }
+
+            Button(action: close) {
+                Image(systemName: "xmark")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 18, height: 18)
+            }
+            .buttonStyle(.plain)
+            .help("Close tab")
+            .accessibilityLabel("Close tab")
+            .padding(.leading, 8)
+        }
+        .padding(.horizontal, 14)
+        .frame(height: ObsidianUI.tabBarHeight)
+        .frame(width: 220, alignment: .leading)
+        .contentShape(Rectangle())
+        .background(isActive ? ObsidianUI.editorBackground : Color.clear)
+    }
+
+    private var displayTitle: String {
+        guard let file = tab.file else {
+            return "Untitled"
+        }
+        return (file.displayName as NSString).deletingPathExtension
+    }
+}
+
+private struct EditorTabContentStack: View {
+    private static let cleanInactiveBudget = 10
+
+    @EnvironmentObject private var appState: AppState
+    let vaultURL: URL
+    let tabs: [WorkspaceTab]
+    let activeTabID: WorkspaceTab.ID?
+    let activeFile: FileTreeItem
+    @State private var mountedTabIDs: [WorkspaceTab.ID] = []
+    @State private var focusRequestID: WorkspaceTab.ID?
+
+    var body: some View {
+        ZStack {
+            ForEach(mountedTabs) { tab in
+                if let file = tab.file {
+                    ObsidianEditorPane(
+                        vaultURL: vaultURL,
+                        file: file,
+                        isActive: tab.id == activeTabID,
+                        focusRequestID: tab.id == activeTabID ? focusRequestID : nil
+                    )
+                        .opacity(tab.id == activeTabID ? 1 : 0)
+                        .allowsHitTesting(tab.id == activeTabID)
+                        .accessibilityHidden(tab.id != activeTabID)
+                        .zIndex(tab.id == activeTabID ? 1 : 0)
+                }
+            }
+        }
+        .onAppear {
+            focusRequestID = activeTabID
+            reconcileMountedTabs()
+        }
+        .onChange(of: activeTabID) { _, _ in
+            focusRequestID = activeTabID
+            reconcileMountedTabs()
+        }
+        .onChange(of: tabs.map(\.id)) { _, _ in
+            reconcileMountedTabs()
+        }
+        .onChange(of: activeFile.id) { _, _ in
+            reconcileMountedTabs()
+        }
+    }
+
+    private var mountedTabs: [WorkspaceTab] {
+        mountedTabIDs.compactMap { id in
+            tabs.first { $0.id == id && $0.file != nil }
+        }
+    }
+
+    private func reconcileMountedTabs() {
+        let currentIDs = Set(tabs.map(\.id))
+        var mounted = mountedTabIDs.filter { currentIDs.contains($0) }
+        let dirtyIDs = Set(tabs.compactMap { tab -> WorkspaceTab.ID? in
+            guard let file = tab.file, appState.isEditorDirty(file: file) else {
+                return nil
+            }
+            return tab.id
+        })
+
+        if let activeTabID {
+            mounted.removeAll { $0 == activeTabID }
+            mounted.append(activeTabID)
+        }
+
+        for tab in tabs where dirtyIDs.contains(tab.id) && !mounted.contains(tab.id) {
+            mounted.append(tab.id)
+        }
+
+        var cleanInactiveIDs = mounted.filter { id in
+            id != activeTabID && !dirtyIDs.contains(id)
+        }
+        while cleanInactiveIDs.count > Self.cleanInactiveBudget {
+            let evictedID = cleanInactiveIDs.removeFirst()
+            mounted.removeAll { $0 == evictedID }
+        }
+
+        mountedTabIDs = mounted
     }
 }
 
 private struct ObsidianEditorPane: View {
     let vaultURL: URL
     let file: FileTreeItem
+    var isActive = true
+    var focusRequestID: WorkspaceTab.ID?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -573,7 +819,13 @@ private struct ObsidianEditorPane: View {
 
             Divider()
 
-            SourceNoteView(vaultURL: vaultURL, file: file, chrome: .obsidian)
+            SourceNoteView(
+                vaultURL: vaultURL,
+                file: file,
+                chrome: .obsidian,
+                isActive: isActive,
+                focusRequestID: focusRequestID
+            )
         }
     }
 }
