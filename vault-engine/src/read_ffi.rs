@@ -6,11 +6,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::ENGINE_ABI_VERSION;
 use crate::attachments::{AttachmentReferenceSource, AttachmentResolutionState};
 use crate::index::{
-    AttachmentRecord, FileIndexStatus, FileRecord, IndexPropertyValue, PropertyRecord, TagRecord,
+    AttachmentProjection, AttachmentRecord, FileIndexStatus, FileRecord, FileTreeProjection,
+    IndexPropertyValue, LinkProjection, PropertyProjection, PropertyRecord, TagRecord,
 };
 use crate::read_api::{
-    LocalGraphEdge, LocalGraphEdgeDirection, LocalGraphNode, LocalGraphNodeKind, ReadOpenError,
-    SearchHit,
+    LivePreviewMetadataItem, LivePreviewMetadataItemKind, LivePreviewMetadataSource,
+    LivePreviewMetadataState, LocalGraphEdge, LocalGraphEdgeDirection, LocalGraphNode,
+    LocalGraphNodeKind, ReadOpenError, SearchHit,
 };
 use crate::scanner::ScanEntryKind;
 
@@ -143,6 +145,20 @@ pub struct EngineReadGraphEdgeRow {
     pub direction: u32,
     pub is_embed: u32,
     pub hop: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EngineReadLivePreviewMetadataRow {
+    pub item_kind: u32,
+    pub key: EngineReadStringRef,
+    pub value: EngineReadStringRef,
+    pub resolved_file_id: EngineReadStringRef,
+    pub resolved_relative_path: EngineReadStringRef,
+    pub heading: EngineReadStringRef,
+    pub alias: EngineReadStringRef,
+    pub state_kind: u32,
+    pub source_kind: u32,
 }
 
 pub struct EngineReadResultBuilder {
@@ -297,6 +313,15 @@ impl EngineReadFileTreeRow {
             modified_unix_ms: unix_ms(record.modified),
         }
     }
+
+    pub fn from_projection(
+        builder: &mut EngineReadResultBuilder,
+        projection: &FileTreeProjection,
+    ) -> Self {
+        let mut row = Self::from_record(builder, &projection.file);
+        row.relative_path = builder.push_string(&projection.display_path);
+        row
+    }
 }
 
 impl EngineReadSearchHitRow {
@@ -324,6 +349,49 @@ impl EngineReadTagRow {
     }
 }
 
+impl EngineReadLinkRow {
+    pub fn from_projection(
+        builder: &mut EngineReadResultBuilder,
+        projection: &LinkProjection,
+    ) -> Self {
+        Self {
+            source_file_id: builder.push_string(&projection.source_file_id),
+            source_relative_path: projection
+                .source_relative_path
+                .as_ref()
+                .map(|path| builder.push_string(&path_display(path)))
+                .unwrap_or_else(EngineReadStringRef::empty),
+            target_file_id: projection
+                .target_file_id
+                .as_ref()
+                .map(|value| builder.push_string(value))
+                .unwrap_or_else(EngineReadStringRef::empty),
+            target_relative_path: projection
+                .target_relative_path
+                .as_ref()
+                .map(|path| builder.push_string(&path_display(path)))
+                .unwrap_or_else(EngineReadStringRef::empty),
+            target_text: builder.push_string(&projection.target_text),
+            heading: projection
+                .heading
+                .as_ref()
+                .map(|value| builder.push_string(value))
+                .unwrap_or_else(EngineReadStringRef::empty),
+            alias: projection
+                .alias
+                .as_ref()
+                .map(|value| builder.push_string(value))
+                .unwrap_or_else(EngineReadStringRef::empty),
+            resolution_state: if projection.target_file_id.is_some() {
+                1
+            } else {
+                2
+            },
+            is_embed: u32::from(projection.is_embed),
+        }
+    }
+}
+
 impl EngineReadPropertyRow {
     pub fn from_record(builder: &mut EngineReadResultBuilder, record: &PropertyRecord) -> Self {
         let (display_value, value_kind) = match &record.value {
@@ -336,6 +404,18 @@ impl EngineReadPropertyRow {
             key: builder.push_string(&record.key),
             display_value: builder.push_string(&display_value),
             value_kind,
+        }
+    }
+
+    pub fn from_projection(
+        builder: &mut EngineReadResultBuilder,
+        projection: &PropertyProjection,
+    ) -> Self {
+        Self {
+            file_id: builder.push_string(&projection.file_id),
+            key: builder.push_string(&projection.key),
+            display_value: builder.push_string(&projection.display_value),
+            value_kind: property_value_kind(&projection.value),
         }
     }
 }
@@ -358,6 +438,24 @@ impl EngineReadAttachmentRow {
             resolved_relative_path,
             source_kind: attachment_source_code(record.source),
             state_kind,
+        }
+    }
+
+    pub fn from_projection(
+        builder: &mut EngineReadResultBuilder,
+        projection: &AttachmentProjection,
+    ) -> Self {
+        let resolved_relative_path = projection
+            .resolved_relative_path
+            .as_ref()
+            .map(|path| builder.push_string(&path_display(path)))
+            .unwrap_or_else(EngineReadStringRef::empty);
+        Self {
+            source_file_id: builder.push_string(&projection.source_file_id),
+            raw_target: builder.push_string(&projection.raw_target),
+            resolved_relative_path,
+            source_kind: attachment_source_code(projection.source),
+            state_kind: attachment_state_code(&projection.state),
         }
     }
 }
@@ -393,6 +491,41 @@ impl EngineReadGraphEdgeRow {
             },
             is_embed: u32::from(edge.is_embed),
             hop: u32::from(edge.hop),
+        }
+    }
+}
+
+impl EngineReadLivePreviewMetadataRow {
+    pub fn from_item(
+        builder: &mut EngineReadResultBuilder,
+        item: &LivePreviewMetadataItem,
+    ) -> Self {
+        Self {
+            item_kind: live_preview_item_kind_code(item.kind),
+            key: builder.push_string(&item.key),
+            value: builder.push_string(&item.value),
+            resolved_file_id: item
+                .resolved_file_id
+                .as_ref()
+                .map(|value| builder.push_string(value))
+                .unwrap_or_else(EngineReadStringRef::empty),
+            resolved_relative_path: item
+                .resolved_relative_path
+                .as_ref()
+                .map(|value| builder.push_string(value))
+                .unwrap_or_else(EngineReadStringRef::empty),
+            heading: item
+                .heading
+                .as_ref()
+                .map(|value| builder.push_string(value))
+                .unwrap_or_else(EngineReadStringRef::empty),
+            alias: item
+                .alias
+                .as_ref()
+                .map(|value| builder.push_string(value))
+                .unwrap_or_else(EngineReadStringRef::empty),
+            state_kind: live_preview_state_code(item.state),
+            source_kind: live_preview_source_code(item.source),
         }
     }
 }
@@ -458,6 +591,56 @@ fn attachment_source_code(source: AttachmentReferenceSource) -> u32 {
         AttachmentReferenceSource::WikiEmbed => 1,
         AttachmentReferenceSource::MarkdownImage => 2,
         AttachmentReferenceSource::MarkdownLink => 3,
+    }
+}
+
+fn attachment_state_code(state: &AttachmentResolutionState) -> u32 {
+    match state {
+        AttachmentResolutionState::Resolved { .. } => 1,
+        AttachmentResolutionState::Missing => 2,
+        AttachmentResolutionState::Duplicate { .. } => 3,
+        AttachmentResolutionState::Remote => 4,
+        AttachmentResolutionState::Rejected(_) => 5,
+        AttachmentResolutionState::Unsupported => 6,
+    }
+}
+
+fn property_value_kind(value: &IndexPropertyValue) -> u32 {
+    match value {
+        IndexPropertyValue::String(_) => 1,
+        IndexPropertyValue::Bool(_) => 2,
+        IndexPropertyValue::List(_) => 3,
+    }
+}
+
+fn live_preview_item_kind_code(kind: LivePreviewMetadataItemKind) -> u32 {
+    match kind {
+        LivePreviewMetadataItemKind::Property => 1,
+        LivePreviewMetadataItemKind::Tag => 2,
+        LivePreviewMetadataItemKind::Link => 3,
+        LivePreviewMetadataItemKind::Attachment => 4,
+    }
+}
+
+fn live_preview_state_code(state: LivePreviewMetadataState) -> u32 {
+    match state {
+        LivePreviewMetadataState::None => 0,
+        LivePreviewMetadataState::Resolved => 1,
+        LivePreviewMetadataState::Missing => 2,
+        LivePreviewMetadataState::Remote => 4,
+        LivePreviewMetadataState::Rejected => 5,
+        LivePreviewMetadataState::Unsupported => 6,
+    }
+}
+
+fn live_preview_source_code(source: LivePreviewMetadataSource) -> u32 {
+    match source {
+        LivePreviewMetadataSource::None => 0,
+        LivePreviewMetadataSource::Inline => 1,
+        LivePreviewMetadataSource::WikiLink => 2,
+        LivePreviewMetadataSource::MarkdownLink => 3,
+        LivePreviewMetadataSource::WikiEmbed => 4,
+        LivePreviewMetadataSource::MarkdownImage => 5,
     }
 }
 
@@ -694,6 +877,10 @@ mod tests {
         assert_layout::<EngineReadAttachmentRow>(&fixture, "EngineReadAttachmentRow");
         assert_layout::<EngineReadGraphNodeRow>(&fixture, "EngineReadGraphNodeRow");
         assert_layout::<EngineReadGraphEdgeRow>(&fixture, "EngineReadGraphEdgeRow");
+        assert_layout::<EngineReadLivePreviewMetadataRow>(
+            &fixture,
+            "EngineReadLivePreviewMetadataRow",
+        );
     }
 
     fn string_for_builder(
