@@ -59,6 +59,20 @@ func graphLayoutOrphansUseDispersedCloudInsteadOfSingleRing() {
 }
 
 @Test
+func graphLayoutLargeConnectedComponentsDoNotCollapseIntoOneDisk() {
+    let layout = GraphLayoutMapper.map(connectedLayoutFixtureSnapshot(nodeCount: 4_096))
+    let xs = layout.nodes.map(\.position.x)
+    let ys = layout.nodes.map(\.position.y)
+    let xSpan = (xs.max() ?? 0) - (xs.min() ?? 0)
+    let ySpan = (ys.max() ?? 0) - (ys.min() ?? 0)
+
+    #expect(layout.components.count == 1)
+    #expect(layout.components.first?.isOrphanRing == false)
+    #expect(xSpan > 700)
+    #expect(ySpan > 700)
+}
+
+@Test
 func graphLayoutBoundsIncludeNodeRadii() {
     let bounds = GraphLayoutBounds.enclosing([
         layoutTestNode(index: 0, id: "file:a", x: -10, y: 0, radius: 2),
@@ -427,6 +441,27 @@ private func largeLayoutFixtureSnapshot(nodeCount: Int) -> WholeVaultGraphSnapsh
             layoutNode("file:\(index)", degree: 0)
         },
         edges: []
+    )
+}
+
+private func connectedLayoutFixtureSnapshot(nodeCount: Int) -> WholeVaultGraphSnapshot {
+    WholeVaultGraphSnapshot(
+        requestID: 1,
+        generation: 9,
+        partialReasons: [],
+        nodeCountTotal: nodeCount,
+        edgeCountTotal: max(0, nodeCount - 1),
+        nodes: (0..<nodeCount).map { index in
+            layoutNode("file:\(index)", degree: 2)
+        },
+        edges: (0..<max(0, nodeCount - 1)).map { index in
+            WholeVaultGraphEdge(
+                sourceNodeID: "file:\(index)",
+                targetNodeID: "file:\(index + 1)",
+                kind: .resolved,
+                weight: 1
+            )
+        }
     )
 }
 

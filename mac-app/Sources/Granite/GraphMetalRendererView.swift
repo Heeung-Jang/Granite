@@ -808,9 +808,9 @@ private final class GraphMetalRenderer {
 
         switch node.kind {
         case .resolved:
-            return GraphMetalColor.resolvedNode
+            return GraphMetalColor.resolvedNode(nodeCount: input.layout.nodes.count)
         case .unresolved:
-            return GraphMetalColor.unresolvedNode
+            return GraphMetalColor.unresolvedNode(nodeCount: input.layout.nodes.count)
         }
     }
 
@@ -821,9 +821,9 @@ private final class GraphMetalRenderer {
 
         switch edge.kind {
         case .resolved:
-            return GraphMetalColor.resolvedEdge
+            return GraphMetalColor.resolvedEdge(edgeCount: input.layout.edges.count)
         case .unresolved:
-            return GraphMetalColor.unresolvedEdge
+            return GraphMetalColor.unresolvedEdge(edgeCount: input.layout.edges.count)
         }
     }
 
@@ -1019,14 +1019,34 @@ private struct GraphMetalUniforms {
 }
 
 private enum GraphMetalColor {
-    static let resolvedNode = SIMD4<Float>(0.18, 0.18, 0.18, Float(GraphVisualMetrics.resolvedNodeAlpha))
-    static let unresolvedNode = SIMD4<Float>(0.42, 0.42, 0.42, Float(GraphVisualMetrics.unresolvedNodeAlpha))
     static let searchNode = SIMD4<Float>(0.07, 0.72, 0.28, 1.0)
     static let hoveredNode = SIMD4<Float>(0.07, 0.72, 0.28, Float(GraphVisualMetrics.activeNodeAlpha))
     static let selectedNode = SIMD4<Float>(0.07, 0.72, 0.28, 1.0)
-    static let resolvedEdge = SIMD4<Float>(0.25, 0.25, 0.25, Float(GraphVisualMetrics.resolvedEdgeAlpha))
-    static let unresolvedEdge = SIMD4<Float>(0.25, 0.25, 0.25, Float(GraphVisualMetrics.unresolvedEdgeAlpha))
     static let activeEdge = SIMD4<Float>(0.07, 0.72, 0.28, Float(GraphVisualMetrics.activeEdgeAlpha))
+
+    static func resolvedNode(nodeCount: Int) -> SIMD4<Float> {
+        SIMD4<Float>(0.18, 0.18, 0.18, Float(GraphVisualMetrics.resolvedNodeOpacity(
+            nodeCount: nodeCount
+        )))
+    }
+
+    static func unresolvedNode(nodeCount: Int) -> SIMD4<Float> {
+        SIMD4<Float>(0.42, 0.42, 0.42, Float(GraphVisualMetrics.unresolvedNodeOpacity(
+            nodeCount: nodeCount
+        )))
+    }
+
+    static func resolvedEdge(edgeCount: Int) -> SIMD4<Float> {
+        SIMD4<Float>(0.25, 0.25, 0.25, Float(GraphVisualMetrics.resolvedEdgeOpacity(
+            edgeCount: edgeCount
+        )))
+    }
+
+    static func unresolvedEdge(edgeCount: Int) -> SIMD4<Float> {
+        SIMD4<Float>(0.25, 0.25, 0.25, Float(GraphVisualMetrics.unresolvedEdgeOpacity(
+            edgeCount: edgeCount
+        )))
+    }
 
     static func clearColor() -> MTLClearColor {
         let color = NSColor.textBackgroundColor.usingColorSpace(.deviceRGB)

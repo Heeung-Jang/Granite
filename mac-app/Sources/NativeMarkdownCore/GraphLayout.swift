@@ -246,8 +246,13 @@ public enum GraphLayoutMapper {
                 try checkCancellation()
             }
             let componentIndex = componentIndexByNode[index] ?? 0
+            let componentNodeCount = components[componentIndex].nodeIndexes.count
             let offset = componentOffsets[componentIndex]
-            let seed = seedPosition(nodeID: node.nodeID, degree: node.degree)
+            let seed = seedPosition(
+                nodeID: node.nodeID,
+                degree: node.degree,
+                componentNodeCount: componentNodeCount
+            )
             nodes.append(GraphLayoutNode(
                 index: index,
                 nodeID: node.nodeID,
@@ -273,11 +278,28 @@ public enum GraphLayoutMapper {
         )
     }
 
-    private static func seedPosition(nodeID: String, degree: Int) -> GraphPoint {
+    private static func seedPosition(
+        nodeID: String,
+        degree: Int,
+        componentNodeCount: Int
+    ) -> GraphPoint {
         let hash = stableHash(nodeID)
         let angle = Double(hash % 10_000) / 10_000.0 * 2.0 * Double.pi
+        if componentNodeCount >= 128 {
+            let radialHash = stableHash("\(nodeID)#radius")
+            let radialUnit = Double(radialHash % 10_000) / 10_000.0
+            let radius = 72.0 + radialUnit.squareRoot() * connectedComponentCloudRadius(
+                nodeCount: componentNodeCount
+            )
+            return GraphPoint(x: cos(angle) * radius, y: sin(angle) * radius)
+        }
+
         let radius = 80.0 + Double(max(0, 24 - min(degree, 24))) * 8.0
         return GraphPoint(x: cos(angle) * radius, y: sin(angle) * radius)
+    }
+
+    private static func connectedComponentCloudRadius(nodeCount: Int) -> Double {
+        Double(max(0, nodeCount)).squareRoot() * 6.0
     }
 
     private static func radius(forDegree degree: Int) -> Double {
@@ -609,7 +631,7 @@ public struct GraphLayoutCacheKey: Equatable, Sendable, CustomStringConvertible 
         vaultIdentityHash: String,
         generation: UInt64,
         settings: GraphSettings,
-        layoutAlgorithmVersion: String = "layout-v1"
+        layoutAlgorithmVersion: String = "layout-v2"
     ) -> Self {
         let payload = [
             "vault:\(vaultIdentityHash)",

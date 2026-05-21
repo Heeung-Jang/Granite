@@ -39,6 +39,42 @@ public enum GraphVisualMetrics {
         )
     }
 
+    public static func resolvedNodeOpacity(nodeCount: Int) -> Double {
+        densityAdjustedAlpha(
+            base: resolvedNodeAlpha,
+            minimum: 0.20,
+            count: nodeCount,
+            denseCount: 10_000
+        )
+    }
+
+    public static func unresolvedNodeOpacity(nodeCount: Int) -> Double {
+        densityAdjustedAlpha(
+            base: unresolvedNodeAlpha,
+            minimum: 0.12,
+            count: nodeCount,
+            denseCount: 10_000
+        )
+    }
+
+    public static func resolvedEdgeOpacity(edgeCount: Int) -> Double {
+        densityAdjustedAlpha(
+            base: resolvedEdgeAlpha,
+            minimum: 0.018,
+            count: edgeCount,
+            denseCount: 20_000
+        )
+    }
+
+    public static func unresolvedEdgeOpacity(edgeCount: Int) -> Double {
+        densityAdjustedAlpha(
+            base: unresolvedEdgeAlpha,
+            minimum: 0.01,
+            count: edgeCount,
+            denseCount: 20_000
+        )
+    }
+
     public static func hitRadius(
         forNodeRadius nodeRadius: Double,
         zoomScale: Double,
@@ -48,5 +84,20 @@ public enum GraphVisualMetrics {
             minimumHitRadius,
             nodeRadius * max(0.1, zoomScale) + hitRadiusPadding
         )
+    }
+
+    private static func densityAdjustedAlpha(
+        base: Double,
+        minimum: Double,
+        count: Int,
+        denseCount: Int
+    ) -> Double {
+        guard count > 1_000 else {
+            return base
+        }
+
+        let denominator = max(1, denseCount - 1_000)
+        let progress = min(1.0, Double(count - 1_000) / Double(denominator))
+        return base + (minimum - base) * progress
     }
 }

@@ -60,7 +60,7 @@ struct GraphCanvasRendererView: View {
                     )
 
                     drawEdges(input: renderInput, paths: renderPaths, context: &graphContext)
-                    drawNodes(paths: renderPaths, context: &graphContext)
+                    drawNodes(input: renderInput, paths: renderPaths, context: &graphContext)
                     drawLabels(input: renderInput, context: &context, size: size)
                     AppTelemetry.endGraphStage(drawSignpost)
 
@@ -203,7 +203,9 @@ struct GraphCanvasRendererView: View {
     ) {
         context.stroke(
             paths.resolvedEdges,
-            with: .color(Color.secondary.opacity(GraphVisualMetrics.resolvedEdgeAlpha)),
+            with: .color(Color.secondary.opacity(GraphVisualMetrics.resolvedEdgeOpacity(
+                edgeCount: input.layout.edges.count
+            ))),
             lineWidth: GraphVisualMetrics.linkThickness(
                 base: input.presentation.linkThickness,
                 isActive: false
@@ -211,7 +213,9 @@ struct GraphCanvasRendererView: View {
         )
         context.stroke(
             paths.unresolvedEdges,
-            with: .color(Color.secondary.opacity(GraphVisualMetrics.unresolvedEdgeAlpha)),
+            with: .color(Color.secondary.opacity(GraphVisualMetrics.unresolvedEdgeOpacity(
+                edgeCount: input.layout.edges.count
+            ))),
             lineWidth: GraphVisualMetrics.linkThickness(
                 base: input.presentation.linkThickness,
                 isActive: false
@@ -227,7 +231,9 @@ struct GraphCanvasRendererView: View {
         )
         context.stroke(
             paths.arrowHeads,
-            with: .color(Color.secondary.opacity(GraphVisualMetrics.resolvedEdgeAlpha)),
+            with: .color(Color.secondary.opacity(GraphVisualMetrics.resolvedEdgeOpacity(
+                edgeCount: input.layout.edges.count
+            ))),
             lineWidth: GraphVisualMetrics.linkThickness(
                 base: input.presentation.linkThickness,
                 isActive: false
@@ -236,11 +242,22 @@ struct GraphCanvasRendererView: View {
     }
 
     private func drawNodes(
+        input: GraphRendererInput,
         paths: GraphCanvasRenderPaths,
         context: inout GraphicsContext
     ) {
-        context.fill(paths.unresolvedNodes, with: .color(Color.secondary.opacity(GraphVisualMetrics.unresolvedNodeAlpha)))
-        context.fill(paths.resolvedNodes, with: .color(Color.primary.opacity(GraphVisualMetrics.resolvedNodeAlpha)))
+        context.fill(
+            paths.unresolvedNodes,
+            with: .color(Color.secondary.opacity(GraphVisualMetrics.unresolvedNodeOpacity(
+                nodeCount: input.layout.nodes.count
+            )))
+        )
+        context.fill(
+            paths.resolvedNodes,
+            with: .color(Color.primary.opacity(GraphVisualMetrics.resolvedNodeOpacity(
+                nodeCount: input.layout.nodes.count
+            )))
+        )
         for (colorHex, path) in paths.groupNodes {
             context.fill(path, with: .color(Color(graphHex: colorHex)))
         }

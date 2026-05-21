@@ -29,6 +29,19 @@ func graphVisualMetricsMatchObsidianDensityTargets() {
 }
 
 @Test
+func graphVisualMetricsReduceOpacityForDenseGraphs() {
+    #expect(GraphVisualMetrics.resolvedNodeOpacity(nodeCount: 100) == GraphVisualMetrics.resolvedNodeAlpha)
+    #expect(GraphVisualMetrics.unresolvedNodeOpacity(nodeCount: 100) == GraphVisualMetrics.unresolvedNodeAlpha)
+    #expect(GraphVisualMetrics.resolvedEdgeOpacity(edgeCount: 100) == GraphVisualMetrics.resolvedEdgeAlpha)
+    #expect(GraphVisualMetrics.unresolvedEdgeOpacity(edgeCount: 100) == GraphVisualMetrics.unresolvedEdgeAlpha)
+
+    #expect(GraphVisualMetrics.resolvedNodeOpacity(nodeCount: 60_000) <= 0.20)
+    #expect(GraphVisualMetrics.unresolvedNodeOpacity(nodeCount: 60_000) <= 0.12)
+    #expect(GraphVisualMetrics.resolvedEdgeOpacity(edgeCount: 120_000) <= 0.018)
+    #expect(GraphVisualMetrics.unresolvedEdgeOpacity(edgeCount: 120_000) <= 0.01)
+}
+
+@Test
 func graphSettingsDefaultsMatchMvpGate() {
     let settings = GraphSettings()
 
