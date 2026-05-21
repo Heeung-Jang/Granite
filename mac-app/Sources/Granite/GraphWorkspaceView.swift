@@ -143,6 +143,7 @@ struct GraphWorkspaceView: View {
                                         }
                                     }
                                 ),
+                                interactionCallbacks: graphInteractionCallbacks(input: input),
                                 hitTestIndex: loadedHitTestIndex,
                                 onHoverNode: { nodeID in
                                     interaction.hover(nodeID)
@@ -612,6 +613,35 @@ struct GraphWorkspaceView: View {
             return
         }
         openNode(selectedNodeID, in: input)
+    }
+
+    private func graphInteractionCallbacks(input: GraphRendererInput) -> GraphRendererInteractionCallbacks {
+        GraphRendererInteractionCallbacks(
+            beginNodeDrag: { start in
+                interaction.beginDrag(
+                    nodeID: start.nodeID,
+                    nodePosition: start.nodePosition,
+                    pointerGraphPoint: start.pointerGraphPoint,
+                    graphMovementThreshold: start.graphMovementThreshold
+                )
+                interaction.select(start.nodeID)
+            },
+            updateNodeDrag: { pointerGraphPoint in
+                interaction.updateDrag(to: pointerGraphPoint)
+            },
+            endNodeDrag: {
+                guard let result = interaction.finishDrag() else {
+                    return
+                }
+                switch GraphGestureDecision.completion(for: result) {
+                case .tap(let nodeID):
+                    interaction.select(nodeID)
+                    openNode(nodeID, in: input)
+                case .drag:
+                    break
+                }
+            }
+        )
     }
 
     private func openNode(_ nodeID: String, in input: GraphRendererInput) {

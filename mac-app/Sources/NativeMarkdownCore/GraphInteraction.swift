@@ -335,7 +335,7 @@ public enum GraphGestureDecision {
         result.movedBeyondThreshold ? .drag(result) : .tap(nodeID: result.nodeID)
     }
 
-    private static func pointerGraphPoint(
+    public static func pointerGraphPoint(
         screenPoint: GraphPoint,
         viewport: GraphViewport,
         canvasSize: GraphSize

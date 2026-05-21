@@ -59,17 +59,17 @@ public struct GraphRendererCallbacks: Sendable {
     }
 }
 
-public struct GraphRendererInteractionCallbacks: Sendable {
-    public let beginNodeDrag: @Sendable (GraphNodeDragStart) -> Void
-    public let updateNodeDrag: @Sendable (GraphPoint) -> Void
-    public let endNodeDrag: @Sendable () -> Void
-    public let panCanvas: @Sendable (GraphPoint) -> Void
+public struct GraphRendererInteractionCallbacks {
+    public let beginNodeDrag: (GraphNodeDragStart) -> Void
+    public let updateNodeDrag: (GraphPoint) -> Void
+    public let endNodeDrag: () -> Void
+    public let panCanvas: (GraphPoint) -> Void
 
     public init(
-        beginNodeDrag: @escaping @Sendable (GraphNodeDragStart) -> Void = { _ in },
-        updateNodeDrag: @escaping @Sendable (GraphPoint) -> Void = { _ in },
-        endNodeDrag: @escaping @Sendable () -> Void = {},
-        panCanvas: @escaping @Sendable (GraphPoint) -> Void = { _ in }
+        beginNodeDrag: @escaping (GraphNodeDragStart) -> Void = { _ in },
+        updateNodeDrag: @escaping (GraphPoint) -> Void = { _ in },
+        endNodeDrag: @escaping () -> Void = {},
+        panCanvas: @escaping (GraphPoint) -> Void = { _ in }
     ) {
         self.beginNodeDrag = beginNodeDrag
         self.updateNodeDrag = updateNodeDrag
