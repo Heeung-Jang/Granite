@@ -416,6 +416,19 @@ impl MetadataStore {
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
+    pub fn graph_resolved_edges_compact(
+        &self,
+        generation: u64,
+        limit: usize,
+    ) -> MetadataStoreResult<Vec<GraphResolvedEdgeRecord>> {
+        let mut statement = self.connection.prepare(GRAPH_RESOLVED_EDGES_COMPACT_SQL)?;
+        let rows = statement.query_map(
+            params![generation as i64, limit_to_i64(limit)],
+            row_to_graph_resolved_edge,
+        )?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
     pub fn graph_unresolved_edges(
         &self,
         generation: u64,
@@ -683,6 +696,26 @@ const GRAPH_RESOLVED_EDGES_SQL: &str = "
            source_files.relative_path,
            links.resolved_target_file_id,
            target_files.relative_path,
+           COUNT(*) AS weight
+    FROM links INDEXED BY idx_links_resolved_pair
+    CROSS JOIN files AS source_files ON source_files.file_id = links.source_file_id
+    CROSS JOIN files AS target_files ON target_files.file_id = links.resolved_target_file_id
+    WHERE links.resolved_target_file_id IS NOT NULL
+      AND source_files.kind = 'markdown'
+      AND source_files.status IN ('parsed', 'search_indexed')
+      AND source_files.generation = ?1
+      AND target_files.kind = 'markdown'
+      AND target_files.status IN ('parsed', 'search_indexed')
+      AND target_files.generation = ?1
+    GROUP BY links.source_file_id, links.resolved_target_file_id
+    ORDER BY links.source_file_id, links.resolved_target_file_id
+    LIMIT ?2";
+
+const GRAPH_RESOLVED_EDGES_COMPACT_SQL: &str = "
+    SELECT links.source_file_id,
+           '' AS source_relative_path,
+           links.resolved_target_file_id,
+           '' AS target_relative_path,
            COUNT(*) AS weight
     FROM links INDEXED BY idx_links_resolved_pair
     CROSS JOIN files AS source_files ON source_files.file_id = links.source_file_id

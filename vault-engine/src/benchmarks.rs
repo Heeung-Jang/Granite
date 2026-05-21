@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -8,7 +9,7 @@ use serde::Serialize;
 
 use crate::graph::{
     WholeVaultGraphInputs, WholeVaultGraphRequest, WholeVaultGraphSnapshot,
-    build_whole_vault_graph_snapshot,
+    build_whole_vault_graph_snapshot, whole_vault_graph_needs_tags,
 };
 use crate::index::{
     FileRecord, GraphFileRecord, GraphQueryStage, IndexSchemaMetadata, LinkEdgeRecord,
@@ -49,6 +50,7 @@ pub struct WholeVaultGraphBenchmarkOptions {
     pub include_orphans: bool,
     pub swift_decode_duration_milliseconds: f64,
     pub swift_decode_memory_bytes: u64,
+    pub private_payload_output: Option<PathBuf>,
 }
 
 #[derive(Debug, Serialize)]
@@ -307,9 +309,13 @@ pub fn run_whole_vault_graph_snapshot_benchmark(
     let snapshot_start = Instant::now();
     let node_fetch_limit = request.node_limit().saturating_add(1);
     let edge_fetch_limit = request.edge_limit().saturating_add(1);
-    let (_, files_duration) = timed(|| Ok(store.graph_files(1, node_fetch_limit)?))?;
-    let (resolved_edges, resolved_duration) =
-        timed(|| Ok(store.graph_resolved_edges(1, edge_fetch_limit)?))?;
+    let (all_files, files_duration) = timed(|| Ok(store.graph_files(1, node_fetch_limit)?))?;
+    let has_all_files = all_files.len() < node_fetch_limit;
+    let (resolved_edges, resolved_duration) = if has_all_files {
+        timed(|| Ok(store.graph_resolved_edges_compact(1, edge_fetch_limit)?))?
+    } else {
+        timed(|| Ok(store.graph_resolved_edges(1, edge_fetch_limit)?))?
+    };
     let (unresolved_edges, unresolved_duration) = if request.include_unresolved {
         timed(|| Ok(store.graph_unresolved_edges(1, edge_fetch_limit)?))?
     } else {
@@ -320,20 +326,25 @@ pub fn run_whole_vault_graph_snapshot_benchmark(
     } else {
         (Vec::new(), Duration::ZERO)
     };
-    let files = benchmark_graph_candidate_files(
-        &resolved_edges,
-        &unresolved_edges,
-        &orphan_files,
-        node_fetch_limit,
-    );
-    let file_ids = files
-        .iter()
-        .map(|file| file.file_id.clone())
-        .collect::<Vec<_>>();
-    let (tags, tags_duration) =
-        timed(
-            || Ok(store.graph_tags_for_files(&file_ids, request.tag_limit().saturating_add(1))?),
-        )?;
+    let files = if has_all_files {
+        all_files
+    } else {
+        benchmark_graph_candidate_files(
+            &resolved_edges,
+            &unresolved_edges,
+            &orphan_files,
+            node_fetch_limit,
+        )
+    };
+    let (tags, tags_duration) = if whole_vault_graph_needs_tags(request) {
+        let file_ids = files
+            .iter()
+            .map(|file| file.file_id.clone())
+            .collect::<Vec<_>>();
+        timed(|| Ok(store.graph_tags_for_files(&file_ids, request.tag_limit().saturating_add(1))?))?
+    } else {
+        (Vec::new(), Duration::ZERO)
+    };
     let node_count_total =
         store.graph_visible_node_count(1, request.include_unresolved, request.include_orphans)?;
     let edge_count_total = store.graph_visible_edge_count(1, request.include_unresolved)?;
@@ -351,13 +362,17 @@ pub fn run_whole_vault_graph_snapshot_benchmark(
             tags,
         },
     );
-    let encoded_payload_bytes = graph_payload_bytes(&build.snapshot)?;
     let assembly_duration = assembly_start.elapsed();
     let snapshot_duration = snapshot_start.elapsed();
+    let snapshot_ms = duration_millis(snapshot_duration);
+    let encoded_payload_bytes = graph_payload_bytes(&build.snapshot, snapshot_ms)?;
     let rss_after = current_rss_bytes();
     let rss_delta = rss_before
         .zip(rss_after)
         .map(|(before, after)| after.saturating_sub(before));
+    if let Some(path) = &options.private_payload_output {
+        write_private_graph_payload(path, &build.snapshot, snapshot_ms, encoded_payload_bytes)?;
+    }
 
     let plans = store.graph_query_plan_summaries(1)?;
     let indexed_access_summary = vec![
@@ -383,7 +398,6 @@ pub fn run_whole_vault_graph_snapshot_benchmark(
             duration_milliseconds: duration_millis(assembly_duration),
         },
     ];
-    let snapshot_ms = duration_millis(snapshot_duration);
     let memory_target = 250.0 * 1024.0 * 1024.0;
     let swift_decode_target = 1_500.0;
     let swift_decode_memory_target = 200.0 * 1024.0 * 1024.0;
@@ -477,6 +491,27 @@ pub fn run_whole_vault_graph_snapshot_benchmark(
             ),
         ],
     })
+}
+
+fn write_private_graph_payload(
+    path: &Path,
+    snapshot: &WholeVaultGraphSnapshot,
+    snapshot_duration_milliseconds: f64,
+    encoded_payload_bytes: usize,
+) -> BackendBenchmarkResultType<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let file = fs::File::create(path)?;
+    serde_json::to_writer(
+        file,
+        &graph_payload_envelope(
+            snapshot,
+            snapshot_duration_milliseconds,
+            encoded_payload_bytes,
+        ),
+    )?;
+    Ok(())
 }
 
 pub fn benchmark_module_ready() -> bool {
@@ -1059,18 +1094,96 @@ where
 }
 
 #[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 struct WholeVaultGraphPayloadEnvelope<'a> {
+    ok: bool,
+    value: WholeVaultGraphPayloadValue<'a>,
+    error: Option<WholeVaultGraphPayloadError>,
+}
+
+#[derive(Serialize)]
+struct WholeVaultGraphPayloadValue<'a> {
     payload_version: u32,
+    request_id: u64,
+    generation: u64,
+    state: &'static str,
+    metrics: WholeVaultGraphPayloadMetrics,
     snapshot: &'a WholeVaultGraphSnapshot,
 }
 
-fn graph_payload_bytes(snapshot: &WholeVaultGraphSnapshot) -> BackendBenchmarkResultType<usize> {
-    let payload = WholeVaultGraphPayloadEnvelope {
-        payload_version: 1,
-        snapshot,
-    };
-    Ok(serde_json::to_vec(&payload)?.len())
+#[derive(Serialize)]
+struct WholeVaultGraphPayloadMetrics {
+    snapshot_duration_milliseconds: f64,
+    encoded_payload_bytes: usize,
+}
+
+#[derive(Serialize)]
+struct WholeVaultGraphPayloadError {}
+
+fn graph_payload_envelope(
+    snapshot: &WholeVaultGraphSnapshot,
+    snapshot_duration_milliseconds: f64,
+    encoded_payload_bytes: usize,
+) -> WholeVaultGraphPayloadEnvelope<'_> {
+    WholeVaultGraphPayloadEnvelope {
+        ok: true,
+        value: WholeVaultGraphPayloadValue {
+            payload_version: 1,
+            request_id: snapshot.request_id,
+            generation: snapshot.generation,
+            state: if snapshot.partial_reasons.is_empty() {
+                "complete"
+            } else {
+                "partial"
+            },
+            metrics: WholeVaultGraphPayloadMetrics {
+                snapshot_duration_milliseconds,
+                encoded_payload_bytes,
+            },
+            snapshot,
+        },
+        error: None,
+    }
+}
+
+fn graph_payload_bytes(
+    snapshot: &WholeVaultGraphSnapshot,
+    snapshot_duration_milliseconds: f64,
+) -> BackendBenchmarkResultType<usize> {
+    let mut encoded_payload_bytes = 0;
+    for _ in 0..4 {
+        let next = count_json_bytes(&graph_payload_envelope(
+            snapshot,
+            snapshot_duration_milliseconds,
+            encoded_payload_bytes,
+        ))?;
+        if next == encoded_payload_bytes {
+            return Ok(next);
+        }
+        encoded_payload_bytes = next;
+    }
+    Ok(encoded_payload_bytes)
+}
+
+fn count_json_bytes<T: Serialize>(value: &T) -> BackendBenchmarkResultType<usize> {
+    let mut writer = CountingWriter::default();
+    serde_json::to_writer(&mut writer, value)?;
+    Ok(writer.bytes)
+}
+
+#[derive(Default)]
+struct CountingWriter {
+    bytes: usize,
+}
+
+impl Write for CountingWriter {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        self.bytes = self.bytes.saturating_add(buffer.len());
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 fn indexed_access(
@@ -1436,6 +1549,7 @@ mod tests {
             include_orphans: true,
             swift_decode_duration_milliseconds: 42.0,
             swift_decode_memory_bytes: 8 * 1024 * 1024,
+            private_payload_output: None,
         })
         .expect("graph benchmark");
 
@@ -1460,10 +1574,7 @@ mod tests {
                 .any(|measurement| measurement.name == "swiftDecodeMemory")
         );
         assert_eq!(artifact.bridge_decision.format, "json");
-        assert_eq!(
-            artifact.bridge_decision.decision_reason,
-            "withinJsonBudget"
-        );
+        assert_eq!(artifact.bridge_decision.decision_reason, "withinJsonBudget");
         assert!(
             artifact
                 .indexed_access_summary

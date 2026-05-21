@@ -129,6 +129,35 @@ public struct WholeVaultGraphNode: Codable, Equatable, Sendable {
         case degree
         case tags
     }
+
+    public init(
+        nodeID: String,
+        fileID: String?,
+        relativePath: String?,
+        label: String,
+        kind: WholeVaultGraphNodeKind,
+        degree: Int,
+        tags: [String] = []
+    ) {
+        self.nodeID = nodeID
+        self.fileID = fileID
+        self.relativePath = relativePath
+        self.label = label
+        self.kind = kind
+        self.degree = degree
+        self.tags = tags
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        nodeID = try container.decode(String.self, forKey: .nodeID)
+        fileID = try container.decodeIfPresent(String.self, forKey: .fileID)
+        relativePath = try container.decodeIfPresent(String.self, forKey: .relativePath)
+        label = try container.decode(String.self, forKey: .label)
+        kind = try container.decode(WholeVaultGraphNodeKind.self, forKey: .kind)
+        degree = try container.decode(Int.self, forKey: .degree)
+        tags = try container.decodeIfPresent([String].self, forKey: .tags) ?? []
+    }
 }
 
 public enum WholeVaultGraphNodeKind: String, Codable, Equatable, Sendable {

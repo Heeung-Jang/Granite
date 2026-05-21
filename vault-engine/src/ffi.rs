@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::ENGINE_ABI_VERSION;
 use crate::graph::{
     WholeVaultGraphInputs, WholeVaultGraphRequest, WholeVaultGraphSnapshot,
-    build_whole_vault_graph_snapshot,
+    build_whole_vault_graph_snapshot, whole_vault_graph_needs_tags,
 };
 use crate::index::{
     GraphFileRecord, GraphResolvedEdgeRecord, GraphUnresolvedEdgeRecord, IndexSchemaMetadata,
@@ -590,9 +590,19 @@ fn graph_snapshot_payload(
     let start = Instant::now();
     let edge_fetch_limit = graph_request.edge_limit().saturating_add(1);
     let node_fetch_limit = graph_request.node_limit().saturating_add(1);
-    let resolved_edges = metadata
-        .graph_resolved_edges(generation, edge_fetch_limit)
+    let all_files = metadata
+        .graph_files(generation, node_fetch_limit)
         .map_err(graph_metadata_error)?;
+    let has_all_files = all_files.len() < node_fetch_limit;
+    let resolved_edges = if has_all_files {
+        metadata
+            .graph_resolved_edges_compact(generation, edge_fetch_limit)
+            .map_err(graph_metadata_error)?
+    } else {
+        metadata
+            .graph_resolved_edges(generation, edge_fetch_limit)
+            .map_err(graph_metadata_error)?
+    };
     let unresolved_edges = if graph_request.include_unresolved {
         metadata
             .graph_unresolved_edges(generation, edge_fetch_limit)
@@ -611,19 +621,27 @@ fn graph_snapshot_payload(
     } else {
         Vec::new()
     };
-    let files = graph_candidate_files(
-        &resolved_edges,
-        &unresolved_edges,
-        &orphan_files,
-        node_fetch_limit,
-    );
-    let file_ids = files
-        .iter()
-        .map(|file| file.file_id.clone())
-        .collect::<Vec<_>>();
-    let tags = metadata
-        .graph_tags_for_files(&file_ids, graph_request.tag_limit().saturating_add(1))
-        .map_err(graph_metadata_error)?;
+    let files = if has_all_files {
+        all_files
+    } else {
+        graph_candidate_files(
+            &resolved_edges,
+            &unresolved_edges,
+            &orphan_files,
+            node_fetch_limit,
+        )
+    };
+    let tags = if whole_vault_graph_needs_tags(graph_request) {
+        let file_ids = files
+            .iter()
+            .map(|file| file.file_id.clone())
+            .collect::<Vec<_>>();
+        metadata
+            .graph_tags_for_files(&file_ids, graph_request.tag_limit().saturating_add(1))
+            .map_err(graph_metadata_error)?
+    } else {
+        Vec::new()
+    };
     let node_count_total = metadata
         .graph_visible_node_count(
             generation,

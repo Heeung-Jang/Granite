@@ -85,6 +85,22 @@ struct NativeMarkdownApp: App {
             }
         }
 
+        if let payloadBenchmarkIndex = CommandLine.arguments.firstIndex(of: "--graph-payload-benchmark") {
+            do {
+                let payloadPathIndex = CommandLine.arguments.index(after: payloadBenchmarkIndex)
+                guard CommandLine.arguments.indices.contains(payloadPathIndex) else {
+                    print("Graph payload benchmark failed")
+                    Foundation.exit(2)
+                }
+                let payloadURL = URL(fileURLWithPath: CommandLine.arguments[payloadPathIndex])
+                print(try GraphPayloadBenchmarkProbe.encodedResult(payloadURL: payloadURL))
+                Foundation.exit(0)
+            } catch {
+                print("Graph payload benchmark failed")
+                Foundation.exit(2)
+            }
+        }
+
         if CommandLine.arguments.contains("--textkit-strategy-probe") {
             print(TextKitStrategyProbe.encodedReport())
             Foundation.exit(0)

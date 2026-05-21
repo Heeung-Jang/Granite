@@ -105,6 +105,11 @@ fn run() -> Result<(), Box<dyn Error>> {
         Command::ObsidianRunbook(command) => write_obsidian_runbook(&command),
         Command::TantivyQueryBenchmark(command) => run_tantivy_query_benchmark(&command),
         Command::GraphSnapshotBenchmark(command) => {
+            if let Some(private_payload_output) = &command.private_payload_output {
+                if is_private_output_inside_vault(&command.vault_root, private_payload_output)? {
+                    return Err("refusing to write private graph payload inside the vault".into());
+                }
+            }
             let artifact =
                 run_whole_vault_graph_snapshot_benchmark(&WholeVaultGraphBenchmarkOptions {
                     vault_alias: command.vault_alias,
@@ -116,6 +121,7 @@ fn run() -> Result<(), Box<dyn Error>> {
                     include_orphans: command.include_orphans,
                     swift_decode_duration_milliseconds: command.swift_decode_duration_milliseconds,
                     swift_decode_memory_bytes: command.swift_decode_memory_bytes,
+                    private_payload_output: command.private_payload_output.clone(),
                 })?;
             write_json(
                 &command.vault_root,
@@ -238,6 +244,7 @@ struct TantivyQueryBenchmarkCommand {
 struct GraphSnapshotBenchmarkCommand {
     vault_root: PathBuf,
     output_path: Option<PathBuf>,
+    private_payload_output: Option<PathBuf>,
     vault_alias: String,
     code_revision: String,
     max_nodes: usize,
@@ -624,6 +631,7 @@ impl GraphSnapshotBenchmarkCommand {
         let mut include_orphans = true;
         let mut swift_decode_duration_milliseconds: Option<f64> = None;
         let mut swift_decode_memory_bytes = None;
+        let mut private_payload_output = None;
 
         while let Some(arg) = parser.next_arg() {
             match arg.as_str() {
@@ -647,6 +655,10 @@ impl GraphSnapshotBenchmarkCommand {
                     let value = parser.required_string_arg("--swift-decode-memory-bytes")?;
                     swift_decode_memory_bytes = Some(value.parse()?);
                 }
+                "--private-payload-output" => {
+                    private_payload_output =
+                        Some(parser.required_path_arg("--private-payload-output")?);
+                }
                 "--exclude-unresolved" => include_unresolved = false,
                 "--exclude-orphans" => include_orphans = false,
                 _ => parser.parse_common_arg(arg)?,
@@ -667,9 +679,17 @@ impl GraphSnapshotBenchmarkCommand {
         {
             return Err("swift decode duration must be a finite non-negative number".into());
         }
+        if let Some(path) = &private_payload_output {
+            if !has_private_path_component(path) {
+                return Err(
+                    "private graph payload output must be written under a private directory".into(),
+                );
+            }
+        }
         Ok(Self {
             vault_root,
             output_path: parser.output_path,
+            private_payload_output,
             vault_alias,
             code_revision,
             max_nodes,
@@ -911,6 +931,35 @@ fn timing_stop_condition(query_class: &str) -> &'static str {
 fn has_private_path_component(path: &Path) -> bool {
     path.components()
         .any(|component| component.as_os_str() == "private")
+}
+
+fn is_private_output_inside_vault(vault_root: &Path, output_path: &Path) -> std::io::Result<bool> {
+    let vault_root = vault_root.canonicalize()?;
+    let parent = output_path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let absolute_parent = if parent.is_absolute() {
+        parent.to_path_buf()
+    } else {
+        env::current_dir()?.join(parent)
+    };
+    let normalized_parent = normalize_existing_or_future_path(&absolute_parent);
+    Ok(normalized_parent == vault_root || normalized_parent.starts_with(&vault_root))
+}
+
+fn normalize_existing_or_future_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            _ => normalized.push(component.as_os_str()),
+        }
+    }
+    normalized
 }
 
 fn required_string<I>(args: &mut I, name: &str) -> Result<String, Box<dyn Error>>
@@ -1226,6 +1275,8 @@ mod tests {
                 "42.5",
                 "--swift-decode-memory-bytes",
                 "8388608",
+                "--private-payload-output",
+                "docs/benchmarks/private/graph-payload.json",
                 "--exclude-unresolved",
                 "--pretty",
             ]
@@ -1240,6 +1291,9 @@ mod tests {
                 command: Command::GraphSnapshotBenchmark(GraphSnapshotBenchmarkCommand {
                     vault_root: PathBuf::from("/tmp/vault"),
                     output_path: Some(PathBuf::from("/tmp/graph.json")),
+                    private_payload_output: Some(PathBuf::from(
+                        "docs/benchmarks/private/graph-payload.json",
+                    )),
                     vault_alias: "small-fixture".to_string(),
                     code_revision: "abcdef0".to_string(),
                     max_nodes: 64_000,

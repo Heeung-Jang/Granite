@@ -44,7 +44,7 @@ public enum EngineGraphClientError: Error, Equatable, CustomStringConvertible {
 }
 
 public protocol EngineGraphTransport: Sendable {
-    func snapshot(metadataPath: String, requestJSON: String) async throws -> String
+    func snapshot(metadataPath: String, requestJSON: String) async throws -> Data
 }
 
 public actor EngineGraphClient {
@@ -72,7 +72,7 @@ public actor EngineGraphClient {
 
         let requestJSON = try Self.encodedJSONString(request)
         let snapshotSignpost = AppTelemetry.beginGraphStage(.snapshot)
-        let response: String
+        let response: Data
         do {
             response = try await transport.snapshot(
                 metadataPath: metadataURL.path,
@@ -119,6 +119,20 @@ public actor EngineGraphClient {
         guard let data = json.data(using: .utf8) else {
             throw EngineGraphClientError.invalidResponse("response is not UTF-8")
         }
+        return try decodeEnvelope(
+            data,
+            expectedRequestID: expectedRequestID,
+            expectedGeneration: expectedGeneration,
+            byteCapBytes: byteCapBytes
+        )
+    }
+
+    public static func decodeEnvelope(
+        _ data: Data,
+        expectedRequestID: UInt64? = nil,
+        expectedGeneration: UInt64? = nil,
+        byteCapBytes: Int = WholeVaultGraphRequest.defaultByteCapBytes
+    ) throws -> WholeVaultGraphPayload {
         guard data.count <= byteCapBytes else {
             throw WholeVaultGraphValidationError.payloadTooLarge
         }
@@ -175,7 +189,7 @@ public struct DynamicEngineGraphTransport: EngineGraphTransport {
         self.libraryPath = libraryPath
     }
 
-    public func snapshot(metadataPath: String, requestJSON: String) async throws -> String {
+    public func snapshot(metadataPath: String, requestJSON: String) async throws -> Data {
         guard let libraryPath, !libraryPath.isEmpty else {
             throw EngineGraphClientError.missingLibrary(EngineLibraryPath.missingMessage)
         }
@@ -196,7 +210,7 @@ public struct DynamicEngineGraphTransport: EngineGraphTransport {
         let free = unsafeBitCast(freeSymbol, to: FreeFunction.self)
         return try metadataPath.withCString { metadataPointer in
             try requestJSON.withCString { requestPointer in
-                try stringResponse(
+                try dataResponse(
                     snapshot(metadataPointer, requestPointer),
                     free: free
                 )
@@ -204,17 +218,17 @@ public struct DynamicEngineGraphTransport: EngineGraphTransport {
         }
     }
 
-    private func stringResponse(
+    private func dataResponse(
         _ pointer: UnsafeMutablePointer<CChar>?,
         free: FreeFunction
-    ) throws -> String {
+    ) throws -> Data {
         guard let pointer else {
             throw EngineGraphClientError.callFailed("graph FFI returned null")
         }
         defer {
             free(pointer)
         }
-        return String(cString: pointer)
+        return Data(bytes: pointer, count: strlen(pointer))
     }
 
     private func dynamicLoaderError() -> String {

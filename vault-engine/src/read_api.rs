@@ -3,7 +3,7 @@ use std::fmt;
 
 use crate::graph::{
     WholeVaultGraphInputs, WholeVaultGraphRequest, WholeVaultGraphSnapshot,
-    build_whole_vault_graph_snapshot,
+    build_whole_vault_graph_snapshot, whole_vault_graph_needs_tags,
 };
 use crate::graph_key::unresolved_target_key;
 use crate::index::{
@@ -340,9 +340,17 @@ impl VaultReadApi {
     ) -> ReadApiResult<ReadValue<WholeVaultGraphSnapshot>> {
         let edge_fetch_limit = request.edge_limit().saturating_add(1);
         let node_fetch_limit = request.node_limit().saturating_add(1);
-        let resolved_edges = self
+        let all_files = self
             .metadata
-            .graph_resolved_edges(self.generation, edge_fetch_limit)?;
+            .graph_files(self.generation, node_fetch_limit)?;
+        let has_all_files = all_files.len() < node_fetch_limit;
+        let resolved_edges = if has_all_files {
+            self.metadata
+                .graph_resolved_edges_compact(self.generation, edge_fetch_limit)?
+        } else {
+            self.metadata
+                .graph_resolved_edges(self.generation, edge_fetch_limit)?
+        };
         let unresolved_edges = if request.include_unresolved {
             self.metadata
                 .graph_unresolved_edges(self.generation, edge_fetch_limit)?
@@ -358,19 +366,26 @@ impl VaultReadApi {
         } else {
             Vec::new()
         };
-        let files = graph_candidate_files(
-            &resolved_edges,
-            &unresolved_edges,
-            &orphan_files,
-            node_fetch_limit,
-        );
-        let file_ids = files
-            .iter()
-            .map(|file| file.file_id.clone())
-            .collect::<Vec<_>>();
-        let tags = self
-            .metadata
-            .graph_tags_for_files(&file_ids, request.tag_limit().saturating_add(1))?;
+        let files = if has_all_files {
+            all_files
+        } else {
+            graph_candidate_files(
+                &resolved_edges,
+                &unresolved_edges,
+                &orphan_files,
+                node_fetch_limit,
+            )
+        };
+        let tags = if whole_vault_graph_needs_tags(request) {
+            let file_ids = files
+                .iter()
+                .map(|file| file.file_id.clone())
+                .collect::<Vec<_>>();
+            self.metadata
+                .graph_tags_for_files(&file_ids, request.tag_limit().saturating_add(1))?
+        } else {
+            Vec::new()
+        };
         let node_count_total = self.metadata.graph_visible_node_count(
             self.generation,
             request.include_unresolved,
@@ -1088,12 +1103,15 @@ mod tests {
         assert_eq!(whole_graph.value.nodes.len(), 3);
         assert_eq!(whole_graph.value.edges.len(), 3);
         assert!(whole_graph.value.nodes.iter().any(|node| {
-            node.file_id.as_deref() == Some(home.file_id.as_str())
-                && node.label == "Home.md"
-                && node.tags == vec!["project/native"]
+            node.file_id.is_none()
+                && node.relative_path.as_deref() == Some("Home.md")
+                && node.label == "Home"
+                && node.tags.is_empty()
         }));
         assert!(whole_graph.value.nodes.iter().any(|node| {
-            node.file_id.as_deref() == Some(guide.file_id.as_str()) && node.label == "Docs/Guide.md"
+            node.file_id.is_none()
+                && node.relative_path.as_deref() == Some("Docs/Guide.md")
+                && node.label == "Guide"
         }));
         assert!(whole_graph.value.edges.iter().any(|edge| edge.weight == 1));
 

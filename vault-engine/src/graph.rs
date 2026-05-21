@@ -42,11 +42,14 @@ pub struct WholeVaultGraphSnapshot {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct WholeVaultGraphNode {
     pub node_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub file_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub relative_path: Option<String>,
     pub label: String,
     pub kind: WholeVaultGraphNodeKind,
     pub degree: usize,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
 }
 
@@ -184,11 +187,10 @@ pub fn build_whole_vault_graph_snapshot(
     generation: u64,
     inputs: WholeVaultGraphInputs,
 ) -> WholeVaultGraphBuild {
-    let files_by_id: HashMap<String, GraphFileRecord> = inputs
+    let files_by_id: HashMap<&str, &GraphFileRecord> = inputs
         .files
         .iter()
-        .cloned()
-        .map(|file| (file.file_id.clone(), file))
+        .map(|file| (file.file_id.as_str(), file))
         .collect();
     let degree_by_file = degree_by_file(&inputs.resolved_edges, &inputs.unresolved_edges, request);
     let node_count_total = inputs.node_count_total;
@@ -240,14 +242,18 @@ pub fn graph_unresolved_node_id(target_text: &str) -> String {
     )
 }
 
+pub fn whole_vault_graph_needs_tags(request: WholeVaultGraphRequest) -> bool {
+    request.group_rule_count > 0
+}
+
 struct SnapshotBuilder<'a> {
     request: WholeVaultGraphRequest,
     generation: u64,
     node_count_total: usize,
     edge_count_total: usize,
-    files_by_id: &'a HashMap<String, GraphFileRecord>,
+    files_by_id: &'a HashMap<&'a str, &'a GraphFileRecord>,
     tags_by_file: &'a HashMap<String, Vec<String>>,
-    degree_by_file: &'a HashMap<String, usize>,
+    degree_by_file: &'a HashMap<&'a str, usize>,
     node_ids: HashSet<String>,
     nodes: Vec<WholeVaultGraphNode>,
     edges: Vec<WholeVaultGraphEdge>,
@@ -260,9 +266,9 @@ impl<'a> SnapshotBuilder<'a> {
         generation: u64,
         node_count_total: usize,
         edge_count_total: usize,
-        files_by_id: &'a HashMap<String, GraphFileRecord>,
+        files_by_id: &'a HashMap<&'a str, &'a GraphFileRecord>,
         tags_by_file: &'a HashMap<String, Vec<String>>,
-        degree_by_file: &'a HashMap<String, usize>,
+        degree_by_file: &'a HashMap<&'a str, usize>,
     ) -> Self {
         Self {
             request,
@@ -327,10 +333,13 @@ impl<'a> SnapshotBuilder<'a> {
             return false;
         };
 
-        let (label, was_truncated) = bounded_label(
-            &file.relative_path.display().to_string(),
-            self.request.label_limit(),
-        );
+        let relative_path = file.relative_path.display().to_string();
+        let label_source = file
+            .relative_path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or(&relative_path);
+        let (label, was_truncated) = bounded_label(label_source, self.request.label_limit());
         if was_truncated {
             self.add_partial_reason(WholeVaultGraphPartialReason::MaxLabelBytes);
         }
@@ -338,8 +347,8 @@ impl<'a> SnapshotBuilder<'a> {
         self.node_ids.insert(node_id.clone());
         self.nodes.push(WholeVaultGraphNode {
             node_id,
-            file_id: Some(file_id.to_string()),
-            relative_path: Some(file.relative_path.display().to_string()),
+            file_id: None,
+            relative_path: Some(relative_path),
             label,
             kind: WholeVaultGraphNodeKind::Resolved,
             degree: self.degree_by_file.get(file_id).copied().unwrap_or(0),
@@ -420,19 +429,19 @@ impl<'a> SnapshotBuilder<'a> {
     }
 }
 
-fn degree_by_file(
-    resolved_edges: &[GraphResolvedEdgeRecord],
-    unresolved_edges: &[GraphUnresolvedEdgeRecord],
+fn degree_by_file<'a>(
+    resolved_edges: &'a [GraphResolvedEdgeRecord],
+    unresolved_edges: &'a [GraphUnresolvedEdgeRecord],
     request: WholeVaultGraphRequest,
-) -> HashMap<String, usize> {
+) -> HashMap<&'a str, usize> {
     let mut degrees = HashMap::new();
     for edge in resolved_edges {
-        *degrees.entry(edge.source_file_id.clone()).or_insert(0) += edge.weight;
-        *degrees.entry(edge.target_file_id.clone()).or_insert(0) += edge.weight;
+        *degrees.entry(edge.source_file_id.as_str()).or_insert(0) += edge.weight;
+        *degrees.entry(edge.target_file_id.as_str()).or_insert(0) += edge.weight;
     }
     if request.include_unresolved {
         for edge in unresolved_edges {
-            *degrees.entry(edge.source_file_id.clone()).or_insert(0) += edge.weight;
+            *degrees.entry(edge.source_file_id.as_str()).or_insert(0) += edge.weight;
         }
     }
     degrees
@@ -530,19 +539,18 @@ mod tests {
         assert_eq!(build.snapshot.edge_count_total, 2);
         assert_eq!(build.snapshot.edges.len(), 2);
         assert!(build.snapshot.nodes.iter().any(|node| {
-            node.file_id.as_deref() == Some("home.md")
+            node.file_id.is_none()
                 && node.relative_path.as_deref() == Some("Home.md")
+                && node.label == "Home"
                 && node.kind == WholeVaultGraphNodeKind::Resolved
                 && node.degree == 3
                 && node.tags == vec!["project/native"]
         }));
-        assert!(
-            build
-                .snapshot
-                .nodes
-                .iter()
-                .any(|node| { node.file_id.as_deref() == Some("orphan.md") && node.degree == 0 })
-        );
+        assert!(build.snapshot.nodes.iter().any(|node| {
+            node.relative_path.as_deref() == Some("Orphan.md")
+                && node.label == "Orphan"
+                && node.degree == 0
+        }));
         assert!(
             build
                 .snapshot

@@ -166,8 +166,8 @@ func engineGraphClientRejectsUnexpectedGeneration() throws {
 private struct FakeGraphTransport: EngineGraphTransport {
     let handler: @Sendable (String, String) async throws -> String
 
-    func snapshot(metadataPath: String, requestJSON: String) async throws -> String {
-        try await handler(metadataPath, requestJSON)
+    func snapshot(metadataPath: String, requestJSON: String) async throws -> Data {
+        Data(try await handler(metadataPath, requestJSON).utf8)
     }
 }
 
