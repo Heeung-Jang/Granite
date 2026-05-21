@@ -594,7 +594,7 @@ private struct ObsidianNoteToolbar: View {
             Spacer()
 
             ObsidianIconButton(systemName: "book", accessibilityLabel: "Reading view", action: {})
-            ObsidianIconButton(systemName: "ellipsis", accessibilityLabel: "More actions", action: {})
+            ObsidianMarkerStyleMenu()
         }
         .padding(.horizontal, 14)
         .frame(height: ObsidianUI.noteToolbarHeight)
@@ -604,6 +604,30 @@ private struct ObsidianNoteToolbar: View {
     private var breadcrumb: String {
         let title = (file.displayName as NSString).deletingPathExtension
         return file.parentPath.isEmpty ? title : "\(file.parentPath) / \(title)"
+    }
+}
+
+private struct ObsidianMarkerStyleMenu: View {
+    @AppStorage(LivePreviewMarkerStyle.storageKey) private var markerStyleRaw = LivePreviewMarkerStyle.defaultValue.rawValue
+
+    var body: some View {
+        Menu {
+            Picker("Marker Style", selection: $markerStyleRaw) {
+                ForEach(LivePreviewMarkerStyle.allCases) { style in
+                    Text(style.menuTitle).tag(style.rawValue)
+                }
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 16))
+                .foregroundStyle(.secondary)
+                .frame(width: 30, height: 30)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .buttonStyle(.plain)
+        .help("Marker style")
+        .accessibilityLabel("Marker style")
     }
 }
 

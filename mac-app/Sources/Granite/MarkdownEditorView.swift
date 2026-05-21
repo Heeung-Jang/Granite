@@ -9,6 +9,7 @@ struct MarkdownEditorView: NSViewRepresentable {
     var livePreviewMode: LivePreviewMode = .livePreview
     var linkStyleMap = LivePreviewLinkStyleMap()
     var embedPreviewMap = LivePreviewEmbedPreviewMap()
+    var markerStyle: LivePreviewMarkerStyle = .defaultValue
     var documentTitle: String?
     var interactionHandler: ((MarkdownEditorInteraction) -> Void)?
 
@@ -19,6 +20,7 @@ struct MarkdownEditorView: NSViewRepresentable {
             livePreviewMode: livePreviewMode,
             linkStyleMap: linkStyleMap,
             embedPreviewMap: embedPreviewMap,
+            markerStyle: markerStyle,
             documentTitle: documentTitle
         )
     }
@@ -59,6 +61,7 @@ struct MarkdownEditorView: NSViewRepresentable {
             livePreviewMode: livePreviewMode,
             linkStyleMap: linkStyleMap,
             embedPreviewMap: embedPreviewMap,
+            markerStyle: markerStyle,
             documentTitle: documentTitle
         )
         guard let textView = scrollView.documentView as? NSTextView else {
@@ -103,8 +106,10 @@ struct MarkdownEditorView: NSViewRepresentable {
         private var livePreviewMode: LivePreviewMode
         private var linkStyleMap: LivePreviewLinkStyleMap
         private var embedPreviewMap: LivePreviewEmbedPreviewMap
+        private var markerStyle: LivePreviewMarkerStyle
         private var documentTitle: String?
         private var isDecoratingLivePreview = false
+        private var decorationGeneration = 0
         weak var textView: NSTextView?
         var isApplyingAppKitChange = false
 
@@ -114,6 +119,7 @@ struct MarkdownEditorView: NSViewRepresentable {
             livePreviewMode: LivePreviewMode = .livePreview,
             linkStyleMap: LivePreviewLinkStyleMap = LivePreviewLinkStyleMap(),
             embedPreviewMap: LivePreviewEmbedPreviewMap = LivePreviewEmbedPreviewMap(),
+            markerStyle: LivePreviewMarkerStyle = .defaultValue,
             documentTitle: String? = nil
         ) {
             _text = text
@@ -121,6 +127,7 @@ struct MarkdownEditorView: NSViewRepresentable {
             self.livePreviewMode = livePreviewMode
             self.linkStyleMap = linkStyleMap
             self.embedPreviewMap = embedPreviewMap
+            self.markerStyle = markerStyle
             self.documentTitle = documentTitle
         }
 
@@ -130,6 +137,7 @@ struct MarkdownEditorView: NSViewRepresentable {
             livePreviewMode: LivePreviewMode,
             linkStyleMap: LivePreviewLinkStyleMap,
             embedPreviewMap: LivePreviewEmbedPreviewMap,
+            markerStyle: LivePreviewMarkerStyle,
             documentTitle: String?
         ) {
             _text = text
@@ -137,6 +145,7 @@ struct MarkdownEditorView: NSViewRepresentable {
             self.livePreviewMode = livePreviewMode
             self.linkStyleMap = linkStyleMap
             self.embedPreviewMap = embedPreviewMap
+            self.markerStyle = markerStyle
             self.documentTitle = documentTitle
             if let textView = textView as? MarkdownInteractionTextView {
                 textView.livePreviewDocumentTitle = documentTitle
@@ -153,7 +162,7 @@ struct MarkdownEditorView: NSViewRepresentable {
 
             isApplyingAppKitChange = true
             text = textView.string
-            renderCurrentSelection(in: textView)
+            scheduleLivePreviewDecoration(in: textView, afterTextMutation: true)
             isApplyingAppKitChange = false
         }
 
@@ -164,7 +173,7 @@ struct MarkdownEditorView: NSViewRepresentable {
             guard let textView = notification.object as? NSTextView else {
                 return
             }
-            renderCurrentSelection(in: textView)
+            scheduleLivePreviewDecoration(in: textView)
         }
 
         func textView(_ textView: MarkdownInteractionTextView, handleMouseDown event: NSEvent) -> Bool {
@@ -200,12 +209,54 @@ struct MarkdownEditorView: NSViewRepresentable {
                 livePreviewMode: livePreviewMode,
                 revealRange: textView.selectedRange(),
                 linkStyleMap: linkStyleMap,
-                embedPreviewMap: embedPreviewMap
+                embedPreviewMap: embedPreviewMap,
+                markerStyle: markerStyle
             )
         }
 
         private func renderCurrentSelection(in textView: NSTextView) {
             decorateVisibleRange(in: textView)
+        }
+
+        private func scheduleLivePreviewDecoration(
+            in textView: NSTextView,
+            afterTextMutation: Bool = false
+        ) {
+            if afterTextMutation {
+                invalidateLayoutAfterTextMutation(in: textView)
+            }
+
+            decorationGeneration += 1
+            let generation = decorationGeneration
+            Task { @MainActor [weak self, weak textView] in
+                guard let self,
+                      let textView,
+                      generation == self.decorationGeneration,
+                      !self.isDecoratingLivePreview
+                else {
+                    return
+                }
+
+                self.renderCurrentSelection(in: textView)
+                if let textContainer = textView.textContainer {
+                    textView.layoutManager?.ensureLayout(for: textContainer)
+                }
+                textView.needsDisplay = true
+            }
+        }
+
+        private func invalidateLayoutAfterTextMutation(in textView: NSTextView) {
+            let textLength = (textView.string as NSString).length
+            guard textLength > 0 else {
+                textView.needsDisplay = true
+                return
+            }
+            let fullRange = NSRange(location: 0, length: textLength)
+            textView.layoutManager?.invalidateLayout(
+                forCharacterRange: fullRange,
+                actualCharacterRange: nil
+            )
+            textView.needsDisplay = true
         }
     }
 }

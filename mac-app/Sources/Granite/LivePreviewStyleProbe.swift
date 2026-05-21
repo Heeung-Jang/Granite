@@ -125,7 +125,8 @@ enum LivePreviewStyleProbe {
             livePreviewMode: .livePreview,
             revealRange: textView.selectedRange(),
             linkStyleMap: linkStyleMap,
-            embedPreviewMap: embedPreviewMap
+            embedPreviewMap: embedPreviewMap,
+            markerStyle: .hidden
         )
 
         let fonts = (1...6).compactMap { font(in: textView, source: source, marker: "Heading \($0)") }
@@ -182,7 +183,8 @@ enum LivePreviewStyleProbe {
                 livePreviewMode: .livePreview,
                 revealRange: textView.selectedRange(),
                 linkStyleMap: linkStyleMap,
-                embedPreviewMap: embedPreviewMap
+                embedPreviewMap: embedPreviewMap,
+                markerStyle: .hidden
             )
         }
         let revealedFenceColor = foregroundColor(in: textView, source: source, marker: "```swift")
@@ -194,7 +196,8 @@ enum LivePreviewStyleProbe {
                 livePreviewMode: .livePreview,
                 revealRange: textView.selectedRange(),
                 linkStyleMap: linkStyleMap,
-                embedPreviewMap: embedPreviewMap
+                embedPreviewMap: embedPreviewMap,
+                markerStyle: .hidden
             )
         }
         let revealedListMarkerColor = foregroundColor(in: textView, source: source, marker: "- Bullet")
@@ -206,7 +209,8 @@ enum LivePreviewStyleProbe {
                 livePreviewMode: .livePreview,
                 revealRange: textView.selectedRange(),
                 linkStyleMap: linkStyleMap,
-                embedPreviewMap: embedPreviewMap
+                embedPreviewMap: embedPreviewMap,
+                markerStyle: .hidden
             )
         }
         let revealedCalloutSyntaxColor = foregroundColor(in: textView, source: source, marker: "> [!note]")
@@ -218,7 +222,8 @@ enum LivePreviewStyleProbe {
                 livePreviewMode: .livePreview,
                 revealRange: textView.selectedRange(),
                 linkStyleMap: linkStyleMap,
-                embedPreviewMap: embedPreviewMap
+                embedPreviewMap: embedPreviewMap,
+                markerStyle: .hidden
             )
         }
         let revealedPropertyDelimiterColor = foregroundColor(in: textView, source: source, marker: "---")
@@ -231,7 +236,8 @@ enum LivePreviewStyleProbe {
                 livePreviewMode: .livePreview,
                 revealRange: textView.selectedRange(),
                 linkStyleMap: linkStyleMap,
-                embedPreviewMap: embedPreviewMap
+                embedPreviewMap: embedPreviewMap,
+                markerStyle: .hidden
             )
         }
         let revealedEmbedSizeColor = foregroundColor(in: textView, source: source, marker: "|100")
@@ -244,7 +250,8 @@ enum LivePreviewStyleProbe {
                 livePreviewMode: .livePreview,
                 revealRange: textView.selectedRange(),
                 linkStyleMap: linkStyleMap,
-                embedPreviewMap: embedPreviewMap
+                embedPreviewMap: embedPreviewMap,
+                markerStyle: .hidden
             )
         }
         let revealedTablePipeColor = foregroundColor(in: textView, source: source, marker: "| Name")
