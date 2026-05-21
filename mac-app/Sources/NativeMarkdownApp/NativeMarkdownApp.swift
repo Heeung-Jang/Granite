@@ -96,6 +96,11 @@ struct NativeMarkdownApp: App {
         .commands {
             EditorCommands()
         }
+
+        Settings {
+            GraniteSettingsView()
+                .environmentObject(appState)
+        }
     }
 }
 
