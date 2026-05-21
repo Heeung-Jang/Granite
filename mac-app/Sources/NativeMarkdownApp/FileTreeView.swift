@@ -29,16 +29,9 @@ struct FileTreeView: View {
         )) {
             await reload(for: appState.vaultSelection)
         }
-        .onChange(of: selectedFileID) { _, newValue in
-            guard let item = item(withID: newValue) else {
-                return
-            }
-            if !appState.openFile(item) {
-                selectedFileID = appState.selectedFile?.id
-            }
-        }
         .onChange(of: appState.selectedFile?.id) { _, newValue in
             selectedFileID = newValue
+            expandToSelectedFileIfNeeded()
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("File browser")
@@ -82,12 +75,12 @@ struct FileTreeView: View {
             EmptyFileTreeState(title: issue.displayTitle, systemImage: "exclamationmark.triangle")
         case .failed(let message):
             EmptyFileTreeState(title: message, systemImage: "xmark.octagon")
-        case .loaded(let snapshot):
+        case .loaded(let loaded):
             VStack(spacing: 0) {
-                if snapshot.state != .complete {
+                if loaded.snapshot.state != .complete {
                     HStack {
-                        Image(systemName: snapshot.state == .stale ? "clock.badge.exclamationmark" : "ellipsis")
-                        Text(snapshot.state == .stale ? "Stale" : "Partial")
+                        Image(systemName: loaded.snapshot.state == .stale ? "clock.badge.exclamationmark" : "ellipsis")
+                        Text(loaded.snapshot.state == .stale ? "Stale" : "Partial")
                         Spacer()
                     }
                     .font(.caption)
@@ -95,14 +88,14 @@ struct FileTreeView: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
                     .accessibilityElement(children: .combine)
-                    .accessibilityLabel(snapshot.state == .stale ? "File list is stale" : "File list is partial")
+                    .accessibilityLabel(loaded.snapshot.state == .stale ? "File list is stale" : "File list is partial")
 
                     Divider()
                 }
 
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 1) {
-                        ForEach(visibleRows(for: snapshot)) { row in
+                        ForEach(loaded.visibleRows) { row in
                             Button {
                                 handle(row)
                             } label: {
@@ -150,8 +143,16 @@ struct FileTreeView: View {
                     return
                 }
 
-                expandedFolderIDs = defaultExpandedFolders(for: snapshot)
-                state = snapshot.items.isEmpty ? .empty : .loaded(snapshot)
+                let outline = FileTreeOutline(snapshot: snapshot)
+                let expandedFolderIDs = outline.defaultExpandedFolderIDs(selectedFile: appState.selectedFile)
+                self.expandedFolderIDs = expandedFolderIDs
+                state = snapshot.items.isEmpty
+                    ? .empty
+                    : .loaded(FileTreeLoadedState(
+                        snapshot: snapshot,
+                        outline: outline,
+                        visibleRows: outline.visibleRows(expandedFolderIDs: expandedFolderIDs)
+                    ))
                 AppTelemetry.sidebarRefreshCompleted(
                     state: snapshot.state,
                     itemCount: snapshot.items.count,
@@ -187,13 +188,13 @@ struct FileTreeView: View {
     }
 
     private func item(withID id: String?) -> FileTreeItem? {
-        guard let id, case .loaded(let snapshot) = state else {
+        guard let id, case .loaded(let loaded) = state else {
             return nil
         }
-        return snapshot.items.first { $0.id == id }
+        return loaded.outline.item(withID: id)
     }
 
-    private func handle(_ row: FileTreeDisplayRow) {
+    private func handle(_ row: FileTreeOutlineRow) {
         switch row.kind {
         case .folder:
             if expandedFolderIDs.contains(row.id) {
@@ -201,6 +202,7 @@ struct FileTreeView: View {
             } else {
                 expandedFolderIDs.insert(row.id)
             }
+            refreshVisibleRows()
         case .file:
             guard let file = row.file else {
                 return
@@ -212,98 +214,33 @@ struct FileTreeView: View {
         }
     }
 
-    private func isSelected(_ row: FileTreeDisplayRow) -> Bool {
+    private func isSelected(_ row: FileTreeOutlineRow) -> Bool {
         guard let file = row.file else {
             return false
         }
         return file.id == selectedFileID
     }
 
-    private func visibleRows(for snapshot: FileTreeSnapshot) -> [FileTreeDisplayRow] {
-        let folders = folderPaths(for: snapshot.items)
-        let childFolders = Dictionary(grouping: folders) { parentPath(for: $0) }
-        let childFiles = Dictionary(grouping: snapshot.items) { $0.parentPath }
-        var rows: [FileTreeDisplayRow] = []
-
-        func appendChildren(parent: String, depth: Int) {
-            let folders = (childFolders[parent] ?? []).sorted {
-                displayName(forFolderPath: $0).localizedStandardCompare(displayName(forFolderPath: $1)) == .orderedAscending
-            }
-            for folder in folders {
-                rows.append(FileTreeDisplayRow(
-                    id: folder,
-                    kind: .folder,
-                    title: displayName(forFolderPath: folder),
-                    depth: depth,
-                    isExpanded: expandedFolderIDs.contains(folder),
-                    file: nil
-                ))
-                if expandedFolderIDs.contains(folder) {
-                    appendChildren(parent: folder, depth: depth + 1)
-                }
-            }
-
-            let files = (childFiles[parent] ?? []).sorted {
-                $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending
-            }
-            for file in files {
-                rows.append(FileTreeDisplayRow(
-                    id: file.id,
-                    kind: .file,
-                    title: (file.displayName as NSString).deletingPathExtension,
-                    depth: depth,
-                    isExpanded: false,
-                    file: file
-                ))
-            }
+    private func expandToSelectedFileIfNeeded() {
+        guard let selectedFile = item(withID: selectedFileID),
+              case .loaded(let loaded) = state
+        else {
+            return
         }
-
-        appendChildren(parent: "", depth: 0)
-        return rows
-    }
-
-    private func folderPaths(for items: [FileTreeItem]) -> Set<String> {
-        var folders = Set<String>()
-        for item in items {
-            var current = ""
-            for component in item.parentPath.split(separator: "/") {
-                current = current.isEmpty ? String(component) : "\(current)/\(component)"
-                folders.insert(current)
-            }
+        let ancestorFolderIDs = loaded.outline.ancestorFolderIDs(for: selectedFile)
+        guard !ancestorFolderIDs.isSubset(of: expandedFolderIDs) else {
+            return
         }
-        return folders
+        expandedFolderIDs.formUnion(ancestorFolderIDs)
+        refreshVisibleRows()
     }
 
-    private func defaultExpandedFolders(for snapshot: FileTreeSnapshot) -> Set<String> {
-        var folders = Set<String>()
-        for item in snapshot.items {
-            if let root = item.parentPath.split(separator: "/").first {
-                folders.insert(String(root))
-            }
-            if appState.selectedFile == item {
-                folders.formUnion(ancestorFolders(for: item.parentPath))
-            }
+    private func refreshVisibleRows() {
+        guard case .loaded(var loaded) = state else {
+            return
         }
-        return folders
-    }
-
-    private func ancestorFolders(for path: String) -> Set<String> {
-        var folders = Set<String>()
-        var current = ""
-        for component in path.split(separator: "/") {
-            current = current.isEmpty ? String(component) : "\(current)/\(component)"
-            folders.insert(current)
-        }
-        return folders
-    }
-
-    private func parentPath(for folderPath: String) -> String {
-        let parent = (folderPath as NSString).deletingLastPathComponent
-        return parent == "." ? "" : parent
-    }
-
-    private func displayName(forFolderPath folderPath: String) -> String {
-        (folderPath as NSString).lastPathComponent
+        loaded.visibleRows = loaded.outline.visibleRows(expandedFolderIDs: expandedFolderIDs)
+        state = .loaded(loaded)
     }
 }
 
@@ -315,28 +252,20 @@ private struct FileTreeTaskKey: Hashable {
 private enum FileTreeViewState {
     case idle
     case loading
-    case loaded(FileTreeSnapshot)
+    case loaded(FileTreeLoadedState)
     case empty
     case unavailable(VaultAccessIssue)
     case failed(String)
 }
 
-private struct FileTreeDisplayRow: Identifiable {
-    enum Kind {
-        case folder
-        case file
-    }
-
-    let id: String
-    let kind: Kind
-    let title: String
-    let depth: Int
-    let isExpanded: Bool
-    let file: FileTreeItem?
+private struct FileTreeLoadedState {
+    let snapshot: FileTreeSnapshot
+    let outline: FileTreeOutline
+    var visibleRows: [FileTreeOutlineRow]
 }
 
 private struct FileTreeRow: View {
-    let row: FileTreeDisplayRow
+    let row: FileTreeOutlineRow
     let isSelected: Bool
 
     var body: some View {
