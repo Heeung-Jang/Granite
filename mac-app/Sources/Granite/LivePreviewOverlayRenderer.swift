@@ -41,8 +41,12 @@ enum LivePreviewOverlayRenderer {
         static let tagHorizontalPadding: CGFloat = 18
     }
 
-    static func drawBackgrounds(in textView: MarkdownInteractionTextView, dirtyRect: NSRect) {
-        guard textView.livePreviewMode == .livePreview else {
+    static func drawBackgrounds(
+        in textView: MarkdownInteractionTextView,
+        dirtyRect: NSRect,
+        state: LivePreviewOverlayState
+    ) {
+        guard state.drawsLivePreviewChrome else {
             return
         }
         for renderBlock in visibleBlocks(in: textView) {
@@ -59,8 +63,12 @@ enum LivePreviewOverlayRenderer {
         }
     }
 
-    static func drawForegrounds(in textView: MarkdownInteractionTextView, dirtyRect: NSRect) {
-        guard textView.livePreviewMode == .livePreview else {
+    static func drawForegrounds(
+        in textView: MarkdownInteractionTextView,
+        dirtyRect: NSRect,
+        state: LivePreviewOverlayState
+    ) {
+        guard state.drawsLivePreviewChrome else {
             return
         }
         for renderBlock in visibleBlocks(in: textView) {
@@ -74,7 +82,7 @@ enum LivePreviewOverlayRenderer {
                     drawTableForeground(table, in: textView, dirtyRect: dirtyRect)
                 }
             case .horizontalRule:
-                drawHorizontalRule(renderBlock.block, in: textView, dirtyRect: dirtyRect)
+                drawHorizontalRule(renderBlock.block, in: textView, dirtyRect: dirtyRect, state: state)
             default:
                 continue
             }
@@ -316,9 +324,10 @@ enum LivePreviewOverlayRenderer {
     private static func drawHorizontalRule(
         _ block: LivePreviewBlockSpan,
         in textView: NSTextView,
-        dirtyRect: NSRect
+        dirtyRect: NSRect,
+        state: LivePreviewOverlayState
     ) {
-        guard shouldDrawHorizontalRule(block, selectedRange: textView.selectedRange()),
+        guard shouldDrawHorizontalRule(block, selectedRange: state.revealRange),
               let lineRect = unionLineRect(for: block.sourceRange.nsRange, in: textView)
         else {
             return

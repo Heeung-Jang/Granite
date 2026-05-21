@@ -34,7 +34,9 @@ struct MarkdownEditorView: NSViewRepresentable {
         textView.isEditable = isEditable
         if let textView = textView as? MarkdownInteractionTextView {
             textView.livePreviewMode = livePreviewMode
+            textView.livePreviewMarkerStyle = markerStyle
             textView.livePreviewDocumentTitle = documentTitle
+            textView.refreshLivePreviewOverlayState()
         }
         let decorationTimer = AppTelemetryTimer()
         context.coordinator.decorateVisibleRange(in: textView)
@@ -86,7 +88,9 @@ struct MarkdownEditorView: NSViewRepresentable {
         textView.isEditable = isEditable
         if let textView = textView as? MarkdownInteractionTextView {
             textView.livePreviewMode = livePreviewMode
+            textView.livePreviewMarkerStyle = markerStyle
             textView.livePreviewDocumentTitle = documentTitle
+            textView.refreshLivePreviewOverlayState()
         }
         MarkdownEditorAccessibility.apply(to: textView, isEditable: isEditable, mode: livePreviewMode)
         context.coordinator.applyFocusRequestIfNeeded(isActive: isActive, in: scrollView)
@@ -160,6 +164,8 @@ struct MarkdownEditorView: NSViewRepresentable {
             self.focusRequestID = focusRequestID
             if let textView = textView as? MarkdownInteractionTextView {
                 textView.livePreviewDocumentTitle = documentTitle
+                textView.livePreviewMarkerStyle = markerStyle
+                textView.refreshLivePreviewOverlayState()
             }
         }
 
@@ -240,6 +246,10 @@ struct MarkdownEditorView: NSViewRepresentable {
                 embedPreviewMap: embedPreviewMap,
                 markerStyle: markerStyle
             )
+            if let textView = textView as? MarkdownInteractionTextView {
+                textView.livePreviewMarkerStyle = markerStyle
+                textView.refreshLivePreviewOverlayState(revealRange: textView.selectedRange())
+            }
         }
 
         private func renderCurrentSelection(in textView: NSTextView) {
@@ -341,7 +351,13 @@ final class MarkdownInteractionTextView: NSTextView {
     weak var interactionDelegate: MarkdownInteractionTextViewDelegate?
     var livePreviewMode: LivePreviewMode = .livePreview {
         didSet {
+            refreshLivePreviewOverlayState()
             needsDisplay = true
+        }
+    }
+    var livePreviewMarkerStyle: LivePreviewMarkerStyle = .defaultValue {
+        didSet {
+            refreshLivePreviewOverlayState()
         }
     }
     var livePreviewDocumentTitle: String? {
@@ -349,12 +365,21 @@ final class MarkdownInteractionTextView: NSTextView {
             needsDisplay = true
         }
     }
+    private(set) var livePreviewOverlayState = LivePreviewOverlayState()
+    private var livePreviewOverlaySourceVersion = 0
     private var tableCellMenuTarget: LivePreviewTableCell?
 
     override func draw(_ dirtyRect: NSRect) {
+        refreshLivePreviewOverlayState()
+        let overlayState = livePreviewOverlayState
         super.draw(dirtyRect)
-        LivePreviewOverlayRenderer.drawBackgrounds(in: self, dirtyRect: dirtyRect)
-        LivePreviewOverlayRenderer.drawForegrounds(in: self, dirtyRect: dirtyRect)
+        LivePreviewOverlayRenderer.drawBackgrounds(in: self, dirtyRect: dirtyRect, state: overlayState)
+        LivePreviewOverlayRenderer.drawForegrounds(in: self, dirtyRect: dirtyRect, state: overlayState)
+    }
+
+    override func didChangeText() {
+        super.didChangeText()
+        noteLivePreviewSourceChanged()
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -427,6 +452,33 @@ final class MarkdownInteractionTextView: NSTextView {
             return nil
         }
         return LivePreviewTableParser.cell(atUTF16Offset: utf16Offset, in: string)
+    }
+
+    func refreshLivePreviewOverlayState(revealRange: NSRange? = nil) {
+        livePreviewOverlayState = livePreviewOverlayState.synchronized(
+            mode: livePreviewMode,
+            markerStyle: livePreviewMarkerStyle,
+            revealRange: revealRange ?? selectedRange(),
+            sourceVersion: livePreviewOverlaySourceVersion,
+            isEditable: isEditable,
+            hasMarkedText: hasMarkedText(),
+            isSelectionDragActive: false
+        )
+    }
+
+    func noteLivePreviewSourceChanged() {
+        livePreviewOverlaySourceVersion += 1
+        refreshLivePreviewOverlayState()
+    }
+
+    func setLivePreviewOverlayTableState(
+        hovered: LivePreviewTableCell?,
+        active: LivePreviewTableCell?
+    ) {
+        livePreviewOverlayState = livePreviewOverlayState.withTableCells(
+            hovered: hovered,
+            active: active
+        )
     }
 
     func utf16Offset(for event: NSEvent) -> Int? {
@@ -508,6 +560,7 @@ final class MarkdownInteractionTextView: NSTextView {
             length: min(selection.length, max(0, (string as NSString).length - min(selection.location, (string as NSString).length)))
         ))
     }
+
 }
 
 @MainActor
@@ -527,6 +580,9 @@ enum MarkdownEditorTextSynchronizer {
 
         let selection = textView.selectedRange()
         textView.string = text
+        if let textView = textView as? MarkdownInteractionTextView {
+            textView.noteLivePreviewSourceChanged()
+        }
         textView.setSelectedRange(clamped(selection, for: text))
         return true
     }

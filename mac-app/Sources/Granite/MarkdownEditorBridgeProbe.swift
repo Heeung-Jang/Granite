@@ -20,6 +20,10 @@ struct MarkdownEditorBridgeProbeReport: Codable, Equatable {
     var livePreviewNoOpRenderSkipsChanges: Bool
     var livePreviewRenderDoesNotMutateSource: Bool
     var sourceModeShowsRawMarkdownSyntax: Bool
+    var overlayStateClearsOnModeSwitch: Bool
+    var overlayStateClearsOnSourceChange: Bool
+    var overlayStateClearsWhenDisabled: Bool
+    var overlayStateClearsDuringMarkedText: Bool
     var activeHeadingLineMovementPreservesSource: Bool
     var activeListLineMovementPreservesSource: Bool
     var activeTaskLineMovementPreservesSource: Bool
@@ -95,6 +99,7 @@ enum MarkdownEditorBridgeProbe {
         let modeProbe = probeModeTransitions()
         let renderProbe = probeLivePreviewRendering()
         let sourcePreservationProbe = probeSourcePreservationGuards()
+        let overlayStateProbe = probeOverlayStateLifecycle()
         let markerStyleProbe = probeMarkerStyleStorageCompatibility()
         let selectionChangeProbe = probeSelectionChangeDecorationDoesNotReenter()
         let checkboxProbe = probeCheckboxToggle()
@@ -119,6 +124,10 @@ enum MarkdownEditorBridgeProbe {
             livePreviewNoOpRenderSkipsChanges: renderProbe.noOpRenderSkipsChanges,
             livePreviewRenderDoesNotMutateSource: sourcePreservationProbe.livePreviewRenderDoesNotMutateSource,
             sourceModeShowsRawMarkdownSyntax: sourcePreservationProbe.sourceModeShowsRawMarkdownSyntax,
+            overlayStateClearsOnModeSwitch: overlayStateProbe.clearsOnModeSwitch,
+            overlayStateClearsOnSourceChange: overlayStateProbe.clearsOnSourceChange,
+            overlayStateClearsWhenDisabled: overlayStateProbe.clearsWhenDisabled,
+            overlayStateClearsDuringMarkedText: overlayStateProbe.clearsDuringMarkedText,
             activeHeadingLineMovementPreservesSource: sourcePreservationProbe.activeHeadingLineMovementPreservesSource,
             activeListLineMovementPreservesSource: sourcePreservationProbe.activeListLineMovementPreservesSource,
             activeTaskLineMovementPreservesSource: sourcePreservationProbe.activeTaskLineMovementPreservesSource,
@@ -240,6 +249,81 @@ enum MarkdownEditorBridgeProbe {
             moveSelection(to: "Bullet"),
             moveSelection(to: "Done"),
             moveSelection(to: "---")
+        )
+    }
+
+    private static func probeOverlayStateLifecycle() -> (
+        clearsOnModeSwitch: Bool,
+        clearsOnSourceChange: Bool,
+        clearsWhenDisabled: Bool,
+        clearsDuringMarkedText: Bool
+    ) {
+        let activeCell = LivePreviewTableCell(
+            text: "Alpha",
+            sourceRange: LivePreviewSourceRange(location: 0, length: 7),
+            contentRange: LivePreviewSourceRange(location: 2, length: 5),
+            columnIndex: 0
+        )
+
+        let modeTextView = MarkdownEditorTextViewFactory.makeTextView() as! MarkdownInteractionTextView
+        modeTextView.string = "| A | B |\n| --- | --- |\n| Alpha | Beta |\n"
+        modeTextView.livePreviewMode = .livePreview
+        modeTextView.setLivePreviewOverlayTableState(hovered: nil, active: activeCell)
+        modeTextView.livePreviewMode = .source
+        modeTextView.refreshLivePreviewOverlayState()
+        let clearsOnModeSwitch = modeTextView.livePreviewOverlayState.mode == .source
+            && modeTextView.livePreviewOverlayState.activeTableCell == nil
+
+        let sourceTextView = MarkdownEditorTextViewFactory.makeTextView() as! MarkdownInteractionTextView
+        sourceTextView.string = "Before"
+        sourceTextView.refreshLivePreviewOverlayState()
+        sourceTextView.setLivePreviewOverlayTableState(hovered: nil, active: activeCell)
+        sourceTextView.string = "After"
+        sourceTextView.noteLivePreviewSourceChanged()
+        sourceTextView.refreshLivePreviewOverlayState()
+        let clearsOnSourceChange = sourceTextView.livePreviewOverlayState.activeTableCell == nil
+
+        let disabledTextView = MarkdownEditorTextViewFactory.makeTextView() as! MarkdownInteractionTextView
+        disabledTextView.string = "Body"
+        disabledTextView.refreshLivePreviewOverlayState()
+        disabledTextView.setLivePreviewOverlayTableState(hovered: activeCell, active: activeCell)
+        disabledTextView.isEditable = false
+        disabledTextView.refreshLivePreviewOverlayState()
+        let clearsWhenDisabled = disabledTextView.livePreviewOverlayState.hoveredTableCell == nil
+            && disabledTextView.livePreviewOverlayState.activeTableCell == nil
+            && !disabledTextView.livePreviewOverlayState.allowsTransientControls
+
+        let markedTextView = MarkdownEditorTextViewFactory.makeTextView() as! MarkdownInteractionTextView
+        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 900, height: 700))
+        scrollView.documentView = markedTextView
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 900, height: 700),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: true
+        )
+        window.contentView = scrollView
+        window.makeFirstResponder(markedTextView)
+        markedTextView.string = "Body"
+        markedTextView.refreshLivePreviewOverlayState()
+        markedTextView.setLivePreviewOverlayTableState(hovered: activeCell, active: activeCell)
+        markedTextView.setMarkedText(
+            "한글",
+            selectedRange: NSRange(location: 2, length: 0),
+            replacementRange: NSRange(location: NSNotFound, length: 0)
+        )
+        markedTextView.refreshLivePreviewOverlayState()
+        let clearsDuringMarkedText = markedTextView.hasMarkedText()
+            && markedTextView.livePreviewOverlayState.hoveredTableCell == nil
+            && markedTextView.livePreviewOverlayState.activeTableCell == nil
+            && !markedTextView.livePreviewOverlayState.allowsTransientControls
+        markedTextView.unmarkText()
+
+        return (
+            clearsOnModeSwitch,
+            clearsOnSourceChange,
+            clearsWhenDisabled,
+            clearsDuringMarkedText
         )
     }
 
