@@ -172,6 +172,88 @@ func appStatePublishesRequestedSearches() {
 }
 
 @Test
+func workspaceSelectionComparesNoteIdentity() {
+    let first = FileTreeItem(relativePath: "Folder/Note.md")
+    let same = FileTreeItem(relativePath: "Folder/Note.md")
+    let second = FileTreeItem(relativePath: "Folder/Other.md")
+
+    #expect(WorkspaceSelection.empty == .empty)
+    #expect(WorkspaceSelection.graph == .graph)
+    #expect(WorkspaceSelection.note(first) == .note(same))
+    #expect(WorkspaceSelection.note(first) != .note(second))
+    #expect(WorkspaceSelection.note(first) != .graph)
+}
+
+@Test
+func appStateSelectingGraphPreservesSelectedFileAndDirtyState() {
+    let state = AppState()
+    let file = FileTreeItem(relativePath: "Draft.md")
+
+    #expect(state.openFile(file))
+    state.updateEditorDirtyState(file: file, isDirty: true)
+
+    state.openGraph(source: .ribbon)
+
+    #expect(state.workspaceSelection == .graph)
+    #expect(state.selectedFile == file)
+    #expect(state.isEditorDirty(file: file))
+    #expect(state.dirtyNavigationWarning == nil)
+}
+
+@Test
+func appStateDirtyNavigationFromGraphKeepsGraphSelectedWhenCancelled() {
+    let state = AppState()
+    let dirty = FileTreeItem(relativePath: "Dirty.md")
+    let target = FileTreeItem(relativePath: "Target.md")
+
+    #expect(state.openFile(dirty))
+    state.updateEditorDirtyState(file: dirty, isDirty: true)
+    state.openGraph(source: .keyboard)
+
+    #expect(state.openFile(target) == false)
+    #expect(state.workspaceSelection == .graph)
+    #expect(state.selectedFile == dirty)
+
+    state.dismissDirtyNavigationWarning()
+
+    #expect(state.workspaceSelection == .graph)
+    #expect(state.selectedFile == dirty)
+}
+
+@Test
+func appStateDiscardingDirtyNavigationFromGraphOpensRequestedNote() {
+    let state = AppState()
+    let dirty = FileTreeItem(relativePath: "Dirty.md")
+    let target = FileTreeItem(relativePath: "Target.md")
+
+    #expect(state.openFile(dirty))
+    state.updateEditorDirtyState(file: dirty, isDirty: true)
+    state.openGraph(source: .keyboard)
+    #expect(state.openFile(target) == false)
+
+    state.discardDirtyChangesAndOpenRequestedFile()
+
+    #expect(state.workspaceSelection == .note(target))
+    #expect(state.selectedFile == target)
+    #expect(!state.isEditorDirty(file: dirty))
+}
+
+@Test
+func appStateDoesNotCloseDirtyNoteTabSilently() {
+    let state = AppState()
+    let file = FileTreeItem(relativePath: "Draft.md")
+
+    #expect(state.openFile(file))
+    state.updateEditorDirtyState(file: file, isDirty: true)
+
+    state.closeWorkspaceSelection()
+
+    #expect(state.workspaceSelection == .note(file))
+    #expect(state.selectedFile == file)
+    #expect(state.isEditorDirty(file: file))
+}
+
+@Test
 func appStateBlocksCrossNoteNavigationWhileEditorIsDirty() {
     let state = AppState()
     let first = FileTreeItem(relativePath: "First.md")
@@ -582,6 +664,8 @@ func indexDirectoryResolverCreatesOnlyAppOwnedDirectories() throws {
     #expect(location.metadataStoreFile.path == location.dataDirectory.appendingPathComponent("metadata.sqlite").path)
     #expect(location.tantivyIndexDirectory.path == location.dataDirectory.appendingPathComponent("tantivy").path)
     #expect(location.indexingQueueFile.path.hasPrefix(location.dataDirectory.path))
+    #expect(location.metadataFile.path.hasPrefix(location.dataDirectory.path))
+    #expect(location.metadataFile.lastPathComponent == "metadata.sqlite")
     #expect(location.rebuildDirectory.path.hasPrefix(supportRoot.path))
     #expect(location.lockFile.path.hasPrefix(supportRoot.path))
     #expect(FileManager.default.fileExists(atPath: location.dataDirectory.path))

@@ -1,9 +1,15 @@
-use std::{fmt, path::Path};
+use std::{collections::HashSet, fmt, path::Path};
 
+use crate::graph::{
+    WholeVaultGraphInputs, WholeVaultGraphRequest, WholeVaultGraphSnapshot,
+    build_whole_vault_graph_snapshot, whole_vault_graph_needs_tags,
+};
+use crate::graph_key::unresolved_target_key;
 use crate::index::{
     AttachmentProjection, AttachmentRecord, FileLookupProjection, FileRecord, FileTreeProjection,
-    HeadingRecord, IndexSchemaMetadata, LinkEdgeRecord, LinkProjection, MetadataStore,
-    MetadataStoreError, PropertyProjection, PropertyRecord, TagRecord,
+    GraphFileRecord, GraphResolvedEdgeRecord, GraphUnresolvedEdgeRecord, HeadingRecord,
+    IndexSchemaMetadata, LinkEdgeRecord, LinkProjection, MetadataStore, MetadataStoreError,
+    PropertyProjection, PropertyRecord, TagRecord,
 };
 use crate::parser::{MarkdownLink, PropertyValue, WikiLink, parse_markdown};
 use crate::scanner::{ScanEntryKind, classify_file};
@@ -15,7 +21,7 @@ const MAX_FILE_TREE_PAGE_LIMIT: usize = 100_000;
 const MAX_GRAPH_NODES: usize = 250;
 const MAX_GRAPH_EDGES: usize = 500;
 pub const READ_BACKEND_NAME: &str = "sqlite+tantivy";
-pub const READ_BACKEND_VERSION: &str = "metadata-v1";
+pub const READ_BACKEND_VERSION: &str = "metadata-v2";
 pub const READ_TOKENIZER_CONFIG: &str = "tantivy";
 pub const ENGINE_READ_STATE_COMPLETE: u32 = 0;
 pub const ENGINE_READ_STATE_PARTIAL: u32 = 1;
@@ -526,6 +532,88 @@ impl VaultReadApi {
     ) -> ReadApiResult<ReadValue<LocalGraph>> {
         let file = self.require_file(relative_path)?;
         self.local_graph(&file.file_id, request)
+    }
+
+    pub fn whole_vault_graph(
+        &self,
+        request: WholeVaultGraphRequest,
+    ) -> ReadApiResult<ReadValue<WholeVaultGraphSnapshot>> {
+        let edge_fetch_limit = request.edge_limit().saturating_add(1);
+        let node_fetch_limit = request.node_limit().saturating_add(1);
+        let all_files = self
+            .metadata
+            .graph_files(self.generation, node_fetch_limit)?;
+        let has_all_files = all_files.len() < node_fetch_limit;
+        let resolved_edges = if has_all_files {
+            self.metadata
+                .graph_resolved_edges_compact(self.generation, edge_fetch_limit)?
+        } else {
+            self.metadata
+                .graph_resolved_edges(self.generation, edge_fetch_limit)?
+        };
+        let unresolved_edges = if request.include_unresolved {
+            self.metadata
+                .graph_unresolved_edges(self.generation, edge_fetch_limit)?
+        } else {
+            Vec::new()
+        };
+        let orphan_files = if request.include_orphans {
+            self.metadata.graph_orphan_files(
+                self.generation,
+                request.include_unresolved,
+                node_fetch_limit,
+            )?
+        } else {
+            Vec::new()
+        };
+        let files = if has_all_files {
+            all_files
+        } else {
+            graph_candidate_files(
+                &resolved_edges,
+                &unresolved_edges,
+                &orphan_files,
+                node_fetch_limit,
+            )
+        };
+        let tags = if whole_vault_graph_needs_tags(request) {
+            let file_ids = files
+                .iter()
+                .map(|file| file.file_id.clone())
+                .collect::<Vec<_>>();
+            self.metadata
+                .graph_tags_for_files(&file_ids, request.tag_limit().saturating_add(1))?
+        } else {
+            Vec::new()
+        };
+        let node_count_total = self.metadata.graph_visible_node_count(
+            self.generation,
+            request.include_unresolved,
+            request.include_orphans,
+        )?;
+        let edge_count_total = self
+            .metadata
+            .graph_visible_edge_count(self.generation, request.include_unresolved)?;
+        let inputs = WholeVaultGraphInputs {
+            node_count_total,
+            edge_count_total,
+            files,
+            resolved_edges,
+            unresolved_edges,
+            orphan_files,
+            tags,
+        };
+        let graph = build_whole_vault_graph_snapshot(request, self.generation, inputs);
+        Ok(ReadValue {
+            request_id: request.request_id,
+            generation: self.generation,
+            state: if graph.partial {
+                ReadState::Partial
+            } else {
+                ReadState::Complete
+            },
+            value: graph.snapshot,
+        })
     }
 
     pub fn live_preview_metadata(
@@ -1066,7 +1154,7 @@ fn graph_file_node_id(file_id: &str) -> String {
 }
 
 fn graph_unresolved_node_id(target_text: &str) -> String {
-    format!("unresolved:{}", target_text.to_lowercase())
+    format!("unresolved:{}", unresolved_target_key(target_text))
 }
 
 fn unresolved_graph_node(target_text: &str) -> LocalGraphNode {
@@ -1082,6 +1170,69 @@ fn push_frontier_file(frontier: &mut Vec<String>, center_file_id: &str, file_id:
     if file_id != center_file_id {
         frontier.push(file_id.to_string());
     }
+}
+
+fn graph_candidate_files(
+    resolved_edges: &[GraphResolvedEdgeRecord],
+    unresolved_edges: &[GraphUnresolvedEdgeRecord],
+    orphan_files: &[GraphFileRecord],
+    limit: usize,
+) -> Vec<GraphFileRecord> {
+    let mut seen = HashSet::new();
+    let mut files = Vec::new();
+
+    for edge in resolved_edges {
+        push_graph_candidate_file(
+            &mut files,
+            &mut seen,
+            limit,
+            &edge.source_file_id,
+            &edge.source_relative_path,
+        );
+        push_graph_candidate_file(
+            &mut files,
+            &mut seen,
+            limit,
+            &edge.target_file_id,
+            &edge.target_relative_path,
+        );
+    }
+    for edge in unresolved_edges {
+        push_graph_candidate_file(
+            &mut files,
+            &mut seen,
+            limit,
+            &edge.source_file_id,
+            &edge.source_relative_path,
+        );
+    }
+    for file in orphan_files {
+        push_graph_candidate_file(
+            &mut files,
+            &mut seen,
+            limit,
+            &file.file_id,
+            &file.relative_path,
+        );
+    }
+
+    files
+}
+
+fn push_graph_candidate_file(
+    files: &mut Vec<GraphFileRecord>,
+    seen: &mut HashSet<String>,
+    limit: usize,
+    file_id: &str,
+    relative_path: &Path,
+) {
+    if files.len() >= limit || !seen.insert(file_id.to_string()) {
+        return;
+    }
+    files.push(GraphFileRecord {
+        file_id: file_id.to_string(),
+        relative_path: relative_path.to_path_buf(),
+    });
 }
 
 fn display_property_value(value: &PropertyValue) -> String {
@@ -1416,7 +1567,7 @@ mod tests {
         let connection = rusqlite::Connection::open(&schema_path).expect("connection");
         connection
             .execute(
-                "UPDATE index_metadata SET value = '2' WHERE key = 'schema_version'",
+                "UPDATE index_metadata SET value = '1' WHERE key = 'schema_version'",
                 [],
             )
             .expect("schema version update");
@@ -1427,8 +1578,8 @@ mod tests {
                 .err()
                 .expect("schema"),
             ReadOpenError::SchemaMismatch {
-                stored: 2,
-                expected: 1
+                stored: 1,
+                expected: 2
             }
         );
     }
@@ -1774,6 +1925,58 @@ mod tests {
             .expect("edge capped graph");
         assert_eq!(edge_capped.state, ReadState::Partial);
         assert_eq!(edge_capped.value.edges.len(), 1);
+
+        let whole_graph = api
+            .whole_vault_graph(WholeVaultGraphRequest::with_request_id(62, 10, 10))
+            .expect("whole vault graph");
+        assert_eq!(whole_graph.request_id, 62);
+        assert_eq!(whole_graph.generation, 1);
+        assert_eq!(whole_graph.state, ReadState::Complete);
+        assert_eq!(whole_graph.value.nodes.len(), 3);
+        assert_eq!(whole_graph.value.edges.len(), 3);
+        assert!(whole_graph.value.nodes.iter().any(|node| {
+            node.file_id.is_none()
+                && node.relative_path.as_deref() == Some("Home.md")
+                && node.label == "Home"
+                && node.tags.is_empty()
+        }));
+        assert!(whole_graph.value.nodes.iter().any(|node| {
+            node.file_id.is_none()
+                && node.relative_path.as_deref() == Some("Docs/Guide.md")
+                && node.label == "Guide"
+        }));
+        assert!(whole_graph.value.edges.iter().any(|edge| edge.weight == 1));
+
+        let whole_graph_with_group_metadata = api
+            .whole_vault_graph(
+                WholeVaultGraphRequest::with_request_id(64, 10, 10)
+                    .with_group_limits(1, 100, 10, 100),
+            )
+            .expect("whole vault graph with group metadata");
+        assert!(
+            whole_graph_with_group_metadata
+                .value
+                .nodes
+                .iter()
+                .any(|node| {
+                    node.relative_path.as_deref() == Some("Home.md")
+                        && node.tags == vec!["project/native"]
+                })
+        );
+
+        let whole_with_unresolved = api
+            .whole_vault_graph(
+                WholeVaultGraphRequest::with_request_id(63, 10, 10).including_unresolved(true),
+            )
+            .expect("whole vault graph with unresolved");
+        assert_eq!(whole_with_unresolved.state, ReadState::Complete);
+        assert!(
+            whole_with_unresolved
+                .value
+                .nodes
+                .iter()
+                .any(|node| node.file_id.is_none())
+        );
     }
 
     fn fixture_entry(relative_path: &str) -> ScanEntry {

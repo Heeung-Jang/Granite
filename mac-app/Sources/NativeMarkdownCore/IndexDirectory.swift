@@ -30,6 +30,10 @@ public struct AppOwnedIndexLocation: Equatable {
     public let lockFile: URL
     public let rebuildDirectory: URL
     public let configuration: IndexConfiguration
+
+    public var metadataFile: URL {
+        dataDirectory.appendingPathComponent("metadata.sqlite", isDirectory: false)
+    }
 }
 
 public protocol IndexDirectoryResolving {

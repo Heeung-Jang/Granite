@@ -45,12 +45,18 @@ func telemetrySchemaDefinesAllowedAndDisallowedFields() {
     #expect(schema.allowsPublicField("hardCeilingPassed"))
     #expect(schema.allowsPublicField("hardCeilingViolations"))
     #expect(schema.allowsPublicField("memoryDeltaBytes"))
+    #expect(schema.allowsPublicField("nodeCount"))
+    #expect(schema.allowsPublicField("edgeCount"))
+    #expect(schema.allowsPublicField("rendererKind"))
+    #expect(schema.allowsPublicField("source"))
     #expect(schema.rejectsRawField("absolutePath"))
     #expect(schema.rejectsRawField("fileName"))
     #expect(schema.rejectsRawField("noteText"))
     #expect(schema.rejectsRawField("linkTarget"))
     #expect(schema.rejectsRawField("tagName"))
     #expect(schema.rejectsRawField("embedName"))
+    #expect(schema.rejectsRawField("searchQuery"))
+    #expect(schema.rejectsRawField("groupQuery"))
     #expect(!schema.allowsPublicField("noteText"))
     #expect(!schema.allowsPublicField("absolutePath"))
 }
@@ -84,4 +90,18 @@ func telemetryTimerReportsMilliseconds() {
 
     #expect(timer.elapsedMilliseconds(nowNanoseconds: 9_000_000) == 8)
     #expect(timer.elapsedMilliseconds(nowNanoseconds: 500_000) == 0)
+}
+
+@Test
+func graphTelemetryStagesUsePublicStageNames() {
+    #expect(GraphTelemetryStage.snapshot.rawValue == "snapshot")
+    #expect(GraphTelemetryStage.decode.rawValue == "decode")
+    #expect(GraphTelemetryStage.layout.rawValue == "layout")
+    #expect(GraphTelemetryStage.draw.rawValue == "draw")
+    #expect(GraphTelemetryStage.totalFirstRender.rawValue == "totalFirstRender")
+    #expect(GraphTelemetryStage.snapshot.signpostName == "graph.snapshot")
+    #expect(GraphTelemetryStage.decode.signpostName == "graph.decode")
+    #expect(GraphTelemetryStage.layout.signpostName == "graph.layout")
+    #expect(GraphTelemetryStage.draw.signpostName == "graph.draw")
+    #expect(GraphTelemetryStage.totalFirstRender.signpostName == "graph.first_render")
 }

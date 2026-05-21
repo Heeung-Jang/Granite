@@ -5,11 +5,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crate::attachments::{AttachmentReferenceSource, AttachmentResolutionState};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 
+use crate::graph_key::unresolved_target_key;
 use crate::parser::PropertyValue;
 use crate::paths::{FileIdentity, lookup_key};
 use crate::scanner::{ScanEntry, ScanEntryKind};
 
-pub const INDEX_SCHEMA_VERSION: u32 = 1;
+pub const INDEX_SCHEMA_VERSION: u32 = 2;
 pub const MAX_INDEX_ERROR_CHARS: usize = 512;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,6 +60,52 @@ pub struct TagRecord {
     pub file_id: String,
     pub tag: String,
     pub source: TagSource,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GraphFileRecord {
+    pub file_id: String,
+    pub relative_path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GraphResolvedEdgeRecord {
+    pub source_file_id: String,
+    pub source_relative_path: PathBuf,
+    pub target_file_id: String,
+    pub target_relative_path: PathBuf,
+    pub weight: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GraphUnresolvedEdgeRecord {
+    pub source_file_id: String,
+    pub source_relative_path: PathBuf,
+    pub target_text: String,
+    pub weight: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GraphTagRecord {
+    pub file_id: String,
+    pub tag: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GraphQueryStage {
+    Files,
+    ResolvedEdges,
+    ResolvedEdgesCompact,
+    UnresolvedEdges,
+    OrphansResolvedOnly,
+    OrphansWithUnresolved,
+    Tags,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GraphQueryPlanSummary {
+    pub stage: GraphQueryStage,
+    pub detail: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -281,8 +328,20 @@ impl MetadataStore {
         Self::from_connection(Connection::open(path)?, expected)
     }
 
+    pub fn stored_schema_metadata(
+        path: impl AsRef<std::path::Path>,
+    ) -> MetadataStoreResult<Option<IndexSchemaMetadata>> {
+        let connection = Connection::open(path)?;
+        read_schema_metadata(&connection)
+    }
+
     pub fn open_in_memory(expected: &IndexSchemaMetadata) -> MetadataStoreResult<Self> {
         Self::from_connection(Connection::open_in_memory()?, expected)
+    }
+
+    pub fn release_memory(&self) -> MetadataStoreResult<()> {
+        self.connection.execute_batch("PRAGMA shrink_memory;")?;
+        Ok(())
     }
 
     pub fn open_existing_read_only(
@@ -392,8 +451,8 @@ impl MetadataStore {
                 transaction.prepare("DELETE FROM attachments WHERE source_file_id = ?1")?;
             let mut insert_link = transaction.prepare(
                 "INSERT INTO links (
-                    source_file_id, target_text, resolved_target_file_id, heading, alias, is_embed
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    source_file_id, target_text, target_key, resolved_target_file_id, heading, alias, is_embed
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             )?;
             let mut insert_tag = transaction
                 .prepare("INSERT INTO tags (file_id, tag, source) VALUES (?1, ?2, ?3)")?;
@@ -432,9 +491,11 @@ impl MetadataStore {
                 delete_attachments.execute(params![&file.file_id])?;
 
                 for link in &record.links {
+                    let target_key = unresolved_target_key(&link.target_text);
                     insert_link.execute(params![
                         &link.source_file_id,
                         &link.target_text,
+                        &target_key,
                         link.resolved_target_file_id.as_deref(),
                         link.heading.as_deref(),
                         link.alias.as_deref(),
@@ -517,8 +578,8 @@ impl MetadataStore {
                 )?;
                 let mut insert_link = transaction.prepare(
                     "INSERT INTO links (
-                        source_file_id, target_text, resolved_target_file_id, heading, alias, is_embed
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                        source_file_id, target_text, target_key, resolved_target_file_id, heading, alias, is_embed
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 )?;
                 let mut insert_tag = transaction
                     .prepare("INSERT INTO tags (file_id, tag, source) VALUES (?1, ?2, ?3)")?;
@@ -551,9 +612,11 @@ impl MetadataStore {
                     ])?;
 
                     for link in &record.links {
+                        let target_key = unresolved_target_key(&link.target_text);
                         insert_link.execute(params![
                             &link.source_file_id,
                             &link.target_text,
+                            &target_key,
                             link.resolved_target_file_id.as_deref(),
                             link.heading.as_deref(),
                             link.alias.as_deref(),
@@ -770,6 +833,217 @@ impl MetadataStore {
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
+    pub fn graph_files(
+        &self,
+        generation: u64,
+        limit: usize,
+    ) -> MetadataStoreResult<Vec<GraphFileRecord>> {
+        let mut statement = self.connection.prepare(GRAPH_FILES_SQL)?;
+        let rows = statement.query_map(
+            params![generation as i64, limit_to_i64(limit)],
+            row_to_graph_file,
+        )?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn graph_resolved_edges(
+        &self,
+        generation: u64,
+        limit: usize,
+    ) -> MetadataStoreResult<Vec<GraphResolvedEdgeRecord>> {
+        let mut statement = self.connection.prepare(GRAPH_RESOLVED_EDGES_SQL)?;
+        let rows = statement.query_map(
+            params![generation as i64, limit_to_i64(limit)],
+            row_to_graph_resolved_edge,
+        )?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn graph_resolved_edges_compact(
+        &self,
+        generation: u64,
+        limit: usize,
+    ) -> MetadataStoreResult<Vec<GraphResolvedEdgeRecord>> {
+        let mut statement = self.connection.prepare(GRAPH_RESOLVED_EDGES_COMPACT_SQL)?;
+        let rows = statement.query_map(
+            params![generation as i64, limit_to_i64(limit)],
+            row_to_graph_resolved_edge,
+        )?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn graph_unresolved_edges(
+        &self,
+        generation: u64,
+        limit: usize,
+    ) -> MetadataStoreResult<Vec<GraphUnresolvedEdgeRecord>> {
+        let mut statement = self.connection.prepare(GRAPH_UNRESOLVED_EDGES_SQL)?;
+        let rows = statement.query_map(
+            params![generation as i64, limit_to_i64(limit)],
+            row_to_graph_unresolved_edge,
+        )?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn graph_orphan_files(
+        &self,
+        generation: u64,
+        include_unresolved: bool,
+        limit: usize,
+    ) -> MetadataStoreResult<Vec<GraphFileRecord>> {
+        let sql = if include_unresolved {
+            GRAPH_ORPHANS_WITH_UNRESOLVED_SQL
+        } else {
+            GRAPH_ORPHANS_RESOLVED_ONLY_SQL
+        };
+        let mut statement = self.connection.prepare(sql)?;
+        let rows = statement.query_map(
+            params![generation as i64, limit_to_i64(limit)],
+            row_to_graph_file,
+        )?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn graph_tags_for_files(
+        &self,
+        file_ids: &[String],
+        max_tags_per_file: usize,
+    ) -> MetadataStoreResult<Vec<GraphTagRecord>> {
+        if file_ids.is_empty() || max_tags_per_file == 0 {
+            return Ok(Vec::new());
+        }
+
+        let mut tags = Vec::new();
+        for chunk in file_ids.chunks(400) {
+            let placeholders = std::iter::repeat_n("?", chunk.len())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let sql = format!(
+                "SELECT file_id, tag FROM (
+                    SELECT tags.file_id, tags.tag,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY tags.file_id
+                               ORDER BY tags.tag, tags.id
+                           ) AS tag_rank
+                    FROM tags
+                    WHERE tags.file_id IN ({placeholders})
+                )
+                WHERE tag_rank <= ?
+                ORDER BY file_id, tag"
+            );
+            let mut statement = self.connection.prepare(&sql)?;
+            let max_tags = limit_to_i64(max_tags_per_file);
+            let mut params: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(chunk.len() + 1);
+            for file_id in chunk {
+                params.push(file_id);
+            }
+            params.push(&max_tags);
+            let rows = statement.query_map(params.as_slice(), row_to_graph_tag)?;
+            for row in rows {
+                tags.push(row?);
+            }
+        }
+        Ok(tags)
+    }
+
+    pub fn graph_visible_node_count(
+        &self,
+        generation: u64,
+        include_unresolved: bool,
+        include_orphans: bool,
+    ) -> MetadataStoreResult<usize> {
+        let mut parts = vec![
+            GRAPH_RESOLVED_SOURCE_NODES_SQL,
+            GRAPH_RESOLVED_TARGET_NODES_SQL,
+        ];
+        if include_unresolved {
+            parts.push(GRAPH_UNRESOLVED_SOURCE_NODES_SQL);
+            parts.push(GRAPH_UNRESOLVED_TARGET_NODES_SQL);
+        }
+        if include_orphans {
+            parts.push(if include_unresolved {
+                GRAPH_ORPHAN_NODES_WITH_UNRESOLVED_SQL
+            } else {
+                GRAPH_ORPHAN_NODES_RESOLVED_ONLY_SQL
+            });
+        }
+        let sql = format!("SELECT COUNT(*) FROM ({})", parts.join(" UNION "));
+        self.connection
+            .query_row(&sql, params![generation as i64], |row| row.get::<_, i64>(0))
+            .map(|count| count as usize)
+            .map_err(Into::into)
+    }
+
+    pub fn graph_visible_edge_count(
+        &self,
+        generation: u64,
+        include_unresolved: bool,
+    ) -> MetadataStoreResult<usize> {
+        let sql = if include_unresolved {
+            format!(
+                "SELECT COUNT(*) FROM ({GRAPH_RESOLVED_EDGE_GROUPS_SQL} UNION ALL {GRAPH_UNRESOLVED_EDGE_GROUPS_SQL})"
+            )
+        } else {
+            format!("SELECT COUNT(*) FROM ({GRAPH_RESOLVED_EDGE_GROUPS_SQL})")
+        };
+        self.connection
+            .query_row(&sql, params![generation as i64], |row| row.get::<_, i64>(0))
+            .map(|count| count as usize)
+            .map_err(Into::into)
+    }
+
+    pub fn graph_query_plan_summaries(
+        &self,
+        generation: u64,
+    ) -> MetadataStoreResult<Vec<GraphQueryPlanSummary>> {
+        let queries = [
+            (GraphQueryStage::Files, GRAPH_FILES_SQL),
+            (GraphQueryStage::ResolvedEdges, GRAPH_RESOLVED_EDGES_SQL),
+            (
+                GraphQueryStage::ResolvedEdgesCompact,
+                GRAPH_RESOLVED_EDGES_COMPACT_SQL,
+            ),
+            (GraphQueryStage::UnresolvedEdges, GRAPH_UNRESOLVED_EDGES_SQL),
+            (
+                GraphQueryStage::OrphansResolvedOnly,
+                GRAPH_ORPHANS_RESOLVED_ONLY_SQL,
+            ),
+            (
+                GraphQueryStage::OrphansWithUnresolved,
+                GRAPH_ORPHANS_WITH_UNRESOLVED_SQL,
+            ),
+            (GraphQueryStage::Tags, GRAPH_TAGS_PLAN_SQL),
+        ];
+        let mut summaries = Vec::new();
+        for (stage, sql) in queries {
+            let explain = format!("EXPLAIN QUERY PLAN {sql}");
+            let mut statement = self.connection.prepare(&explain)?;
+            if stage == GraphQueryStage::Tags {
+                let rows =
+                    statement.query_map(params!["graph-plan-placeholder", 1_i64], |row| {
+                        Ok(GraphQueryPlanSummary {
+                            stage,
+                            detail: row.get(3)?,
+                        })
+                    })?;
+                for row in rows {
+                    summaries.push(row?);
+                }
+            } else {
+                let rows = statement.query_map(params![generation as i64, 1_i64], |row| {
+                    Ok(GraphQueryPlanSummary {
+                        stage,
+                        detail: row.get(3)?,
+                    })
+                })?;
+                for row in rows {
+                    summaries.push(row?);
+                }
+            }
+        }
+        Ok(summaries)
+    }
+
     pub fn tag_note_projections(
         &self,
         tag: &str,
@@ -918,6 +1192,245 @@ pub enum MetadataTable {
     Attachments,
 }
 
+const GRAPH_FILES_SQL: &str = "
+    SELECT file_id, relative_path
+    FROM files
+    WHERE kind = 'markdown'
+      AND status IN ('parsed', 'search_indexed')
+      AND generation = ?1
+    ORDER BY file_id
+    LIMIT ?2";
+
+const GRAPH_RESOLVED_EDGES_SQL: &str = "
+    SELECT links.source_file_id,
+           source_files.relative_path,
+           links.resolved_target_file_id,
+           target_files.relative_path,
+           COUNT(*) AS weight
+    FROM links INDEXED BY idx_links_resolved_pair
+    CROSS JOIN files AS source_files ON source_files.file_id = links.source_file_id
+    CROSS JOIN files AS target_files ON target_files.file_id = links.resolved_target_file_id
+    WHERE links.resolved_target_file_id IS NOT NULL
+      AND source_files.kind = 'markdown'
+      AND source_files.status IN ('parsed', 'search_indexed')
+      AND source_files.generation = ?1
+      AND target_files.kind = 'markdown'
+      AND target_files.status IN ('parsed', 'search_indexed')
+      AND target_files.generation = ?1
+    GROUP BY links.source_file_id, links.resolved_target_file_id
+    ORDER BY links.source_file_id, links.resolved_target_file_id
+    LIMIT ?2";
+
+const GRAPH_RESOLVED_EDGES_COMPACT_SQL: &str = "
+    SELECT links.source_file_id,
+           '' AS source_relative_path,
+           links.resolved_target_file_id,
+           '' AS target_relative_path,
+           COUNT(*) AS weight
+    FROM links INDEXED BY idx_links_resolved_pair
+    CROSS JOIN files AS source_files ON source_files.file_id = links.source_file_id
+    CROSS JOIN files AS target_files ON target_files.file_id = links.resolved_target_file_id
+    WHERE links.resolved_target_file_id IS NOT NULL
+      AND source_files.kind = 'markdown'
+      AND source_files.status IN ('parsed', 'search_indexed')
+      AND source_files.generation = ?1
+      AND target_files.kind = 'markdown'
+      AND target_files.status IN ('parsed', 'search_indexed')
+      AND target_files.generation = ?1
+    GROUP BY links.source_file_id, links.resolved_target_file_id
+    ORDER BY links.source_file_id, links.resolved_target_file_id
+    LIMIT ?2";
+
+const GRAPH_UNRESOLVED_EDGES_SQL: &str = "
+    SELECT links.source_file_id,
+           source_files.relative_path,
+           MIN(links.target_text) AS target_text,
+           COUNT(*) AS weight
+    FROM links INDEXED BY idx_links_unresolved_source_target_key
+    CROSS JOIN files AS source_files ON source_files.file_id = links.source_file_id
+    WHERE links.resolved_target_file_id IS NULL
+      AND source_files.kind = 'markdown'
+      AND source_files.status IN ('parsed', 'search_indexed')
+      AND source_files.generation = ?1
+    GROUP BY links.source_file_id, links.target_key
+    ORDER BY links.source_file_id, links.target_key
+    LIMIT ?2";
+
+const GRAPH_ORPHANS_RESOLVED_ONLY_SQL: &str = "
+    SELECT files.file_id, files.relative_path
+    FROM files
+    WHERE files.kind = 'markdown'
+      AND files.status IN ('parsed', 'search_indexed')
+      AND files.generation = ?1
+      AND NOT EXISTS (
+        SELECT 1 FROM links
+        JOIN files AS source_files ON source_files.file_id = links.source_file_id
+        JOIN files AS target_files ON target_files.file_id = links.resolved_target_file_id
+        WHERE links.resolved_target_file_id IS NOT NULL
+          AND source_files.kind = 'markdown'
+          AND source_files.status IN ('parsed', 'search_indexed')
+          AND source_files.generation = ?1
+          AND target_files.kind = 'markdown'
+          AND target_files.status IN ('parsed', 'search_indexed')
+          AND target_files.generation = ?1
+          AND (links.source_file_id = files.file_id OR links.resolved_target_file_id = files.file_id)
+      )
+    ORDER BY files.file_id
+    LIMIT ?2";
+
+const GRAPH_ORPHANS_WITH_UNRESOLVED_SQL: &str = "
+    SELECT files.file_id, files.relative_path
+    FROM files
+    WHERE files.kind = 'markdown'
+      AND files.status IN ('parsed', 'search_indexed')
+      AND files.generation = ?1
+      AND NOT EXISTS (
+        SELECT 1 FROM links
+        JOIN files AS source_files ON source_files.file_id = links.source_file_id
+        JOIN files AS target_files ON target_files.file_id = links.resolved_target_file_id
+        WHERE links.resolved_target_file_id IS NOT NULL
+          AND source_files.kind = 'markdown'
+          AND source_files.status IN ('parsed', 'search_indexed')
+          AND source_files.generation = ?1
+          AND target_files.kind = 'markdown'
+          AND target_files.status IN ('parsed', 'search_indexed')
+          AND target_files.generation = ?1
+          AND (links.source_file_id = files.file_id OR links.resolved_target_file_id = files.file_id)
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM links
+        WHERE links.resolved_target_file_id IS NULL
+          AND links.source_file_id = files.file_id
+      )
+    ORDER BY files.file_id
+    LIMIT ?2";
+
+const GRAPH_TAGS_PLAN_SQL: &str = "
+    SELECT file_id, tag FROM (
+        SELECT tags.file_id, tags.tag,
+               ROW_NUMBER() OVER (
+                   PARTITION BY tags.file_id
+                   ORDER BY tags.tag, tags.id
+               ) AS tag_rank
+        FROM tags
+        WHERE tags.file_id IN (?1)
+    )
+    WHERE tag_rank <= ?2
+    ORDER BY file_id, tag";
+
+const GRAPH_RESOLVED_SOURCE_NODES_SQL: &str = "
+    SELECT links.source_file_id AS node_id
+    FROM links INDEXED BY idx_links_resolved_pair
+    CROSS JOIN files AS source_files ON source_files.file_id = links.source_file_id
+    CROSS JOIN files AS target_files ON target_files.file_id = links.resolved_target_file_id
+    WHERE links.resolved_target_file_id IS NOT NULL
+      AND source_files.kind = 'markdown'
+      AND source_files.status IN ('parsed', 'search_indexed')
+      AND source_files.generation = ?1
+      AND target_files.kind = 'markdown'
+      AND target_files.status IN ('parsed', 'search_indexed')
+      AND target_files.generation = ?1";
+
+const GRAPH_RESOLVED_TARGET_NODES_SQL: &str = "
+    SELECT links.resolved_target_file_id AS node_id
+    FROM links INDEXED BY idx_links_resolved_pair
+    CROSS JOIN files AS source_files ON source_files.file_id = links.source_file_id
+    CROSS JOIN files AS target_files ON target_files.file_id = links.resolved_target_file_id
+    WHERE links.resolved_target_file_id IS NOT NULL
+      AND source_files.kind = 'markdown'
+      AND source_files.status IN ('parsed', 'search_indexed')
+      AND source_files.generation = ?1
+      AND target_files.kind = 'markdown'
+      AND target_files.status IN ('parsed', 'search_indexed')
+      AND target_files.generation = ?1";
+
+const GRAPH_UNRESOLVED_SOURCE_NODES_SQL: &str = "
+    SELECT links.source_file_id AS node_id
+    FROM links INDEXED BY idx_links_unresolved_source_target_key
+    CROSS JOIN files AS source_files ON source_files.file_id = links.source_file_id
+    WHERE links.resolved_target_file_id IS NULL
+      AND source_files.kind = 'markdown'
+      AND source_files.status IN ('parsed', 'search_indexed')
+      AND source_files.generation = ?1";
+
+const GRAPH_UNRESOLVED_TARGET_NODES_SQL: &str = "
+    SELECT 'unresolved:' || links.target_key AS node_id
+    FROM links INDEXED BY idx_links_unresolved_source_target_key
+    CROSS JOIN files AS source_files ON source_files.file_id = links.source_file_id
+    WHERE links.resolved_target_file_id IS NULL
+      AND source_files.kind = 'markdown'
+      AND source_files.status IN ('parsed', 'search_indexed')
+      AND source_files.generation = ?1";
+
+const GRAPH_RESOLVED_EDGE_GROUPS_SQL: &str = "
+    SELECT links.source_file_id, links.resolved_target_file_id
+    FROM links INDEXED BY idx_links_resolved_pair
+    CROSS JOIN files AS source_files ON source_files.file_id = links.source_file_id
+    CROSS JOIN files AS target_files ON target_files.file_id = links.resolved_target_file_id
+    WHERE links.resolved_target_file_id IS NOT NULL
+      AND source_files.kind = 'markdown'
+      AND source_files.status IN ('parsed', 'search_indexed')
+      AND source_files.generation = ?1
+      AND target_files.kind = 'markdown'
+      AND target_files.status IN ('parsed', 'search_indexed')
+      AND target_files.generation = ?1
+    GROUP BY links.source_file_id, links.resolved_target_file_id";
+
+const GRAPH_UNRESOLVED_EDGE_GROUPS_SQL: &str = "
+    SELECT links.source_file_id, links.target_key
+    FROM links INDEXED BY idx_links_unresolved_source_target_key
+    CROSS JOIN files AS source_files ON source_files.file_id = links.source_file_id
+    WHERE links.resolved_target_file_id IS NULL
+      AND source_files.kind = 'markdown'
+      AND source_files.status IN ('parsed', 'search_indexed')
+      AND source_files.generation = ?1
+    GROUP BY links.source_file_id, links.target_key";
+
+const GRAPH_ORPHAN_NODES_RESOLVED_ONLY_SQL: &str = "
+    SELECT files.file_id AS node_id
+    FROM files
+    WHERE files.kind = 'markdown'
+      AND files.status IN ('parsed', 'search_indexed')
+      AND files.generation = ?1
+      AND NOT EXISTS (
+        SELECT 1 FROM links
+        JOIN files AS source_files ON source_files.file_id = links.source_file_id
+        JOIN files AS target_files ON target_files.file_id = links.resolved_target_file_id
+        WHERE links.resolved_target_file_id IS NOT NULL
+          AND source_files.kind = 'markdown'
+          AND source_files.status IN ('parsed', 'search_indexed')
+          AND source_files.generation = ?1
+          AND target_files.kind = 'markdown'
+          AND target_files.status IN ('parsed', 'search_indexed')
+          AND target_files.generation = ?1
+          AND (links.source_file_id = files.file_id OR links.resolved_target_file_id = files.file_id)
+      )";
+
+const GRAPH_ORPHAN_NODES_WITH_UNRESOLVED_SQL: &str = "
+    SELECT files.file_id AS node_id
+    FROM files
+    WHERE files.kind = 'markdown'
+      AND files.status IN ('parsed', 'search_indexed')
+      AND files.generation = ?1
+      AND NOT EXISTS (
+        SELECT 1 FROM links
+        JOIN files AS source_files ON source_files.file_id = links.source_file_id
+        JOIN files AS target_files ON target_files.file_id = links.resolved_target_file_id
+        WHERE links.resolved_target_file_id IS NOT NULL
+          AND source_files.kind = 'markdown'
+          AND source_files.status IN ('parsed', 'search_indexed')
+          AND source_files.generation = ?1
+          AND target_files.kind = 'markdown'
+          AND target_files.status IN ('parsed', 'search_indexed')
+          AND target_files.generation = ?1
+          AND (links.source_file_id = files.file_id OR links.resolved_target_file_id = files.file_id)
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM links
+        WHERE links.resolved_target_file_id IS NULL
+          AND links.source_file_id = files.file_id
+      )";
+
 pub fn slugify_heading(title: &str) -> String {
     title
         .trim()
@@ -984,6 +1497,7 @@ fn create_schema(connection: &Connection) -> MetadataStoreResult<()> {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             source_file_id TEXT NOT NULL,
             target_text TEXT NOT NULL,
+            target_key TEXT NOT NULL,
             resolved_target_file_id TEXT,
             heading TEXT,
             alias TEXT,
@@ -1033,9 +1547,19 @@ fn create_projection_indexes(connection: &Connection) -> MetadataStoreResult<()>
     connection.execute_batch(
         "
         CREATE INDEX IF NOT EXISTS idx_files_relative_path ON files(relative_path);
+        CREATE INDEX IF NOT EXISTS idx_files_kind_status_generation
+            ON files(kind, status, generation);
         CREATE INDEX IF NOT EXISTS idx_links_source_file_id ON links(source_file_id);
         CREATE INDEX IF NOT EXISTS idx_links_resolved_target_file_id
             ON links(resolved_target_file_id);
+        CREATE INDEX IF NOT EXISTS idx_links_resolved_pair
+            ON links(source_file_id, resolved_target_file_id);
+        CREATE INDEX IF NOT EXISTS idx_links_unresolved_target_text
+            ON links(target_text)
+            WHERE resolved_target_file_id IS NULL;
+        CREATE INDEX IF NOT EXISTS idx_links_unresolved_source_target_key
+            ON links(source_file_id, target_key, target_text)
+            WHERE resolved_target_file_id IS NULL;
         CREATE INDEX IF NOT EXISTS idx_tags_file_id ON tags(file_id);
         CREATE INDEX IF NOT EXISTS idx_tags_tag ON tags(tag);
         CREATE INDEX IF NOT EXISTS idx_properties_file_id ON properties(file_id);
@@ -1050,8 +1574,12 @@ fn drop_projection_indexes(connection: &Connection) -> MetadataStoreResult<()> {
     connection.execute_batch(
         "
         DROP INDEX IF EXISTS idx_files_relative_path;
+        DROP INDEX IF EXISTS idx_files_kind_status_generation;
         DROP INDEX IF EXISTS idx_links_source_file_id;
         DROP INDEX IF EXISTS idx_links_resolved_target_file_id;
+        DROP INDEX IF EXISTS idx_links_resolved_pair;
+        DROP INDEX IF EXISTS idx_links_unresolved_target_text;
+        DROP INDEX IF EXISTS idx_links_unresolved_source_target_key;
         DROP INDEX IF EXISTS idx_tags_file_id;
         DROP INDEX IF EXISTS idx_tags_tag;
         DROP INDEX IF EXISTS idx_properties_file_id;
@@ -1184,13 +1712,15 @@ fn delete_child_records(connection: &Connection, file_id: &str) -> MetadataStore
 }
 
 fn insert_link(connection: &Connection, link: &LinkEdgeRecord) -> MetadataStoreResult<()> {
+    let target_key = unresolved_target_key(&link.target_text);
     connection.execute(
         "INSERT INTO links (
-            source_file_id, target_text, resolved_target_file_id, heading, alias, is_embed
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            source_file_id, target_text, target_key, resolved_target_file_id, heading, alias, is_embed
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         params![
             &link.source_file_id,
             &link.target_text,
+            &target_key,
             link.resolved_target_file_id.as_deref(),
             link.heading.as_deref(),
             link.alias.as_deref(),
@@ -1325,6 +1855,43 @@ fn row_to_tag(row: &rusqlite::Row<'_>) -> rusqlite::Result<TagRecord> {
         file_id: row.get(0)?,
         tag: row.get(1)?,
         source: tag_source_from_str(&source).map_err(|_| rusqlite::Error::InvalidQuery)?,
+    })
+}
+
+fn row_to_graph_file(row: &rusqlite::Row<'_>) -> rusqlite::Result<GraphFileRecord> {
+    Ok(GraphFileRecord {
+        file_id: row.get(0)?,
+        relative_path: PathBuf::from(row.get::<_, String>(1)?),
+    })
+}
+
+fn row_to_graph_resolved_edge(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<GraphResolvedEdgeRecord> {
+    Ok(GraphResolvedEdgeRecord {
+        source_file_id: row.get(0)?,
+        source_relative_path: PathBuf::from(row.get::<_, String>(1)?),
+        target_file_id: row.get(2)?,
+        target_relative_path: PathBuf::from(row.get::<_, String>(3)?),
+        weight: row.get::<_, i64>(4)? as usize,
+    })
+}
+
+fn row_to_graph_unresolved_edge(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<GraphUnresolvedEdgeRecord> {
+    Ok(GraphUnresolvedEdgeRecord {
+        source_file_id: row.get(0)?,
+        source_relative_path: PathBuf::from(row.get::<_, String>(1)?),
+        target_text: row.get(2)?,
+        weight: row.get::<_, i64>(3)? as usize,
+    })
+}
+
+fn row_to_graph_tag(row: &rusqlite::Row<'_>) -> rusqlite::Result<GraphTagRecord> {
+    Ok(GraphTagRecord {
+        file_id: row.get(0)?,
+        tag: row.get(1)?,
     })
 }
 
@@ -1480,6 +2047,10 @@ fn system_time_to_unix_ms(time: Option<SystemTime>) -> Option<i64> {
 
 fn unix_ms_to_system_time(ms: Option<i64>) -> Option<SystemTime> {
     ms.map(|ms| UNIX_EPOCH + Duration::from_millis(ms as u64))
+}
+
+fn limit_to_i64(limit: usize) -> i64 {
+    limit.min(i64::MAX as usize) as i64
 }
 
 fn scan_kind_to_str(kind: ScanEntryKind) -> &'static str {
@@ -1833,6 +2404,251 @@ mod tests {
     }
 
     #[test]
+    fn metadata_store_returns_whole_vault_graph_bulk_records() {
+        let metadata = IndexSchemaMetadata::new("sqlite", "metadata-v2", "none", 1);
+        let mut store = MetadataStore::open_in_memory(&metadata).expect("store");
+        let mut home = FileRecord::from_scan_entry(&fixture_entry("Home.md"), 1);
+        home.mark_search_indexed();
+        let mut target = FileRecord::from_scan_entry(&fixture_entry("Folder/Target.md"), 1);
+        target.mark_search_indexed();
+        let mut orphan = FileRecord::from_scan_entry(&fixture_entry("Docs/Guide.md"), 1);
+        orphan.mark_parsed("hash-guide");
+        let mut old_generation =
+            FileRecord::from_scan_entry(&fixture_entry("Folder/Duplicate.md"), 0);
+        old_generation.mark_search_indexed();
+        let mut attachment =
+            FileRecord::from_scan_entry(&fixture_entry("attachments/diagram.svg"), 1);
+        attachment.mark_search_indexed();
+
+        let resolved = LinkEdgeRecord {
+            source_file_id: home.file_id.clone(),
+            target_text: "Folder/Target".to_string(),
+            resolved_target_file_id: Some(target.file_id.clone()),
+            heading: None,
+            alias: None,
+            is_embed: false,
+        };
+        let unresolved = LinkEdgeRecord {
+            source_file_id: home.file_id.clone(),
+            target_text: "ÄMissing".to_string(),
+            resolved_target_file_id: None,
+            heading: None,
+            alias: None,
+            is_embed: false,
+        };
+        let unresolved_case_variant = LinkEdgeRecord {
+            target_text: "ämissing".to_string(),
+            ..unresolved.clone()
+        };
+        let attachment_link = LinkEdgeRecord {
+            source_file_id: attachment.file_id.clone(),
+            target_text: "Home".to_string(),
+            resolved_target_file_id: Some(home.file_id.clone()),
+            heading: None,
+            alias: None,
+            is_embed: false,
+        };
+        let stale_link = LinkEdgeRecord {
+            source_file_id: old_generation.file_id.clone(),
+            target_text: "Docs/Guide".to_string(),
+            resolved_target_file_id: Some(orphan.file_id.clone()),
+            heading: None,
+            alias: None,
+            is_embed: false,
+        };
+
+        store
+            .replace_file_records(
+                &home,
+                &[
+                    resolved.clone(),
+                    resolved.clone(),
+                    unresolved.clone(),
+                    unresolved.clone(),
+                    unresolved_case_variant,
+                ],
+                &[
+                    TagRecord {
+                        file_id: home.file_id.clone(),
+                        tag: "project/native".to_string(),
+                        source: TagSource::Inline,
+                    },
+                    TagRecord {
+                        file_id: home.file_id.clone(),
+                        tag: "work".to_string(),
+                        source: TagSource::Frontmatter,
+                    },
+                ],
+                &[],
+                &[],
+                &[],
+            )
+            .expect("home records");
+        store
+            .replace_file_records(&target, &[], &[], &[], &[], &[])
+            .expect("target records");
+        store
+            .replace_file_records(&orphan, &[], &[], &[], &[], &[])
+            .expect("orphan records");
+        store
+            .replace_file_records(&old_generation, &[stale_link], &[], &[], &[], &[])
+            .expect("old records");
+        store
+            .replace_file_records(&attachment, &[attachment_link], &[], &[], &[], &[])
+            .expect("attachment records");
+
+        let files = store.graph_files(1, 10).expect("graph files");
+        let file_ids = files
+            .iter()
+            .map(|file| file.file_id.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        let expected_file_ids = [
+            orphan.file_id.as_str(),
+            target.file_id.as_str(),
+            home.file_id.as_str(),
+        ]
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(file_ids, expected_file_ids);
+        assert_eq!(
+            files
+                .iter()
+                .find(|file| file.file_id == home.file_id)
+                .expect("home graph file")
+                .relative_path,
+            home.relative_path
+        );
+        assert!(!files.iter().any(|file| file.file_id == attachment.file_id));
+        assert!(
+            !files
+                .iter()
+                .any(|file| file.file_id == old_generation.file_id)
+        );
+
+        let resolved_edges = store.graph_resolved_edges(1, 10).expect("resolved edges");
+        assert_eq!(resolved_edges.len(), 1);
+        assert_eq!(resolved_edges[0].source_file_id, home.file_id);
+        assert_eq!(resolved_edges[0].source_relative_path, home.relative_path);
+        assert_eq!(resolved_edges[0].target_file_id, target.file_id);
+        assert_eq!(resolved_edges[0].target_relative_path, target.relative_path);
+        assert_eq!(resolved_edges[0].weight, 2);
+
+        let unresolved_edges = store
+            .graph_unresolved_edges(1, 10)
+            .expect("unresolved edges");
+        assert_eq!(unresolved_edges.len(), 1);
+        assert_eq!(unresolved_edges[0].source_file_id, home.file_id);
+        assert_eq!(unresolved_edges[0].source_relative_path, home.relative_path);
+        assert_eq!(unresolved_edges[0].target_text, "ÄMissing");
+        assert_eq!(unresolved_edges[0].weight, 3);
+
+        let orphans = store.graph_orphan_files(1, false, 10).expect("orphans");
+        assert_eq!(
+            orphans,
+            vec![GraphFileRecord {
+                file_id: orphan.file_id.clone(),
+                relative_path: orphan.relative_path.clone(),
+            }]
+        );
+
+        let tags = store
+            .graph_tags_for_files(std::slice::from_ref(&home.file_id), 10)
+            .expect("graph tags");
+        assert_eq!(tags.len(), 2);
+        assert!(tags.iter().all(|tag| tag.file_id == home.file_id));
+        assert_eq!(
+            store
+                .graph_visible_node_count(1, false, false)
+                .expect("resolved node count"),
+            2
+        );
+        assert_eq!(
+            store
+                .graph_visible_node_count(1, true, true)
+                .expect("full node count"),
+            4
+        );
+        assert_eq!(
+            store
+                .graph_visible_edge_count(1, false)
+                .expect("resolved edge count"),
+            1
+        );
+        assert_eq!(
+            store
+                .graph_visible_edge_count(1, true)
+                .expect("full edge count"),
+            2
+        );
+
+        let plans = store.graph_query_plan_summaries(1).expect("plans");
+        assert!(
+            plans
+                .iter()
+                .any(|plan| plan.stage == GraphQueryStage::Files)
+        );
+        assert!(
+            plans
+                .iter()
+                .any(|plan| plan.stage == GraphQueryStage::ResolvedEdges)
+        );
+        assert!(
+            plans
+                .iter()
+                .any(|plan| plan.stage == GraphQueryStage::UnresolvedEdges)
+        );
+        assert!(
+            plans
+                .iter()
+                .any(|plan| plan.stage == GraphQueryStage::OrphansResolvedOnly)
+        );
+        assert!(
+            plans
+                .iter()
+                .any(|plan| plan.stage == GraphQueryStage::OrphansWithUnresolved)
+        );
+        assert!(plans.iter().any(|plan| plan.stage == GraphQueryStage::Tags));
+        assert!(plans.iter().all(|plan| !plan.detail.contains("Home.md")));
+        let unresolved_plan_details = plans
+            .iter()
+            .filter(|plan| plan.stage == GraphQueryStage::UnresolvedEdges)
+            .map(|plan| plan.detail.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            unresolved_plan_details
+                .iter()
+                .any(|detail| detail.contains("idx_links_unresolved_source_target_key"))
+        );
+        assert!(
+            unresolved_plan_details
+                .iter()
+                .all(|detail| !detail.contains("USE TEMP B-TREE FOR GROUP BY"))
+        );
+        let edge_count_plan_sql = format!(
+            "EXPLAIN QUERY PLAN SELECT COUNT(*) FROM ({GRAPH_RESOLVED_EDGE_GROUPS_SQL} UNION ALL {GRAPH_UNRESOLVED_EDGE_GROUPS_SQL})"
+        );
+        let mut statement = store
+            .connection
+            .prepare(&edge_count_plan_sql)
+            .expect("edge count plan");
+        let edge_count_plan_details = statement
+            .query_map(params![1_i64], |row| row.get::<_, String>(3))
+            .expect("edge count plan rows")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("edge count plan details");
+        assert!(
+            edge_count_plan_details
+                .iter()
+                .any(|detail| detail.contains("idx_links_unresolved_source_target_key"))
+        );
+        assert!(
+            edge_count_plan_details
+                .iter()
+                .all(|detail| !detail.contains("USE TEMP B-TREE FOR GROUP BY"))
+        );
+    }
+
+    #[test]
     fn metadata_store_replaces_file_records_batch() {
         let metadata = IndexSchemaMetadata::new("sqlite", "metadata-v1", "none", 1);
         let mut store = MetadataStore::open_in_memory(&metadata).expect("store");
@@ -1879,8 +2695,12 @@ mod tests {
 
         for expected in [
             "idx_files_relative_path",
+            "idx_files_kind_status_generation",
             "idx_links_source_file_id",
             "idx_links_resolved_target_file_id",
+            "idx_links_resolved_pair",
+            "idx_links_unresolved_target_text",
+            "idx_links_unresolved_source_target_key",
             "idx_tags_file_id",
             "idx_tags_tag",
             "idx_properties_file_id",

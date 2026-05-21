@@ -33,6 +33,7 @@ struct GraniteApp: App {
             let file = FileTreeItem(relativePath: "Telemetry/Smoke.md")
             AppTelemetry.searchInputChanged(mode: .fileName, queryLength: 5)
             AppTelemetry.searchCompleted(mode: .fileName, state: .complete, resultCount: 1, durationMilliseconds: 1)
+            AppTelemetry.graphOpened(source: .keyboard)
             AppTelemetry.noteOpened(file)
             AppTelemetry.noteLoadCompleted(file, success: true, durationMilliseconds: 1)
             AppTelemetry.sidebarRefreshCompleted(state: .complete, itemCount: 1, durationMilliseconds: 1)
@@ -51,10 +52,94 @@ struct GraniteApp: App {
                 edgeCount: 0,
                 durationMilliseconds: 1
             )
+            AppTelemetry.graphDrawCompleted(GraphRendererMetrics(
+                rendererKind: .canvas,
+                nodeCount: 1,
+                edgeCount: 0,
+                drawDurationMilliseconds: 1
+            ))
+            AppTelemetry.graphStageCompleted(
+                stage: .layout,
+                state: .complete,
+                nodeCount: 1,
+                edgeCount: 0,
+                durationMilliseconds: 1
+            )
             AppTelemetry.saveRequested(file: file, available: false)
             AppTelemetry.editorDecorationCompleted(textLength: 128, durationMilliseconds: 1)
             print("Granite telemetry smoke test")
             Foundation.exit(0)
+        }
+
+        if CommandLine.arguments.contains("--graph-canvas-smoke-test") {
+            do {
+                let metrics = try GraphCanvasRendererSmokeProbe.run()
+                AppTelemetry.graphDrawCompleted(metrics)
+                print("Graph canvas smoke test renderer=\(metrics.rendererKind.rawValue) nodes=\(metrics.nodeCount) edges=\(metrics.edgeCount)")
+                Foundation.exit(0)
+            } catch {
+                print("Graph canvas smoke test failed")
+                Foundation.exit(2)
+            }
+        }
+
+        if CommandLine.arguments.contains("--graph-load-smoke-test") {
+            do {
+                let metrics = try GraphLoadSmokeProbe.run()
+                print("Graph load smoke test renderer=\(metrics.rendererKind.rawValue) nodes=\(metrics.nodeCount) edges=\(metrics.edgeCount)")
+                Foundation.exit(0)
+            } catch {
+                print("Graph load smoke test failed")
+                Foundation.exit(2)
+            }
+        }
+
+        if let payloadBenchmarkIndex = CommandLine.arguments.firstIndex(of: "--graph-payload-benchmark") {
+            do {
+                let payloadPathIndex = CommandLine.arguments.index(after: payloadBenchmarkIndex)
+                guard CommandLine.arguments.indices.contains(payloadPathIndex) else {
+                    print("Graph payload benchmark failed")
+                    Foundation.exit(2)
+                }
+                let payloadURL = URL(fileURLWithPath: CommandLine.arguments[payloadPathIndex])
+                print(try GraphPayloadBenchmarkProbe.encodedResult(payloadURL: payloadURL))
+                Foundation.exit(0)
+            } catch {
+                print("Graph payload benchmark failed")
+                Foundation.exit(2)
+            }
+        }
+
+        if let canvasBenchmarkIndex = CommandLine.arguments.firstIndex(of: "--graph-canvas-benchmark") {
+            do {
+                let payloadPathIndex = CommandLine.arguments.index(after: canvasBenchmarkIndex)
+                guard CommandLine.arguments.indices.contains(payloadPathIndex) else {
+                    print("Graph canvas benchmark failed")
+                    Foundation.exit(2)
+                }
+                let payloadURL = URL(fileURLWithPath: CommandLine.arguments[payloadPathIndex])
+                print(try GraphCanvasBenchmarkProbe.encodedResult(payloadURL: payloadURL))
+                Foundation.exit(0)
+            } catch {
+                print("Graph canvas benchmark failed")
+                Foundation.exit(2)
+            }
+        }
+
+        if let metalBenchmarkIndex = CommandLine.arguments.firstIndex(of: "--graph-metal-benchmark") {
+            do {
+                let payloadPathIndex = CommandLine.arguments.index(after: metalBenchmarkIndex)
+                guard CommandLine.arguments.indices.contains(payloadPathIndex) else {
+                    print("Graph metal benchmark failed")
+                    Foundation.exit(2)
+                }
+                let payloadURL = URL(fileURLWithPath: CommandLine.arguments[payloadPathIndex])
+                print(try GraphMetalBenchmarkProbe.encodedResult(payloadURL: payloadURL))
+                Foundation.exit(0)
+            } catch {
+                print("Graph metal benchmark failed")
+                Foundation.exit(2)
+            }
         }
 
         if CommandLine.arguments.contains("--textkit-strategy-probe") {
@@ -95,6 +180,7 @@ struct GraniteApp: App {
         .defaultSize(width: 1440, height: 900)
         .commands {
             EditorCommands()
+            GraphCommands(appState: appState)
         }
 
         Settings {

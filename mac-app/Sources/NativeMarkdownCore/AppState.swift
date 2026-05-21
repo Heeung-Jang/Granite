@@ -76,6 +76,17 @@ public struct DirtyEditorActionWarning: Equatable, Identifiable, Sendable {
     }
 }
 
+public enum WorkspaceSelection: Equatable, Sendable {
+    case empty
+    case note(FileTreeItem)
+    case graph
+}
+
+public enum GraphOpenSource: String, Equatable, Sendable {
+    case ribbon
+    case keyboard
+}
+
 public final class AppState: ObservableObject {
     @Published public private(set) var vaultSelection: VaultSelectionState
     @Published public private(set) var engineHealth: EngineHealthStatus
@@ -84,6 +95,7 @@ public final class AppState: ObservableObject {
     @Published public private(set) var readAvailability: ReadAvailability
     @Published public private(set) var readGeneration: UInt64
     @Published public private(set) var recentVaults: [RecentVault]
+    @Published public private(set) var workspaceSelection: WorkspaceSelection
     @Published public private(set) var selectedFile: FileTreeItem?
     @Published public private(set) var requestedSearch: WorkspaceSearchRequest?
     @Published public private(set) var dirtyNavigationWarning: DirtyNavigationWarning?
@@ -118,6 +130,7 @@ public final class AppState: ObservableObject {
         self.maxRecentVaults = max(1, maxRecentVaults)
         self.readAvailability = .unavailable
         self.readGeneration = 0
+        self.workspaceSelection = .empty
         self.recentVaults = Self.normalizedRecentVaults(
             from: recentVaultStorage.loadRecentVaultURLs(),
             limit: self.maxRecentVaults
@@ -129,6 +142,7 @@ public final class AppState: ObservableObject {
         if let issue = vaultAccessValidator.validateVault(at: vaultURL) {
             resetReadClient(availability: readAvailability(for: issue))
             indexLocation = nil
+            workspaceSelection = .empty
             selectedFile = nil
             dirtyEditorFile = nil
             clearAllDirtyWarnings()
@@ -150,6 +164,7 @@ public final class AppState: ObservableObject {
             readAvailability = .error(Self.readErrorMessage(error))
         }
         vaultSelection = .selected(vaultURL)
+        workspaceSelection = .empty
         selectedFile = nil
         dirtyEditorFile = nil
         clearAllDirtyWarnings()
@@ -163,6 +178,7 @@ public final class AppState: ObservableObject {
     public func markStaleBookmark(for url: URL) {
         resetReadClient(availability: .stale)
         indexLocation = nil
+        workspaceSelection = .empty
         selectedFile = nil
         dirtyEditorFile = nil
         clearAllDirtyWarnings()
@@ -182,6 +198,7 @@ public final class AppState: ObservableObject {
         resetReadClient(availability: .unavailable)
         vaultSelection = .noVault
         indexLocation = nil
+        workspaceSelection = .empty
         selectedFile = nil
         dirtyEditorFile = nil
         clearAllDirtyWarnings()
@@ -218,9 +235,29 @@ public final class AppState: ObservableObject {
         }
 
         selectedFile = item
+        workspaceSelection = .note(item)
         clearAllDirtyWarnings()
         AppTelemetry.noteOpened(item)
         return true
+    }
+
+    public func openGraph(source: GraphOpenSource) {
+        workspaceSelection = .graph
+        dirtyNavigationWarning = nil
+        AppTelemetry.graphOpened(source: source)
+    }
+
+    @discardableResult
+    public func closeWorkspaceSelection() -> Bool {
+        switch workspaceSelection {
+        case .graph:
+            workspaceSelection = selectedFile.map(WorkspaceSelection.note) ?? .empty
+            return true
+        case .note:
+            return requestClearSelectedFile()
+        case .empty:
+            return true
+        }
     }
 
     public func updateEditorDirtyState(file: FileTreeItem, isDirty: Bool) {
@@ -247,12 +284,14 @@ public final class AppState: ObservableObject {
         dirtyEditorFile = nil
         clearAllDirtyWarnings()
         selectedFile = warning.requestedFile
+        workspaceSelection = .note(warning.requestedFile)
         AppTelemetry.noteOpened(warning.requestedFile)
     }
 
     @discardableResult
     public func requestClearSelectedFile() -> Bool {
         guard let selectedFile else {
+            workspaceSelection = .empty
             dirtyEditorActionWarning = nil
             return true
         }
@@ -266,6 +305,7 @@ public final class AppState: ObservableObject {
         }
 
         self.selectedFile = nil
+        workspaceSelection = .empty
         clearAllDirtyWarnings()
         return true
     }
@@ -324,6 +364,7 @@ public final class AppState: ObservableObject {
         switch warning.action {
         case .clearSelection:
             selectedFile = nil
+            workspaceSelection = .empty
             clearAllDirtyWarnings()
         case .closeVault:
             clearVault()

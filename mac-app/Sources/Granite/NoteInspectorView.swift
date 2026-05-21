@@ -83,8 +83,6 @@ struct NoteInspectorView: View {
             tagsState.isLoading
         case .attachments:
             attachmentsState.isLoading
-        case .graph:
-            false
         }
     }
 
@@ -107,8 +105,6 @@ struct NoteInspectorView: View {
             await loadTagsAndProperties()
         case .attachments:
             await loadAttachments()
-        case .graph:
-            return
         }
     }
 
@@ -281,8 +277,6 @@ struct NoteInspectorView: View {
             panelStateContent(attachmentsState, loadingText: "Attachments loading") { attachments in
                 attachmentsSection(attachments)
             }
-        case .graph:
-            graphSection()
         }
     }
 
@@ -394,17 +388,6 @@ struct NoteInspectorView: View {
         }
     }
 
-    private func graphSection() -> some View {
-        InspectorSection(title: "Graph") {
-            LocalGraphSection(
-                file: file,
-                reader: appState.readClient,
-                readAvailability: appState.readAvailability,
-                readGeneration: appState.readGeneration,
-                open: open
-            )
-        }
-    }
 }
 
 private enum InspectorPanelState<Value> {
@@ -438,7 +421,6 @@ private enum NoteInspectorPanel: CaseIterable {
     case outgoing
     case tags
     case attachments
-    case graph
 
     var systemImage: String {
         switch self {
@@ -450,8 +432,6 @@ private enum NoteInspectorPanel: CaseIterable {
             return "tag"
         case .attachments:
             return "doc"
-        case .graph:
-            return "list.bullet"
         }
     }
 
@@ -465,8 +445,6 @@ private enum NoteInspectorPanel: CaseIterable {
             return "Tags and properties"
         case .attachments:
             return "Attachments"
-        case .graph:
-            return "Graph"
         }
     }
 }
@@ -706,266 +684,6 @@ private struct AttachmentImagePreview: View {
             return
         }
         image = loadedImage
-    }
-}
-
-private enum LocalGraphViewState {
-    case loading
-    case loaded(LocalGraphSnapshot)
-    case failed(String)
-}
-
-private struct LocalGraphSection: View {
-    let file: FileTreeItem
-    let reader: (any EngineReading)?
-    let readAvailability: ReadAvailability
-    let readGeneration: UInt64
-    let open: (FileTreeItem) -> Void
-
-    @State private var depth: LocalGraphDepth = .oneHop
-    @State private var state: LocalGraphViewState = .loading
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Picker("Depth", selection: $depth) {
-                ForEach(LocalGraphDepth.allCases, id: \.self) { depth in
-                    Text(depth.displayName).tag(depth)
-                }
-            }
-            .labelsHidden()
-            .pickerStyle(.segmented)
-            .controlSize(.small)
-            .accessibilityLabel("Graph depth")
-
-            switch state {
-            case .loading:
-                HStack(spacing: 8) {
-                    ProgressView()
-                        .controlSize(.small)
-                    EmptyInlineText("Loading graph")
-                }
-            case .failed(let message):
-                Label(message, systemImage: "xmark.octagon")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            case .loaded(let snapshot):
-                LocalGraphContent(snapshot: snapshot, open: open)
-            }
-        }
-        .task(id: "\(file.id)-\(depth.rawValue)-\(readGeneration)") {
-            await loadGraph()
-        }
-    }
-
-    private func loadGraph() async {
-        state = .loading
-        let timer = AppTelemetryTimer()
-        let file = file
-        let depth = depth
-        guard let reader, readAvailability == .ready else {
-            state = readAvailability == .opening ? .loading : .failed(readUnavailableTitle(readAvailability))
-            return
-        }
-
-        do {
-            let snapshot = try await EngineLocalGraphLoader(reader: reader).loadGraph(
-                file: file,
-                requestID: readGeneration,
-                request: LocalGraphRequest(depth: depth)
-            )
-
-            if Task.isCancelled {
-                return
-            }
-            state = .loaded(snapshot)
-            AppTelemetry.graphRendered(
-                file,
-                state: snapshot.state,
-                nodeCount: snapshot.nodes.count,
-                edgeCount: snapshot.edges.count,
-                durationMilliseconds: timer.elapsedMilliseconds()
-            )
-        } catch {
-            if Task.isCancelled {
-                return
-            }
-            state = .failed(error.localizedDescription)
-            AppTelemetry.graphRendered(
-                file,
-                state: .error,
-                nodeCount: 0,
-                edgeCount: 0,
-                durationMilliseconds: timer.elapsedMilliseconds()
-            )
-        }
-    }
-
-    private func readUnavailableTitle(_ availability: ReadAvailability) -> String {
-        switch availability {
-        case .unavailable:
-            return "Index unavailable"
-        case .opening:
-            return "Opening index"
-        case .ready:
-            return "Index ready"
-        case .stale:
-            return "Index stale"
-        case .error(let message):
-            return message
-        }
-    }
-}
-
-private struct LocalGraphContent: View {
-    let snapshot: LocalGraphSnapshot
-    let open: (FileTreeItem) -> Void
-
-    private var nodesByID: [String: LocalGraphNode] {
-        Dictionary(uniqueKeysWithValues: snapshot.nodes.map { ($0.id, $0) })
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if snapshot.state != .complete {
-                Label("Partial graph", systemImage: "ellipsis")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            if snapshot.edges.isEmpty {
-                EmptyInlineText("No graph links")
-            } else {
-                LocalGraphNodeStrip(nodes: snapshot.nodes, open: open)
-
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(snapshot.edges.prefix(12)) { edge in
-                        LocalGraphEdgeRow(edge: edge, nodesByID: nodesByID, open: open)
-                    }
-                    if snapshot.edges.count > 12 {
-                        Text("+ \(snapshot.edges.count - 12) more")
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                    }
-                }
-            }
-        }
-    }
-}
-
-private struct LocalGraphNodeStrip: View {
-    let nodes: [LocalGraphNode]
-    let open: (FileTreeItem) -> Void
-
-    var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(nodes) { node in
-                    LocalGraphNodeChip(node: node, open: open)
-                }
-            }
-        }
-        .accessibilityLabel("Graph nodes")
-    }
-}
-
-private struct LocalGraphNodeChip: View {
-    let node: LocalGraphNode
-    let open: (FileTreeItem) -> Void
-
-    var body: some View {
-        Group {
-            if let file = node.file, node.kind != .center {
-                Button {
-                    open(file)
-                } label: {
-                    label
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Open graph note \(node.label)")
-            } else {
-                label
-                    .accessibilityLabel(accessibilityLabel)
-            }
-        }
-    }
-
-    private var accessibilityLabel: String {
-        switch node.kind {
-        case .center:
-            "Current graph note \(node.label)"
-        case .resolved:
-            "Graph note \(node.label)"
-        case .unresolved:
-            "Unresolved graph link \(node.label)"
-        }
-    }
-
-    private var label: some View {
-        Label(node.label, systemImage: systemImage)
-            .font(.caption2)
-            .lineLimit(1)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 3)
-            .background(.quaternary.opacity(node.kind == .center ? 0.9 : 0.45))
-            .clipShape(Capsule())
-    }
-
-    private var systemImage: String {
-        switch node.kind {
-        case .center:
-            "smallcircle.filled.circle"
-        case .resolved:
-            "doc.text"
-        case .unresolved:
-            "questionmark"
-        }
-    }
-}
-
-private struct LocalGraphEdgeRow: View {
-    let edge: LocalGraphEdge
-    let nodesByID: [String: LocalGraphNode]
-    let open: (FileTreeItem) -> Void
-
-    var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
-            nodeLabel(nodesByID[edge.sourceNodeID])
-            Image(systemName: edge.direction == .backlink ? "arrow.left" : "arrow.right")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-            nodeLabel(nodesByID[edge.targetNodeID])
-            Text("h\(edge.hop)")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(accessibilityLabel)
-    }
-
-    private var accessibilityLabel: String {
-        let source = nodesByID[edge.sourceNodeID]?.label ?? edge.sourceNodeID
-        let target = nodesByID[edge.targetNodeID]?.label ?? edge.targetText
-        let direction = edge.direction == .backlink ? "backlink" : "outgoing link"
-        return "\(direction) from \(source) to \(target), hop \(edge.hop)"
-    }
-
-    @ViewBuilder
-    private func nodeLabel(_ node: LocalGraphNode?) -> some View {
-        if let file = node?.file, node?.kind != .center {
-            Button {
-                open(file)
-            } label: {
-                Text(node?.label ?? "")
-                    .lineLimit(1)
-            }
-            .buttonStyle(.plain)
-            .font(.caption)
-        } else {
-            Text(node?.label ?? edge.targetText)
-                .font(.caption)
-                .foregroundStyle(node == nil ? .secondary : .primary)
-                .lineLimit(1)
-        }
     }
 }
 
