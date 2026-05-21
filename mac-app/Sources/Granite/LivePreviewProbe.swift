@@ -165,6 +165,17 @@ enum LivePreviewProbe {
                 range: visibleRange
             )
         }
+        for location in selectionSweepLocations(documentLength: (document as NSString).length, visibleRange: visibleRange) {
+            let selection = NSRange(location: location, length: 0)
+            textView.setSelectedRange(selection)
+            record("selectionSweep", in: &samples) {
+                MarkdownVisibleRangeDecorator.decorateVisibleRange(
+                    in: textView,
+                    range: visibleRange,
+                    revealRange: selection
+                )
+            }
+        }
     }
 
     private static func measureFallback(
@@ -221,6 +232,9 @@ enum LivePreviewProbe {
         if p95("textKitApply", in: stages) > thresholds.maxVisibleDecorationP95Milliseconds {
             violations.append("textKitApply")
         }
+        if p95("selectionSweep", in: stages) > thresholds.maxVisibleDecorationP95Milliseconds {
+            violations.append("selectionSweep")
+        }
         if let memoryDeltaBytes,
            memoryDeltaBytes > thresholds.maxRenderMemoryDeltaBytes {
             violations.append("memoryDeltaBytes")
@@ -259,6 +273,8 @@ enum LivePreviewProbe {
         [
             LivePreviewProbeFixture(id: "compatibility-100kb", document: markdownDocument(targetBytes: 100 * 1024), iterations: 10),
             LivePreviewProbeFixture(id: "compatibility-1mb", document: markdownDocument(targetBytes: 1024 * 1024), iterations: 5),
+            LivePreviewProbeFixture(id: "horizontal-rule-dense", document: horizontalRuleDenseDocument(targetBytes: 100 * 1024), iterations: 10),
+            LivePreviewProbeFixture(id: "marker-policy-dense", document: markerPolicyDenseDocument(targetBytes: 100 * 1024), iterations: 10),
             LivePreviewProbeFixture(id: "attachment-heavy", document: attachmentHeavyDocument(count: 40), iterations: 5),
             LivePreviewProbeFixture(id: "table-heavy", document: tableDocument(columns: 20, rows: 50), iterations: 5),
             LivePreviewProbeFixture(id: "huge-table", document: tableDocument(columns: 100, rows: 100), iterations: 3),
@@ -278,6 +294,34 @@ enum LivePreviewProbe {
         return header + String(repeating: line, count: repeatCount)
     }
 
+    private static func horizontalRuleDenseDocument(targetBytes: Int) -> String {
+        let line = """
+        Paragraph before a rule with [[Wiki Link]] and #tag/native.
+        ---
+        Paragraph after hyphen rule.
+        ***
+        Paragraph after star rule.
+        ___
+
+        """
+        let repeatCount = targetBytes / line.utf8.count + 1
+        return "# Horizontal Rules\n\n" + String(repeating: line, count: repeatCount)
+    }
+
+    private static func markerPolicyDenseDocument(targetBytes: Int) -> String {
+        let line = """
+        # Section
+        - Bullet item with **strong** text
+        - [x] Completed task
+        > Quote with `code`
+        > [!note] Callout body
+        Regular context paragraph with [[Wiki Link]], #tag/native, **strong** text, and enough prose to keep the dense marker fixture close to real notes instead of thousands of tiny blocks.
+
+        """
+        let repeatCount = targetBytes / line.utf8.count + 1
+        return "---\nstatus: dense\n---\n\n" + String(repeating: line, count: repeatCount)
+    }
+
     private static func attachmentHeavyDocument(count: Int) -> String {
         (0..<count).map { index in
             "![fixture-\(index)](fixture-\(index).png)"
@@ -289,6 +333,22 @@ enum LivePreviewProbe {
         let alignment = "| " + Array(repeating: "---", count: columns).joined(separator: " | ") + " |"
         let row = "| " + (0..<columns).map { "v\($0)" }.joined(separator: " | ") + " |"
         return ([header, alignment] + Array(repeating: row, count: rows)).joined(separator: "\n")
+    }
+
+    private static func selectionSweepLocations(documentLength: Int, visibleRange: NSRange) -> [Int] {
+        guard documentLength > 0 else {
+            return [0]
+        }
+        let lower = min(max(0, visibleRange.location), documentLength)
+        let upper = min(documentLength, max(lower, visibleRange.location + visibleRange.length))
+        let midpoint = lower + max(0, upper - lower) / 2
+        return [
+            lower,
+            min(documentLength, lower + 1_024),
+            midpoint,
+            max(lower, upper - 1_024),
+            upper
+        ].map { min(max(0, $0), documentLength) }
     }
 }
 
