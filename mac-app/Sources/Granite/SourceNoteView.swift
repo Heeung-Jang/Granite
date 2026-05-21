@@ -28,6 +28,7 @@ struct SourceNoteView: View {
     @State private var recoveryTask: Task<Void, Never>?
     @State private var fallbackProfileTask: Task<Void, Never>?
     @State private var livePreviewMetadataTask: Task<Void, Never>?
+    @State private var activityToken = WorkspaceEditorActivityToken()
     @AppStorage(LivePreviewMarkerStyle.storageKey) private var markerStyleRaw = LivePreviewMarkerStyle.defaultValue.rawValue
 
     init(
@@ -117,10 +118,21 @@ struct SourceNoteView: View {
             await load()
         }
         .onChange(of: text) { _, newValue in
+            guard WorkspaceEditorActivityGate.shouldRun(.textChangeSideEffects, isActive: isActive) else {
+                return
+            }
             saveSession?.updateContents(newValue)
             clearLivePreviewMetadata()
             updateAutomaticFallbackAfterTextChange(for: newValue)
             scheduleRecoverySnapshot(contents: newValue)
+        }
+        .onChange(of: isActive) { _, newValue in
+            if newValue {
+                activityToken = WorkspaceEditorActivityToken()
+                refreshLivePreviewMetadataIfNeeded(contents: text)
+            } else {
+                cancelInactiveEditorWork()
+            }
         }
         .onChange(of: saveSession) { oldValue, newValue in
             appState.updateEditorDirtyState(file: file, isDirty: newValue?.isDirty == true)
@@ -139,7 +151,7 @@ struct SourceNoteView: View {
                 appState.updateEditorDirtyState(file: file, isDirty: false)
             }
         }
-        .focusedSceneValue(\.editorSaveAction, editorSaveAction)
+        .focusedSceneValue(\.editorSaveAction, activeEditorSaveAction)
         .alert("Open External Link?", isPresented: externalLinkAlertBinding) {
             Button("Open") {
                 if let url = pendingExternalLink?.url {
@@ -235,6 +247,9 @@ struct SourceNoteView: View {
     }
 
     private func updateAutomaticFallbackAfterTextChange(for contents: String) {
+        guard WorkspaceEditorActivityGate.shouldRun(.fallbackProfile, isActive: isActive) else {
+            return
+        }
         guard livePreviewMode != .source else {
             return
         }
@@ -271,7 +286,7 @@ struct SourceNoteView: View {
                 return
             }
             await MainActor.run {
-                guard contents == text else {
+                guard isActive, contents == text else {
                     return
                 }
                 updateAutomaticFallback(for: contents)
@@ -283,6 +298,10 @@ struct SourceNoteView: View {
         EditorSaveAction(isAvailable: saveSession?.canSave == true) {
             saveCurrentNote()
         }
+    }
+
+    private var activeEditorSaveAction: EditorSaveAction? {
+        isActive ? editorSaveAction : nil
     }
 
     private func load() async {
@@ -638,6 +657,9 @@ struct SourceNoteView: View {
     }
 
     private func scheduleRecoverySnapshot(contents: String) {
+        guard WorkspaceEditorActivityGate.shouldRun(.recoverySnapshot, isActive: isActive) else {
+            return
+        }
         guard saveSession?.isDirty == true else {
             return
         }
@@ -692,6 +714,10 @@ struct SourceNoteView: View {
     }
 
     private func refreshLivePreviewMetadataIfNeeded(contents: String) {
+        guard WorkspaceEditorActivityGate.shouldRun(.livePreviewMetadata, isActive: isActive) else {
+            clearLivePreviewMetadata()
+            return
+        }
         guard livePreviewMode == .livePreview else {
             clearLivePreviewMetadata()
             return
@@ -706,18 +732,25 @@ struct SourceNoteView: View {
         let reader = appState.readClient
         let readAvailability = appState.readAvailability
         let readGeneration = appState.readGeneration
+        let activityToken = activityToken
         livePreviewMetadataTask = Task {
-            guard let reader, readAvailability == .ready else {
+            guard let reader, readAvailability == .ready, !activityToken.isCancelled else {
                 clearLivePreviewMetadata()
                 return
             }
 
             let maps = try? await Task.detached(priority: .utility) {
+                guard !activityToken.isCancelled else {
+                    return (LivePreviewLinkStyleMap(), LivePreviewEmbedPreviewMap())
+                }
                 let metadata = try await EngineLivePreviewMetadataLoader(reader: reader).loadMetadata(
                     file: file,
                     requestID: readGeneration,
                     contents: contents
                 )
+                guard !activityToken.isCancelled else {
+                    return (metadata.linkStyleMap(source: contents), LivePreviewEmbedPreviewMap())
+                }
                 let embedPreviewPlan = LivePreviewEmbedPreviewPlan(
                     source: contents,
                     references: metadata.attachments
@@ -733,12 +766,19 @@ struct SourceNoteView: View {
             }.value
 
             if Task.isCancelled ||
+                activityToken.isCancelled ||
                 !LivePreviewMetadataFreshness.accepts(candidateContents: contents, currentContents: text) {
                 return
             }
             livePreviewLinkStyleMap = maps?.0 ?? LivePreviewLinkStyleMap()
             livePreviewEmbedPreviewMap = maps?.1 ?? LivePreviewEmbedPreviewMap()
         }
+    }
+
+    private func cancelInactiveEditorWork() {
+        activityToken.cancel()
+        fallbackProfileTask?.cancel()
+        livePreviewMetadataTask?.cancel()
     }
 
     private func handleEditorInteraction(_ request: MarkdownEditorInteractionRequest) {

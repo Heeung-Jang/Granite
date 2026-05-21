@@ -288,6 +288,26 @@ func appStateTracksMultipleDirtyTabsAndClearsOnlySavedFile() {
 }
 
 @Test
+func appStateLifecycleWarningCountsMultipleDirtyTabs() {
+    let state = AppState()
+    let first = FileTreeItem(relativePath: "First.md")
+    let second = FileTreeItem(relativePath: "Second.md")
+
+    #expect(state.openFile(first))
+    #expect(state.openFile(second, disposition: .newTab))
+    state.updateEditorDirtyState(file: first, isDirty: true)
+    state.updateEditorDirtyState(file: second, isDirty: true)
+
+    #expect(state.requestAppQuit() == false)
+    #expect(state.dirtyLifecycleWarning == DirtyLifecycleWarning(
+        dirtyFile: first,
+        action: .quitApp,
+        dirtyCount: 2
+    ))
+    #expect(state.dirtyLifecycleWarning?.isAggregate == true)
+}
+
+@Test
 func appStateClosesTabsWithNeighborSelectionAndRecentlyClosedRestore() {
     let state = AppState()
     let first = FileTreeItem(relativePath: "First.md")
@@ -711,6 +731,27 @@ func appStateBlocksClosingVaultWithAnyDirtyEditorFile() {
         dirtyFile: dirtyFile,
         action: .closeVault
     ))
+}
+
+@Test
+func appStateCloseVaultWarningCountsMultipleDirtyTabs() {
+    let vaultURL = URL(fileURLWithPath: "/tmp/multi-dirty-vault", isDirectory: true)
+    let state = AppState(vaultSelection: .selected(vaultURL))
+    let first = FileTreeItem(relativePath: "First.md")
+    let second = FileTreeItem(relativePath: "Second.md")
+
+    #expect(state.openFile(first))
+    #expect(state.openFile(second, disposition: .newTab))
+    state.updateEditorDirtyState(file: first, isDirty: true)
+    state.updateEditorDirtyState(file: second, isDirty: true)
+
+    #expect(state.requestCloseVault() == false)
+    #expect(state.dirtyEditorActionWarning == DirtyEditorActionWarning(
+        dirtyFile: first,
+        action: .closeVault,
+        dirtyCount: 2
+    ))
+    #expect(state.dirtyEditorActionWarning?.isAggregate == true)
 }
 
 @Test

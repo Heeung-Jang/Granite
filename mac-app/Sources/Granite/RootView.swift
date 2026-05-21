@@ -138,6 +138,14 @@ struct RootView: View {
         guard let warning = appState.dirtyLifecycleWarning else {
             return ""
         }
+        if warning.isAggregate {
+            switch warning.action {
+            case .closeWindow:
+                return "There are unsaved changes in open tabs. Discard them and close this window?"
+            case .quitApp:
+                return "There are unsaved changes in open tabs. Discard them and quit Granite?"
+            }
+        }
         switch warning.action {
         case .closeWindow:
             return "Discard unsaved changes in \(warning.dirtyFile.displayName) and close this window?"
@@ -175,6 +183,9 @@ struct RootView: View {
         case .clearSelection:
             return "Discard unsaved changes in \(warning.dirtyFile.displayName) and close this note?"
         case .closeVault:
+            if warning.isAggregate {
+                return "There are unsaved changes in open tabs. Discard them and close this vault?"
+            }
             return "Discard unsaved changes in \(warning.dirtyFile.displayName) and close this vault?"
         }
     }
@@ -727,8 +738,6 @@ private struct ObsidianTabItem: View {
 }
 
 private struct EditorTabContentStack: View {
-    private static let cleanInactiveBudget = 10
-
     @EnvironmentObject private var appState: AppState
     let vaultURL: URL
     let tabs: [WorkspaceTab]
@@ -777,33 +786,17 @@ private struct EditorTabContentStack: View {
     }
 
     private func reconcileMountedTabs() {
-        let currentIDs = Set(tabs.map(\.id))
-        var mounted = mountedTabIDs.filter { currentIDs.contains($0) }
-        let dirtyIDs = Set(tabs.compactMap { tab -> WorkspaceTab.ID? in
-            guard let file = tab.file, appState.isEditorDirty(file: file) else {
-                return nil
+        let plan = WorkspaceMountedEditorPlanner.reconcile(
+            tabs: tabs,
+            activeTabID: activeTabID,
+            existingMountedTabIDs: mountedTabIDs
+        ) { tab in
+            guard let file = tab.file else {
+                return false
             }
-            return tab.id
-        })
-
-        if let activeTabID {
-            mounted.removeAll { $0 == activeTabID }
-            mounted.append(activeTabID)
+            return appState.isEditorDirty(file: file)
         }
-
-        for tab in tabs where dirtyIDs.contains(tab.id) && !mounted.contains(tab.id) {
-            mounted.append(tab.id)
-        }
-
-        var cleanInactiveIDs = mounted.filter { id in
-            id != activeTabID && !dirtyIDs.contains(id)
-        }
-        while cleanInactiveIDs.count > Self.cleanInactiveBudget {
-            let evictedID = cleanInactiveIDs.removeFirst()
-            mounted.removeAll { $0 == evictedID }
-        }
-
-        mountedTabIDs = mounted
+        mountedTabIDs = plan.mountedTabIDs
     }
 }
 

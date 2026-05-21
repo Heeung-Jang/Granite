@@ -56,9 +56,20 @@ public enum DirtyLifecycleAction: String, Equatable, Sendable {
 public struct DirtyLifecycleWarning: Equatable, Identifiable, Sendable {
     public let dirtyFile: FileTreeItem
     public let action: DirtyLifecycleAction
+    public let dirtyCount: Int
+
+    public init(dirtyFile: FileTreeItem, action: DirtyLifecycleAction, dirtyCount: Int = 1) {
+        self.dirtyFile = dirtyFile
+        self.action = action
+        self.dirtyCount = max(1, dirtyCount)
+    }
 
     public var id: String {
-        "\(action.rawValue)->\(dirtyFile.id)"
+        "\(action.rawValue)->\(dirtyFile.id)->\(dirtyCount)"
+    }
+
+    public var isAggregate: Bool {
+        dirtyCount > 1
     }
 }
 
@@ -70,9 +81,20 @@ public enum DirtyEditorAction: String, Equatable, Sendable {
 public struct DirtyEditorActionWarning: Equatable, Identifiable, Sendable {
     public let dirtyFile: FileTreeItem
     public let action: DirtyEditorAction
+    public let dirtyCount: Int
+
+    public init(dirtyFile: FileTreeItem, action: DirtyEditorAction, dirtyCount: Int = 1) {
+        self.dirtyFile = dirtyFile
+        self.action = action
+        self.dirtyCount = max(1, dirtyCount)
+    }
 
     public var id: String {
-        "\(action.rawValue)->\(dirtyFile.id)"
+        "\(action.rawValue)->\(dirtyFile.id)->\(dirtyCount)"
+    }
+
+    public var isAggregate: Bool {
+        dirtyCount > 1
     }
 }
 
@@ -506,7 +528,8 @@ public final class AppState: ObservableObject {
         if let dirtyEditorFile = firstDirtyEditorFile {
             setDirtyEditorActionWarning(DirtyEditorActionWarning(
                 dirtyFile: dirtyEditorFile,
-                action: .closeVault
+                action: .closeVault,
+                dirtyCount: dirtyEditorFileCount
             ))
             return false
         }
@@ -588,7 +611,11 @@ public final class AppState: ObservableObject {
             dirtyLifecycleWarning = nil
             return true
         }
-        setDirtyLifecycleWarning(DirtyLifecycleWarning(dirtyFile: dirtyEditorFile, action: action))
+        setDirtyLifecycleWarning(DirtyLifecycleWarning(
+            dirtyFile: dirtyEditorFile,
+            action: action,
+            dirtyCount: dirtyEditorFileCount
+        ))
         return false
     }
 
@@ -616,6 +643,10 @@ public final class AppState: ObservableObject {
             return file
         }
         return dirtyEditorFiles.values.first
+    }
+
+    private var dirtyEditorFileCount: Int {
+        dirtyEditorFiles.count
     }
 
     private func dirtyFile(for tab: WorkspaceTab) -> FileTreeItem? {
