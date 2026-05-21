@@ -16,6 +16,7 @@ struct GraphWorkspaceView: View {
     @State private var loadedHitTestIndex: GraphHitTestIndex?
     @State private var graphBannerText: String?
     @State private var pendingFirstRender: PendingGraphFirstRender?
+    @State private var forceRefinementTask: Task<Void, Never>?
     @State private var nextGraphRequestID: UInt64 = 1
     @State private var showsSettings = false
     @State private var viewport = GraphViewport()
@@ -53,6 +54,7 @@ struct GraphWorkspaceView: View {
         }
         .onDisappear {
             cancelPendingFirstRender()
+            cancelForceRefinement()
         }
     }
 
@@ -274,6 +276,7 @@ struct GraphWorkspaceView: View {
         }
 
         cancelPendingFirstRender()
+        cancelForceRefinement()
         let requestID = nextGraphRequestID
         nextGraphRequestID += 1
         let totalTimer = AppTelemetryTimer()
@@ -444,6 +447,7 @@ struct GraphWorkspaceView: View {
         )
         AppTelemetry.endGraphStage(pending.signpost)
         pendingFirstRender = nil
+        scheduleForceRefinement(requestID: requestID)
     }
 
     @MainActor
@@ -454,6 +458,53 @@ struct GraphWorkspaceView: View {
 
         AppTelemetry.endGraphStage(pending.signpost)
         pendingFirstRender = nil
+    }
+
+    @MainActor
+    private func scheduleForceRefinement(requestID: UInt64) {
+        let force = settings.presentation.force
+        guard force.isEnabled,
+              let layout = loadedLayout,
+              layout.requestID == requestID
+        else {
+            return
+        }
+
+        cancelForceRefinement()
+        forceRefinementTask = Task {
+            do {
+                let refined = try await Task.detached(priority: .utility) {
+                    try GraphForceRefinement.refined(
+                        layout,
+                        settings: force,
+                        checkCancellation: Task.checkCancellation
+                    )
+                }.value
+                try Task.checkCancellation()
+                let hitTestIndex = try await Task.detached(priority: .utility) {
+                    try GraphHitTestIndex(
+                        layout: refined,
+                        checkCancellation: Task.checkCancellation
+                    )
+                }.value
+                try Task.checkCancellation()
+                await MainActor.run {
+                    guard loadedLayout?.requestID == requestID else {
+                        return
+                    }
+                    loadedLayout = refined
+                    loadedHitTestIndex = hitTestIndex
+                }
+            } catch {
+                return
+            }
+        }
+    }
+
+    @MainActor
+    private func cancelForceRefinement() {
+        forceRefinementTask?.cancel()
+        forceRefinementTask = nil
     }
 
     private func zoom(by multiplier: Double) {
@@ -758,6 +809,36 @@ private struct GraphSettingsPanel: View {
                 Divider()
 
                 VStack(alignment: .leading, spacing: 8) {
+                    Toggle("Forces", isOn: $settings.presentation.force.isEnabled)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        forceSlider(
+                            title: "Center",
+                            value: $settings.presentation.force.centerStrength,
+                            range: 0...1
+                        )
+                        forceSlider(
+                            title: "Repel",
+                            value: $settings.presentation.force.repelStrength,
+                            range: 0...1
+                        )
+                        forceSlider(
+                            title: "Link force",
+                            value: $settings.presentation.force.linkStrength,
+                            range: 0...1
+                        )
+                        forceSlider(
+                            title: "Link distance",
+                            value: $settings.presentation.force.linkDistance,
+                            range: 40...320
+                        )
+                    }
+                    .disabled(!settings.presentation.force.isEnabled)
+                }
+
+                Divider()
+
+                VStack(alignment: .leading, spacing: 8) {
                     Text("Groups")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
@@ -835,6 +916,19 @@ private struct GraphSettingsPanel: View {
 
     private func removeGroupRule(_ rule: GraphGroupRule) {
         settings.groupRules.removeAll { $0.id == rule.id }
+    }
+
+    private func forceSlider(
+        title: String,
+        value: Binding<Double>,
+        range: ClosedRange<Double>
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Slider(value: value, in: range, step: 0.05)
+        }
     }
 }
 

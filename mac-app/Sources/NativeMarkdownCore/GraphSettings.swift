@@ -45,17 +45,52 @@ public struct GraphPresentationSettings: Equatable, Sendable {
     public var showArrows: Bool
     public var nodeSize: Double
     public var linkThickness: Double
+    public var force: GraphForceSettings
 
     public init(
         labelVisibility: GraphLabelVisibility = .automatic,
         showArrows: Bool = false,
         nodeSize: Double = 1.0,
-        linkThickness: Double = 1.0
+        linkThickness: Double = 1.0,
+        force: GraphForceSettings = GraphForceSettings()
     ) {
         self.labelVisibility = labelVisibility
         self.showArrows = showArrows
         self.nodeSize = nodeSize
         self.linkThickness = linkThickness
+        self.force = force
+    }
+}
+
+public struct GraphForceSettings: Equatable, Sendable {
+    public var isEnabled: Bool
+    public var centerStrength: Double
+    public var repelStrength: Double
+    public var linkStrength: Double
+    public var linkDistance: Double
+
+    public init(
+        isEnabled: Bool = false,
+        centerStrength: Double = 0.25,
+        repelStrength: Double = 0.25,
+        linkStrength: Double = 0.35,
+        linkDistance: Double = 120
+    ) {
+        self.isEnabled = isEnabled
+        self.centerStrength = centerStrength
+        self.repelStrength = repelStrength
+        self.linkStrength = linkStrength
+        self.linkDistance = linkDistance
+    }
+
+    public var clamped: Self {
+        Self(
+            isEnabled: isEnabled,
+            centerStrength: centerStrength.clamped(to: 0...1),
+            repelStrength: repelStrength.clamped(to: 0...1),
+            linkStrength: linkStrength.clamped(to: 0...1),
+            linkDistance: linkDistance.clamped(to: 40...320)
+        )
     }
 }
 
@@ -152,6 +187,7 @@ public struct GraphSettingsPrivacyKey: Equatable, Sendable, CustomStringConverti
             "arrows:\(settings.presentation.showArrows)",
             "node:\(settings.presentation.nodeSize)",
             "link:\(settings.presentation.linkThickness)",
+            "force:\(settings.presentation.force.clamped)",
             "search:\(stableHash(settings.searchQuery))",
             "groups:\(groupFingerprints)"
         ].joined(separator: "|")
@@ -165,5 +201,11 @@ public struct GraphSettingsPrivacyKey: Equatable, Sendable, CustomStringConverti
             hash &*= 0x100000001b3
         }
         return String(format: "%016llx", hash)
+    }
+}
+
+private extension Comparable {
+    func clamped(to range: ClosedRange<Self>) -> Self {
+        min(max(self, range.lowerBound), range.upperBound)
     }
 }

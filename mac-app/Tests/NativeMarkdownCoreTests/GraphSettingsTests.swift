@@ -9,6 +9,7 @@ func graphSettingsDefaultsMatchMvpGate() {
     #expect(settings.semantic.includeOrphans == false)
     #expect(settings.semantic.resolvedLinksOnly)
     #expect(settings.presentation.labelVisibility == .automatic)
+    #expect(settings.presentation.force.isEnabled == false)
     #expect(settings.searchQuery.isEmpty)
     #expect(settings.groupRules.isEmpty)
 }
@@ -103,6 +104,58 @@ func graphGroupMatcherMatchesLabelsPathsAndTags() {
 
     #expect(colors["file:daily"] == "#2da44e")
     #expect(colors["file:project"] == "#2f81f7")
+}
+
+@Test
+func graphForceRefinementRunsOnlyWhenEnabled() throws {
+    let layout = GraphRendererSnapshot(
+        requestID: 1,
+        generation: 1,
+        nodes: [
+            GraphLayoutNode(
+                index: 0,
+                nodeID: "file:a",
+                label: "A",
+                kind: .resolved,
+                degree: 1,
+                position: GraphPoint(x: 0, y: 0),
+                radius: 4
+            ),
+            GraphLayoutNode(
+                index: 1,
+                nodeID: "file:b",
+                label: "B",
+                kind: .resolved,
+                degree: 1,
+                position: GraphPoint(x: 260, y: 0),
+                radius: 4
+            )
+        ],
+        edges: [
+            GraphLayoutEdge(sourceIndex: 0, targetIndex: 1, kind: .resolved, weight: 1)
+        ],
+        components: []
+    )
+
+    let disabled = try GraphForceRefinement.refined(
+        layout,
+        settings: GraphForceSettings(isEnabled: false)
+    )
+    let enabled = try GraphForceRefinement.refined(
+        layout,
+        settings: GraphForceSettings(
+            isEnabled: true,
+            centerStrength: 0,
+            repelStrength: 0,
+            linkStrength: 1,
+            linkDistance: 80
+        ),
+        iterations: 4
+    )
+
+    #expect(disabled == layout)
+    #expect(enabled.nodes[0].position.x > layout.nodes[0].position.x)
+    #expect(enabled.nodes[1].position.x < layout.nodes[1].position.x)
 }
 
 @Test
