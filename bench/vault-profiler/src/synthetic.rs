@@ -412,6 +412,7 @@ mod tests {
             work_dir: dir.path().join("indexes"),
             time_to_usable_sample_count: 1,
             snippet_storage_mode: vault_engine::benchmarks::SnippetStorageMode::StoredBody,
+            include_sqlite_fts: true,
         })
         .expect("benchmark");
 

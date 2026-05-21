@@ -95,6 +95,7 @@ fn run() -> Result<(), Box<dyn Error>> {
                     work_dir: command.work_dir,
                     time_to_usable_sample_count: command.time_to_usable_samples,
                     snippet_storage_mode: command.snippet_storage_mode,
+                    include_sqlite_fts: command.include_sqlite_fts,
                 })?;
             write_json(
                 &command.vault_root,
@@ -204,6 +205,7 @@ struct BackendBenchmarkCommand {
     result_limit: usize,
     time_to_usable_samples: usize,
     snippet_storage_mode: SnippetStorageMode,
+    include_sqlite_fts: bool,
     pretty: bool,
 }
 
@@ -450,6 +452,7 @@ impl BackendBenchmarkCommand {
         let mut result_limit = 10;
         let mut time_to_usable_samples = 1;
         let mut snippet_storage_mode = SnippetStorageMode::StoredBody;
+        let mut include_sqlite_fts = true;
 
         while let Some(arg) = parser.next_arg() {
             match arg.as_str() {
@@ -471,6 +474,7 @@ impl BackendBenchmarkCommand {
                     let value = parser.required_string_arg("--snippet-storage-mode")?;
                     snippet_storage_mode = parse_snippet_storage_mode(&value)?;
                 }
+                "--skip-sqlite-fts" => include_sqlite_fts = false,
                 _ => parser.parse_common_arg(arg)?,
             }
         }
@@ -490,6 +494,7 @@ impl BackendBenchmarkCommand {
             result_limit,
             time_to_usable_samples,
             snippet_storage_mode,
+            include_sqlite_fts,
             pretty: parser.pretty,
         })
     }
@@ -1012,6 +1017,7 @@ mod tests {
                 "3",
                 "--snippet-storage-mode",
                 "lazy-source-experiment",
+                "--skip-sqlite-fts",
                 "--pretty",
             ]
             .into_iter()
@@ -1032,6 +1038,7 @@ mod tests {
                     result_limit: 5,
                     time_to_usable_samples: 3,
                     snippet_storage_mode: SnippetStorageMode::LazySourceExperiment,
+                    include_sqlite_fts: false,
                     pretty: true,
                 }),
             }

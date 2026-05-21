@@ -45,6 +45,7 @@ pub struct VaultBackendBenchmarkOptions {
     pub work_dir: PathBuf,
     pub time_to_usable_sample_count: usize,
     pub snippet_storage_mode: SnippetStorageMode,
+    pub include_sqlite_fts: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -278,10 +279,21 @@ pub fn run_shared_backend_benchmark_from_vault(
         &loaded_sources.sources,
         &pipeline_options,
     )?;
-    let sqlite =
-        run_sqlite_benchmark_from_sources(options, &loaded_sources.sources, &pipeline_options)?;
     let tantivy =
         run_tantivy_benchmark_from_sources(options, &loaded_sources.sources, &pipeline_options)?;
+    let sqlite = if options.include_sqlite_fts {
+        Some(run_sqlite_benchmark_from_sources(
+            options,
+            &loaded_sources.sources,
+            &pipeline_options,
+        )?)
+    } else {
+        None
+    };
+    let total_document_bytes = sqlite
+        .as_ref()
+        .map(|benchmark| benchmark.total_document_bytes)
+        .unwrap_or(tantivy.total_document_bytes);
     let time_to_usable_micros = loaded_sources.stages.scan_micros
         + loaded_sources.stages.source_collection_micros
         + metadata_store.sqlite_metadata_write_micros
@@ -308,11 +320,14 @@ pub fn run_shared_backend_benchmark_from_vault(
         corpus_stages: BenchmarkCorpusStageMetrics::from(loaded_sources.stages),
         document_count: loaded_sources.sources.len(),
         query_count: options.queries.len(),
-        total_document_bytes: sqlite.total_document_bytes,
+        total_document_bytes,
         time_to_usable_micros: time_to_usable_samples.first().copied(),
         time_to_usable_samples,
         metadata_store: Some(metadata_store),
-        backends: vec![sqlite.result, tantivy.result],
+        backends: match sqlite {
+            Some(sqlite) => vec![sqlite.result, tantivy.result],
+            None => vec![tantivy.result],
+        },
     })
 }
 
@@ -1207,6 +1222,7 @@ mod tests {
             work_dir: temp.path().join("indexes"),
             time_to_usable_sample_count: 1,
             snippet_storage_mode: SnippetStorageMode::StoredBody,
+            include_sqlite_fts: true,
         };
         let serial_options = IndexingPipelineOptions::serial();
         let worker_options = IndexingPipelineOptions {
@@ -1272,6 +1288,7 @@ mod tests {
             work_dir: temp.path().join("indexes"),
             time_to_usable_sample_count: 1,
             snippet_storage_mode: SnippetStorageMode::StoredBody,
+            include_sqlite_fts: true,
         };
 
         let artifact = run_shared_backend_benchmark_from_vault(&options).expect("benchmark");
@@ -1377,6 +1394,7 @@ mod tests {
             work_dir: temp.path().join("lazy-indexes"),
             time_to_usable_sample_count: 1,
             snippet_storage_mode: SnippetStorageMode::LazySourceExperiment,
+            include_sqlite_fts: false,
         };
         let lazy_artifact =
             run_shared_backend_benchmark_from_vault(&lazy_options).expect("lazy benchmark");
@@ -1389,6 +1407,7 @@ mod tests {
             lazy_artifact.pipeline_config.snippet_storage_mode,
             SnippetStorageMode::LazySourceExperiment
         );
+        assert_eq!(lazy_artifact.backends.len(), 1);
         assert!(lazy_artifact.backends.iter().any(|backend| {
             backend.backend == "tantivy_lazy_source_experiment"
                 && backend.snippet_result_count == 0
