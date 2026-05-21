@@ -3,6 +3,11 @@ import NativeMarkdownCore
 
 @MainActor
 enum LivePreviewOverlayRenderer {
+    private static let unorderedMarkerRegex = regex(#"^\s*[-*+]\s"#)
+    private static let orderedMarkerRegex = regex(#"^\s*\d+[.)]\s"#)
+    private static let taskPrefixRegex = regex(#"^\s*[-*+]\s+\[[ xX]\]\s"#)
+    private static let taskCheckboxRegex = regex(#"\[[ xX]\]"#)
+
     private struct RenderBlock {
         var block: LivePreviewBlockSpan
         var properties: LivePreviewPropertyBlock?
@@ -321,6 +326,16 @@ enum LivePreviewOverlayRenderer {
         return !block.sourceRange.nsRange.intersectsOrContainsCaret(selectedRange)
     }
 
+    static func markerGeometries(in textView: NSTextView) -> [LivePreviewMarkerGeometry] {
+        let source = textView.string
+        guard !source.isEmpty else {
+            return []
+        }
+        return LivePreviewParser.parse(source).blocks.compactMap { block in
+            markerGeometry(for: block, source: source, in: textView)
+        }
+    }
+
     private static func drawHorizontalRule(
         _ block: LivePreviewBlockSpan,
         in textView: NSTextView,
@@ -347,6 +362,48 @@ enum LivePreviewOverlayRenderer {
         path.move(to: NSPoint(x: x, y: y))
         path.line(to: NSPoint(x: x + width, y: y))
         path.stroke()
+    }
+
+    private static func markerGeometry(
+        for block: LivePreviewBlockSpan,
+        source: String,
+        in textView: NSTextView
+    ) -> LivePreviewMarkerGeometry? {
+        guard let marker = markerRange(for: block, source: source),
+              let rect = boundingRect(for: marker.range, in: textView),
+              let lineRect = unionLineRect(for: block.sourceRange.nsRange, in: textView)
+        else {
+            return nil
+        }
+        return LivePreviewMarkerGeometry(
+            kind: marker.kind,
+            sourceRange: marker.range,
+            rect: rect,
+            lineRect: lineRect
+        )
+    }
+
+    private static func markerRange(
+        for block: LivePreviewBlockSpan,
+        source: String
+    ) -> (kind: LivePreviewMarkerGeometry.Kind, range: NSRange)? {
+        switch block.kind {
+        case .unorderedList:
+            return firstMatch(in: source, range: block.sourceRange.nsRange, regex: unorderedMarkerRegex)
+                .map { (.unorderedListMarker, $0) }
+        case .orderedList:
+            return firstMatch(in: source, range: block.sourceRange.nsRange, regex: orderedMarkerRegex)
+                .map { (.orderedListMarker, $0) }
+        case .taskList:
+            guard let prefix = firstMatch(in: source, range: block.sourceRange.nsRange, regex: taskPrefixRegex),
+                  let checkbox = firstMatch(in: source, range: prefix, regex: taskCheckboxRegex)
+            else {
+                return nil
+            }
+            return (.taskCheckbox, checkbox)
+        default:
+            return nil
+        }
     }
 
     private struct TableLayout {
@@ -661,6 +718,37 @@ enum LivePreviewOverlayRenderer {
         return fragments
     }
 
+    private static func boundingRect(for range: NSRange, in textView: NSTextView) -> NSRect? {
+        guard let layoutManager = textView.layoutManager,
+              let textContainer = textView.textContainer
+        else {
+            return nil
+        }
+        let clampedRange = clamped(range, length: (textView.string as NSString).length)
+        guard clampedRange.length > 0 else {
+            return nil
+        }
+
+        layoutManager.ensureLayout(for: textContainer)
+        let glyphRange = layoutManager.glyphRange(forCharacterRange: clampedRange, actualCharacterRange: nil)
+        guard glyphRange.length > 0 else {
+            return nil
+        }
+        return offset(layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer), by: textView.textContainerOrigin)
+    }
+
+    private static func firstMatch(
+        in source: String,
+        range: NSRange,
+        regex: NSRegularExpression
+    ) -> NSRange? {
+        regex.firstMatch(in: source, range: range)?.range
+    }
+
+    private static func regex(_ pattern: String) -> NSRegularExpression {
+        try! NSRegularExpression(pattern: pattern, options: [.anchorsMatchLines])
+    }
+
     private static func offset(_ rect: NSRect, by point: NSPoint) -> NSRect {
         NSRect(x: rect.minX + point.x, y: rect.minY + point.y, width: rect.width, height: rect.height)
     }
@@ -681,6 +769,19 @@ enum LivePreviewOverlayRenderer {
         let maxLength = max(0, length - location)
         return NSRange(location: location, length: min(range.length, maxLength))
     }
+}
+
+struct LivePreviewMarkerGeometry: Equatable {
+    enum Kind: Equatable {
+        case unorderedListMarker
+        case orderedListMarker
+        case taskCheckbox
+    }
+
+    var kind: Kind
+    var sourceRange: NSRange
+    var rect: NSRect
+    var lineRect: NSRect
 }
 
 private extension NSRange {

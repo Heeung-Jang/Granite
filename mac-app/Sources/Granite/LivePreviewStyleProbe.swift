@@ -31,6 +31,10 @@ struct LivePreviewStyleProbeReport: Codable, Equatable {
     var obsidianTaskSourceTokenConcealedOutsideReveal: Bool
     var obsidianTaskSourceTokenRevealedInsideLine: Bool
     var obsidianTaskCheckboxVisualVisibleOutsideReveal: Bool
+    var markerGeometry: MarkerGeometryProbeReport
+    var unorderedMarkerGeometryReported: Bool
+    var orderedMarkerGeometryReported: Bool
+    var taskMarkerGeometryReported: Bool
     var nestedListIndentStable: Bool
     var listRenderPreservesSource: Bool
     var blockquoteParagraphIndentApplied: Bool
@@ -97,6 +101,15 @@ struct HeadingMarkerGeometryProbeReport: Codable, Equatable {
         collapsedMarkerWidth: 0,
         collapsedTextX: 0
     )
+}
+
+struct MarkerGeometryProbeReport: Codable, Equatable {
+    var unorderedMarkerWidth: Double
+    var unorderedMarkerX: Double
+    var orderedMarkerWidth: Double
+    var orderedMarkerX: Double
+    var taskCheckboxWidth: Double
+    var taskCheckboxX: Double
 }
 
 @MainActor
@@ -307,6 +320,7 @@ enum LivePreviewStyleProbe {
         let obsidianMarkerFields = probeObsidianMarkerFields()
         let horizontalRuleFields = probeHorizontalRuleFields()
         let headingMarkerFields = probeHeadingMarkerGeometry()
+        let markerGeometryFields = probeMarkerGeometry()
 
         var report = LivePreviewStyleProbeReport(
             summary: .passed,
@@ -351,6 +365,10 @@ enum LivePreviewStyleProbe {
             obsidianTaskSourceTokenConcealedOutsideReveal: obsidianMarkerFields.taskSourceTokenConcealedOutsideReveal,
             obsidianTaskSourceTokenRevealedInsideLine: obsidianMarkerFields.taskSourceTokenRevealedInsideLine,
             obsidianTaskCheckboxVisualVisibleOutsideReveal: obsidianMarkerFields.taskCheckboxVisualVisibleOutsideReveal,
+            markerGeometry: markerGeometryFields.geometry,
+            unorderedMarkerGeometryReported: markerGeometryFields.unorderedReported,
+            orderedMarkerGeometryReported: markerGeometryFields.orderedReported,
+            taskMarkerGeometryReported: markerGeometryFields.taskReported,
             nestedListIndentStable: nestedListParagraphStyle?.headIndent == listParagraphStyle?.headIndent,
             listRenderPreservesSource: textView.string.contains("- [x] Done item"),
             blockquoteParagraphIndentApplied: blockquoteParagraphStyle?.headIndent ?? 0 > 0,
@@ -651,6 +669,48 @@ enum LivePreviewStyleProbe {
             collapsedLineHeightPreserved,
             collapsedSelectionSafe,
             collapsedMarkedTextSafe
+        )
+    }
+
+    private static func probeMarkerGeometry() -> (
+        geometry: MarkerGeometryProbeReport,
+        unorderedReported: Bool,
+        orderedReported: Bool,
+        taskReported: Bool
+    ) {
+        let source = """
+        - Unordered
+        1. Ordered
+        - [x] Done
+        """
+        let textView = MarkdownEditorTextViewFactory.makeTextView()
+        textView.string = source
+        textView.setSelectedRange(NSRange(location: (source as NSString).length, length: 0))
+        MarkdownVisibleRangeDecorator.decorateVisibleRange(
+            in: textView,
+            livePreviewMode: .livePreview,
+            revealRange: textView.selectedRange(),
+            markerStyle: .obsidian
+        )
+
+        let geometries = LivePreviewOverlayRenderer.markerGeometries(in: textView)
+        let unordered = geometries.first { $0.kind == .unorderedListMarker }
+        let ordered = geometries.first { $0.kind == .orderedListMarker }
+        let task = geometries.first { $0.kind == .taskCheckbox }
+        let geometry = MarkerGeometryProbeReport(
+            unorderedMarkerWidth: Double(unordered?.rect.width ?? 0),
+            unorderedMarkerX: Double(unordered?.rect.minX ?? 0),
+            orderedMarkerWidth: Double(ordered?.rect.width ?? 0),
+            orderedMarkerX: Double(ordered?.rect.minX ?? 0),
+            taskCheckboxWidth: Double(task?.rect.width ?? 0),
+            taskCheckboxX: Double(task?.rect.minX ?? 0)
+        )
+
+        return (
+            geometry,
+            unordered?.rect.width ?? 0 > 0,
+            ordered?.rect.width ?? 0 > 0,
+            task?.rect.width ?? 0 > 0
         )
     }
 
