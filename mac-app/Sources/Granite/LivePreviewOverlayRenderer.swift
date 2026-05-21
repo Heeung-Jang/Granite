@@ -88,7 +88,7 @@ enum LivePreviewOverlayRenderer {
                 }
             case .horizontalRule:
                 drawHorizontalRule(renderBlock.block, in: textView, dirtyRect: dirtyRect, state: state)
-            case .unorderedList:
+            case .unorderedList, .orderedList:
                 drawMarkerOverlay(renderBlock.block, in: textView, dirtyRect: dirtyRect, state: state)
             default:
                 continue
@@ -345,7 +345,7 @@ enum LivePreviewOverlayRenderer {
     ) -> Bool {
         guard state.drawsLivePreviewChrome,
               state.markerStyle == .obsidian,
-              markerKind == .unorderedListMarker
+              markerKind == .unorderedListMarker || markerKind == .orderedListMarker
         else {
             return false
         }
@@ -395,7 +395,9 @@ enum LivePreviewOverlayRenderer {
         switch geometry.kind {
         case .unorderedListMarker:
             drawUnorderedBullet(geometry, dirtyRect: dirtyRect)
-        case .orderedListMarker, .taskCheckbox:
+        case .orderedListMarker:
+            drawOrderedMarker(geometry, source: textView.string, dirtyRect: dirtyRect)
+        case .taskCheckbox:
             return
         }
     }
@@ -413,6 +415,39 @@ enum LivePreviewOverlayRenderer {
         }
         LivePreviewTheme.secondaryTextColor.setFill()
         NSBezierPath(ovalIn: rect).fill()
+    }
+
+    private static func drawOrderedMarker(
+        _ geometry: LivePreviewMarkerGeometry,
+        source: String,
+        dirtyRect: NSRect
+    ) {
+        let marker = markerText(geometry, source: source)
+        let rect = NSRect(
+            x: geometry.rect.minX,
+            y: geometry.lineRect.minY,
+            width: max(28, geometry.rect.width),
+            height: geometry.lineRect.height
+        )
+        drawString(
+            marker,
+            in: rect,
+            attributes: [
+                .font: LivePreviewTheme.baseFont,
+                .foregroundColor: LivePreviewTheme.secondaryTextColor
+            ],
+            dirtyRect: dirtyRect
+        )
+    }
+
+    private static func markerText(_ geometry: LivePreviewMarkerGeometry, source: String) -> String {
+        let range = clamped(geometry.sourceRange, length: (source as NSString).length)
+        guard range.length > 0 else {
+            return ""
+        }
+        return (source as NSString)
+            .substring(with: range)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private static func markerGeometry(

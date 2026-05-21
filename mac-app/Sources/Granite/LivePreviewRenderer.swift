@@ -657,9 +657,9 @@ enum LivePreviewRenderer {
                 ? prefixMatches(in: source, block: block, regex: unorderedListPrefixRegex)
                 : []
         case .orderedList:
-            ranges = markerStyle.showsListMarkersOutsideReveal
-                ? []
-                : prefixMatches(in: source, block: block, regex: orderedListPrefixRegex)
+            ranges = markerStyle == .obsidian || !markerStyle.showsListMarkersOutsideReveal
+                ? prefixMatches(in: source, block: block, regex: orderedListPrefixRegex)
+                : []
         case .taskList:
             ranges = taskListConcealmentRanges(for: block, source: source, markerStyle: markerStyle)
         case .blockquote:

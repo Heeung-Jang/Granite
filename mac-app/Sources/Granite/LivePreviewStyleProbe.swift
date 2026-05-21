@@ -42,6 +42,11 @@ struct LivePreviewStyleProbeReport: Codable, Equatable {
     var unorderedTabbedMarkerDetected: Bool
     var obsidianUnorderedMarkerOverlayDrawsOutsideReveal: Bool
     var obsidianUnorderedMarkerOverlaySuppressedInsideReveal: Bool
+    var orderedDotMarkerDetected: Bool
+    var orderedParenMarkerDetected: Bool
+    var orderedMultiDigitMarkerDetected: Bool
+    var obsidianOrderedMarkerOverlayDrawsOutsideReveal: Bool
+    var obsidianOrderedMarkerOverlaySuppressedInsideReveal: Bool
     var markerStyleCompatibilityPreserved: Bool
     var nestedListIndentStable: Bool
     var listRenderPreservesSource: Bool
@@ -123,7 +128,6 @@ struct MarkerGeometryProbeReport: Codable, Equatable {
 @MainActor
 enum LivePreviewStyleProbe {
     private static let expectedFailures: Set<String> = [
-        "obsidianOrderedMarkerConcealedOutsideReveal",
         "obsidianTaskSourceTokenConcealedOutsideReveal",
         "tableActiveCellEditStateVisible",
         "tableRowAddControlVisibleWhenFocused",
@@ -330,6 +334,8 @@ enum LivePreviewStyleProbe {
         let markerGeometryFields = probeMarkerGeometry()
         let unorderedMarkerFields = probeUnorderedMarkerDetection()
         let unorderedOverlayFields = probeUnorderedMarkerOverlayPolicy()
+        let orderedMarkerFields = probeOrderedMarkerDetection()
+        let orderedOverlayFields = probeOrderedMarkerOverlayPolicy()
 
         var report = LivePreviewStyleProbeReport(
             summary: .passed,
@@ -385,7 +391,13 @@ enum LivePreviewStyleProbe {
             unorderedTabbedMarkerDetected: unorderedMarkerFields.tabbedDetected,
             obsidianUnorderedMarkerOverlayDrawsOutsideReveal: unorderedOverlayFields.drawsOutsideReveal,
             obsidianUnorderedMarkerOverlaySuppressedInsideReveal: unorderedOverlayFields.suppressedInsideReveal,
-            markerStyleCompatibilityPreserved: unorderedOverlayFields.compatibilityPreserved,
+            orderedDotMarkerDetected: orderedMarkerFields.dotDetected,
+            orderedParenMarkerDetected: orderedMarkerFields.parenDetected,
+            orderedMultiDigitMarkerDetected: orderedMarkerFields.multiDigitDetected,
+            obsidianOrderedMarkerOverlayDrawsOutsideReveal: orderedOverlayFields.drawsOutsideReveal,
+            obsidianOrderedMarkerOverlaySuppressedInsideReveal: orderedOverlayFields.suppressedInsideReveal,
+            markerStyleCompatibilityPreserved: unorderedOverlayFields.compatibilityPreserved
+                && orderedOverlayFields.compatibilityPreserved,
             nestedListIndentStable: nestedListParagraphStyle?.headIndent == listParagraphStyle?.headIndent,
             listRenderPreservesSource: textView.string.contains("- [x] Done item"),
             blockquoteParagraphIndentApplied: blockquoteParagraphStyle?.headIndent ?? 0 > 0,
@@ -823,6 +835,83 @@ enum LivePreviewStyleProbe {
                 markerKind: markerKind,
                 state: hiddenState
             )
+        )
+    }
+
+    private static func probeOrderedMarkerDetection() -> (
+        dotDetected: Bool,
+        parenDetected: Bool,
+        multiDigitDetected: Bool
+    ) {
+        let source = "1. Dot\n2) Paren\n10. Ten\n"
+        let markerTexts = LivePreviewOverlayRenderer.markerGeometries(
+            in: configuredTextView(source: source, markerStyle: .obsidian)
+        )
+        .filter { $0.kind == .orderedListMarker }
+        .compactMap { geometry -> String? in
+            sourceText(
+                for: LivePreviewSourceRange(
+                    location: geometry.sourceRange.location,
+                    length: geometry.sourceRange.length
+                ),
+                in: source
+            )?.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        return (
+            markerTexts.contains("1."),
+            markerTexts.contains("2)"),
+            markerTexts.contains("10.")
+        )
+    }
+
+    private static func probeOrderedMarkerOverlayPolicy() -> (
+        drawsOutsideReveal: Bool,
+        suppressedInsideReveal: Bool,
+        compatibilityPreserved: Bool
+    ) {
+        let source = "1. Ordered\n"
+        let result = LivePreviewParser.parse(source)
+        guard let block = result.blocks.first,
+              let markerKind = LivePreviewOverlayRenderer.markerGeometries(
+                in: configuredTextView(source: source, markerStyle: .obsidian)
+              ).first?.kind,
+              let textOffset = utf16Offset(of: "Ordered", in: source)
+        else {
+            return (false, false, false)
+        }
+
+        let outsideState = LivePreviewOverlayState(
+            markerStyle: .obsidian,
+            revealRange: NSRange(location: (source as NSString).length, length: 0)
+        )
+        let drawsOutsideReveal = LivePreviewOverlayRenderer.shouldDrawMarkerOverlay(
+            for: block,
+            markerKind: markerKind,
+            state: outsideState
+        )
+        let suppressedInsideReveal = !LivePreviewOverlayRenderer.shouldDrawMarkerOverlay(
+            for: block,
+            markerKind: markerKind,
+            state: LivePreviewOverlayState(
+                markerStyle: .obsidian,
+                revealRange: NSRange(location: textOffset, length: 0)
+            )
+        )
+        let compatibilityPreserved = !LivePreviewOverlayRenderer.shouldDrawMarkerOverlay(
+            for: block,
+            markerKind: markerKind,
+            state: LivePreviewOverlayState(markerStyle: .accent, revealRange: outsideState.revealRange)
+        ) && !LivePreviewOverlayRenderer.shouldDrawMarkerOverlay(
+            for: block,
+            markerKind: markerKind,
+            state: LivePreviewOverlayState(markerStyle: .hidden, revealRange: outsideState.revealRange)
+        )
+
+        return (
+            drawsOutsideReveal,
+            suppressedInsideReveal,
+            compatibilityPreserved
         )
     }
 
