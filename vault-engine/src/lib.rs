@@ -9,6 +9,7 @@ pub mod indexing_queue;
 pub mod parser;
 pub mod paths;
 pub mod read_api;
+pub mod read_ffi;
 pub mod save;
 pub mod scanner;
 pub mod sqlite_fts;
@@ -34,6 +35,7 @@ pub fn health_check() -> EngineHealth {
             "paths",
             "file_watcher",
             "read_api",
+            "read_ffi",
             "save",
             "index",
             "index_rebuild",
@@ -67,6 +69,7 @@ mod tests {
                 "paths",
                 "file_watcher",
                 "read_api",
+                "read_ffi",
                 "save",
                 "index",
                 "index_rebuild",

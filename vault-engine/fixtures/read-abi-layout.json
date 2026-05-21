@@ -1,0 +1,12 @@
+{
+  "EngineReadStringRef": { "size": 8, "align": 4 },
+  "EngineReadResultHeader": { "size": 72, "align": 8 },
+  "EngineReadFileTreeRow": { "size": 40, "align": 8 },
+  "EngineReadSearchHitRow": { "size": 40, "align": 8 },
+  "EngineReadLinkRow": { "size": 64, "align": 4 },
+  "EngineReadTagRow": { "size": 20, "align": 4 },
+  "EngineReadPropertyRow": { "size": 28, "align": 4 },
+  "EngineReadAttachmentRow": { "size": 32, "align": 4 },
+  "EngineReadGraphNodeRow": { "size": 28, "align": 4 },
+  "EngineReadGraphEdgeRow": { "size": 36, "align": 4 }
+}

@@ -12,6 +12,7 @@ use crate::paths::{FileIdentity, PathError, VaultRoot};
 use crate::read_api::{
     ENGINE_READ_STATE_COMPLETE, ReadOpenError, VaultReadApi, open_vault_read_api,
 };
+use crate::read_ffi::{EngineReadResultBuffer, open_error_buffer, open_status_buffer};
 use crate::save::{
     SafeSaveError, SaveBaseline, SaveChoiceOutcome, SaveConflict, SaveConflictChoiceError,
     SaveConflictKind, SaveConflictSnapshot, SaveOutcome, SaveReloadOutcome, SaveRequest,
@@ -54,27 +55,9 @@ pub unsafe extern "C" fn engine_string_free(ptr: *mut c_char) {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct EngineReadResultBuffer {
-    pub ptr: *mut c_uchar,
-    pub len: usize,
-    pub capacity: usize,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
 pub struct EngineReadOpenResult {
     pub handle: *mut EngineReadHandle,
     pub result: EngineReadResultBuffer,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct EngineReadOpenStatus {
-    abi_version: u32,
-    ok: u32,
-    state: u32,
-    generation: u64,
-    error_code: u32,
 }
 
 pub struct EngineReadHandle {
@@ -587,44 +570,14 @@ where
             let generation = handle.generation();
             EngineReadOpenResult {
                 handle: Box::into_raw(Box::new(handle)),
-                result: open_status_buffer(EngineReadOpenStatus {
-                    abi_version: ENGINE_ABI_VERSION,
-                    ok: 1,
-                    state: ENGINE_READ_STATE_COMPLETE,
-                    generation,
-                    error_code: 0,
-                }),
+                result: open_status_buffer(generation, ENGINE_READ_STATE_COMPLETE),
             }
         }
         Err(error) => EngineReadOpenResult {
             handle: std::ptr::null_mut(),
-            result: open_status_buffer(EngineReadOpenStatus {
-                abi_version: ENGINE_ABI_VERSION,
-                ok: 0,
-                state: error.state_code(),
-                generation: 0,
-                error_code: error.abi_numeric_code(),
-            }),
+            result: open_error_buffer(&error),
         },
     }
-}
-
-fn open_status_buffer(status: EngineReadOpenStatus) -> EngineReadResultBuffer {
-    let mut bytes = Vec::with_capacity(std::mem::size_of::<EngineReadOpenStatus>());
-    let status_bytes = unsafe {
-        slice::from_raw_parts(
-            (&status as *const EngineReadOpenStatus).cast::<u8>(),
-            std::mem::size_of::<EngineReadOpenStatus>(),
-        )
-    };
-    bytes.extend_from_slice(status_bytes);
-    let result = EngineReadResultBuffer {
-        ptr: bytes.as_mut_ptr(),
-        len: bytes.len(),
-        capacity: bytes.capacity(),
-    };
-    std::mem::forget(bytes);
-    result
 }
 
 unsafe fn read_c_string(ptr: *const c_char, field: &str) -> Result<String, FfiError> {
@@ -687,6 +640,10 @@ mod tests {
     use super::*;
     use crate::index::{IndexSchemaMetadata, MetadataStore};
     use crate::read_api::{READ_BACKEND_NAME, READ_BACKEND_VERSION, READ_TOKENIZER_CONFIG};
+    use crate::read_ffi::{
+        ENGINE_READ_NO_NEXT_OFFSET, ENGINE_READ_ROW_KIND_OPEN_STATUS, decode_header_for_test,
+        string_for_test,
+    };
     use crate::sqlite_fts::SearchDocument;
     use crate::tantivy_search::TantivySearchIndex;
     use serde_json::Value;
@@ -712,19 +669,15 @@ mod tests {
             CString::new(fixture.tantivy_path.to_string_lossy().as_bytes()).expect("tantivy");
 
         let response = unsafe { engine_read_open(metadata.as_ptr(), tantivy.as_ptr()) };
-        let status = unsafe { take_open_status(response.result) };
+        let header = unsafe { take_open_header(response.result) };
 
         assert!(!response.handle.is_null());
-        assert_eq!(
-            status,
-            EngineReadOpenStatus {
-                abi_version: ENGINE_ABI_VERSION,
-                ok: 1,
-                state: ENGINE_READ_STATE_COMPLETE,
-                generation: 11,
-                error_code: 0,
-            }
-        );
+        assert_eq!(header.abi_version, ENGINE_ABI_VERSION);
+        assert_eq!(header.row_kind, ENGINE_READ_ROW_KIND_OPEN_STATUS);
+        assert_eq!(header.row_count, 0);
+        assert_eq!(header.state, ENGINE_READ_STATE_COMPLETE);
+        assert_eq!(header.generation, 11);
+        assert_eq!(header.next_offset, ENGINE_READ_NO_NEXT_OFFSET);
 
         unsafe {
             engine_read_close(response.handle);
@@ -734,15 +687,11 @@ mod tests {
     #[test]
     fn engine_read_open_invalid_paths_return_error_buffer() {
         let response = unsafe { engine_read_open(std::ptr::null(), std::ptr::null()) };
-        let status = unsafe { take_open_status(response.result) };
+        let (header, error_code) = unsafe { take_open_error(response.result) };
 
         assert!(response.handle.is_null());
-        assert_eq!(status.ok, 0);
-        assert_eq!(status.state, crate::read_api::ENGINE_READ_STATE_ERROR);
-        assert_eq!(
-            status.error_code,
-            ReadOpenError::InvalidInput("metadata_path").abi_numeric_code()
-        );
+        assert_eq!(header.state, crate::read_api::ENGINE_READ_STATE_ERROR);
+        assert_eq!(error_code, "invalid_input");
     }
 
     #[test]
@@ -760,11 +709,10 @@ mod tests {
     #[test]
     fn read_ffi_panic_boundary_returns_error_buffer() {
         let response = read_open_response(|| panic!("test panic"));
-        let status = unsafe { take_open_status(response.result) };
+        let (_header, error_code) = unsafe { take_open_error(response.result) };
 
         assert!(response.handle.is_null());
-        assert_eq!(status.ok, 0);
-        assert_eq!(status.error_code, ReadOpenError::Panic.abi_numeric_code());
+        assert_eq!(error_code, "panic");
     }
 
     #[test]
@@ -1045,14 +993,27 @@ mod tests {
         value
     }
 
-    unsafe fn take_open_status(buffer: EngineReadResultBuffer) -> EngineReadOpenStatus {
+    unsafe fn take_open_header(
+        buffer: EngineReadResultBuffer,
+    ) -> crate::read_ffi::EngineReadResultHeader {
         assert!(!buffer.ptr.is_null());
-        assert_eq!(buffer.len, std::mem::size_of::<EngineReadOpenStatus>());
-        let status = unsafe { std::ptr::read_unaligned(buffer.ptr.cast::<EngineReadOpenStatus>()) };
+        let header = decode_header_for_test(&buffer);
         unsafe {
             engine_read_result_free(buffer);
         }
-        status
+        header
+    }
+
+    unsafe fn take_open_error(
+        buffer: EngineReadResultBuffer,
+    ) -> (crate::read_ffi::EngineReadResultHeader, String) {
+        assert!(!buffer.ptr.is_null());
+        let header = decode_header_for_test(&buffer);
+        let error_code = string_for_test(&buffer, header.error_code);
+        unsafe {
+            engine_read_result_free(buffer);
+        }
+        (header, error_code)
     }
 
     struct ReadFixture {
