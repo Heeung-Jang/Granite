@@ -480,19 +480,16 @@ private final class GraphMetalRenderer {
 
         let identity = drawIdentity(for: input)
         commandBuffer.present(drawable)
-        commandBuffer.commit()
-        commandBuffer.waitUntilCompleted()
-
-        let metrics = renderer.metrics(
-            for: input,
-            drawDurationMilliseconds: timer.elapsedMilliseconds()
-        )
-        callbacks.didCompleteDraw(metrics)
-        drawReportGate.reportIfNeeded(
+        let completion = GraphMetalDrawCompletion(
+            renderer: renderer,
+            input: input,
+            timer: timer,
             identity: identity,
-            metrics: metrics,
-            callbacks: callbacks
+            callbacks: callbacks,
+            drawReportGate: drawReportGate
         )
+        commandBuffer.addCompletedHandler(completion.handle)
+        commandBuffer.commit()
     }
 
     private static func makePipeline(
@@ -604,6 +601,46 @@ private final class GraphMetalRenderer {
         }
         return input.layout.nodes[edge.sourceIndex].nodeID == activeNodeID
             || input.layout.nodes[edge.targetIndex].nodeID == activeNodeID
+    }
+}
+
+private final class GraphMetalDrawCompletion: @unchecked Sendable {
+    private let renderer: GraphRendererContract
+    private let input: GraphRendererInput
+    private let timer: AppTelemetryTimer
+    private let identity: String
+    private let callbacks: GraphRendererCallbacks
+    private let drawReportGate: GraphMetalDrawReportGate
+
+    init(
+        renderer: GraphRendererContract,
+        input: GraphRendererInput,
+        timer: AppTelemetryTimer,
+        identity: String,
+        callbacks: GraphRendererCallbacks,
+        drawReportGate: GraphMetalDrawReportGate
+    ) {
+        self.renderer = renderer
+        self.input = input
+        self.timer = timer
+        self.identity = identity
+        self.callbacks = callbacks
+        self.drawReportGate = drawReportGate
+    }
+
+    func handle(_ commandBuffer: any MTLCommandBuffer) {
+        let metrics = renderer.metrics(
+            for: input,
+            drawDurationMilliseconds: timer.elapsedMilliseconds()
+        )
+        DispatchQueue.main.async {
+            self.callbacks.didCompleteDraw(metrics)
+            self.drawReportGate.reportIfNeeded(
+                identity: self.identity,
+                metrics: metrics,
+                callbacks: self.callbacks
+            )
+        }
     }
 }
 
