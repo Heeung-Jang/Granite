@@ -117,6 +117,91 @@ func livePreviewParserClassifiesFrontmatterWithoutInterpretingValues() throws {
 }
 
 @Test
+func livePreviewParserClassifiesHorizontalRules() {
+    let source = """
+    Before
+    ---
+    ***
+    ___
+    After
+    """
+    let result = LivePreviewParser.parse(source)
+
+    let horizontalRules = result.blocks.filter { $0.kind == .horizontalRule }
+    #expect(horizontalRules.count == 3)
+    #expect(horizontalRules.allSatisfy { string(for: $0.contentRange, in: source)?.count == 3 })
+}
+
+@Test
+func livePreviewParserKeepsHorizontalRuleFalsePositivesAsOtherBlocks() {
+    let source = """
+    ----
+    - - -
+    --- text
+        ---
+    > ---
+    - ---
+    ```swift
+    ---
+    ```
+    | A | B |
+    | --- | --- |
+    | 1 | 2 |
+    """
+    let result = LivePreviewParser.parse(source)
+
+    #expect(!result.blocks.contains { $0.kind == .horizontalRule })
+    #expect(result.blocks.containsBlock { $0 == .blockquote })
+    #expect(result.blocks.containsBlock { $0 == .table })
+    #expect(result.blocks.containsBlock {
+        if case .fencedCode = $0 { true } else { false }
+    })
+}
+
+@Test
+func livePreviewParserTreatsSetextLikeLineAsHorizontalRule() {
+    let source = """
+    Title
+    ---
+    """
+    let result = LivePreviewParser.parse(source)
+
+    #expect(result.blocks.map(\.kind) == [.paragraph, .horizontalRule])
+}
+
+@Test
+func livePreviewParserDoesNotTreatFrontmatterDelimitersAsHorizontalRules() throws {
+    let source = """
+    ---
+    title: Test
+    ---
+
+    Body
+    ---
+    """
+    let result = LivePreviewParser.parse(source)
+    let horizontalRules = result.blocks.filter { $0.kind == .horizontalRule }
+    #expect(horizontalRules.count == 1)
+    #expect(result.blocks.first?.kind == .frontmatter(isClosed: true))
+
+    let nsSource = source as NSString
+    let openingDelimiter = nsSource.range(of: "---")
+    let closingDelimiter = nsSource.range(
+        of: "---",
+        options: [],
+        range: NSRange(
+            location: openingDelimiter.location + openingDelimiter.length,
+            length: nsSource.length - openingDelimiter.location - openingDelimiter.length
+        )
+    )
+    let partial = LivePreviewParser.parse(
+        source,
+        in: LivePreviewSourceRange(location: closingDelimiter.location, length: closingDelimiter.length)
+    )
+    #expect(!partial.blocks.contains { $0.kind == .horizontalRule })
+}
+
+@Test
 func livePreviewParserDetectsTablesAndLeavesMalformedTablesAsParagraphs() throws {
     let source = try fixture("tables.md")
     let result = LivePreviewParser.parse(source)

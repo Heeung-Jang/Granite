@@ -22,6 +22,7 @@ public enum LivePreviewParser {
         }
 
         let lines = LineIndex.lines(in: source, range: stringRange)
+        let frontmatterDelimiterRanges = frontmatterDelimiterRanges(in: source)
         var blocks: [LivePreviewBlockSpan] = []
         var index = 0
 
@@ -49,12 +50,22 @@ public enum LivePreviewParser {
                 blocks.append(block)
                 continue
             }
-            if let block = parseSingleLineBlock(source: source, line: line, index: &index) {
+            if let block = parseSingleLineBlock(
+                source: source,
+                line: line,
+                index: &index,
+                frontmatterDelimiterRanges: frontmatterDelimiterRanges
+            ) {
                 blocks.append(block)
                 continue
             }
 
-            blocks.append(parseParagraph(source: source, lines: lines, index: &index))
+            blocks.append(parseParagraph(
+                source: source,
+                lines: lines,
+                index: &index,
+                frontmatterDelimiterRanges: frontmatterDelimiterRanges
+            ))
         }
 
         return LivePreviewParseResult(
@@ -183,7 +194,8 @@ public enum LivePreviewParser {
     private static func parseSingleLineBlock(
         source: String,
         line: LineIndex.Line,
-        index: inout Int
+        index: inout Int,
+        frontmatterDelimiterRanges: [LivePreviewSourceRange]
     ) -> LivePreviewBlockSpan? {
         let trimmed = line.trimmed
         let kind: LivePreviewBlockKind?
@@ -203,6 +215,12 @@ public enum LivePreviewParser {
             kind = .blockquote
         } else if isEmbedLine(trimmed) {
             kind = .embed
+        } else if isHorizontalRule(
+            line,
+            source: source,
+            frontmatterDelimiterRanges: frontmatterDelimiterRanges
+        ) {
+            kind = .horizontalRule
         } else {
             kind = nil
         }
@@ -224,13 +242,19 @@ public enum LivePreviewParser {
     private static func parseParagraph(
         source: String,
         lines: [LineIndex.Line],
-        index: inout Int
+        index: inout Int,
+        frontmatterDelimiterRanges: [LivePreviewSourceRange]
     ) -> LivePreviewBlockSpan {
         let start = index
         index += 1
         while index < lines.count,
               !lines[index].trimmed.isEmpty,
-              !startsBlock(lines[index], nextLine: lines.indices.contains(index + 1) ? lines[index + 1] : nil) {
+              !startsBlock(
+                lines[index],
+                nextLine: lines.indices.contains(index + 1) ? lines[index + 1] : nil,
+                source: source,
+                frontmatterDelimiterRanges: frontmatterDelimiterRanges
+              ) {
             index += 1
         }
         return makeBlock(
@@ -274,7 +298,7 @@ public enum LivePreviewParser {
         switch kind {
         case .heading, .paragraph, .unorderedList, .orderedList, .taskList, .blockquote, .callout:
             return true
-        case .frontmatter, .fencedCode, .table, .embed:
+        case .frontmatter, .fencedCode, .table, .horizontalRule, .embed:
             return false
         }
     }
@@ -385,7 +409,12 @@ public enum LivePreviewParser {
         }
     }
 
-    private static func startsBlock(_ line: LineIndex.Line, nextLine: LineIndex.Line?) -> Bool {
+    private static func startsBlock(
+        _ line: LineIndex.Line,
+        nextLine: LineIndex.Line?,
+        source: String,
+        frontmatterDelimiterRanges: [LivePreviewSourceRange]
+    ) -> Bool {
         let trimmed = line.trimmed
         return headingLevel(in: trimmed) != nil ||
             fenceOpener(in: trimmed) != nil ||
@@ -395,6 +424,7 @@ public enum LivePreviewParser {
             isOrderedList(trimmed) ||
             trimmed.hasPrefix(">") ||
             isEmbedLine(trimmed) ||
+            isHorizontalRule(line, source: source, frontmatterDelimiterRanges: frontmatterDelimiterRanges) ||
             (trimmed.contains("|") && nextLine.map { isTableAlignment($0.trimmed) } == true)
     }
 
@@ -456,6 +486,71 @@ public enum LivePreviewParser {
 
     private static func isEmbedLine(_ trimmedLine: String) -> Bool {
         trimmedLine.hasPrefix("![[") || trimmedLine.hasPrefix("![")
+    }
+
+    private static func isHorizontalRule(
+        _ line: LineIndex.Line,
+        source: String,
+        frontmatterDelimiterRanges: [LivePreviewSourceRange]
+    ) -> Bool {
+        guard isHorizontalRule(line.trimmed),
+              !isIndentedCodeLine(line, source: source),
+              !isFrontmatterDelimiter(line, source: source, delimiterRanges: frontmatterDelimiterRanges)
+        else {
+            return false
+        }
+        return true
+    }
+
+    private static func isHorizontalRule(_ trimmedLine: String) -> Bool {
+        trimmedLine == "---" || trimmedLine == "***" || trimmedLine == "___"
+    }
+
+    private static func isIndentedCodeLine(_ line: LineIndex.Line, source: String) -> Bool {
+        leadingIndentColumns(in: String(source[line.contentRange])) >= 4
+    }
+
+    private static func leadingIndentColumns(in line: String) -> Int {
+        var columns = 0
+        for character in line {
+            if character == " " {
+                columns += 1
+            } else if character == "\t" {
+                columns += 4
+            } else {
+                break
+            }
+        }
+        return columns
+    }
+
+    private static func isFrontmatterDelimiter(
+        _ line: LineIndex.Line,
+        source: String,
+        delimiterRanges: [LivePreviewSourceRange]
+    ) -> Bool {
+        let sourceRange = LivePreviewRangeMapper.sourceRange(for: line.contentRange, in: source)
+        return delimiterRanges.contains(sourceRange)
+    }
+
+    private static func frontmatterDelimiterRanges(in source: String) -> [LivePreviewSourceRange] {
+        guard let firstLine = LineIndex.line(in: source, startingAt: source.startIndex),
+              firstLine.trimmed == "---"
+        else {
+            return []
+        }
+
+        var ranges = [LivePreviewRangeMapper.sourceRange(for: firstLine.contentRange, in: source)]
+        var index = firstLine.fullRange.upperBound
+        while let line = LineIndex.line(in: source, startingAt: index) {
+            defer { index = line.fullRange.upperBound }
+            guard line.trimmed == "---" else {
+                continue
+            }
+            ranges.append(LivePreviewRangeMapper.sourceRange(for: line.contentRange, in: source))
+            break
+        }
+        return ranges
     }
 
     private static func isTableAlignment(_ trimmedLine: String) -> Bool {
@@ -534,21 +629,36 @@ private enum LineIndex {
         var index = range.lowerBound
 
         while index < range.upperBound {
-            let lineUpper = source[index..<range.upperBound].firstIndex(of: "\n").map {
-                source.index(after: $0)
-            } ?? range.upperBound
-            let contentUpper = lineUpper > index && source[source.index(before: lineUpper)] == "\n"
-                ? source.index(before: lineUpper)
-                : lineUpper
-            let contentRange = index..<contentUpper
-            lines.append(Line(
-                fullRange: index..<lineUpper,
-                contentRange: contentRange,
-                trimmed: String(source[contentRange]).trimmingCharacters(in: .whitespacesAndNewlines)
-            ))
-            index = lineUpper
+            guard let line = line(in: source, startingAt: index, upperBound: range.upperBound) else {
+                break
+            }
+            lines.append(line)
+            index = line.fullRange.upperBound
         }
 
         return lines
+    }
+
+    static func line(
+        in source: String,
+        startingAt index: String.Index,
+        upperBound: String.Index? = nil
+    ) -> Line? {
+        let upperBound = upperBound ?? source.endIndex
+        guard index < upperBound else {
+            return nil
+        }
+        let lineUpper = source[index..<upperBound].firstIndex(of: "\n").map {
+            source.index(after: $0)
+        } ?? upperBound
+        let contentUpper = lineUpper > index && source[source.index(before: lineUpper)] == "\n"
+            ? source.index(before: lineUpper)
+            : lineUpper
+        let contentRange = index..<contentUpper
+        return Line(
+            fullRange: index..<lineUpper,
+            contentRange: contentRange,
+            trimmed: String(source[contentRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+        )
     }
 }

@@ -11,6 +11,7 @@ public enum LivePreviewBlockKind: Equatable, Sendable {
     case blockquote
     case callout(kind: String?)
     case table
+    case horizontalRule
     case embed
 }
 

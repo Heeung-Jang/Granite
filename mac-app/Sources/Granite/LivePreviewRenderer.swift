@@ -220,6 +220,11 @@ enum LivePreviewRenderer {
                 .font: LivePreviewTheme.baseFont,
                 .paragraphStyle: LivePreviewTheme.tableParagraphStyle
             ], range: range)
+        case .horizontalRule:
+            plan.addAttributes([
+                .foregroundColor: LivePreviewTheme.secondaryTextColor,
+                .paragraphStyle: LivePreviewTheme.listParagraphStyle
+            ], range: range)
         case .embed:
             plan.addAttributes([
                 .foregroundColor: LivePreviewTheme.embedFallbackColor,
@@ -623,6 +628,8 @@ enum LivePreviewRenderer {
         case .embed:
             return embedTokenRanges(for: block, source: source, preview: embedPreview)
         case .paragraph:
+            ranges = []
+        case .horizontalRule:
             ranges = []
         case .fencedCode:
             return matches(in: source, range: block.sourceRange.nsRange, regex: fenceLineRegex)
