@@ -409,7 +409,7 @@ private final class GraphMetalRenderer {
     private let commandQueue: any MTLCommandQueue
     private let edgePipeline: any MTLRenderPipelineState
     private let nodePipeline: any MTLRenderPipelineState
-    private var cachedIdentity: String?
+    private var bufferState: GraphMetalBufferState?
     private var edgeBuffer: (any MTLBuffer)?
     private var nodeBuffer: (any MTLBuffer)?
     private var edgeVertexCount = 0
@@ -444,41 +444,47 @@ private final class GraphMetalRenderer {
     }
 
     func updateBuffers(for input: GraphRendererInput) throws {
-        let identity = cacheIdentity(for: input)
-        guard cachedIdentity != identity else {
+        let geometryIdentity = geometryIdentity(for: input)
+        let styleIdentity = styleIdentity(for: input)
+        guard let bufferState,
+              bufferState.geometryIdentity == geometryIdentity,
+              edgeBuffer != nil || input.layout.edges.isEmpty,
+              nodeBuffer != nil || input.layout.nodes.isEmpty
+        else {
+            rebuildBuffers(
+                for: input,
+                geometryIdentity: geometryIdentity,
+                styleIdentity: styleIdentity
+            )
             return
         }
 
+        guard bufferState.styleIdentity != styleIdentity
+                || bufferState.positionOverrides != input.positionOverrides
+        else {
+            return
+        }
+
+        if bufferState.styleIdentity == styleIdentity {
+            updatePositionOverrides(from: bufferState.positionOverrides, to: input.positionOverrides, input: input)
+        } else {
+            updateDynamicVertices(for: input)
+        }
+        self.bufferState = bufferState.updating(
+            styleIdentity: styleIdentity,
+            positionOverrides: input.positionOverrides
+        )
+    }
+
+    private func rebuildBuffers(
+        for input: GraphRendererInput,
+        geometryIdentity: String,
+        styleIdentity: String
+    ) {
         var edgeVertices: [GraphMetalVertex] = []
         edgeVertices.reserveCapacity(input.layout.edges.count * (input.presentation.showArrows ? 9 : 6))
         for edge in input.layout.edges {
-            guard input.layout.nodes.indices.contains(edge.sourceIndex),
-                  input.layout.nodes.indices.contains(edge.targetIndex)
-            else {
-                continue
-            }
-            let isActiveEdge = edgeIsActive(edge, input: input)
-            let color = edgeColor(edge, input: input)
-            let source = metalPoint(input.position(for: input.layout.nodes[edge.sourceIndex]))
-            let target = metalPoint(input.position(for: input.layout.nodes[edge.targetIndex]))
-            appendThickEdgeVertices(
-                from: source,
-                to: target,
-                color: color,
-                thickness: Float(GraphVisualMetrics.linkThickness(
-                    base: input.presentation.linkThickness,
-                    isActive: isActiveEdge
-                )),
-                vertices: &edgeVertices
-            )
-            if input.presentation.showArrows {
-                appendArrowHeadVertices(
-                    from: source,
-                    to: target,
-                    color: color,
-                    vertices: &edgeVertices
-                )
-            }
+            appendEdgeVertices(edge: edge, input: input, vertices: &edgeVertices)
         }
 
         var nodeVertices: [GraphMetalVertex] = []
@@ -498,7 +504,108 @@ private final class GraphMetalRenderer {
         nodeBuffer = Self.makeBuffer(device: device, vertices: nodeVertices)
         edgeVertexCount = edgeVertices.count
         nodeVertexCount = nodeVertices.count
-        cachedIdentity = identity
+        bufferState = GraphMetalBufferState(
+            geometryIdentity: geometryIdentity,
+            styleIdentity: styleIdentity,
+            positionOverrides: input.positionOverrides,
+            nodeIndexByID: nodeIndexByID(for: input.layout),
+            incidentEdgeIndexesByNodeIndex: incidentEdgeIndexesByNodeIndex(for: input.layout),
+            edgeVertexSpan: input.presentation.showArrows ? 9 : 6
+        )
+    }
+
+    private func updatePositionOverrides(
+        from oldOverrides: GraphNodePositionOverrides,
+        to newOverrides: GraphNodePositionOverrides,
+        input: GraphRendererInput
+    ) {
+        guard let bufferState else {
+            return
+        }
+
+        let changedNodeIDs = Set(oldOverrides.positionsByNodeID.keys)
+            .union(newOverrides.positionsByNodeID.keys)
+        for nodeID in changedNodeIDs {
+            guard let nodeIndex = bufferState.nodeIndexByID[nodeID],
+                  input.layout.nodes.indices.contains(nodeIndex)
+            else {
+                continue
+            }
+            writeNodeVertex(at: nodeIndex, input: input)
+            for edgeIndex in bufferState.incidentEdgeIndexesByNodeIndex[nodeIndex] {
+                writeEdgeVertices(at: edgeIndex, input: input)
+            }
+        }
+    }
+
+    private func updateDynamicVertices(for input: GraphRendererInput) {
+        for nodeIndex in input.layout.nodes.indices {
+            writeNodeVertex(at: nodeIndex, input: input)
+        }
+        for edgeIndex in input.layout.edges.indices {
+            writeEdgeVertices(at: edgeIndex, input: input)
+        }
+    }
+
+    private func writeNodeVertex(at nodeIndex: Int, input: GraphRendererInput) {
+        guard let nodeBuffer,
+              input.layout.nodes.indices.contains(nodeIndex)
+        else {
+            return
+        }
+
+        let node = input.layout.nodes[nodeIndex]
+        var vertex = GraphMetalVertex(
+            position: metalPoint(input.position(for: node)),
+            color: nodeColor(node, input: input),
+            radius: Float(GraphVisualMetrics.drawRadius(
+                forNodeRadius: node.radius,
+                nodeSize: input.presentation.nodeSize
+            ))
+        )
+        write(vertex: &vertex, to: nodeBuffer, at: nodeIndex)
+    }
+
+    private func writeEdgeVertices(at edgeIndex: Int, input: GraphRendererInput) {
+        guard let edgeBuffer,
+              let bufferState,
+              input.layout.edges.indices.contains(edgeIndex)
+        else {
+            return
+        }
+
+        var vertices: [GraphMetalVertex] = []
+        vertices.reserveCapacity(bufferState.edgeVertexSpan)
+        appendEdgeVertices(edge: input.layout.edges[edgeIndex], input: input, vertices: &vertices)
+        write(vertices: vertices, to: edgeBuffer, at: edgeIndex * bufferState.edgeVertexSpan)
+    }
+
+    private func write(vertex: inout GraphMetalVertex, to buffer: any MTLBuffer, at index: Int) {
+        let offset = index * MemoryLayout<GraphMetalVertex>.stride
+        guard offset + MemoryLayout<GraphMetalVertex>.stride <= buffer.length else {
+            return
+        }
+        withUnsafeBytes(of: &vertex) { bytes in
+            buffer.contents()
+                .advanced(by: offset)
+                .copyMemory(from: bytes.baseAddress!, byteCount: bytes.count)
+        }
+    }
+
+    private func write(vertices: [GraphMetalVertex], to buffer: any MTLBuffer, at startIndex: Int) {
+        guard !vertices.isEmpty else {
+            return
+        }
+        let offset = startIndex * MemoryLayout<GraphMetalVertex>.stride
+        let byteCount = vertices.count * MemoryLayout<GraphMetalVertex>.stride
+        guard offset + byteCount <= buffer.length else {
+            return
+        }
+        vertices.withUnsafeBytes { bytes in
+            buffer.contents()
+                .advanced(by: offset)
+                .copyMemory(from: bytes.baseAddress!, byteCount: bytes.count)
+        }
     }
 
     @MainActor
@@ -613,12 +720,8 @@ private final class GraphMetalRenderer {
         }
     }
 
-    private func cacheIdentity(for input: GraphRendererInput) -> String {
-        var searchHasher = Hasher()
-        for nodeID in input.searchMatchedNodeIDs.sorted() {
-            searchHasher.combine(nodeID)
-        }
-        return [
+    private func geometryIdentity(for input: GraphRendererInput) -> String {
+        [
             String(input.layout.requestID),
             String(input.layout.generation),
             String(input.layout.renderIdentity),
@@ -626,9 +729,18 @@ private final class GraphMetalRenderer {
             String(input.layout.edges.count),
             String(input.presentation.nodeSize.bitPattern),
             String(input.presentation.linkThickness.bitPattern),
-            input.presentation.showArrows.description,
+            input.presentation.showArrows.description
+        ]
+        .joined(separator: ":")
+    }
+
+    private func styleIdentity(for input: GraphRendererInput) -> String {
+        var searchHasher = Hasher()
+        for nodeID in input.searchMatchedNodeIDs.sorted() {
+            searchHasher.combine(nodeID)
+        }
+        return [
             groupColorIdentity(input.groupColorHexByNodeID),
-            String(input.positionOverrides.renderIdentity),
             String(searchHasher.finalize()),
             input.hoveredNodeID ?? "",
             input.selectedNodeID ?? ""
@@ -649,6 +761,26 @@ private final class GraphMetalRenderer {
 
     private func metalPoint(_ point: GraphPoint) -> SIMD2<Float> {
         SIMD2<Float>(Float(point.x), Float(point.y))
+    }
+
+    private func nodeIndexByID(for layout: GraphRendererSnapshot) -> [String: Int] {
+        Dictionary(uniqueKeysWithValues: layout.nodes.enumerated().map { ($0.element.nodeID, $0.offset) })
+    }
+
+    private func incidentEdgeIndexesByNodeIndex(for layout: GraphRendererSnapshot) -> [[Int]] {
+        var incidentEdges = Array(repeating: [Int](), count: layout.nodes.count)
+        for (edgeIndex, edge) in layout.edges.enumerated() {
+            guard incidentEdges.indices.contains(edge.sourceIndex),
+                  incidentEdges.indices.contains(edge.targetIndex)
+            else {
+                continue
+            }
+            incidentEdges[edge.sourceIndex].append(edgeIndex)
+            if edge.targetIndex != edge.sourceIndex {
+                incidentEdges[edge.targetIndex].append(edgeIndex)
+            }
+        }
+        return incidentEdges
     }
 
     private func nodeColor(_ node: GraphLayoutNode, input: GraphRendererInput) -> SIMD4<Float> {
@@ -696,6 +828,41 @@ private final class GraphMetalRenderer {
         }
         return input.layout.nodes[edge.sourceIndex].nodeID == activeNodeID
             || input.layout.nodes[edge.targetIndex].nodeID == activeNodeID
+    }
+
+    private func appendEdgeVertices(
+        edge: GraphLayoutEdge,
+        input: GraphRendererInput,
+        vertices: inout [GraphMetalVertex]
+    ) {
+        guard input.layout.nodes.indices.contains(edge.sourceIndex),
+              input.layout.nodes.indices.contains(edge.targetIndex)
+        else {
+            return
+        }
+
+        let isActiveEdge = edgeIsActive(edge, input: input)
+        let color = edgeColor(edge, input: input)
+        let source = metalPoint(input.position(for: input.layout.nodes[edge.sourceIndex]))
+        let target = metalPoint(input.position(for: input.layout.nodes[edge.targetIndex]))
+        appendThickEdgeVertices(
+            from: source,
+            to: target,
+            color: color,
+            thickness: Float(GraphVisualMetrics.linkThickness(
+                base: input.presentation.linkThickness,
+                isActive: isActiveEdge
+            )),
+            vertices: &vertices
+        )
+        if input.presentation.showArrows {
+            appendArrowHeadVertices(
+                from: source,
+                to: target,
+                color: color,
+                vertices: &vertices
+            )
+        }
     }
 
     private func appendArrowHeadVertices(
@@ -811,6 +978,29 @@ private struct GraphMetalVertex {
     var position: SIMD2<Float>
     var color: SIMD4<Float>
     var radius: Float
+}
+
+private struct GraphMetalBufferState {
+    let geometryIdentity: String
+    let styleIdentity: String
+    let positionOverrides: GraphNodePositionOverrides
+    let nodeIndexByID: [String: Int]
+    let incidentEdgeIndexesByNodeIndex: [[Int]]
+    let edgeVertexSpan: Int
+
+    func updating(
+        styleIdentity: String,
+        positionOverrides: GraphNodePositionOverrides
+    ) -> GraphMetalBufferState {
+        GraphMetalBufferState(
+            geometryIdentity: geometryIdentity,
+            styleIdentity: styleIdentity,
+            positionOverrides: positionOverrides,
+            nodeIndexByID: nodeIndexByID,
+            incidentEdgeIndexesByNodeIndex: incidentEdgeIndexesByNodeIndex,
+            edgeVertexSpan: edgeVertexSpan
+        )
+    }
 }
 
 private struct GraphMetalUniforms {
