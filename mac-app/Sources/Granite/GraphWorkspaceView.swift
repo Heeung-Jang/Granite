@@ -28,14 +28,8 @@ struct GraphWorkspaceView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            VStack(spacing: 0) {
-                toolbar
-
-                Divider()
-
-                graphContent
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            graphContent
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             if showsSettings {
                 Divider()
@@ -58,49 +52,6 @@ struct GraphWorkspaceView: View {
             cancelPendingFirstRender()
             cancelForceRefinement()
         }
-    }
-
-    private var toolbar: some View {
-        HStack(spacing: 10) {
-            TextField("Search", text: $settings.searchQuery)
-                .textFieldStyle(.roundedBorder)
-                .frame(maxWidth: 260)
-                .accessibilityLabel("Graph search")
-
-            Spacer()
-
-            ObsidianIconButton(
-                systemName: "minus.magnifyingglass",
-                accessibilityLabel: "Zoom out graph"
-            ) {
-                zoom(by: 0.85)
-            }
-
-            ObsidianIconButton(
-                systemName: "plus.magnifyingglass",
-                accessibilityLabel: "Zoom in graph"
-            ) {
-                zoom(by: 1.15)
-            }
-
-            ObsidianIconButton(
-                systemName: "arrow.counterclockwise",
-                accessibilityLabel: "Reset graph view"
-            ) {
-                resetViewportToFit()
-            }
-
-            ObsidianIconButton(
-                systemName: "slider.horizontal.3",
-                accessibilityLabel: "Graph settings",
-                isSelected: showsSettings
-            ) {
-                showsSettings.toggle()
-            }
-        }
-        .padding(.horizontal, 14)
-        .frame(height: ObsidianUI.noteToolbarHeight)
-        .background(ObsidianUI.editorBackground)
     }
 
     private var graphCommandActions: GraphCommandActions {
@@ -130,65 +81,78 @@ struct GraphWorkspaceView: View {
                         }
 
                         GeometryReader { proxy in
-                            GraphRendererSurfaceView(
-                                input: input,
-                                viewport: $viewport,
-                                callbacks: GraphRendererCallbacks(
-                                    didCompleteFirstDraw: { metrics in
-                                        Task { @MainActor in
-                                            handleFirstDraw(
-                                                metrics,
-                                                requestID: input.layout.requestID
-                                            )
+                            ZStack(alignment: .top) {
+                                GraphRendererSurfaceView(
+                                    input: input,
+                                    viewport: $viewport,
+                                    callbacks: GraphRendererCallbacks(
+                                        didCompleteFirstDraw: { metrics in
+                                            Task { @MainActor in
+                                                handleFirstDraw(
+                                                    metrics,
+                                                    requestID: input.layout.requestID
+                                                )
+                                            }
                                         }
+                                    ),
+                                    interactionCallbacks: graphInteractionCallbacks(input: input),
+                                    hitTestIndex: loadedHitTestIndex,
+                                    onHoverNode: { nodeID in
+                                        interaction.hover(nodeID)
+                                    },
+                                    onSelectNode: { nodeID in
+                                        interaction.select(nodeID)
+                                    },
+                                    onOpenNode: { nodeID in
+                                        openNode(nodeID, in: input)
                                     }
-                                ),
-                                interactionCallbacks: graphInteractionCallbacks(input: input),
-                                hitTestIndex: loadedHitTestIndex,
-                                onHoverNode: { nodeID in
-                                    interaction.hover(nodeID)
-                                },
-                                onSelectNode: { nodeID in
-                                    interaction.select(nodeID)
-                                },
-                                onOpenNode: { nodeID in
-                                    openNode(nodeID, in: input)
+                                )
+                                .frame(width: proxy.size.width, height: proxy.size.height)
+                                .focused($graphSurfaceFocused)
+                                .onAppear {
+                                    graphSurfaceFocused = true
+                                    workspaceModel.applyStableGraph(GraphStableGraphSummary(
+                                        generation: input.layout.generation,
+                                        nodeCount: input.layout.nodes.count,
+                                        edgeCount: input.layout.edges.count
+                                    ))
+                                    updateGraphCanvasSize(proxy.size, layout: input.layout)
                                 }
-                            )
-                            .frame(width: proxy.size.width, height: proxy.size.height)
-                            .focused($graphSurfaceFocused)
-                            .onAppear {
-                                graphSurfaceFocused = true
-                                workspaceModel.applyStableGraph(GraphStableGraphSummary(
-                                    generation: input.layout.generation,
-                                    nodeCount: input.layout.nodes.count,
-                                    edgeCount: input.layout.edges.count
-                                ))
-                                updateGraphCanvasSize(proxy.size, layout: input.layout)
+                                .onChange(of: proxy.size) { _, newSize in
+                                    updateGraphCanvasSize(newSize, layout: input.layout)
+                                }
+                                .onChange(of: input.layout.requestID) { _, _ in
+                                    updateGraphCanvasSize(proxy.size, layout: input.layout)
+                                }
+                                .onMoveCommand { direction in
+                                    panGraph(direction)
+                                }
+                                .onKeyPress(.return) {
+                                    openSelectedNode(in: input)
+                                }
+                                .onKeyPress("+") {
+                                    zoom(by: 1.15)
+                                    return .handled
+                                }
+                                .onKeyPress("-") {
+                                    zoom(by: 0.85)
+                                    return .handled
+                                }
+                                .onExitCommand {
+                                    clearGraphSelection()
+                                }
+
+                                GraphCanvasHeader(
+                                    title: graphViewTitle,
+                                    searchQuery: $settings.searchQuery,
+                                    width: proxy.size.width,
+                                    settingsIsPresented: showsSettings,
+                                    zoomOut: { zoom(by: 0.85) },
+                                    zoomIn: { zoom(by: 1.15) },
+                                    resetView: resetViewportToFit,
+                                    toggleSettings: { showsSettings.toggle() }
+                                )
                             }
-                            .onChange(of: proxy.size) { _, newSize in
-                                updateGraphCanvasSize(newSize, layout: input.layout)
-                            }
-                            .onChange(of: input.layout.requestID) { _, _ in
-                                updateGraphCanvasSize(proxy.size, layout: input.layout)
-                            }
-                            .onMoveCommand { direction in
-                                panGraph(direction)
-                            }
-                            .onKeyPress(.return) {
-                                openSelectedNode(in: input)
-                            }
-                            .onKeyPress("+") {
-                                zoom(by: 1.15)
-                                return .handled
-                            }
-                            .onKeyPress("-") {
-                                zoom(by: 0.85)
-                                return .handled
-                            }
-                        .onExitCommand {
-                            clearGraphSelection()
-                        }
                         }
 
                         if showsKeyboardResults(for: input) {
@@ -827,6 +791,118 @@ private struct PendingGraphFirstRender {
     let state: SearchResultState
     let nodeCount: Int
     let edgeCount: Int
+}
+
+private struct GraphCanvasHeader: View {
+    let title: String
+    @Binding var searchQuery: String
+    let width: CGFloat
+    let settingsIsPresented: Bool
+    let zoomOut: () -> Void
+    let zoomIn: () -> Void
+    let resetView: () -> Void
+    let toggleSettings: () -> Void
+
+    private var usesCenteredTitle: Bool {
+        width >= 840
+    }
+
+    private var showsCompactTitle: Bool {
+        width >= 560
+    }
+
+    private var searchFieldWidth: CGFloat {
+        if usesCenteredTitle {
+            return min(240, max(180, width * 0.28))
+        }
+
+        let titleWidth: CGFloat = showsCompactTitle ? 60 : 0
+        let spacing: CGFloat = showsCompactTitle ? 24 : 8
+        let horizontalPadding: CGFloat = 28
+        let controlsWidth: CGFloat = 138
+        let availableWidth = width - horizontalPadding - titleWidth - spacing - controlsWidth
+        return min(180, max(88, availableWidth))
+    }
+
+    var body: some View {
+        Group {
+            if usesCenteredTitle {
+                ZStack {
+                    headerTitle
+                        .frame(maxWidth: .infinity, alignment: .center)
+
+                    HStack(spacing: 8) {
+                        searchField
+
+                        Spacer(minLength: 16)
+
+                        controlButtons
+                    }
+                }
+            } else {
+                HStack(spacing: 8) {
+                    if showsCompactTitle {
+                        headerTitle
+                    }
+
+                    searchField
+
+                    Spacer(minLength: 8)
+
+                    controlButtons
+                }
+            }
+        }
+        .frame(height: 32)
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 14)
+        .padding(.top, 8)
+    }
+
+    private var headerTitle: some View {
+        Text(title)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.primary)
+            .lineLimit(1)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+
+    private var searchField: some View {
+        TextField("Search", text: $searchQuery)
+            .textFieldStyle(.roundedBorder)
+            .frame(width: searchFieldWidth)
+            .accessibilityLabel("Graph search")
+    }
+
+    private var controlButtons: some View {
+        HStack(spacing: 6) {
+            ObsidianIconButton(
+                systemName: "minus.magnifyingglass",
+                accessibilityLabel: "Zoom out graph",
+                action: zoomOut
+            )
+
+            ObsidianIconButton(
+                systemName: "plus.magnifyingglass",
+                accessibilityLabel: "Zoom in graph",
+                action: zoomIn
+            )
+
+            ObsidianIconButton(
+                systemName: "arrow.counterclockwise",
+                accessibilityLabel: "Reset graph view",
+                action: resetView
+            )
+
+            ObsidianIconButton(
+                systemName: "slider.horizontal.3",
+                accessibilityLabel: "Graph settings",
+                isSelected: settingsIsPresented,
+                action: toggleSettings
+            )
+        }
+    }
 }
 
 private struct GraphKeyboardResultsList: View {
