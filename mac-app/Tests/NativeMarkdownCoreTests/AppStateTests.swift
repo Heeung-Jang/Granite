@@ -293,6 +293,316 @@ func appStateAllowsSameDirtyNoteAndCleanNavigation() {
 }
 
 @Test
+func appStateCreatesAndFillsEmptyWorkspaceTabs() {
+    let state = AppState()
+    let file = FileTreeItem(relativePath: "Codex/First.md")
+
+    state.newEmptyTab()
+    state.newEmptyTab()
+
+    #expect(state.workspaceTabs.count == 1)
+    #expect(state.activeTab?.isEmpty == true)
+    #expect(state.selectedFile == nil)
+
+    #expect(state.openFile(file))
+
+    #expect(state.workspaceTabs.count == 1)
+    #expect(state.activeFile == file)
+    #expect(state.selectedFile == file)
+    #expect(state.workspaceTabs[0].relativePathKey == "Codex/First.md")
+}
+
+@Test
+func appStateOpensNewTabsAndReusesExistingFileTabs() {
+    let state = AppState()
+    let first = FileTreeItem(relativePath: "First.md")
+    let second = FileTreeItem(relativePath: "Second.md")
+
+    #expect(state.openFile(first))
+    #expect(state.openFile(second, disposition: .newTab))
+    #expect(state.workspaceTabs.map(\.file) == [first, second])
+    #expect(state.selectedFile == second)
+
+    #expect(state.openFile(first, disposition: .newTab))
+
+    #expect(state.workspaceTabs.map(\.file) == [first, second])
+    #expect(state.selectedFile == first)
+    #expect(state.activeFile == first)
+}
+
+@Test
+func appStateBlocksDirtyReplacementButAllowsNewTabOpen() {
+    let state = AppState()
+    let first = FileTreeItem(relativePath: "First.md")
+    let second = FileTreeItem(relativePath: "Second.md")
+
+    #expect(state.openFile(first))
+    state.updateEditorDirtyState(file: first, isDirty: true)
+
+    #expect(state.openFile(second) == false)
+    #expect(state.workspaceTabs.map(\.file) == [first])
+    #expect(state.selectedFile == first)
+    #expect(state.dirtyNavigationWarning == DirtyNavigationWarning(dirtyFile: first, requestedFile: second))
+
+    #expect(state.openFile(second, disposition: .newTab))
+    #expect(state.workspaceTabs.map(\.file) == [first, second])
+    #expect(state.selectedFile == second)
+    #expect(state.isEditorDirty(file: first))
+}
+
+@Test
+func appStateTracksMultipleDirtyTabsAndClearsOnlySavedFile() {
+    let state = AppState()
+    let first = FileTreeItem(relativePath: "First.md")
+    let second = FileTreeItem(relativePath: "Second.md")
+
+    #expect(state.openFile(first))
+    #expect(state.openFile(second, disposition: .newTab))
+    state.updateEditorDirtyState(file: first, isDirty: true)
+    state.updateEditorDirtyState(file: second, isDirty: true)
+
+    state.updateEditorDirtyState(file: second, isDirty: false)
+
+    #expect(state.isEditorDirty(file: first))
+    #expect(!state.isEditorDirty(file: second))
+    #expect(state.requestAppQuit() == false)
+    #expect(state.dirtyLifecycleWarning == DirtyLifecycleWarning(dirtyFile: first, action: .quitApp))
+}
+
+@Test
+func appStateLifecycleWarningCountsMultipleDirtyTabs() {
+    let state = AppState()
+    let first = FileTreeItem(relativePath: "First.md")
+    let second = FileTreeItem(relativePath: "Second.md")
+
+    #expect(state.openFile(first))
+    #expect(state.openFile(second, disposition: .newTab))
+    state.updateEditorDirtyState(file: first, isDirty: true)
+    state.updateEditorDirtyState(file: second, isDirty: true)
+
+    #expect(state.requestAppQuit() == false)
+    #expect(state.dirtyLifecycleWarning == DirtyLifecycleWarning(
+        dirtyFile: first,
+        action: .quitApp,
+        dirtyCount: 2
+    ))
+    #expect(state.dirtyLifecycleWarning?.isAggregate == true)
+}
+
+@Test
+func appStateClosesTabsWithNeighborSelectionAndRecentlyClosedRestore() {
+    let state = AppState()
+    let first = FileTreeItem(relativePath: "First.md")
+    let second = FileTreeItem(relativePath: "Second.md")
+    let third = FileTreeItem(relativePath: "Third.md")
+
+    #expect(state.openFile(first))
+    #expect(state.openFile(second, disposition: .newTab))
+    #expect(state.openFile(third, disposition: .newTab))
+
+    #expect(state.requestCloseTab(state.workspaceTabs[1].id))
+
+    #expect(state.workspaceTabs.map(\.file) == [first, third])
+    #expect(state.selectedFile == third)
+    #expect(state.recentlyClosedTabs.last?.relativePathKey == "Second.md")
+
+    state.restoreRecentlyClosedTab()
+
+    #expect(state.workspaceTabs.map(\.file) == [first, second, third])
+    #expect(state.selectedFile == second)
+}
+
+@Test
+func appStateRestoresRecentlyClosedFinalTab() {
+    let state = AppState()
+    let file = FileTreeItem(relativePath: "Only.md")
+
+    #expect(state.openFile(file))
+    #expect(state.requestCloseActiveTab())
+
+    #expect(state.workspaceTabs.isEmpty)
+    #expect(state.selectedFile == nil)
+    #expect(state.recentlyClosedTabs.last?.relativePathKey == "Only.md")
+
+    state.restoreRecentlyClosedTab()
+
+    #expect(state.workspaceTabs.map(\.file) == [file])
+    #expect(state.selectedFile == file)
+}
+
+@Test
+func appStateDirtyTabCloseWarningCanCancelOrDiscard() {
+    let state = AppState()
+    let first = FileTreeItem(relativePath: "First.md")
+    let second = FileTreeItem(relativePath: "Second.md")
+
+    #expect(state.openFile(first))
+    #expect(state.openFile(second, disposition: .newTab))
+    let firstTabID = state.workspaceTabs[0].id
+    state.updateEditorDirtyState(file: first, isDirty: true)
+
+    #expect(state.requestCloseTab(firstTabID) == false)
+    #expect(state.dirtyTabCloseWarning == DirtyTabCloseWarning(tabID: firstTabID, dirtyFile: first))
+    state.dismissDirtyTabCloseWarning()
+    #expect(state.workspaceTabs.map(\.file) == [first, second])
+    #expect(state.isEditorDirty(file: first))
+
+    #expect(state.requestCloseTab(firstTabID) == false)
+    #expect(state.discardDirtyChangesForTabCloseWarning())
+
+    #expect(state.workspaceTabs.map(\.file) == [second])
+    #expect(!state.isEditorDirty(file: first))
+}
+
+@Test
+func appStateMovesAndActivatesTabsByShortcutIndex() {
+    let state = AppState()
+    let first = FileTreeItem(relativePath: "First.md")
+    let second = FileTreeItem(relativePath: "Second.md")
+    let third = FileTreeItem(relativePath: "Third.md")
+
+    #expect(state.openFile(first))
+    #expect(state.openFile(second, disposition: .newTab))
+    #expect(state.openFile(third, disposition: .newTab))
+
+    state.moveTab(from: 2, to: 0)
+    #expect(state.workspaceTabs.map(\.file) == [third, first, second])
+    #expect(state.selectedFile == third)
+
+    state.activateTab(atShortcutIndex: 2)
+    #expect(state.selectedFile == first)
+    state.activateTab(atShortcutIndex: 9)
+    #expect(state.selectedFile == second)
+    state.activateNextTab()
+    #expect(state.selectedFile == third)
+    state.activatePreviousTab()
+    #expect(state.selectedFile == second)
+}
+
+@Test
+func appStatePersistsNonEmptyWorkspaceTabs() {
+    let vaultURL = URL(fileURLWithPath: "/tmp/tab-session-vault", isDirectory: true)
+    let tabStore = MemoryWorkspaceTabSessionStore()
+    let state = AppState(
+        vaultSelection: .selected(vaultURL),
+        workspaceTabSessionStore: tabStore
+    )
+    let first = FileTreeItem(relativePath: "First.md")
+    let second = FileTreeItem(relativePath: "Second.md")
+
+    state.newEmptyTab()
+    #expect(tabStore.savedSessions[vaultURL.standardizedFileURL.path] == nil)
+
+    #expect(state.openFile(first))
+    #expect(state.openFile(second, disposition: .newTab))
+    state.activateTab(atShortcutIndex: 1)
+
+    #expect(tabStore.savedSessions[vaultURL.standardizedFileURL.path] == WorkspaceTabSession(
+        tabs: ["First.md", "Second.md"],
+        activeRelativePath: "First.md"
+    ))
+}
+
+@Test
+func appStateRestoresPersistedWorkspaceTabsAfterVaultSelection() throws {
+    let temporaryRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let vaultURL = temporaryRoot.appendingPathComponent("vault", isDirectory: true)
+    let supportRoot = temporaryRoot.appendingPathComponent("support", isDirectory: true)
+    try FileManager.default.createDirectory(at: vaultURL, withIntermediateDirectories: true)
+    try "a".write(to: vaultURL.appendingPathComponent("First.md"), atomically: true, encoding: .utf8)
+    try "b".write(to: vaultURL.appendingPathComponent("Second.md"), atomically: true, encoding: .utf8)
+
+    let tabStore = MemoryWorkspaceTabSessionStore(sessions: [
+        RecentVault.storageKey(for: vaultURL): WorkspaceTabSession(
+            tabs: ["Missing.md", "First.md", "Second.md"],
+            activeRelativePath: "Second.md"
+        )
+    ])
+    let state = AppState(
+        engineHealth: EngineHealthStatus(state: .loaded, abiVersion: 1, message: "test"),
+        indexDirectoryResolver: AppOwnedIndexDirectoryResolver(applicationSupportRoot: supportRoot),
+        vaultAccessValidator: AllowingVaultAccessValidator(),
+        recentVaultStorage: MemoryRecentVaultStorage(),
+        workspaceTabSessionStore: tabStore
+    )
+
+    try state.selectVault(vaultURL)
+
+    #expect(state.workspaceTabs.map(\.relativePathKey) == ["First.md", "Second.md"])
+    #expect(state.selectedFile == FileTreeItem(relativePath: "Second.md"))
+}
+
+@Test
+func appStateCapsRestoredWorkspaceTabsAroundActivePath() throws {
+    let temporaryRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let vaultURL = temporaryRoot.appendingPathComponent("vault", isDirectory: true)
+    let supportRoot = temporaryRoot.appendingPathComponent("support", isDirectory: true)
+    try FileManager.default.createDirectory(at: vaultURL, withIntermediateDirectories: true)
+
+    let paths = (0..<40).map { "Note-\($0).md" }
+    for path in paths {
+        try path.write(to: vaultURL.appendingPathComponent(path), atomically: true, encoding: .utf8)
+    }
+
+    let tabStore = MemoryWorkspaceTabSessionStore(sessions: [
+        RecentVault.storageKey(for: vaultURL): WorkspaceTabSession(
+            tabs: paths,
+            activeRelativePath: "Note-30.md"
+        )
+    ])
+    let state = AppState(
+        engineHealth: EngineHealthStatus(state: .loaded, abiVersion: 1, message: "test"),
+        indexDirectoryResolver: AppOwnedIndexDirectoryResolver(applicationSupportRoot: supportRoot),
+        vaultAccessValidator: AllowingVaultAccessValidator(),
+        recentVaultStorage: MemoryRecentVaultStorage(),
+        workspaceTabSessionStore: tabStore
+    )
+
+    try state.selectVault(vaultURL)
+
+    #expect(state.workspaceTabs.count == 25)
+    #expect(state.workspaceTabs.map(\.relativePathKey).contains("Note-30.md"))
+    #expect(state.selectedFile == FileTreeItem(relativePath: "Note-30.md"))
+}
+
+@Test
+func appStateAvoidsDuplicateSessionWritesForNoOpActivationAndExistingOpen() {
+    let vaultURL = URL(fileURLWithPath: "/tmp/tab-session-write-vault", isDirectory: true)
+    let tabStore = MemoryWorkspaceTabSessionStore()
+    let state = AppState(
+        vaultSelection: .selected(vaultURL),
+        workspaceTabSessionStore: tabStore
+    )
+    let first = FileTreeItem(relativePath: "First.md")
+
+    #expect(state.openFile(first))
+    #expect(tabStore.saveCount == 1)
+
+    let activeTabID = state.workspaceTabs[0].id
+    state.activateTab(id: activeTabID)
+    #expect(tabStore.saveCount == 1)
+
+    #expect(state.openFile(first))
+    #expect(tabStore.saveCount == 1)
+}
+
+@Test
+func appStateCapsRecentlyClosedTabs() {
+    let state = AppState()
+
+    for index in 0..<30 {
+        #expect(state.openFile(FileTreeItem(relativePath: "Note-\(index).md"), disposition: .newTab))
+        #expect(state.requestCloseActiveTab())
+    }
+
+    #expect(state.recentlyClosedTabs.count == 25)
+    #expect(state.recentlyClosedTabs.first?.relativePathKey == "Note-5.md")
+    #expect(state.recentlyClosedTabs.last?.relativePathKey == "Note-29.md")
+}
+
+@Test
 func appStateCanDiscardDirtyChangesAndOpenRequestedNote() {
     let state = AppState()
     let first = FileTreeItem(relativePath: "First.md")
@@ -521,6 +831,27 @@ func appStateBlocksClosingVaultWithAnyDirtyEditorFile() {
         dirtyFile: dirtyFile,
         action: .closeVault
     ))
+}
+
+@Test
+func appStateCloseVaultWarningCountsMultipleDirtyTabs() {
+    let vaultURL = URL(fileURLWithPath: "/tmp/multi-dirty-vault", isDirectory: true)
+    let state = AppState(vaultSelection: .selected(vaultURL))
+    let first = FileTreeItem(relativePath: "First.md")
+    let second = FileTreeItem(relativePath: "Second.md")
+
+    #expect(state.openFile(first))
+    #expect(state.openFile(second, disposition: .newTab))
+    state.updateEditorDirtyState(file: first, isDirty: true)
+    state.updateEditorDirtyState(file: second, isDirty: true)
+
+    #expect(state.requestCloseVault() == false)
+    #expect(state.dirtyEditorActionWarning == DirtyEditorActionWarning(
+        dirtyFile: first,
+        action: .closeVault,
+        dirtyCount: 2
+    ))
+    #expect(state.dirtyEditorActionWarning?.isAggregate == true)
 }
 
 @Test
@@ -903,6 +1234,29 @@ func appStatePersistsDeduplicatedRecentVaults() throws {
 }
 
 @Test
+func appStateRemovingRecentVaultClearsStoredTabSession() {
+    let vaultURL = URL(fileURLWithPath: "/tmp/session-forgotten-vault", isDirectory: true)
+    let recentStorage = MemoryRecentVaultStorage(urls: [vaultURL])
+    let tabStore = MemoryWorkspaceTabSessionStore(sessions: [
+        RecentVault.storageKey(for: vaultURL): WorkspaceTabSession(
+            tabs: ["A.md"],
+            activeRelativePath: "A.md"
+        )
+    ])
+    let state = AppState(
+        recentVaultStorage: recentStorage,
+        workspaceTabSessionStore: tabStore
+    )
+
+    state.removeRecentVault(at: vaultURL)
+
+    #expect(state.recentVaults.isEmpty)
+    #expect(recentStorage.savedURLs.isEmpty)
+    #expect(tabStore.loadSession(forVaultAt: vaultURL) == nil)
+    #expect(tabStore.clearCount == 1)
+}
+
+@Test
 func openingUnavailableRecentVaultDoesNotCreateIndexAndCanRemoveIt() throws {
     let temporaryRoot = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -1055,5 +1409,29 @@ private final class MemoryRecentVaultStorage: RecentVaultStoring {
 
     func saveRecentVaultURLs(_ urls: [URL]) {
         savedURLs = urls
+    }
+}
+
+private final class MemoryWorkspaceTabSessionStore: WorkspaceTabSessionStoring {
+    private(set) var savedSessions: [String: WorkspaceTabSession] = [:]
+    private(set) var saveCount = 0
+    private(set) var clearCount = 0
+
+    init(sessions: [String: WorkspaceTabSession] = [:]) {
+        self.savedSessions = sessions
+    }
+
+    func loadSession(forVaultAt vaultURL: URL) -> WorkspaceTabSession? {
+        savedSessions[RecentVault.storageKey(for: vaultURL)]
+    }
+
+    func saveSession(_ session: WorkspaceTabSession, forVaultAt vaultURL: URL) {
+        saveCount += 1
+        savedSessions[RecentVault.storageKey(for: vaultURL)] = session
+    }
+
+    func clearSession(forVaultAt vaultURL: URL) {
+        clearCount += 1
+        savedSessions.removeValue(forKey: RecentVault.storageKey(for: vaultURL))
     }
 }

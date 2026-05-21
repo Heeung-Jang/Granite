@@ -224,7 +224,10 @@ struct FileTreeView: View {
                 return
             }
             selectedFileID = file.id
-            if !appState.openFile(file) {
+            let disposition = OpenDispositionResolver.resolve(
+                isCommandPressed: NSApp.currentEvent?.modifierFlags.contains(.command) == true
+            )
+            if !appState.openFile(file, disposition: disposition) {
                 selectedFileID = appState.selectedFile?.id
             }
         }

@@ -167,6 +167,12 @@ struct GraniteApp: App {
             print(LivePreviewProbe.encodedReport(report))
             Foundation.exit(report.hardCeilingPassed ? 0 : 2)
         }
+
+        if CommandLine.arguments.contains("--workspace-tabs-probe") {
+            let report = WorkspaceTabsProbe.run()
+            print(WorkspaceTabsProbe.encodedReport(report))
+            Foundation.exit(report.passed ? 0 : 2)
+        }
     }
 
     var body: some Scene {

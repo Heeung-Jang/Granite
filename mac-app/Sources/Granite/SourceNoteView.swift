@@ -11,6 +11,8 @@ struct SourceNoteView: View {
     let vaultURL: URL
     let file: FileTreeItem
     let chrome: SourceNoteChrome
+    let isActive: Bool
+    let focusRequestID: WorkspaceTab.ID?
     private let noteSaver: any EngineNoteSaving
 
     @State private var state: SourceNoteViewState = .loading
@@ -26,17 +28,22 @@ struct SourceNoteView: View {
     @State private var recoveryTask: Task<Void, Never>?
     @State private var fallbackProfileTask: Task<Void, Never>?
     @State private var livePreviewMetadataTask: Task<Void, Never>?
+    @State private var activityToken = WorkspaceEditorActivityToken()
     @AppStorage(LivePreviewMarkerStyle.storageKey) private var markerStyleRaw = LivePreviewMarkerStyle.defaultValue.rawValue
 
     init(
         vaultURL: URL,
         file: FileTreeItem,
         chrome: SourceNoteChrome = .native,
+        isActive: Bool = true,
+        focusRequestID: WorkspaceTab.ID? = nil,
         noteSaver: any EngineNoteSaving = EngineSaveClient()
     ) {
         self.vaultURL = vaultURL
         self.file = file
         self.chrome = chrome
+        self.isActive = isActive
+        self.focusRequestID = focusRequestID
         self.noteSaver = noteSaver
     }
 
@@ -60,6 +67,8 @@ struct SourceNoteView: View {
                     embedPreviewMap: livePreviewEmbedPreviewMap,
                     markerStyle: livePreviewMarkerStyle,
                     documentTitle: file.displayName,
+                    isActive: isActive,
+                    focusRequestID: focusRequestID,
                     interactionHandler: handleEditorInteraction
                 )
                     .frame(minHeight: 320)
@@ -109,10 +118,21 @@ struct SourceNoteView: View {
             await load()
         }
         .onChange(of: text) { _, newValue in
+            guard WorkspaceEditorActivityGate.shouldRun(.textChangeSideEffects, isActive: isActive) else {
+                return
+            }
             saveSession?.updateContents(newValue)
             clearLivePreviewMetadata()
             updateAutomaticFallbackAfterTextChange(for: newValue)
             scheduleRecoverySnapshot(contents: newValue)
+        }
+        .onChange(of: isActive) { _, newValue in
+            if newValue {
+                activityToken = WorkspaceEditorActivityToken()
+                refreshLivePreviewMetadataIfNeeded(contents: text)
+            } else {
+                cancelInactiveEditorWork()
+            }
         }
         .onChange(of: saveSession) { oldValue, newValue in
             appState.updateEditorDirtyState(file: file, isDirty: newValue?.isDirty == true)
@@ -131,7 +151,7 @@ struct SourceNoteView: View {
                 appState.updateEditorDirtyState(file: file, isDirty: false)
             }
         }
-        .focusedSceneValue(\.editorSaveAction, editorSaveAction)
+        .focusedSceneValue(\.editorSaveAction, activeEditorSaveAction)
         .alert("Open External Link?", isPresented: externalLinkAlertBinding) {
             Button("Open") {
                 if let url = pendingExternalLink?.url {
@@ -227,6 +247,9 @@ struct SourceNoteView: View {
     }
 
     private func updateAutomaticFallbackAfterTextChange(for contents: String) {
+        guard WorkspaceEditorActivityGate.shouldRun(.fallbackProfile, isActive: isActive) else {
+            return
+        }
         guard livePreviewMode != .source else {
             return
         }
@@ -263,7 +286,7 @@ struct SourceNoteView: View {
                 return
             }
             await MainActor.run {
-                guard contents == text else {
+                guard isActive, contents == text else {
                     return
                 }
                 updateAutomaticFallback(for: contents)
@@ -275,6 +298,10 @@ struct SourceNoteView: View {
         EditorSaveAction(isAvailable: saveSession?.canSave == true) {
             saveCurrentNote()
         }
+    }
+
+    private var activeEditorSaveAction: EditorSaveAction? {
+        isActive ? editorSaveAction : nil
     }
 
     private func load() async {
@@ -630,6 +657,9 @@ struct SourceNoteView: View {
     }
 
     private func scheduleRecoverySnapshot(contents: String) {
+        guard WorkspaceEditorActivityGate.shouldRun(.recoverySnapshot, isActive: isActive) else {
+            return
+        }
         guard saveSession?.isDirty == true else {
             return
         }
@@ -684,6 +714,10 @@ struct SourceNoteView: View {
     }
 
     private func refreshLivePreviewMetadataIfNeeded(contents: String) {
+        guard WorkspaceEditorActivityGate.shouldRun(.livePreviewMetadata, isActive: isActive) else {
+            clearLivePreviewMetadata()
+            return
+        }
         guard livePreviewMode == .livePreview else {
             clearLivePreviewMetadata()
             return
@@ -698,18 +732,25 @@ struct SourceNoteView: View {
         let reader = appState.readClient
         let readAvailability = appState.readAvailability
         let readGeneration = appState.readGeneration
+        let activityToken = activityToken
         livePreviewMetadataTask = Task {
-            guard let reader, readAvailability == .ready else {
+            guard let reader, readAvailability == .ready, !activityToken.isCancelled else {
                 clearLivePreviewMetadata()
                 return
             }
 
             let maps = try? await Task.detached(priority: .utility) {
+                guard !activityToken.isCancelled else {
+                    return (LivePreviewLinkStyleMap(), LivePreviewEmbedPreviewMap())
+                }
                 let metadata = try await EngineLivePreviewMetadataLoader(reader: reader).loadMetadata(
                     file: file,
                     requestID: readGeneration,
                     contents: contents
                 )
+                guard !activityToken.isCancelled else {
+                    return (metadata.linkStyleMap(source: contents), LivePreviewEmbedPreviewMap())
+                }
                 let embedPreviewPlan = LivePreviewEmbedPreviewPlan(
                     source: contents,
                     references: metadata.attachments
@@ -725,6 +766,7 @@ struct SourceNoteView: View {
             }.value
 
             if Task.isCancelled ||
+                activityToken.isCancelled ||
                 !LivePreviewMetadataFreshness.accepts(candidateContents: contents, currentContents: text) {
                 return
             }
@@ -733,11 +775,17 @@ struct SourceNoteView: View {
         }
     }
 
-    private func handleEditorInteraction(_ interaction: MarkdownEditorInteraction) {
-        switch interaction {
+    private func cancelInactiveEditorWork() {
+        activityToken.cancel()
+        fallbackProfileTask?.cancel()
+        livePreviewMetadataTask?.cancel()
+    }
+
+    private func handleEditorInteraction(_ request: MarkdownEditorInteractionRequest) {
+        switch request.interaction {
         case .wikiLink(let link):
             Task {
-                await resolveAndOpen(link)
+                await resolveAndOpen(link, disposition: request.disposition)
             }
         case .externalLink(let link):
             guard link.isUserConfirmableExternalURL, let url = link.url else {
@@ -754,7 +802,10 @@ struct SourceNoteView: View {
     }
 
     @MainActor
-    private func resolveAndOpen(_ link: EditorWikiLink) async {
+    private func resolveAndOpen(
+        _ link: EditorWikiLink,
+        disposition: WorkspaceTabOpenDisposition
+    ) async {
         do {
             let state = try await Task.detached(priority: .userInitiated) {
                 try FileSystemEditorWikiLinkResolver().resolve(link, at: vaultURL)
@@ -762,7 +813,7 @@ struct SourceNoteView: View {
 
             switch state {
             case .resolved(let file):
-                appState.openFile(file)
+                appState.openFile(file, disposition: disposition)
             case .missing:
                 interactionNotice = EditorInteractionNotice(
                     title: "Missing Link",

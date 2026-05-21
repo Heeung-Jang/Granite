@@ -11,7 +11,9 @@ struct MarkdownEditorView: NSViewRepresentable {
     var embedPreviewMap = LivePreviewEmbedPreviewMap()
     var markerStyle: LivePreviewMarkerStyle = .defaultValue
     var documentTitle: String?
-    var interactionHandler: ((MarkdownEditorInteraction) -> Void)?
+    var isActive = true
+    var focusRequestID: UUID?
+    var interactionHandler: ((MarkdownEditorInteractionRequest) -> Void)?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
@@ -21,7 +23,8 @@ struct MarkdownEditorView: NSViewRepresentable {
             linkStyleMap: linkStyleMap,
             embedPreviewMap: embedPreviewMap,
             markerStyle: markerStyle,
-            documentTitle: documentTitle
+            documentTitle: documentTitle,
+            focusRequestID: focusRequestID
         )
     }
 
@@ -62,7 +65,8 @@ struct MarkdownEditorView: NSViewRepresentable {
             linkStyleMap: linkStyleMap,
             embedPreviewMap: embedPreviewMap,
             markerStyle: markerStyle,
-            documentTitle: documentTitle
+            documentTitle: documentTitle,
+            focusRequestID: focusRequestID
         )
         guard let textView = scrollView.documentView as? NSTextView else {
             return
@@ -85,6 +89,7 @@ struct MarkdownEditorView: NSViewRepresentable {
             textView.livePreviewDocumentTitle = documentTitle
         }
         MarkdownEditorAccessibility.apply(to: textView, isEditable: isEditable, mode: livePreviewMode)
+        context.coordinator.applyFocusRequestIfNeeded(isActive: isActive, in: scrollView)
     }
 
     static func dismantleNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {
@@ -102,12 +107,14 @@ struct MarkdownEditorView: NSViewRepresentable {
     @MainActor
     final class Coordinator: NSObject, NSTextViewDelegate, MarkdownInteractionTextViewDelegate {
         @Binding private var text: String
-        private var interactionHandler: ((MarkdownEditorInteraction) -> Void)?
+        private var interactionHandler: ((MarkdownEditorInteractionRequest) -> Void)?
         private var livePreviewMode: LivePreviewMode
         private var linkStyleMap: LivePreviewLinkStyleMap
         private var embedPreviewMap: LivePreviewEmbedPreviewMap
         private var markerStyle: LivePreviewMarkerStyle
         private var documentTitle: String?
+        private var focusRequestID: UUID?
+        private var appliedFocusRequestID: UUID?
         private var isDecoratingLivePreview = false
         private var decorationGeneration = 0
         weak var textView: NSTextView?
@@ -115,12 +122,13 @@ struct MarkdownEditorView: NSViewRepresentable {
 
         init(
             text: Binding<String>,
-            interactionHandler: ((MarkdownEditorInteraction) -> Void)? = nil,
+            interactionHandler: ((MarkdownEditorInteractionRequest) -> Void)? = nil,
             livePreviewMode: LivePreviewMode = .livePreview,
             linkStyleMap: LivePreviewLinkStyleMap = LivePreviewLinkStyleMap(),
             embedPreviewMap: LivePreviewEmbedPreviewMap = LivePreviewEmbedPreviewMap(),
             markerStyle: LivePreviewMarkerStyle = .defaultValue,
-            documentTitle: String? = nil
+            documentTitle: String? = nil,
+            focusRequestID: UUID? = nil
         ) {
             _text = text
             self.interactionHandler = interactionHandler
@@ -129,16 +137,18 @@ struct MarkdownEditorView: NSViewRepresentable {
             self.embedPreviewMap = embedPreviewMap
             self.markerStyle = markerStyle
             self.documentTitle = documentTitle
+            self.focusRequestID = focusRequestID
         }
 
         func update(
             text: Binding<String>,
-            interactionHandler: ((MarkdownEditorInteraction) -> Void)?,
+            interactionHandler: ((MarkdownEditorInteractionRequest) -> Void)?,
             livePreviewMode: LivePreviewMode,
             linkStyleMap: LivePreviewLinkStyleMap,
             embedPreviewMap: LivePreviewEmbedPreviewMap,
             markerStyle: LivePreviewMarkerStyle,
-            documentTitle: String?
+            documentTitle: String?,
+            focusRequestID: UUID?
         ) {
             _text = text
             self.interactionHandler = interactionHandler
@@ -147,9 +157,22 @@ struct MarkdownEditorView: NSViewRepresentable {
             self.embedPreviewMap = embedPreviewMap
             self.markerStyle = markerStyle
             self.documentTitle = documentTitle
+            self.focusRequestID = focusRequestID
             if let textView = textView as? MarkdownInteractionTextView {
                 textView.livePreviewDocumentTitle = documentTitle
             }
+        }
+
+        func applyFocusRequestIfNeeded(isActive: Bool, in scrollView: NSScrollView) {
+            guard isActive,
+                  let focusRequestID,
+                  appliedFocusRequestID != focusRequestID,
+                  let textView = scrollView.documentView as? NSTextView
+            else {
+                return
+            }
+            appliedFocusRequestID = focusRequestID
+            scrollView.window?.makeFirstResponder(textView)
         }
 
         func textDidChange(_ notification: Notification) {
@@ -193,7 +216,12 @@ struct MarkdownEditorView: NSViewRepresentable {
                 return false
             }
 
-            interactionHandler?(interaction)
+            interactionHandler?(MarkdownEditorInteractionRequest(
+                interaction: interaction,
+                disposition: OpenDispositionResolver.resolve(
+                    isCommandPressed: event.modifierFlags.contains(.command)
+                )
+            ))
             return true
         }
 
