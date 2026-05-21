@@ -4,6 +4,7 @@ import NativeMarkdownCore
 import SwiftUI
 
 struct MarkdownEditorBridgeProbeReport: Codable, Equatable {
+    var summary: ProbeCheckSummary
     var sameTextSkippedUpdate: Bool
     var sameTextSelectionPreserved: Bool
     var externalTextApplied: Bool
@@ -17,6 +18,16 @@ struct MarkdownEditorBridgeProbeReport: Codable, Equatable {
     var modeTransitionsKeptUndoEnabled: Bool
     var livePreviewReportsChangedRanges: Bool
     var livePreviewNoOpRenderSkipsChanges: Bool
+    var livePreviewRenderDoesNotMutateSource: Bool
+    var sourceModeShowsRawMarkdownSyntax: Bool
+    var overlayStateClearsOnModeSwitch: Bool
+    var overlayStateClearsOnSourceChange: Bool
+    var overlayStateClearsWhenDisabled: Bool
+    var overlayStateClearsDuringMarkedText: Bool
+    var activeHeadingLineMovementPreservesSource: Bool
+    var activeListLineMovementPreservesSource: Bool
+    var activeTaskLineMovementPreservesSource: Bool
+    var activeHorizontalRuleLineMovementPreservesSource: Bool
     var caretRevealRestoresHiddenSyntaxColor: Bool
     var headingSelectionRevealsMarkdownSource: Bool
     var inlineConcealmentAppliesBeyondParagraph: Bool
@@ -52,21 +63,48 @@ struct MarkdownEditorBridgeProbeReport: Codable, Equatable {
     var checkboxToggleChangesOnlyToken: Bool
     var checkboxToggleUndoRestoresToken: Bool
     var checkboxToggleReadOnlyPreservesBuffer: Bool
+    var renderedTaskCheckboxHitTestResolvesToken: Bool
+    var renderedTaskCheckboxHitTestDisabledGuards: Bool
+    var renderedTaskCheckboxToggleChangesOnlyToken: Bool
+    var renderedTaskCheckboxToggleUndoRestoresToken: Bool
     var tableCellContextMenuResolvesCell: Bool
     var tableCellContextMenuSkipsFallback: Bool
+    var tableRenderedBodyCellHitTestResolvesCell: Bool
+    var tableRenderedHeaderCellHitTestResolvesCell: Bool
+    var tableRenderedHitTestRejectsSyntax: Bool
+    var tableActiveCellStateTracksRenderedCell: Bool
+    var tableActiveCellStateClearsOnMiss: Bool
+    var tableActiveCellStateClearsWhenDisabled: Bool
+    var tableCellEditorFrameFollowsRenderedCell: Bool
+    var tableCellEditorCleansUpOnModeChange: Bool
+    var tableActiveCellOverlayTextSuppressed: Bool
+    var tableCellEditorEnterCommitsCell: Bool
+    var tableCellEditorFocusLossCommitsCell: Bool
+    var tableCellEditorEscapeCancelsEdit: Bool
+    var tableCellEditorRejectsInvalidText: Bool
+    var tableCellEditorBlocksMarkedTextCommit: Bool
+    var tableCellEditorRejectsStaleCell: Bool
+    var tableRowAddControlClickInsertsRow: Bool
+    var tableColumnAddControlClickInsertsColumn: Bool
+    var tableControlsHiddenInSourceMode: Bool
     var tableCellEditChangesOnlyCell: Bool
     var tableCellEditUndoRestoresCell: Bool
     var tableCellEditFailurePreservesBuffer: Bool
+    var tableInPlaceEditAvailable: Bool
+    var tableInPlaceEditSelectionPreserved: Bool
+    var tableInPlaceEditUndoPreservesSelection: Bool
     var frontmatterBoundaryDeleteUndoPreservesBuffer: Bool
     var editorAccessibilityHelpMentionsInteractions: Bool
 }
 
 @MainActor
 enum MarkdownEditorBridgeProbe {
-    static func encodedReport() -> String {
+    private static let expectedFailures: Set<String> = []
+
+    static func encodedReport(_ report: MarkdownEditorBridgeProbeReport = run()) -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let data = try! encoder.encode(run())
+        let data = try! encoder.encode(report)
         return String(decoding: data, as: UTF8.self)
     }
 
@@ -78,6 +116,8 @@ enum MarkdownEditorBridgeProbe {
         let coordinatorProbe = probeCoordinatorBinding()
         let modeProbe = probeModeTransitions()
         let renderProbe = probeLivePreviewRendering()
+        let sourcePreservationProbe = probeSourcePreservationGuards()
+        let overlayStateProbe = probeOverlayStateLifecycle()
         let markerStyleProbe = probeMarkerStyleStorageCompatibility()
         let selectionChangeProbe = probeSelectionChangeDecorationDoesNotReenter()
         let checkboxProbe = probeCheckboxToggle()
@@ -85,7 +125,8 @@ enum MarkdownEditorBridgeProbe {
         let frontmatterBoundaryProbe = probeFrontmatterBoundaryDeleteUndo()
         let accessibilityProbe = probeEditorAccessibility()
 
-        return MarkdownEditorBridgeProbeReport(
+        var report = MarkdownEditorBridgeProbeReport(
+            summary: .passed,
             sameTextSkippedUpdate: sameTextProbe.skipped,
             sameTextSelectionPreserved: sameTextProbe.selectionPreserved,
             externalTextApplied: externalTextProbe.applied,
@@ -99,6 +140,16 @@ enum MarkdownEditorBridgeProbe {
             modeTransitionsKeptUndoEnabled: modeProbe.undoEnabled,
             livePreviewReportsChangedRanges: renderProbe.reportsChangedRanges,
             livePreviewNoOpRenderSkipsChanges: renderProbe.noOpRenderSkipsChanges,
+            livePreviewRenderDoesNotMutateSource: sourcePreservationProbe.livePreviewRenderDoesNotMutateSource,
+            sourceModeShowsRawMarkdownSyntax: sourcePreservationProbe.sourceModeShowsRawMarkdownSyntax,
+            overlayStateClearsOnModeSwitch: overlayStateProbe.clearsOnModeSwitch,
+            overlayStateClearsOnSourceChange: overlayStateProbe.clearsOnSourceChange,
+            overlayStateClearsWhenDisabled: overlayStateProbe.clearsWhenDisabled,
+            overlayStateClearsDuringMarkedText: overlayStateProbe.clearsDuringMarkedText,
+            activeHeadingLineMovementPreservesSource: sourcePreservationProbe.activeHeadingLineMovementPreservesSource,
+            activeListLineMovementPreservesSource: sourcePreservationProbe.activeListLineMovementPreservesSource,
+            activeTaskLineMovementPreservesSource: sourcePreservationProbe.activeTaskLineMovementPreservesSource,
+            activeHorizontalRuleLineMovementPreservesSource: sourcePreservationProbe.activeHorizontalRuleLineMovementPreservesSource,
             caretRevealRestoresHiddenSyntaxColor: renderProbe.caretRevealRestoresHiddenSyntaxColor,
             headingSelectionRevealsMarkdownSource: renderProbe.headingSelectionRevealsMarkdownSource,
             inlineConcealmentAppliesBeyondParagraph: renderProbe.inlineConcealmentAppliesBeyondParagraph,
@@ -134,13 +185,185 @@ enum MarkdownEditorBridgeProbe {
             checkboxToggleChangesOnlyToken: checkboxProbe.changesOnlyToken,
             checkboxToggleUndoRestoresToken: checkboxProbe.undoRestoresToken,
             checkboxToggleReadOnlyPreservesBuffer: checkboxProbe.readOnlyPreservesBuffer,
+            renderedTaskCheckboxHitTestResolvesToken: checkboxProbe.renderedHitTestResolvesToken,
+            renderedTaskCheckboxHitTestDisabledGuards: checkboxProbe.renderedHitTestDisabledGuards,
+            renderedTaskCheckboxToggleChangesOnlyToken: checkboxProbe.renderedToggleChangesOnlyToken,
+            renderedTaskCheckboxToggleUndoRestoresToken: checkboxProbe.renderedToggleUndoRestoresToken,
             tableCellContextMenuResolvesCell: tableCellProbe.contextMenuResolvesCell,
             tableCellContextMenuSkipsFallback: tableCellProbe.contextMenuSkipsFallback,
+            tableRenderedBodyCellHitTestResolvesCell: tableCellProbe.renderedBodyCellHitTestResolvesCell,
+            tableRenderedHeaderCellHitTestResolvesCell: tableCellProbe.renderedHeaderCellHitTestResolvesCell,
+            tableRenderedHitTestRejectsSyntax: tableCellProbe.renderedHitTestRejectsSyntax,
+            tableActiveCellStateTracksRenderedCell: tableCellProbe.activeCellStateTracksRenderedCell,
+            tableActiveCellStateClearsOnMiss: tableCellProbe.activeCellStateClearsOnMiss,
+            tableActiveCellStateClearsWhenDisabled: tableCellProbe.activeCellStateClearsWhenDisabled,
+            tableCellEditorFrameFollowsRenderedCell: tableCellProbe.cellEditorFrameFollowsRenderedCell,
+            tableCellEditorCleansUpOnModeChange: tableCellProbe.cellEditorCleansUpOnModeChange,
+            tableActiveCellOverlayTextSuppressed: tableCellProbe.activeCellOverlayTextSuppressed,
+            tableCellEditorEnterCommitsCell: tableCellProbe.cellEditorEnterCommitsCell,
+            tableCellEditorFocusLossCommitsCell: tableCellProbe.cellEditorFocusLossCommitsCell,
+            tableCellEditorEscapeCancelsEdit: tableCellProbe.cellEditorEscapeCancelsEdit,
+            tableCellEditorRejectsInvalidText: tableCellProbe.cellEditorRejectsInvalidText,
+            tableCellEditorBlocksMarkedTextCommit: tableCellProbe.cellEditorBlocksMarkedTextCommit,
+            tableCellEditorRejectsStaleCell: tableCellProbe.cellEditorRejectsStaleCell,
+            tableRowAddControlClickInsertsRow: tableCellProbe.rowAddControlClickInsertsRow,
+            tableColumnAddControlClickInsertsColumn: tableCellProbe.columnAddControlClickInsertsColumn,
+            tableControlsHiddenInSourceMode: tableCellProbe.controlsHiddenInSourceMode,
             tableCellEditChangesOnlyCell: tableCellProbe.changesOnlyCell,
             tableCellEditUndoRestoresCell: tableCellProbe.undoRestoresCell,
             tableCellEditFailurePreservesBuffer: tableCellProbe.failurePreservesBuffer,
+            tableInPlaceEditAvailable: tableCellProbe.inPlaceEditAvailable,
+            tableInPlaceEditSelectionPreserved: tableCellProbe.inPlaceEditSelectionPreserved,
+            tableInPlaceEditUndoPreservesSelection: tableCellProbe.inPlaceEditUndoPreservesSelection,
             frontmatterBoundaryDeleteUndoPreservesBuffer: frontmatterBoundaryProbe,
             editorAccessibilityHelpMentionsInteractions: accessibilityProbe
+        )
+        report.summary = ProbeCheckSummary.evaluate(report: report, expectedFailures: expectedFailures)
+        return report
+    }
+
+    private static func probeSourcePreservationGuards() -> (
+        livePreviewRenderDoesNotMutateSource: Bool,
+        sourceModeShowsRawMarkdownSyntax: Bool,
+        activeHeadingLineMovementPreservesSource: Bool,
+        activeListLineMovementPreservesSource: Bool,
+        activeTaskLineMovementPreservesSource: Bool,
+        activeHorizontalRuleLineMovementPreservesSource: Bool
+    ) {
+        let source = """
+        # Heading
+
+        - Bullet
+        - [x] Done
+
+        ---
+
+        | Name | Status |
+        | --- | --- |
+        | Alpha | Draft |
+        """
+        let textView = MarkdownEditorTextViewFactory.makeTextView()
+        textView.string = source
+        let endSelection = NSRange(location: (source as NSString).length, length: 0)
+        textView.setSelectedRange(endSelection)
+
+        MarkdownVisibleRangeDecorator.decorateVisibleRange(
+            in: textView,
+            livePreviewMode: .livePreview,
+            revealRange: textView.selectedRange(),
+            markerStyle: .obsidian
+        )
+        let livePreviewRenderDoesNotMutateSource = textView.string == source
+
+        MarkdownVisibleRangeDecorator.decorateVisibleRange(
+            in: textView,
+            livePreviewMode: .source,
+            revealRange: textView.selectedRange(),
+            markerStyle: .obsidian
+        )
+        let sourceModeShowsRawMarkdownSyntax = textView.string == source
+            && foregroundColor(in: textView, text: source, marker: "# Heading") != LivePreviewTheme.concealedColor
+            && foregroundColor(in: textView, text: source, marker: "- Bullet") != LivePreviewTheme.concealedColor
+            && foregroundColor(in: textView, text: source, marker: "- [x]") != LivePreviewTheme.concealedColor
+            && foregroundColor(in: textView, text: source, marker: "---") != LivePreviewTheme.concealedColor
+            && foregroundColor(in: textView, text: source, marker: "| Name") != LivePreviewTheme.concealedColor
+
+        func moveSelection(to marker: String) -> Bool {
+            guard let offset = utf16Offset(of: marker, in: source) else {
+                return false
+            }
+            textView.setSelectedRange(NSRange(location: offset, length: 0))
+            MarkdownVisibleRangeDecorator.decorateVisibleRange(
+                in: textView,
+                livePreviewMode: .livePreview,
+                revealRange: textView.selectedRange(),
+                markerStyle: .obsidian
+            )
+            return textView.string == source
+        }
+
+        return (
+            livePreviewRenderDoesNotMutateSource,
+            sourceModeShowsRawMarkdownSyntax,
+            moveSelection(to: "Heading"),
+            moveSelection(to: "Bullet"),
+            moveSelection(to: "Done"),
+            moveSelection(to: "---")
+        )
+    }
+
+    private static func probeOverlayStateLifecycle() -> (
+        clearsOnModeSwitch: Bool,
+        clearsOnSourceChange: Bool,
+        clearsWhenDisabled: Bool,
+        clearsDuringMarkedText: Bool
+    ) {
+        let activeCell = LivePreviewTableCell(
+            text: "Alpha",
+            sourceRange: LivePreviewSourceRange(location: 0, length: 7),
+            contentRange: LivePreviewSourceRange(location: 2, length: 5),
+            columnIndex: 0
+        )
+
+        let modeTextView = MarkdownEditorTextViewFactory.makeTextView() as! MarkdownInteractionTextView
+        modeTextView.string = "| A | B |\n| --- | --- |\n| Alpha | Beta |\n"
+        modeTextView.livePreviewMode = .livePreview
+        modeTextView.setLivePreviewOverlayTableState(hovered: nil, active: activeCell)
+        modeTextView.livePreviewMode = .source
+        modeTextView.refreshLivePreviewOverlayState()
+        let clearsOnModeSwitch = modeTextView.livePreviewOverlayState.mode == .source
+            && modeTextView.livePreviewOverlayState.activeTableCell == nil
+
+        let sourceTextView = MarkdownEditorTextViewFactory.makeTextView() as! MarkdownInteractionTextView
+        sourceTextView.string = "Before"
+        sourceTextView.refreshLivePreviewOverlayState()
+        sourceTextView.setLivePreviewOverlayTableState(hovered: nil, active: activeCell)
+        sourceTextView.string = "After"
+        sourceTextView.noteLivePreviewSourceChanged()
+        sourceTextView.refreshLivePreviewOverlayState()
+        let clearsOnSourceChange = sourceTextView.livePreviewOverlayState.activeTableCell == nil
+
+        let disabledTextView = MarkdownEditorTextViewFactory.makeTextView() as! MarkdownInteractionTextView
+        disabledTextView.string = "Body"
+        disabledTextView.refreshLivePreviewOverlayState()
+        disabledTextView.setLivePreviewOverlayTableState(hovered: activeCell, active: activeCell)
+        disabledTextView.isEditable = false
+        disabledTextView.refreshLivePreviewOverlayState()
+        let clearsWhenDisabled = disabledTextView.livePreviewOverlayState.hoveredTableCell == nil
+            && disabledTextView.livePreviewOverlayState.activeTableCell == nil
+            && !disabledTextView.livePreviewOverlayState.allowsTransientControls
+
+        let markedTextView = MarkdownEditorTextViewFactory.makeTextView() as! MarkdownInteractionTextView
+        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 900, height: 700))
+        scrollView.documentView = markedTextView
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 900, height: 700),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: true
+        )
+        window.contentView = scrollView
+        window.makeFirstResponder(markedTextView)
+        markedTextView.string = "Body"
+        markedTextView.refreshLivePreviewOverlayState()
+        markedTextView.setLivePreviewOverlayTableState(hovered: activeCell, active: activeCell)
+        markedTextView.setMarkedText(
+            "한글",
+            selectedRange: NSRange(location: 2, length: 0),
+            replacementRange: NSRange(location: NSNotFound, length: 0)
+        )
+        markedTextView.refreshLivePreviewOverlayState()
+        let clearsDuringMarkedText = markedTextView.hasMarkedText()
+            && markedTextView.livePreviewOverlayState.hoveredTableCell == nil
+            && markedTextView.livePreviewOverlayState.activeTableCell == nil
+            && !markedTextView.livePreviewOverlayState.allowsTransientControls
+        markedTextView.unmarkText()
+
+        return (
+            clearsOnModeSwitch,
+            clearsOnSourceChange,
+            clearsWhenDisabled,
+            clearsDuringMarkedText
         )
     }
 
@@ -595,13 +818,9 @@ enum MarkdownEditorBridgeProbe {
             in: obsidianTextView,
             text: text,
             marker: "- Bullet"
-        ) == LivePreviewTheme.secondaryTextColor
-            && foregroundColor(in: obsidianTextView, text: text, marker: "- [x]") == LivePreviewTheme.secondaryTextColor
-        let obsidianTaskCheckboxVisible = foregroundColor(
-            in: obsidianTextView,
-            text: text,
-            marker: "[x]"
-        ) != LivePreviewTheme.concealedColor
+        ) == LivePreviewTheme.concealedColor
+            && foregroundColor(in: obsidianTextView, text: text, marker: "- [x]") == LivePreviewTheme.concealedColor
+        let obsidianTaskCheckboxVisible = taskCheckboxOverlayAvailable(in: obsidianTextView, text: text)
         let obsidianBlockquoteConcealed = foregroundColor(
             in: obsidianTextView,
             text: text,
@@ -625,7 +844,7 @@ enum MarkdownEditorBridgeProbe {
             in: obsidianTextView,
             text: text,
             marker: "# Heading"
-        ) != LivePreviewTheme.concealedColor
+        ) == LivePreviewTheme.secondaryTextColor
 
         let quoteOffset = (text as NSString).range(of: "Quote").location
         obsidianTextView.setSelectedRange(NSRange(location: quoteOffset, length: 0))
@@ -768,6 +987,28 @@ enum MarkdownEditorBridgeProbe {
         return textView.textStorage?.attribute(.font, at: offset, effectiveRange: nil) as? NSFont
     }
 
+    private static func taskCheckboxOverlayAvailable(in textView: NSTextView, text: String) -> Bool {
+        guard let block = LivePreviewParser.parse(text).blocks.first(where: {
+            if case .taskList = $0.kind {
+                return true
+            }
+            return false
+        }),
+              let markerKind = LivePreviewOverlayRenderer.markerGeometries(in: textView)
+                .first(where: { $0.kind == .taskCheckbox })?.kind
+        else {
+            return false
+        }
+        return LivePreviewOverlayRenderer.shouldDrawMarkerOverlay(
+            for: block,
+            markerKind: markerKind,
+            state: LivePreviewOverlayState(
+                markerStyle: .obsidian,
+                revealRange: NSRange(location: (text as NSString).length, length: 0)
+            )
+        )
+    }
+
     private static func utf16Offset(of marker: String, in text: String) -> Int? {
         guard let range = text.range(of: marker) else {
             return nil
@@ -775,10 +1016,30 @@ enum MarkdownEditorBridgeProbe {
         return NSRange(range, in: text).location
     }
 
+    private static func point(for range: NSRange, in textView: NSTextView) -> NSPoint? {
+        guard let layoutManager = textView.layoutManager,
+              let textContainer = textView.textContainer
+        else {
+            return nil
+        }
+        layoutManager.ensureLayout(for: textContainer)
+        let glyphRange = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+        guard glyphRange.length > 0 else {
+            return nil
+        }
+        let rect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+        let origin = textView.textContainerOrigin
+        return NSPoint(x: rect.midX + origin.x, y: rect.midY + origin.y)
+    }
+
     private static func probeCheckboxToggle() -> (
         changesOnlyToken: Bool,
         undoRestoresToken: Bool,
-        readOnlyPreservesBuffer: Bool
+        readOnlyPreservesBuffer: Bool,
+        renderedHitTestResolvesToken: Bool,
+        renderedHitTestDisabledGuards: Bool,
+        renderedToggleChangesOnlyToken: Bool,
+        renderedToggleUndoRestoresToken: Bool
     ) {
         let text = "- [ ] Task\n- [x] Done\n"
         let textView = MarkdownEditorTextViewFactory.makeTextView()
@@ -795,7 +1056,7 @@ enum MarkdownEditorBridgeProbe {
         textView.string = text
         textView.setSelectedRange(NSRange(location: 0, length: 0))
         guard let offset = utf16Offset(of: "[ ]", in: text) else {
-            return (false, false, false)
+            return (false, false, false, false, false, false, false)
         }
 
         let toggled = (textView as? MarkdownInteractionTextView)?.toggleTaskCheckbox(at: offset + 1) == true
@@ -812,12 +1073,102 @@ enum MarkdownEditorBridgeProbe {
         let readOnlyPreservesBuffer = !readOnlyToggled
             && readOnlyTextView.string == text
 
-        return (changesOnlyToken, undoRestoresToken, readOnlyPreservesBuffer)
+        let renderedText = "- [ ] Task\n"
+        let renderedTextView = MarkdownEditorTextViewFactory.makeTextView() as! MarkdownInteractionTextView
+        let renderedScrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 900, height: 700))
+        renderedScrollView.documentView = renderedTextView
+        let renderedWindow = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 900, height: 700),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: true
+        )
+        renderedWindow.contentView = renderedScrollView
+        renderedWindow.makeFirstResponder(renderedTextView)
+        renderedTextView.string = renderedText
+        renderedTextView.livePreviewMarkerStyle = .obsidian
+        renderedTextView.setSelectedRange(NSRange(location: (renderedText as NSString).length, length: 0))
+        MarkdownVisibleRangeDecorator.decorateVisibleRange(
+            in: renderedTextView,
+            livePreviewMode: .livePreview,
+            revealRange: renderedTextView.selectedRange(),
+            markerStyle: .obsidian
+        )
+        renderedTextView.refreshLivePreviewOverlayState()
+        let renderedGeometry = LivePreviewOverlayRenderer.markerGeometries(in: renderedTextView)
+            .first { $0.kind == .taskCheckbox }
+        let renderedPoint = renderedGeometry.map { NSPoint(x: $0.rect.midX, y: $0.rect.midY) }
+        let renderedOffset = renderedPoint.flatMap { renderedTextView.taskCheckboxToggleOffset(at: $0) }
+        let renderedHitTestResolvesToken = renderedOffset == (utf16Offset(of: "[ ]", in: renderedText) ?? -10) + 1
+
+        let renderedToggled = renderedOffset.map { renderedTextView.toggleTaskCheckbox(at: $0) } == true
+        let renderedToggleChangesOnlyToken = renderedToggled && renderedTextView.string == "- [x] Task\n"
+        let renderedCanUndo = renderedTextView.undoManager?.canUndo ?? false
+        renderedTextView.undoManager?.undo()
+        let renderedToggleUndoRestoresToken = renderedCanUndo && renderedTextView.string == renderedText
+
+        let sourceModeTextView = MarkdownEditorTextViewFactory.makeTextView() as! MarkdownInteractionTextView
+        sourceModeTextView.string = renderedText
+        sourceModeTextView.livePreviewMode = .source
+        sourceModeTextView.livePreviewMarkerStyle = .obsidian
+        sourceModeTextView.refreshLivePreviewOverlayState()
+
+        let readOnlyRenderedTextView = MarkdownEditorTextViewFactory.makeTextView() as! MarkdownInteractionTextView
+        readOnlyRenderedTextView.string = renderedText
+        readOnlyRenderedTextView.livePreviewMarkerStyle = .obsidian
+        readOnlyRenderedTextView.isEditable = false
+        readOnlyRenderedTextView.refreshLivePreviewOverlayState()
+
+        let markedTextView = MarkdownEditorTextViewFactory.makeTextView() as! MarkdownInteractionTextView
+        markedTextView.string = renderedText
+        markedTextView.livePreviewMarkerStyle = .obsidian
+        markedTextView.setMarkedText(
+            "한글",
+            selectedRange: NSRange(location: 2, length: 0),
+            replacementRange: NSRange(location: NSNotFound, length: 0)
+        )
+        markedTextView.refreshLivePreviewOverlayState()
+
+        let renderedTaskPoint = renderedPoint ?? .zero
+        let renderedHitTestDisabledGuards = sourceModeTextView.taskCheckboxToggleOffset(at: renderedTaskPoint) == nil
+            && readOnlyRenderedTextView.taskCheckboxToggleOffset(at: renderedTaskPoint) == nil
+            && markedTextView.taskCheckboxToggleOffset(at: renderedTaskPoint) == nil
+
+        return (
+            changesOnlyToken,
+            undoRestoresToken,
+            readOnlyPreservesBuffer,
+            renderedHitTestResolvesToken,
+            renderedHitTestDisabledGuards,
+            renderedToggleChangesOnlyToken,
+            renderedToggleUndoRestoresToken
+        )
     }
 
     private static func probeTableCellEdit() -> (
         contextMenuResolvesCell: Bool,
         contextMenuSkipsFallback: Bool,
+        renderedBodyCellHitTestResolvesCell: Bool,
+        renderedHeaderCellHitTestResolvesCell: Bool,
+        renderedHitTestRejectsSyntax: Bool,
+        activeCellStateTracksRenderedCell: Bool,
+        activeCellStateClearsOnMiss: Bool,
+        activeCellStateClearsWhenDisabled: Bool,
+        cellEditorFrameFollowsRenderedCell: Bool,
+        cellEditorCleansUpOnModeChange: Bool,
+        activeCellOverlayTextSuppressed: Bool,
+        inPlaceEditAvailable: Bool,
+        cellEditorEnterCommitsCell: Bool,
+        cellEditorFocusLossCommitsCell: Bool,
+        cellEditorEscapeCancelsEdit: Bool,
+        cellEditorRejectsInvalidText: Bool,
+        cellEditorBlocksMarkedTextCommit: Bool,
+        cellEditorRejectsStaleCell: Bool,
+        rowAddControlClickInsertsRow: Bool,
+        columnAddControlClickInsertsColumn: Bool,
+        controlsHiddenInSourceMode: Bool,
+        inPlaceEditSelectionPreserved: Bool,
+        inPlaceEditUndoPreservesSelection: Bool,
         changesOnlyCell: Bool,
         undoRestoresCell: Bool,
         failurePreservesBuffer: Bool
@@ -840,18 +1191,246 @@ enum MarkdownEditorBridgeProbe {
         window.makeFirstResponder(textView)
         textView.string = text
         guard let table = LivePreviewTableParser.parse(text).first else {
-            return (false, false, false, false, false)
+            return (
+                false, false, false, false, false, false, false, false, false, false,
+                false, false, false, false, false, false, false, false, false, false,
+                false, false, false, false, false, false
+            )
         }
         let cell = table.bodyRows[0][1]
         let cellOffset = utf16Offset(of: "Draft", in: text) ?? -1
-        let menuCell = (textView as? MarkdownInteractionTextView)?.tableCellForEditing(at: cellOffset)
+        let interactionTextView = textView as? MarkdownInteractionTextView
+        let menuCell = interactionTextView?.tableCellForEditing(at: cellOffset)
         let contextMenuResolvesCell = menuCell == cell
+
+        let layout = LivePreviewTableLayout.make(for: table, in: textView)
+        let bodyLayout = layout?.cells.first { !$0.isHeader && $0.tableCell.text == "Draft" }
+        let headerLayout = layout?.cells.first { $0.isHeader && $0.tableCell.text == "Status" }
+        let renderedBodyCell = bodyLayout.flatMap {
+            interactionTextView?.tableCellForEditing(at: NSPoint(x: $0.textRect.midX, y: $0.textRect.midY))
+        }
+        let renderedHeaderCell = headerLayout.flatMap {
+            interactionTextView?.tableCellForEditing(at: NSPoint(x: $0.textRect.midX, y: $0.textRect.midY))
+        }
+        let renderedBodyCellHitTestResolvesCell = renderedBodyCell == cell
+        let renderedHeaderCellHitTestResolvesCell = renderedHeaderCell == table.header[1]
+        let pipePoint = point(for: NSRange(location: 0, length: 1), in: textView)
+        let alignmentPoint = utf16Offset(of: "| --- | --- |", in: text).flatMap {
+            point(for: NSRange(location: $0, length: 1), in: textView)
+        }
+        let renderedHitTestRejectsSyntax = pipePoint.flatMap { interactionTextView?.tableCellForEditing(at: $0) } == nil
+            && alignmentPoint.flatMap { interactionTextView?.tableCellForEditing(at: $0) } == nil
+        let bodyPoint = bodyLayout.map { NSPoint(x: $0.textRect.midX, y: $0.textRect.midY) }
+        let activeCellStateTracksRenderedCell = bodyPoint.map { point in
+            interactionTextView?.setActiveTableCell(at: point) == true
+                && interactionTextView?.livePreviewOverlayState.activeTableCell == cell
+                && interactionTextView?.livePreviewOverlayState.hoveredTableCell == cell
+        } == true
+        let editorFrame = interactionTextView?.activeTableCellEditorFrame
+        let inPlaceEditAvailable = editorFrame != nil
+        let cellEditorFrameFollowsRenderedCell = bodyLayout.map { layout in
+            editorFrame?.intersects(layout.textRect) == true
+        } == true
+        let activeCellOverlayTextSuppressed = interactionTextView.map {
+            !LivePreviewOverlayRenderer.shouldDrawTableCellText(cell, state: $0.livePreviewOverlayState)
+                && LivePreviewOverlayRenderer.shouldDrawTableCellText(table.header[1], state: $0.livePreviewOverlayState)
+        } == true
+        let activeCellStateClearsOnMiss = bodyPoint.map { _ in
+            interactionTextView?.setActiveTableCell(at: NSPoint(x: 1, y: 1)) == false
+                && interactionTextView?.livePreviewOverlayState.activeTableCell == nil
+        } == true
 
         let fallbackTextView = MarkdownEditorTextViewFactory.makeTextView()
         fallbackTextView.string = text
         (fallbackTextView as? MarkdownInteractionTextView)?.livePreviewMode = .fallbackSource(reason: .tooManyTableCells)
         let fallbackCell = (fallbackTextView as? MarkdownInteractionTextView)?.tableCellForEditing(at: cellOffset)
         let contextMenuSkipsFallback = fallbackCell == nil
+
+        func makeInPlaceEditor() -> (
+            textView: MarkdownInteractionTextView,
+            cell: LivePreviewTableCell,
+            point: NSPoint,
+            selection: NSRange,
+            window: NSWindow
+        )? {
+            let textView = MarkdownEditorTextViewFactory.makeTextView() as! MarkdownInteractionTextView
+            let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 900, height: 700))
+            scrollView.documentView = textView
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 900, height: 700),
+                styleMask: [.titled],
+                backing: .buffered,
+                defer: true
+            )
+            window.contentView = scrollView
+            window.makeFirstResponder(textView)
+            textView.string = text
+            let selection = NSRange(location: utf16Offset(of: "Alpha", in: text) ?? 0, length: 0)
+            textView.setSelectedRange(selection)
+            guard let table = LivePreviewTableParser.parse(text).first,
+                  let layout = LivePreviewTableLayout.make(for: table, in: textView),
+                  let bodyLayout = layout.cells.first(where: { !$0.isHeader && $0.tableCell.text == "Draft" })
+            else {
+                return nil
+            }
+            return (
+                textView,
+                bodyLayout.tableCell,
+                NSPoint(x: bodyLayout.textRect.midX, y: bodyLayout.textRect.midY),
+                selection,
+                window
+            )
+        }
+
+        let enterProbe = makeInPlaceEditor()
+        let enterTextView = enterProbe?.textView
+        let enterActivated = enterProbe.map { $0.textView.setActiveTableCell(at: $0.point) } == true
+        enterTextView?.tableCellEditor?.stringValue = "Published"
+        let enterHandled = enterTextView.flatMap { textView in
+            textView.tableCellEditor.map {
+                textView.control(
+                    $0,
+                    textView: ($0.currentEditor() as? NSTextView) ?? NSTextView(),
+                    doCommandBy: #selector(NSResponder.insertNewline(_:))
+                )
+            }
+        } == true
+        let enterExpected = """
+        | Name | Status |
+        | --- | --- |
+        | Alpha | Published |
+        """
+        let cellEditorEnterCommitsCell = enterActivated && enterHandled && enterTextView?.string == enterExpected
+        let inPlaceEditSelectionPreserved = enterProbe.map {
+            $0.textView.selectedRange() == $0.selection
+        } == true
+        let canUndoInPlace = enterTextView?.undoManager?.canUndo ?? false
+        enterTextView?.undoManager?.undo()
+        let undoSelection = enterTextView?.selectedRange() ?? NSRange(location: NSNotFound, length: 0)
+        let undoTextLength = ((enterTextView?.string ?? "") as NSString).length
+        let inPlaceEditUndoPreservesSelection = canUndoInPlace
+            && enterTextView?.string == text
+            && undoSelection.location != NSNotFound
+            && undoSelection.location + undoSelection.length <= undoTextLength
+
+        let focusProbe = makeInPlaceEditor()
+        let focusTextView = focusProbe?.textView
+        _ = focusProbe.map { $0.textView.setActiveTableCell(at: $0.point) }
+        focusTextView?.tableCellEditor?.stringValue = "Focused"
+        focusProbe?.window.makeFirstResponder(focusTextView)
+        let focusExpected = """
+        | Name | Status |
+        | --- | --- |
+        | Alpha | Focused |
+        """
+        let cellEditorFocusLossCommitsCell = focusTextView?.string == focusExpected
+
+        let escapeProbe = makeInPlaceEditor()
+        let escapeTextView = escapeProbe?.textView
+        _ = escapeProbe.map { $0.textView.setActiveTableCell(at: $0.point) }
+        escapeTextView?.tableCellEditor?.stringValue = "Cancelled"
+        let escapeHandled = escapeTextView.flatMap { textView in
+            textView.tableCellEditor.map {
+                textView.control(
+                    $0,
+                    textView: ($0.currentEditor() as? NSTextView) ?? NSTextView(),
+                    doCommandBy: #selector(NSResponder.cancelOperation(_:))
+                )
+            }
+        } == true
+        let cellEditorEscapeCancelsEdit = escapeHandled
+            && escapeTextView?.string == text
+            && escapeTextView?.tableCellEditor == nil
+
+        let invalidProbe = makeInPlaceEditor()
+        let invalidTextView = invalidProbe?.textView
+        _ = invalidProbe.map { $0.textView.setActiveTableCell(at: $0.point) }
+        invalidTextView?.tableCellEditor?.stringValue = "bad|value"
+        let invalidCommit = invalidTextView?.commitActiveTableCellEditor() == true
+        let cellEditorRejectsInvalidText = !invalidCommit
+            && invalidTextView?.string == text
+            && invalidTextView?.tableCellEditor != nil
+
+        let markedProbe = makeInPlaceEditor()
+        let markedTextView = markedProbe?.textView
+        _ = markedProbe.map { $0.textView.setActiveTableCell(at: $0.point) }
+        markedTextView?.tableCellEditor?.stringValue = "Marked"
+        if let fieldEditor = markedTextView?.tableCellEditor?.currentEditor() as? NSTextView {
+            fieldEditor.setMarkedText(
+                "한",
+                selectedRange: NSRange(location: 1, length: 0),
+                replacementRange: NSRange(location: NSNotFound, length: 0)
+            )
+        }
+        let markedCommit = markedTextView?.commitActiveTableCellEditor() == true
+        let cellEditorBlocksMarkedTextCommit = !markedCommit
+            && markedTextView?.string == text
+            && markedTextView?.tableCellEditor != nil
+        (markedTextView?.tableCellEditor?.currentEditor() as? NSTextView)?.unmarkText()
+
+        let staleProbe = makeInPlaceEditor()
+        let staleTextView = staleProbe?.textView
+        _ = staleProbe.map { $0.textView.setActiveTableCell(at: $0.point) }
+        staleTextView?.tableCellEditor?.stringValue = "Published"
+        staleTextView?.string = text.replacingOccurrences(of: "Draft", with: "Changed")
+        let staleCommit = staleTextView?.commitActiveTableCellEditor() == true
+        let cellEditorRejectsStaleCell = !staleCommit
+            && staleTextView?.string.contains("Changed") == true
+            && staleTextView?.string.contains("Published") == false
+
+        let rowControlProbe = makeInPlaceEditor()
+        let rowControlTextView = rowControlProbe?.textView
+        _ = rowControlProbe.map { $0.textView.setActiveTableCell(at: $0.point) }
+        let rowControlRect = rowControlProbe.flatMap { probe -> NSRect? in
+            LivePreviewTableParser.parse(probe.textView.string).compactMap {
+                LivePreviewTableLayout.make(for: $0, in: probe.textView)
+            }.first?.rowAddControlRect(for: probe.cell)
+        }
+        let rowAddControlClickInsertsRow = rowControlRect.map {
+            rowControlTextView?.performTableControl(at: NSPoint(x: $0.midX, y: $0.midY)) == true
+        } == true && rowControlTextView?.string.contains("| Alpha | Draft |\n|  |  |") == true
+
+        let columnControlProbe = makeInPlaceEditor()
+        let columnControlTextView = columnControlProbe?.textView
+        _ = columnControlProbe.map { $0.textView.setActiveTableCell(at: $0.point) }
+        let columnControlRect = columnControlProbe.flatMap { probe -> NSRect? in
+            LivePreviewTableParser.parse(probe.textView.string).compactMap {
+                LivePreviewTableLayout.make(for: $0, in: probe.textView)
+            }.first?.columnAddControlRect(for: probe.cell)
+        }
+        let columnAddControlClickInsertsColumn = columnControlRect.map {
+            columnControlTextView?.performTableControl(at: NSPoint(x: $0.midX, y: $0.midY)) == true
+        } == true && columnControlTextView?.string.contains("| Alpha | Draft |  |") == true
+
+        let sourceModeControlProbe = makeInPlaceEditor()
+        let sourceModeTextView = sourceModeControlProbe?.textView
+        _ = sourceModeControlProbe.map { $0.textView.setActiveTableCell(at: $0.point) }
+        sourceModeTextView?.livePreviewMode = .source
+        sourceModeTextView?.refreshLivePreviewOverlayState()
+        let controlsHiddenInSourceMode = sourceModeTextView.map {
+            !LivePreviewOverlayRenderer.shouldDrawTableControls(state: $0.livePreviewOverlayState)
+                && $0.performTableControl(at: sourceModeControlProbe?.point ?? .zero) == false
+        } == true
+
+        let disabledTextView = MarkdownEditorTextViewFactory.makeTextView() as! MarkdownInteractionTextView
+        disabledTextView.string = text
+        disabledTextView.livePreviewMode = .livePreview
+        if let point = bodyPoint {
+            _ = disabledTextView.setActiveTableCell(at: point)
+        }
+        disabledTextView.livePreviewMode = .source
+        disabledTextView.refreshLivePreviewOverlayState()
+        let sourceModeClearsActiveCell = disabledTextView.livePreviewOverlayState.activeTableCell == nil
+            && disabledTextView.tableCellForEditing(at: bodyPoint ?? .zero) == nil
+        let cellEditorCleansUpOnModeChange = disabledTextView.activeTableCellEditorFrame == nil
+        disabledTextView.livePreviewMode = .livePreview
+        if let point = bodyPoint {
+            _ = disabledTextView.setActiveTableCell(at: point)
+        }
+        disabledTextView.isEditable = false
+        disabledTextView.refreshLivePreviewOverlayState()
+        let activeCellStateClearsWhenDisabled = sourceModeClearsActiveCell
+            && disabledTextView.livePreviewOverlayState.activeTableCell == nil
 
         let edited = (textView as? MarkdownInteractionTextView)?.replaceTableCell(cell, with: "Published") == true
         let expected = """
@@ -874,7 +1453,34 @@ enum MarkdownEditorBridgeProbe {
             && textView.string == text
             && readOnlyTextView.string == text
 
-        return (contextMenuResolvesCell, contextMenuSkipsFallback, changesOnlyCell, undoRestoresCell, failurePreservesBuffer)
+        return (
+            contextMenuResolvesCell,
+            contextMenuSkipsFallback,
+            renderedBodyCellHitTestResolvesCell,
+            renderedHeaderCellHitTestResolvesCell,
+            renderedHitTestRejectsSyntax,
+            activeCellStateTracksRenderedCell,
+            activeCellStateClearsOnMiss,
+            activeCellStateClearsWhenDisabled,
+            cellEditorFrameFollowsRenderedCell,
+            cellEditorCleansUpOnModeChange,
+            activeCellOverlayTextSuppressed,
+            inPlaceEditAvailable,
+            cellEditorEnterCommitsCell,
+            cellEditorFocusLossCommitsCell,
+            cellEditorEscapeCancelsEdit,
+            cellEditorRejectsInvalidText,
+            cellEditorBlocksMarkedTextCommit,
+            cellEditorRejectsStaleCell,
+            rowAddControlClickInsertsRow,
+            columnAddControlClickInsertsColumn,
+            controlsHiddenInSourceMode,
+            inPlaceEditSelectionPreserved,
+            inPlaceEditUndoPreservesSelection,
+            changesOnlyCell,
+            undoRestoresCell,
+            failurePreservesBuffer
+        )
     }
 
     private static func probeEditorAccessibility() -> Bool {

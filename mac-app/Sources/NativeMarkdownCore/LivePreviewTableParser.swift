@@ -108,6 +108,22 @@ public enum LivePreviewTableParser {
         )
     }
 
+    public static func editableTable(
+        _ table: LivePreviewTable,
+        in source: String
+    ) -> LivePreviewTable? {
+        guard let current = parse(source).first(where: { $0.sourceRange == table.sourceRange }),
+              current == table,
+              current.header.count == current.alignments.count,
+              current.bodyRows.allSatisfy({ $0.count == current.header.count }),
+              rangesResolve(for: current, in: source),
+              !hasAmbiguousEditableSyntax(current, in: source)
+        else {
+            return nil
+        }
+        return current
+    }
+
     private static func alignment(for text: String) -> LivePreviewTableAlignment? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let dashText = trimmed.trimmingCharacters(in: CharacterSet(charactersIn: ":"))
@@ -204,17 +220,57 @@ public enum LivePreviewTableParser {
         var index = range.lowerBound
 
         while index < range.upperBound {
-            let lineUpper = source[index..<range.upperBound].firstIndex(of: "\n").map {
-                source.index(after: $0)
-            } ?? range.upperBound
-            let contentUpper = lineUpper > index && source[source.index(before: lineUpper)] == "\n"
-                ? source.index(before: lineUpper)
-                : lineUpper
+            let contentUpper = source[index..<range.upperBound].firstIndex { $0.isNewline } ?? range.upperBound
+            let lineUpper = contentUpper < range.upperBound
+                ? source.index(after: contentUpper)
+                : range.upperBound
             lines.append(TableLine(contentRange: index..<contentUpper))
             index = lineUpper
         }
 
         return lines
+    }
+
+    private static func rangesResolve(for table: LivePreviewTable, in source: String) -> Bool {
+        guard LivePreviewRangeMapper.stringRange(for: table.sourceRange, in: source) != nil,
+              LivePreviewRangeMapper.stringRange(for: table.alignmentRowRange, in: source) != nil
+        else {
+            return false
+        }
+        return ([table.header] + table.bodyRows).flatMap { $0 }.allSatisfy { cell in
+            guard let sourceRange = LivePreviewRangeMapper.stringRange(for: cell.sourceRange, in: source),
+                  let contentRange = LivePreviewRangeMapper.stringRange(for: cell.contentRange, in: source)
+            else {
+                return false
+            }
+            return source[sourceRange].contains(source[contentRange])
+                && String(source[contentRange]) == cell.text
+        }
+    }
+
+    private static func hasAmbiguousEditableSyntax(_ table: LivePreviewTable, in source: String) -> Bool {
+        guard let range = LivePreviewRangeMapper.stringRange(for: table.sourceRange, in: source) else {
+            return true
+        }
+        return source[range].split(separator: "\n", omittingEmptySubsequences: false).contains { rawLine in
+            let line = String(rawLine)
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            return line.hasPrefix("    ")
+                || line.hasPrefix("\t")
+                || trimmed.hasPrefix(">")
+                || trimmed.hasPrefix("- ")
+                || line.contains("\\|")
+                || hasInteriorEmptyCell(in: trimmed)
+        }
+    }
+
+    private static func hasInteriorEmptyCell(in line: String) -> Bool {
+        guard line.contains("||") else {
+            return false
+        }
+        let withoutLeading = line.hasPrefix("|") ? String(line.dropFirst()) : line
+        let withoutTrailing = withoutLeading.hasSuffix("|") ? String(withoutLeading.dropLast()) : withoutLeading
+        return withoutTrailing.contains("||")
     }
 }
 
@@ -241,6 +297,126 @@ public enum LivePreviewTableCellEdit {
     private static func isSafeCellText(_ text: String) -> Bool {
         !text.contains("\n") && !text.contains("\r") && !text.contains("|")
     }
+}
+
+public enum LivePreviewTableRowInsert {
+    public static func insertingRow(
+        after target: LivePreviewTableCell,
+        in source: String
+    ) -> String? {
+        guard let table = editableTable(containing: target, in: source),
+              let tableRange = LivePreviewRangeMapper.stringRange(for: table.sourceRange, in: source),
+              let rowIndex = rowIndex(containing: target, in: table)
+        else {
+            return nil
+        }
+
+        let lineEnding = preferredLineEnding(in: String(source[tableRange]))
+        var lines = tableLinesText(in: String(source[tableRange]), lineEnding: lineEnding)
+        let insertIndex = rowIndex == 0 ? 2 : rowIndex + 1
+        guard insertIndex <= lines.count else {
+            return nil
+        }
+        lines.insert(blankRow(columnCount: table.header.count, like: lines[0]), at: insertIndex)
+        return replacingTable(in: source, range: tableRange, lines: lines, lineEnding: lineEnding)
+    }
+
+    private static func rowIndex(containing target: LivePreviewTableCell, in table: LivePreviewTable) -> Int? {
+        if table.header.contains(target) {
+            return 0
+        }
+        guard let bodyIndex = table.bodyRows.firstIndex(where: { $0.contains(target) }) else {
+            return nil
+        }
+        return bodyIndex + 2
+    }
+
+    private static func blankRow(columnCount: Int, like line: String) -> String {
+        let cells = Array(repeating: "  ", count: columnCount).joined(separator: "|")
+        if line.trimmingCharacters(in: .whitespaces).hasPrefix("|") {
+            return "|" + cells + "|"
+        }
+        return cells
+    }
+}
+
+public enum LivePreviewTableColumnInsert {
+    public static func insertingColumn(
+        after target: LivePreviewTableCell,
+        in source: String
+    ) -> String? {
+        guard let table = editableTable(containing: target, in: source),
+              let tableRange = LivePreviewRangeMapper.stringRange(for: table.sourceRange, in: source)
+        else {
+            return nil
+        }
+
+        let lineEnding = preferredLineEnding(in: String(source[tableRange]))
+        let lines = tableLinesText(in: String(source[tableRange]), lineEnding: lineEnding)
+        let editedLines = lines.enumerated().map { index, line in
+            insertingCell(
+                in: line,
+                afterColumn: target.columnIndex,
+                value: index == 1 ? "---" : ""
+            )
+        }
+        guard editedLines.allSatisfy({ $0 != nil }) else {
+            return nil
+        }
+        return replacingTable(in: source, range: tableRange, lines: editedLines.compactMap { $0 }, lineEnding: lineEnding)
+    }
+
+    private static func insertingCell(in line: String, afterColumn column: Int, value: String) -> String? {
+        let hasLeadingPipe = line.trimmingCharacters(in: .whitespaces).hasPrefix("|")
+        let hasTrailingPipe = line.trimmingCharacters(in: .whitespaces).hasSuffix("|")
+        var parts = line.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+        if hasLeadingPipe, !parts.isEmpty {
+            parts.removeFirst()
+        }
+        if hasTrailingPipe, !parts.isEmpty {
+            parts.removeLast()
+        }
+        guard parts.indices.contains(column) else {
+            return nil
+        }
+        parts.insert(" \(value) ", at: column + 1)
+        return (hasLeadingPipe ? "|" : "") + parts.joined(separator: "|") + (hasTrailingPipe ? "|" : "")
+    }
+}
+
+private func editableTable(containing target: LivePreviewTableCell, in source: String) -> LivePreviewTable? {
+    LivePreviewTableParser.parse(source).first { table in
+        LivePreviewTableParser.editableTable(table, in: source) != nil
+            && ([table.header] + table.bodyRows).flatMap { $0 }.contains(target)
+    }
+}
+
+private func preferredLineEnding(in text: String) -> String {
+    text.contains("\r\n") ? "\r\n" : "\n"
+}
+
+private func tableLinesText(in tableText: String, lineEnding: String) -> [String] {
+    var lines = tableText.components(separatedBy: lineEnding)
+    if tableText.hasSuffix(lineEnding) {
+        lines.removeLast()
+    }
+    return lines
+}
+
+private func replacingTable(
+    in source: String,
+    range: Range<String.Index>,
+    lines: [String],
+    lineEnding: String
+) -> String {
+    let original = String(source[range])
+    var replacement = lines.joined(separator: lineEnding)
+    if original.hasSuffix(lineEnding) {
+        replacement += lineEnding
+    }
+    var edited = source
+    edited.replaceSubrange(range, with: replacement)
+    return edited
 }
 
 private struct TableLine {

@@ -3,6 +3,11 @@ import NativeMarkdownCore
 
 @MainActor
 enum LivePreviewOverlayRenderer {
+    private static let unorderedMarkerRegex = regex(#"^\s*[-*+]\s"#)
+    private static let orderedMarkerRegex = regex(#"^\s*\d+[.)]\s"#)
+    private static let taskPrefixRegex = regex(#"^\s*[-*+]\s+\[[ xX]\]\s"#)
+    private static let taskCheckboxRegex = regex(#"\[[ xX]\]"#)
+
     private struct RenderBlock {
         var block: LivePreviewBlockSpan
         var properties: LivePreviewPropertyBlock?
@@ -41,8 +46,12 @@ enum LivePreviewOverlayRenderer {
         static let tagHorizontalPadding: CGFloat = 18
     }
 
-    static func drawBackgrounds(in textView: MarkdownInteractionTextView, dirtyRect: NSRect) {
-        guard textView.livePreviewMode == .livePreview else {
+    static func drawBackgrounds(
+        in textView: MarkdownInteractionTextView,
+        dirtyRect: NSRect,
+        state: LivePreviewOverlayState
+    ) {
+        guard state.drawsLivePreviewChrome else {
             return
         }
         for renderBlock in visibleBlocks(in: textView) {
@@ -59,8 +68,12 @@ enum LivePreviewOverlayRenderer {
         }
     }
 
-    static func drawForegrounds(in textView: MarkdownInteractionTextView, dirtyRect: NSRect) {
-        guard textView.livePreviewMode == .livePreview else {
+    static func drawForegrounds(
+        in textView: MarkdownInteractionTextView,
+        dirtyRect: NSRect,
+        state: LivePreviewOverlayState
+    ) {
+        guard state.drawsLivePreviewChrome else {
             return
         }
         for renderBlock in visibleBlocks(in: textView) {
@@ -71,10 +84,12 @@ enum LivePreviewOverlayRenderer {
                 }
             case .table:
                 if let table = renderBlock.table {
-                    drawTableForeground(table, in: textView, dirtyRect: dirtyRect)
+                    drawTableForeground(table, in: textView, dirtyRect: dirtyRect, state: state)
                 }
             case .horizontalRule:
-                drawHorizontalRule(renderBlock.block, in: textView, dirtyRect: dirtyRect)
+                drawHorizontalRule(renderBlock.block, in: textView, dirtyRect: dirtyRect, state: state)
+            case .unorderedList, .orderedList, .taskList:
+                drawMarkerOverlay(renderBlock.block, in: textView, dirtyRect: dirtyRect, state: state)
             default:
                 continue
             }
@@ -265,7 +280,7 @@ enum LivePreviewOverlayRenderer {
     }
 
     private static func drawTableBackground(_ table: LivePreviewTable, in textView: NSTextView, dirtyRect: NSRect) {
-        guard let layout = tableLayout(table, in: textView),
+        guard let layout = LivePreviewTableLayout.make(for: table, in: textView),
               layout.outerRect.intersects(dirtyRect)
         else {
             return
@@ -279,30 +294,60 @@ enum LivePreviewOverlayRenderer {
         }
     }
 
-    private static func drawTableForeground(_ table: LivePreviewTable, in textView: NSTextView, dirtyRect: NSRect) {
-        guard let layout = tableLayout(table, in: textView),
+    private static func drawTableForeground(
+        _ table: LivePreviewTable,
+        in textView: NSTextView,
+        dirtyRect: NSRect,
+        state: LivePreviewOverlayState
+    ) {
+        guard let layout = LivePreviewTableLayout.make(for: table, in: textView),
               layout.outerRect.intersects(dirtyRect)
         else {
             return
         }
 
         drawTableGrid(layout)
-        let rows = [table.header] + table.bodyRows
-        for (rowIndex, row) in rows.enumerated() where rowIndex < layout.rowRects.count {
-            let rowRect = layout.rowRects[rowIndex]
-            for (columnIndex, cell) in row.enumerated() where columnIndex < layout.columnRects.count {
-                let columnRect = layout.columnRects[columnIndex]
-                let cellRect = NSRect(
-                    x: columnRect.minX + 8,
-                    y: rowRect.minY + 6,
-                    width: max(10, columnRect.width - 16),
-                    height: max(10, rowRect.height - 12)
-                )
-                markdownInlineString(
-                    displayValue(cell.text, key: nil),
-                    isHeader: rowIndex == 0
-                ).draw(with: cellRect, options: [.usesLineFragmentOrigin, .usesFontLeading])
-            }
+        for cell in layout.cells where shouldDrawTableCellText(cell.tableCell, state: state) {
+            markdownInlineString(
+                displayValue(cell.tableCell.text, key: nil),
+                isHeader: cell.isHeader
+            ).draw(with: cell.textRect, options: [.usesLineFragmentOrigin, .usesFontLeading])
+        }
+        drawTableControls(layout, state: state)
+    }
+
+    static func shouldDrawTableCellText(
+        _ cell: LivePreviewTableCell,
+        state: LivePreviewOverlayState
+    ) -> Bool {
+        !(state.allowsTransientControls && state.activeTableCell == cell)
+    }
+
+    static func shouldDrawTableControls(state: LivePreviewOverlayState) -> Bool {
+        state.allowsTransientControls && state.activeTableCell != nil
+    }
+
+    private static func drawTableControls(_ layout: LivePreviewTableLayout, state: LivePreviewOverlayState) {
+        guard shouldDrawTableControls(state: state),
+              let cell = state.activeTableCell
+        else {
+            return
+        }
+        [layout.rowAddControlRect(for: cell), layout.columnAddControlRect(for: cell)].compactMap { $0 }.forEach { rect in
+            LivePreviewTheme.tableHeaderBackgroundColor.setFill()
+            NSBezierPath(ovalIn: rect).fill()
+            LivePreviewTheme.tableBorderColor.setStroke()
+            let path = NSBezierPath(ovalIn: rect)
+            path.lineWidth = 1
+            path.stroke()
+            LivePreviewTheme.textColor.setStroke()
+            let plus = NSBezierPath()
+            plus.lineWidth = 1.2
+            plus.move(to: NSPoint(x: rect.midX - 4, y: rect.midY))
+            plus.line(to: NSPoint(x: rect.midX + 4, y: rect.midY))
+            plus.move(to: NSPoint(x: rect.midX, y: rect.midY - 4))
+            plus.line(to: NSPoint(x: rect.midX, y: rect.midY + 4))
+            plus.stroke()
         }
     }
 
@@ -313,12 +358,54 @@ enum LivePreviewOverlayRenderer {
         return !block.sourceRange.nsRange.intersectsOrContainsCaret(selectedRange)
     }
 
+    static func markerGeometries(in textView: NSTextView) -> [LivePreviewMarkerGeometry] {
+        let source = textView.string
+        guard !source.isEmpty else {
+            return []
+        }
+        return LivePreviewParser.parse(source).blocks.compactMap { block in
+            markerGeometry(for: block, source: source, in: textView)
+        }
+    }
+
+    static func shouldDrawMarkerOverlay(
+        for block: LivePreviewBlockSpan,
+        markerKind: LivePreviewMarkerGeometry.Kind,
+        state: LivePreviewOverlayState
+    ) -> Bool {
+        guard state.drawsLivePreviewChrome,
+              state.markerStyle == .obsidian,
+              markerKind == .unorderedListMarker
+                || markerKind == .orderedListMarker
+                || markerKind == .taskCheckbox
+        else {
+            return false
+        }
+        return !block.sourceRange.nsRange.intersectsOrContainsCaret(state.revealRange)
+    }
+
+    static func taskCheckboxTokenRange(
+        at point: NSPoint,
+        in textView: NSTextView,
+        state: LivePreviewOverlayState
+    ) -> NSRange? {
+        guard state.allowsTransientControls,
+              state.markerStyle == .obsidian
+        else {
+            return nil
+        }
+        return markerGeometries(in: textView).first {
+            $0.kind == .taskCheckbox && taskCheckboxRect($0).contains(point)
+        }?.sourceRange
+    }
+
     private static func drawHorizontalRule(
         _ block: LivePreviewBlockSpan,
         in textView: NSTextView,
-        dirtyRect: NSRect
+        dirtyRect: NSRect,
+        state: LivePreviewOverlayState
     ) {
-        guard shouldDrawHorizontalRule(block, selectedRange: textView.selectedRange()),
+        guard shouldDrawHorizontalRule(block, selectedRange: state.revealRange),
               let lineRect = unionLineRect(for: block.sourceRange.nsRange, in: textView)
         else {
             return
@@ -340,51 +427,161 @@ enum LivePreviewOverlayRenderer {
         path.stroke()
     }
 
-    private struct TableLayout {
-        var outerRect: NSRect
-        var rowRects: [NSRect]
-        var columnRects: [NSRect]
+    private static func drawMarkerOverlay(
+        _ block: LivePreviewBlockSpan,
+        in textView: NSTextView,
+        dirtyRect: NSRect,
+        state: LivePreviewOverlayState
+    ) {
+        guard let geometry = markerGeometry(for: block, source: textView.string, in: textView),
+              shouldDrawMarkerOverlay(for: block, markerKind: geometry.kind, state: state)
+        else {
+            return
+        }
+
+        switch geometry.kind {
+        case .unorderedListMarker:
+            drawUnorderedBullet(geometry, dirtyRect: dirtyRect)
+        case .orderedListMarker:
+            drawOrderedMarker(geometry, source: textView.string, dirtyRect: dirtyRect)
+        case .taskCheckbox:
+            drawTaskCheckbox(geometry, block: block, dirtyRect: dirtyRect)
+        }
     }
 
-    private static func tableLayout(_ table: LivePreviewTable, in textView: NSTextView) -> TableLayout? {
-        let rows = [table.header] + table.bodyRows
-        guard !rows.isEmpty else {
-            return nil
+    private static func drawUnorderedBullet(_ geometry: LivePreviewMarkerGeometry, dirtyRect: NSRect) {
+        let diameter: CGFloat = 4.5
+        let rect = NSRect(
+            x: geometry.rect.minX + 2,
+            y: floor(geometry.lineRect.midY - diameter / 2),
+            width: diameter,
+            height: diameter
+        )
+        guard rect.intersects(dirtyRect) else {
+            return
+        }
+        LivePreviewTheme.secondaryTextColor.setFill()
+        NSBezierPath(ovalIn: rect).fill()
+    }
+
+    private static func drawOrderedMarker(
+        _ geometry: LivePreviewMarkerGeometry,
+        source: String,
+        dirtyRect: NSRect
+    ) {
+        let marker = markerText(geometry, source: source)
+        let rect = NSRect(
+            x: geometry.rect.minX,
+            y: geometry.lineRect.minY,
+            width: max(28, geometry.rect.width),
+            height: geometry.lineRect.height
+        )
+        drawString(
+            marker,
+            in: rect,
+            attributes: [
+                .font: LivePreviewTheme.baseFont,
+                .foregroundColor: LivePreviewTheme.secondaryTextColor
+            ],
+            dirtyRect: dirtyRect
+        )
+    }
+
+    private static func markerText(_ geometry: LivePreviewMarkerGeometry, source: String) -> String {
+        let range = clamped(geometry.sourceRange, length: (source as NSString).length)
+        guard range.length > 0 else {
+            return ""
+        }
+        return (source as NSString)
+            .substring(with: range)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func drawTaskCheckbox(
+        _ geometry: LivePreviewMarkerGeometry,
+        block: LivePreviewBlockSpan,
+        dirtyRect: NSRect
+    ) {
+        guard case .taskList(let isChecked) = block.kind else {
+            return
+        }
+        let rect = taskCheckboxRect(geometry)
+        guard rect.intersects(dirtyRect) else {
+            return
         }
 
-        let rowRects = rows.compactMap { row -> NSRect? in
-            guard let range = unionRange(row.map(\.sourceRange.nsRange)) else {
-                return nil
-            }
-            return unionLineRect(for: range, in: textView)
-                .map { NSRect(x: $0.minX, y: $0.minY - 3, width: $0.width, height: max(30, $0.height + 6)) }
+        let path = NSBezierPath(roundedRect: rect, xRadius: 3, yRadius: 3)
+        path.lineWidth = 1.2
+        LivePreviewTheme.secondaryTextColor.setStroke()
+        path.stroke()
+
+        guard isChecked else {
+            return
         }
-        guard rowRects.count == rows.count,
-              let first = rowRects.first
+        let check = NSBezierPath()
+        check.lineWidth = 1.6
+        check.lineCapStyle = .round
+        check.lineJoinStyle = .round
+        LivePreviewTheme.secondaryTextColor.setStroke()
+        check.move(to: NSPoint(x: rect.minX + 3.5, y: rect.midY))
+        check.line(to: NSPoint(x: rect.midX - 0.5, y: rect.maxY - 3.5))
+        check.line(to: NSPoint(x: rect.maxX - 3, y: rect.minY + 3.5))
+        check.stroke()
+    }
+
+    private static func taskCheckboxRect(_ geometry: LivePreviewMarkerGeometry) -> NSRect {
+        let side: CGFloat = 13
+        return NSRect(
+            x: geometry.rect.minX + 1,
+            y: floor(geometry.lineRect.midY - side / 2),
+            width: side,
+            height: side
+        )
+    }
+
+    private static func markerGeometry(
+        for block: LivePreviewBlockSpan,
+        source: String,
+        in textView: NSTextView
+    ) -> LivePreviewMarkerGeometry? {
+        guard let marker = markerRange(for: block, source: source),
+              let rect = boundingRect(for: marker.range, in: textView),
+              let lineRect = unionLineRect(for: block.sourceRange.nsRange, in: textView)
         else {
             return nil
         }
-
-        let x = first.minX
-        let width = min(920, max(420, textView.bounds.width - x - 36))
-        let weights = columnWeights(for: table)
-        var columnRects: [NSRect] = []
-        var cursor = x
-        let totalWeight = max(1, weights.reduce(0, +))
-        for (index, weight) in weights.enumerated() {
-            let isLast = index == weights.count - 1
-            let columnWidth = isLast ? x + width - cursor : width * CGFloat(weight) / CGFloat(totalWeight)
-            columnRects.append(NSRect(x: cursor, y: first.minY, width: columnWidth, height: 1))
-            cursor += columnWidth
-        }
-
-        let outer = rowRects.reduce(NSRect(x: x, y: first.minY, width: width, height: first.height)) {
-            $0.union(NSRect(x: x, y: $1.minY, width: width, height: $1.height))
-        }
-        return TableLayout(outerRect: outer, rowRects: rowRects, columnRects: columnRects)
+        return LivePreviewMarkerGeometry(
+            kind: marker.kind,
+            sourceRange: marker.range,
+            rect: rect,
+            lineRect: lineRect
+        )
     }
 
-    private static func drawTableGrid(_ layout: TableLayout) {
+    private static func markerRange(
+        for block: LivePreviewBlockSpan,
+        source: String
+    ) -> (kind: LivePreviewMarkerGeometry.Kind, range: NSRange)? {
+        switch block.kind {
+        case .unorderedList:
+            return firstMatch(in: source, range: block.sourceRange.nsRange, regex: unorderedMarkerRegex)
+                .map { (.unorderedListMarker, $0) }
+        case .orderedList:
+            return firstMatch(in: source, range: block.sourceRange.nsRange, regex: orderedMarkerRegex)
+                .map { (.orderedListMarker, $0) }
+        case .taskList:
+            guard let prefix = firstMatch(in: source, range: block.sourceRange.nsRange, regex: taskPrefixRegex),
+                  let checkbox = firstMatch(in: source, range: prefix, regex: taskCheckboxRegex)
+            else {
+                return nil
+            }
+            return (.taskCheckbox, checkbox)
+        default:
+            return nil
+        }
+    }
+
+    private static func drawTableGrid(_ layout: LivePreviewTableLayout) {
         LivePreviewTheme.tableBorderColor.setStroke()
         let path = NSBezierPath()
         path.lineWidth = 1
@@ -403,17 +600,6 @@ enum LivePreviewOverlayRenderer {
             path.line(to: NSPoint(x: columnRect.maxX, y: layout.outerRect.maxY))
         }
         path.stroke()
-    }
-
-    private static func columnWeights(for table: LivePreviewTable) -> [Int] {
-        let rows = [table.header] + table.bodyRows
-        let columnCount = rows.map(\.count).max() ?? 0
-        return (0..<columnCount).map { column in
-            let maxLength = rows
-                .compactMap { row in row.indices.contains(column) ? row[column].text.count : nil }
-                .max() ?? 8
-            return min(34, max(8, maxLength))
-        }
     }
 
     private static func markdownInlineString(_ text: String, isHeader: Bool = false) -> NSAttributedString {
@@ -652,6 +838,37 @@ enum LivePreviewOverlayRenderer {
         return fragments
     }
 
+    private static func boundingRect(for range: NSRange, in textView: NSTextView) -> NSRect? {
+        guard let layoutManager = textView.layoutManager,
+              let textContainer = textView.textContainer
+        else {
+            return nil
+        }
+        let clampedRange = clamped(range, length: (textView.string as NSString).length)
+        guard clampedRange.length > 0 else {
+            return nil
+        }
+
+        layoutManager.ensureLayout(for: textContainer)
+        let glyphRange = layoutManager.glyphRange(forCharacterRange: clampedRange, actualCharacterRange: nil)
+        guard glyphRange.length > 0 else {
+            return nil
+        }
+        return offset(layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer), by: textView.textContainerOrigin)
+    }
+
+    private static func firstMatch(
+        in source: String,
+        range: NSRange,
+        regex: NSRegularExpression
+    ) -> NSRange? {
+        regex.firstMatch(in: source, range: range)?.range
+    }
+
+    private static func regex(_ pattern: String) -> NSRegularExpression {
+        try! NSRegularExpression(pattern: pattern, options: [.anchorsMatchLines])
+    }
+
     private static func offset(_ rect: NSRect, by point: NSPoint) -> NSRect {
         NSRect(x: rect.minX + point.x, y: rect.minY + point.y, width: rect.width, height: rect.height)
     }
@@ -672,6 +889,19 @@ enum LivePreviewOverlayRenderer {
         let maxLength = max(0, length - location)
         return NSRange(location: location, length: min(range.length, maxLength))
     }
+}
+
+struct LivePreviewMarkerGeometry: Equatable {
+    enum Kind: Equatable {
+        case unorderedListMarker
+        case orderedListMarker
+        case taskCheckbox
+    }
+
+    var kind: Kind
+    var sourceRange: NSRange
+    var rect: NSRect
+    var lineRect: NSRect
 }
 
 private extension NSRange {

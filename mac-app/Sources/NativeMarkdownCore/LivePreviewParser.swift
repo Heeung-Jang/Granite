@@ -658,12 +658,10 @@ private enum LineIndex {
         guard index < upperBound else {
             return nil
         }
-        let lineUpper = source[index..<upperBound].firstIndex(of: "\n").map {
-            source.index(after: $0)
-        } ?? upperBound
-        let contentUpper = lineUpper > index && source[source.index(before: lineUpper)] == "\n"
-            ? source.index(before: lineUpper)
-            : lineUpper
+        let contentUpper = source[index..<upperBound].firstIndex { $0.isNewline } ?? upperBound
+        let lineUpper = contentUpper < upperBound
+            ? source.index(after: contentUpper)
+            : upperBound
         let contentRange = index..<contentUpper
         return Line(
             fullRange: index..<lineUpper,

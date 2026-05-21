@@ -48,6 +48,69 @@ func livePreviewTableParserFindsEditableCellAtOffset() {
 }
 
 @Test
+func livePreviewEditableTableContractAcceptsSimpleTable() throws {
+    let source = """
+    | Name | Status |
+    | --- | --- |
+    | Alpha | Draft |
+    """
+    let table = try #require(LivePreviewTableParser.parse(source).first)
+
+    #expect(LivePreviewTableParser.editableTable(table, in: source) == table)
+}
+
+@Test
+func livePreviewEditableTableContractRejectsInconsistentRows() throws {
+    let source = """
+    | Name | Status |
+    | --- | --- |
+    | Alpha |
+    """
+    let table = try #require(LivePreviewTableParser.parse(source).first)
+
+    #expect(LivePreviewTableParser.editableTable(table, in: source) == nil)
+}
+
+@Test
+func livePreviewEditableTableContractRejectsStaleRanges() throws {
+    let source = """
+    | Name | Status |
+    | --- | --- |
+    | Alpha | Draft |
+    """
+    let table = try #require(LivePreviewTableParser.parse(source).first)
+
+    #expect(LivePreviewTableParser.editableTable(table, in: "Prefix\n" + source) == nil)
+}
+
+@Test
+func livePreviewEditableTableContractRejectsAmbiguousSyntax() throws {
+    let escaped = """
+    | Name | Status |
+    | --- | --- |
+    | Alpha \\| Beta | Draft |
+    """
+    let adjacentEmpty = """
+    | Name | Status |
+    | --- | --- |
+    | Alpha || Draft |
+    """
+    let indented = """
+        | Name | Status |
+        | --- | --- |
+        | Alpha | Draft |
+    """
+
+    for source in [escaped, adjacentEmpty, indented] {
+        if let table = LivePreviewTableParser.parse(source).first {
+            #expect(LivePreviewTableParser.editableTable(table, in: source) == nil)
+        } else {
+            #expect(LivePreviewTableParser.parse(source).isEmpty)
+        }
+    }
+}
+
+@Test
 func livePreviewTableParserIgnoresMalformedTables() {
     let source = """
     | Missing | Alignment |
@@ -106,6 +169,78 @@ func livePreviewTableCellEditRejectsStaleCellContent() throws {
     let changedSource = source.replacingOccurrences(of: "Draft", with: "Queued")
 
     #expect(LivePreviewTableCellEdit.replacing(cell: cell, with: "Final", in: changedSource) == nil)
+}
+
+@Test
+func livePreviewTableRowInsertAddsBlankRowAfterHeaderAndBodyRows() throws {
+    let source = """
+    | Name | Status |
+    | --- | --- |
+    | Alpha | Draft |
+    """
+    let table = try #require(LivePreviewTableParser.parse(source).first)
+    let afterHeader = try #require(LivePreviewTableRowInsert.insertingRow(after: table.header[0], in: source))
+    let afterBody = try #require(LivePreviewTableRowInsert.insertingRow(after: table.bodyRows[0][0], in: source))
+
+    #expect(afterHeader == """
+    | Name | Status |
+    | --- | --- |
+    |  |  |
+    | Alpha | Draft |
+    """)
+    #expect(afterBody == """
+    | Name | Status |
+    | --- | --- |
+    | Alpha | Draft |
+    |  |  |
+    """)
+}
+
+@Test
+func livePreviewTableRowInsertPreservesCRLFAndSurroundingText() throws {
+    let source = "BOM\n| Name | Status |\r\n| --- | --- |\r\n| Alpha | Draft |\r\nEOF"
+    let table = try #require(LivePreviewTableParser.parse(source).first)
+    let edited = try #require(LivePreviewTableRowInsert.insertingRow(after: table.bodyRows[0][0], in: source))
+
+    #expect(edited.hasPrefix("BOM\n"))
+    #expect(edited.hasSuffix("EOF"))
+    #expect(edited.contains("| Alpha | Draft |\r\n|  |  |\r\nEOF"))
+}
+
+@Test
+func livePreviewTableColumnInsertAddsBlankColumnAfterTarget() throws {
+    let source = """
+    | Name | Status |
+    | --- | --- |
+    | Alpha | Draft |
+    """
+    let table = try #require(LivePreviewTableParser.parse(source).first)
+    let edited = try #require(LivePreviewTableColumnInsert.insertingColumn(after: table.header[0], in: source))
+
+    #expect(edited == """
+    | Name |  | Status |
+    | --- | --- | --- |
+    | Alpha |  | Draft |
+    """)
+}
+
+@Test
+func livePreviewTableColumnInsertRejectsMalformedOrStaleTargets() throws {
+    let source = """
+    | Name | Status |
+    | --- | --- |
+    | Alpha |
+    """
+    let table = try #require(LivePreviewTableParser.parse(source).first)
+    #expect(LivePreviewTableColumnInsert.insertingColumn(after: table.header[0], in: source) == nil)
+
+    let validSource = """
+    | Name | Status |
+    | --- | --- |
+    | Alpha | Draft |
+    """
+    let validTable = try #require(LivePreviewTableParser.parse(validSource).first)
+    #expect(LivePreviewTableColumnInsert.insertingColumn(after: validTable.header[0], in: "Prefix\n" + validSource) == nil)
 }
 
 private func fixture(_ name: String) throws -> String {

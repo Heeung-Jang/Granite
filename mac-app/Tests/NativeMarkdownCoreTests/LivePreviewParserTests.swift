@@ -54,6 +54,15 @@ func livePreviewParserClassifiesBasicFormattingFixture() throws {
 }
 
 @Test
+func livePreviewParserLoadsObsidianMarkersAndRulesFixture() throws {
+    let source = try fixture("obsidian-markers-and-rules.md")
+
+    #expect(source.contains("# Obsidian Marker Fixture"))
+    #expect(source.contains("- [ ] Pending task"))
+    #expect(source.contains("| Name | Status |"))
+}
+
+@Test
 func livePreviewParserGroupsObsidianCalloutBodyLines() throws {
     let source = """
     > [!summary] TL;DR
@@ -224,6 +233,36 @@ func livePreviewParserDoesNotTreatFrontmatterDelimitersAsHorizontalRules() throw
         source,
         in: LivePreviewSourceRange(location: closingDelimiter.location, length: closingDelimiter.length)
     )
+    #expect(!partial.blocks.contains { $0.kind == .horizontalRule })
+}
+
+@Test
+func livePreviewParserHandlesCRLFHorizontalRulesAndFrontmatterDelimiters() {
+    let source = "---\r\ntitle: CRLF\r\n---\r\n\r\nBody\r\n***\r\n___\r\n"
+    let result = LivePreviewParser.parse(source)
+    let horizontalRules = result.blocks
+        .filter { $0.kind == .horizontalRule }
+        .compactMap { string(for: $0.contentRange, in: source) }
+
+    #expect(result.blocks.first?.kind == .frontmatter(isClosed: true))
+    #expect(horizontalRules == ["***", "___"])
+}
+
+@Test
+func livePreviewParserPartialWindowRejectsTableAlignmentRowsAsHorizontalRules() {
+    let source = """
+    | A | B |
+    | --- | --- |
+    | 1 | 2 |
+    """
+    let full = LivePreviewParser.parse(source)
+    let alignmentRange = (source as NSString).range(of: "| --- | --- |")
+    let partial = LivePreviewParser.parse(
+        source,
+        in: LivePreviewSourceRange(location: alignmentRange.location, length: alignmentRange.length)
+    )
+
+    #expect(full.blocks.contains { $0.kind == .table })
     #expect(!partial.blocks.contains { $0.kind == .horizontalRule })
 }
 

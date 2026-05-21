@@ -573,11 +573,22 @@ enum LivePreviewRenderer {
         revealRange: NSRange,
         markerStyle: LivePreviewMarkerStyle
     ) {
-        guard !shouldRevealSyntax(for: block, revealRange: revealRange, markerStyle: markerStyle) else {
+        let sourceReveal = sourceRevealEligibility(
+            for: block,
+            revealRange: revealRange,
+            markerStyle: markerStyle
+        )
+        guard !sourceReveal.revealsSyntax else {
             return
         }
 
-        for range in concealmentRanges(
+        let collapsedHeadingMarkerRanges = collapsedHeadingMarkerConcealmentRanges(
+            for: block,
+            source: source,
+            markerStyle: markerStyle
+        )
+
+        for range in rawMarkerConcealmentRanges(
             for: block,
             source: source,
             properties: properties,
@@ -589,13 +600,45 @@ enum LivePreviewRenderer {
             guard range.length > 0 else {
                 continue
             }
-            plan.addAttributes([
-                .foregroundColor: LivePreviewTheme.concealedColor
-            ], range: range)
+            plan.addAttributes(
+                rawMarkerConcealmentAttributes(collapsesWidth: collapsedHeadingMarkerRanges.contains(range)),
+                range: range
+            )
         }
     }
 
-    private static func concealmentRanges(
+    private struct SourceRevealEligibility {
+        var revealsSyntax: Bool
+    }
+
+    private struct RenderedMarkerOverlayPolicy {
+        var isNeeded: Bool
+    }
+
+    private static func rawMarkerConcealmentAttributes(collapsesWidth: Bool) -> [NSAttributedString.Key: Any] {
+        var attributes: [NSAttributedString.Key: Any] = [
+            .foregroundColor: LivePreviewTheme.concealedColor
+        ]
+        if collapsesWidth {
+            attributes[.font] = LivePreviewTheme.collapsedSyntaxFont
+        }
+        return attributes
+    }
+
+    private static func collapsedHeadingMarkerConcealmentRanges(
+        for block: LivePreviewBlockSpan,
+        source: String,
+        markerStyle: LivePreviewMarkerStyle
+    ) -> [NSRange] {
+        guard case .heading = block.kind,
+              !markerStyle.showsHeadingMarkersOutsideReveal
+        else {
+            return []
+        }
+        return prefixMatches(in: source, block: block, regex: headingPrefixRegex)
+    }
+
+    private static func rawMarkerConcealmentRanges(
         for block: LivePreviewBlockSpan,
         source: String,
         properties: LivePreviewPropertyBlock?,
@@ -610,13 +653,13 @@ enum LivePreviewRenderer {
                 ? []
                 : prefixMatches(in: source, block: block, regex: headingPrefixRegex)
         case .unorderedList:
-            ranges = markerStyle.showsListMarkersOutsideReveal
-                ? []
-                : prefixMatches(in: source, block: block, regex: unorderedListPrefixRegex)
+            ranges = markerStyle == .obsidian || !markerStyle.showsListMarkersOutsideReveal
+                ? prefixMatches(in: source, block: block, regex: unorderedListPrefixRegex)
+                : []
         case .orderedList:
-            ranges = markerStyle.showsListMarkersOutsideReveal
-                ? []
-                : prefixMatches(in: source, block: block, regex: orderedListPrefixRegex)
+            ranges = markerStyle == .obsidian || !markerStyle.showsListMarkersOutsideReveal
+                ? prefixMatches(in: source, block: block, regex: orderedListPrefixRegex)
+                : []
         case .taskList:
             ranges = taskListConcealmentRanges(for: block, source: source, markerStyle: markerStyle)
         case .blockquote:
@@ -643,21 +686,45 @@ enum LivePreviewRenderer {
         return ranges
     }
 
-    private static func shouldRevealSyntax(
+    private static func sourceRevealEligibility(
         for block: LivePreviewBlockSpan,
         revealRange: NSRange,
         markerStyle: LivePreviewMarkerStyle
-    ) -> Bool {
+    ) -> SourceRevealEligibility {
+        let revealsSyntax: Bool
         switch block.kind {
         case .heading:
-            return block.sourceRange.nsRange.intersectsOrContainsCaret(revealRange)
+            revealsSyntax = block.sourceRange.nsRange.intersectsOrContainsCaret(revealRange)
         case .blockquote where markerStyle.keepsBlockquoteMarkersConcealed:
-            return false
+            revealsSyntax = false
         case .frontmatter, .callout, .table:
-            return false
+            revealsSyntax = false
         default:
-            return block.sourceRange.nsRange.intersectsOrContainsCaret(revealRange)
+            revealsSyntax = block.sourceRange.nsRange.intersectsOrContainsCaret(revealRange)
         }
+        return SourceRevealEligibility(revealsSyntax: revealsSyntax)
+    }
+
+    private static func renderedMarkerOverlayPolicy(
+        for block: LivePreviewBlockSpan,
+        revealRange: NSRange,
+        markerStyle: LivePreviewMarkerStyle
+    ) -> RenderedMarkerOverlayPolicy {
+        let revealsSyntax = sourceRevealEligibility(
+            for: block,
+            revealRange: revealRange,
+            markerStyle: markerStyle
+        ).revealsSyntax
+        let isNeeded: Bool
+        switch block.kind {
+        case .unorderedList, .orderedList:
+            isNeeded = markerStyle == .obsidian && !revealsSyntax
+        case .taskList:
+            isNeeded = markerStyle == .obsidian && !revealsSyntax
+        default:
+            isNeeded = false
+        }
+        return RenderedMarkerOverlayPolicy(isNeeded: isNeeded)
     }
 
     private static func blockTokenRanges(for block: LivePreviewBlockSpan, source: String) -> [NSRange] {
@@ -692,6 +759,9 @@ enum LivePreviewRenderer {
                 .range
             else {
                 return markerStyle.showsListMarkersOutsideReveal ? [] : [prefixRange]
+            }
+            if markerStyle == .obsidian {
+                return [prefixRange]
             }
             if markerStyle.showsListMarkersOutsideReveal {
                 let markerRange = taskListMarkerRange(in: prefixRange, source: source)

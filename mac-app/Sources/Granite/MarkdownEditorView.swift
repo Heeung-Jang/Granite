@@ -34,7 +34,9 @@ struct MarkdownEditorView: NSViewRepresentable {
         textView.isEditable = isEditable
         if let textView = textView as? MarkdownInteractionTextView {
             textView.livePreviewMode = livePreviewMode
+            textView.livePreviewMarkerStyle = markerStyle
             textView.livePreviewDocumentTitle = documentTitle
+            textView.refreshLivePreviewOverlayState()
         }
         let decorationTimer = AppTelemetryTimer()
         context.coordinator.decorateVisibleRange(in: textView)
@@ -86,7 +88,9 @@ struct MarkdownEditorView: NSViewRepresentable {
         textView.isEditable = isEditable
         if let textView = textView as? MarkdownInteractionTextView {
             textView.livePreviewMode = livePreviewMode
+            textView.livePreviewMarkerStyle = markerStyle
             textView.livePreviewDocumentTitle = documentTitle
+            textView.refreshLivePreviewOverlayState()
         }
         MarkdownEditorAccessibility.apply(to: textView, isEditable: isEditable, mode: livePreviewMode)
         context.coordinator.applyFocusRequestIfNeeded(isActive: isActive, in: scrollView)
@@ -160,6 +164,8 @@ struct MarkdownEditorView: NSViewRepresentable {
             self.focusRequestID = focusRequestID
             if let textView = textView as? MarkdownInteractionTextView {
                 textView.livePreviewDocumentTitle = documentTitle
+                textView.livePreviewMarkerStyle = markerStyle
+                textView.refreshLivePreviewOverlayState()
             }
         }
 
@@ -201,8 +207,14 @@ struct MarkdownEditorView: NSViewRepresentable {
 
         func textView(_ textView: MarkdownInteractionTextView, handleMouseDown event: NSEvent) -> Bool {
             if textView.isEditable,
-               let utf16Offset = textView.utf16Offset(for: event),
+               let utf16Offset = textView.taskCheckboxToggleOffset(for: event) ?? textView.utf16Offset(for: event),
                textView.toggleTaskCheckbox(at: utf16Offset) {
+                return true
+            }
+            if textView.performTableControl(at: textView.convert(event.locationInWindow, from: nil)) {
+                return true
+            }
+            if textView.setActiveTableCell(at: textView.convert(event.locationInWindow, from: nil)) {
                 return true
             }
 
@@ -240,6 +252,10 @@ struct MarkdownEditorView: NSViewRepresentable {
                 embedPreviewMap: embedPreviewMap,
                 markerStyle: markerStyle
             )
+            if let textView = textView as? MarkdownInteractionTextView {
+                textView.livePreviewMarkerStyle = markerStyle
+                textView.refreshLivePreviewOverlayState(revealRange: textView.selectedRange())
+            }
         }
 
         private func renderCurrentSelection(in textView: NSTextView) {
@@ -337,11 +353,17 @@ protocol MarkdownInteractionTextViewDelegate: AnyObject {
 }
 
 @MainActor
-final class MarkdownInteractionTextView: NSTextView {
+final class MarkdownInteractionTextView: NSTextView, NSTextFieldDelegate {
     weak var interactionDelegate: MarkdownInteractionTextViewDelegate?
     var livePreviewMode: LivePreviewMode = .livePreview {
         didSet {
+            refreshLivePreviewOverlayState()
             needsDisplay = true
+        }
+    }
+    var livePreviewMarkerStyle: LivePreviewMarkerStyle = .defaultValue {
+        didSet {
+            refreshLivePreviewOverlayState()
         }
     }
     var livePreviewDocumentTitle: String? {
@@ -349,12 +371,29 @@ final class MarkdownInteractionTextView: NSTextView {
             needsDisplay = true
         }
     }
+    private(set) var livePreviewOverlayState = LivePreviewOverlayState()
+    private var livePreviewOverlaySourceVersion = 0
     private var tableCellMenuTarget: LivePreviewTableCell?
+    private(set) var tableCellEditor: NSTextField?
+    private var tableCellEditorTarget: LivePreviewTableCell?
+    private var tableCellEditorSelectionBeforeEdit: NSRange?
+    private var isClosingTableCellEditor = false
+
+    var activeTableCellEditorFrame: NSRect? {
+        tableCellEditor?.frame
+    }
 
     override func draw(_ dirtyRect: NSRect) {
+        refreshLivePreviewOverlayState(syncEditor: false)
+        let overlayState = livePreviewOverlayState
         super.draw(dirtyRect)
-        LivePreviewOverlayRenderer.drawBackgrounds(in: self, dirtyRect: dirtyRect)
-        LivePreviewOverlayRenderer.drawForegrounds(in: self, dirtyRect: dirtyRect)
+        LivePreviewOverlayRenderer.drawBackgrounds(in: self, dirtyRect: dirtyRect, state: overlayState)
+        LivePreviewOverlayRenderer.drawForegrounds(in: self, dirtyRect: dirtyRect, state: overlayState)
+    }
+
+    override func didChangeText() {
+        super.didChangeText()
+        noteLivePreviewSourceChanged()
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -368,8 +407,8 @@ final class MarkdownInteractionTextView: NSTextView {
         let menu = super.menu(for: event) ?? NSMenu()
         tableCellMenuTarget = nil
         guard isEditable,
-              let utf16Offset = utf16Offset(for: event),
-              let cell = tableCellForEditing(at: utf16Offset)
+              let cell = tableCellForEditing(at: convert(event.locationInWindow, from: nil)) ??
+                utf16Offset(for: event).flatMap({ tableCellForEditing(at: $0) })
         else {
             return menu
         }
@@ -429,6 +468,82 @@ final class MarkdownInteractionTextView: NSTextView {
         return LivePreviewTableParser.cell(atUTF16Offset: utf16Offset, in: string)
     }
 
+    func tableCellForEditing(at point: NSPoint) -> LivePreviewTableCell? {
+        guard livePreviewMode == .livePreview else {
+            return nil
+        }
+        return LivePreviewTableLayout.tableCell(at: point, in: self)
+    }
+
+    @discardableResult
+    func setActiveTableCell(at point: NSPoint) -> Bool {
+        refreshLivePreviewOverlayState()
+        guard livePreviewOverlayState.allowsTransientControls,
+              let cell = tableCellForEditing(at: point)
+        else {
+            setLivePreviewOverlayTableState(hovered: nil, active: nil)
+            needsDisplay = true
+            return false
+        }
+        setLivePreviewOverlayTableState(hovered: cell, active: cell)
+        needsDisplay = true
+        return true
+    }
+
+    @discardableResult
+    func performTableControl(at point: NSPoint) -> Bool {
+        refreshLivePreviewOverlayState()
+        guard livePreviewOverlayState.allowsTransientControls,
+              let cell = livePreviewOverlayState.activeTableCell,
+              let layoutCell = LivePreviewTableLayout.layoutCell(for: cell, in: self)
+        else {
+            return false
+        }
+        let layout = LivePreviewTableParser.parse(string).compactMap { LivePreviewTableLayout.make(for: $0, in: self) }
+            .first { $0.layoutCell(for: cell) != nil }
+        guard let layout else {
+            return false
+        }
+        if layout.rowAddControlRect(for: cell)?.contains(point) == true {
+            return applyTableControlEdit(LivePreviewTableRowInsert.insertingRow(after: layoutCell.tableCell, in: string))
+        }
+        if layout.columnAddControlRect(for: cell)?.contains(point) == true {
+            return applyTableControlEdit(LivePreviewTableColumnInsert.insertingColumn(after: layoutCell.tableCell, in: string))
+        }
+        return false
+    }
+
+    func refreshLivePreviewOverlayState(revealRange: NSRange? = nil, syncEditor: Bool = true) {
+        livePreviewOverlayState = livePreviewOverlayState.synchronized(
+            mode: livePreviewMode,
+            markerStyle: livePreviewMarkerStyle,
+            revealRange: revealRange ?? selectedRange(),
+            sourceVersion: livePreviewOverlaySourceVersion,
+            isEditable: isEditable,
+            hasMarkedText: hasMarkedText(),
+            isSelectionDragActive: false
+        )
+        if syncEditor {
+            syncTableCellEditor()
+        }
+    }
+
+    func noteLivePreviewSourceChanged() {
+        livePreviewOverlaySourceVersion += 1
+        refreshLivePreviewOverlayState()
+    }
+
+    func setLivePreviewOverlayTableState(
+        hovered: LivePreviewTableCell?,
+        active: LivePreviewTableCell?
+    ) {
+        livePreviewOverlayState = livePreviewOverlayState.withTableCells(
+            hovered: hovered,
+            active: active
+        )
+        syncTableCellEditor()
+    }
+
     func utf16Offset(for event: NSEvent) -> Int? {
         guard let layoutManager, let textContainer else {
             return nil
@@ -444,6 +559,22 @@ final class MarkdownInteractionTextView: NSTextView {
         let glyphIndex = layoutManager.glyphIndex(for: point, in: textContainer)
         let characterIndex = layoutManager.characterIndexForGlyph(at: glyphIndex)
         return min(characterIndex, (string as NSString).length - 1)
+    }
+
+    func taskCheckboxToggleOffset(for event: NSEvent) -> Int? {
+        taskCheckboxToggleOffset(at: convert(event.locationInWindow, from: nil))
+    }
+
+    func taskCheckboxToggleOffset(at point: NSPoint) -> Int? {
+        refreshLivePreviewOverlayState()
+        guard let tokenRange = LivePreviewOverlayRenderer.taskCheckboxTokenRange(
+            at: point,
+            in: self,
+            state: livePreviewOverlayState
+        ) else {
+            return nil
+        }
+        return tokenRange.location + min(1, max(0, tokenRange.length - 1))
     }
 
     @objc private func editTableCellFromMenu(_ sender: NSMenuItem) {
@@ -475,6 +606,24 @@ final class MarkdownInteractionTextView: NSTextView {
         ))
     }
 
+    private func applyTableControlEdit(_ edited: String?) -> Bool {
+        guard let edited,
+              edited != string,
+              shouldChangeText(in: NSRange(location: 0, length: (string as NSString).length), replacementString: edited)
+        else {
+            return false
+        }
+        let selection = selectedRange()
+        replaceCharacters(in: NSRange(location: 0, length: (string as NSString).length), with: edited)
+        didChangeText()
+        setSelectedRange(NSRange(
+            location: min(selection.location, (string as NSString).length),
+            length: min(selection.length, max(0, (string as NSString).length - min(selection.location, (string as NSString).length)))
+        ))
+        setLivePreviewOverlayTableState(hovered: nil, active: nil)
+        return true
+    }
+
     private func presentTableCellEditor(for cell: LivePreviewTableCell) {
         let alert = NSAlert()
         alert.messageText = "Edit Table Cell"
@@ -493,6 +642,144 @@ final class MarkdownInteractionTextView: NSTextView {
         }
     }
 
+    private func syncTableCellEditor() {
+        guard livePreviewOverlayState.allowsTransientControls,
+              let cell = livePreviewOverlayState.activeTableCell,
+              let layoutCell = LivePreviewTableLayout.layoutCell(for: cell, in: self)
+        else {
+            removeTableCellEditor()
+            return
+        }
+        updateTableCellEditor(for: cell, frame: layoutCell.textRect.insetBy(dx: -2, dy: -2))
+    }
+
+    private func updateTableCellEditor(for cell: LivePreviewTableCell, frame: NSRect) {
+        let editor: NSTextField
+        if let existing = tableCellEditor {
+            editor = existing
+        } else {
+            let field = NSTextField(string: cell.text)
+            field.isBordered = false
+            field.isBezeled = false
+            field.drawsBackground = true
+            field.backgroundColor = LivePreviewTheme.tableCellBackgroundColor
+            field.font = LivePreviewTheme.baseFont
+            field.focusRingType = .none
+            field.usesSingleLineMode = true
+            field.lineBreakMode = .byTruncatingTail
+            field.delegate = self
+            addSubview(field)
+            editor = field
+            tableCellEditor = field
+        }
+
+        if tableCellEditorTarget != cell {
+            editor.stringValue = cell.text
+            tableCellEditorSelectionBeforeEdit = selectedRange()
+        }
+        tableCellEditorTarget = cell
+        editor.frame = frame
+        if window?.firstResponder !== editor.currentEditor() {
+            window?.makeFirstResponder(editor)
+        }
+    }
+
+    private func removeTableCellEditor() {
+        tableCellEditor?.delegate = nil
+        tableCellEditor?.removeFromSuperview()
+        tableCellEditor = nil
+        tableCellEditorTarget = nil
+        tableCellEditorSelectionBeforeEdit = nil
+    }
+
+    func control(
+        _ control: NSControl,
+        textView: NSTextView,
+        doCommandBy commandSelector: Selector
+    ) -> Bool {
+        guard control === tableCellEditor else {
+            return false
+        }
+        if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+            _ = commitActiveTableCellEditor()
+            return true
+        }
+        if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
+            cancelActiveTableCellEditor()
+            return true
+        }
+        return false
+    }
+
+    func controlTextDidChange(_ notification: Notification) {
+        guard notification.object as? NSTextField === tableCellEditor else {
+            return
+        }
+        tableCellEditor?.backgroundColor = LivePreviewTheme.tableCellBackgroundColor
+    }
+
+    func controlTextDidEndEditing(_ notification: Notification) {
+        guard notification.object as? NSTextField === tableCellEditor,
+              !isClosingTableCellEditor
+        else {
+            return
+        }
+        _ = commitActiveTableCellEditor()
+    }
+
+    @discardableResult
+    func commitActiveTableCellEditor() -> Bool {
+        guard let editor = tableCellEditor,
+              let target = tableCellEditorTarget,
+              (editor.currentEditor() as? NSTextView)?.hasMarkedText() != true,
+              let currentCell = LivePreviewTableParser.cell(
+                atUTF16Offset: target.contentRange.location,
+                in: string
+              ),
+              currentCell == target,
+              LivePreviewTableCellEdit.replacing(cell: currentCell, with: editor.stringValue, in: string) != nil
+        else {
+            markTableCellEditorInvalid()
+            return false
+        }
+
+        let selection = tableCellEditorSelectionBeforeEdit
+        isClosingTableCellEditor = true
+        defer { isClosingTableCellEditor = false }
+        guard replaceTableCell(currentCell, with: editor.stringValue) else {
+            markTableCellEditorInvalid()
+            return false
+        }
+        setLivePreviewOverlayTableState(hovered: nil, active: nil)
+        window?.makeFirstResponder(self)
+        restoreSelection(selection)
+        return true
+    }
+
+    func cancelActiveTableCellEditor() {
+        let selection = tableCellEditorSelectionBeforeEdit
+        isClosingTableCellEditor = true
+        defer { isClosingTableCellEditor = false }
+        setLivePreviewOverlayTableState(hovered: nil, active: nil)
+        window?.makeFirstResponder(self)
+        restoreSelection(selection)
+    }
+
+    private func markTableCellEditorInvalid() {
+        tableCellEditor?.backgroundColor = NSColor.systemRed.withAlphaComponent(0.14)
+        NSSound.beep()
+    }
+
+    private func restoreSelection(_ selection: NSRange?) {
+        guard let selection else {
+            return
+        }
+        setSelectedRange(NSRange(
+            location: min(selection.location, (string as NSString).length),
+            length: min(selection.length, max(0, (string as NSString).length - min(selection.location, (string as NSString).length)))
+        ))
+    }
+
     private func replaceTableCell(_ range: NSRange, with replacement: String, registersUndo: Bool) {
         guard shouldChangeText(in: range, replacementString: replacement) else {
             return
@@ -508,6 +795,7 @@ final class MarkdownInteractionTextView: NSTextView {
             length: min(selection.length, max(0, (string as NSString).length - min(selection.location, (string as NSString).length)))
         ))
     }
+
 }
 
 @MainActor
@@ -527,6 +815,9 @@ enum MarkdownEditorTextSynchronizer {
 
         let selection = textView.selectedRange()
         textView.string = text
+        if let textView = textView as? MarkdownInteractionTextView {
+            textView.noteLivePreviewSourceChanged()
+        }
         textView.setSelectedRange(clamped(selection, for: text))
         return true
     }
