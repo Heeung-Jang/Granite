@@ -61,6 +61,75 @@ public struct GraphHitTestIndex: Equatable, Sendable {
         self.nodeIndexByID = nodeIndexByID
     }
 
+    private init(
+        layout: GraphRendererSnapshot,
+        bucketCellSize: Double,
+        buckets: [GraphGridCell: [Int]],
+        nodeIndexByID: [String: Int]
+    ) {
+        self.layout = layout
+        self.bucketCellSize = bucketCellSize
+        self.buckets = buckets
+        self.nodeIndexByID = nodeIndexByID
+    }
+
+    public func movingNode(nodeID: String, to graphPoint: GraphPoint) -> GraphHitTestIndex {
+        guard let nodeIndex = nodeIndexByID[nodeID],
+              layout.nodes.indices.contains(nodeIndex)
+        else {
+            return self
+        }
+
+        let oldNode = layout.nodes[nodeIndex]
+        guard oldNode.position != graphPoint else {
+            return self
+        }
+
+        var nodes = layout.nodes
+        nodes[nodeIndex] = oldNode.withPosition(graphPoint)
+        let movedLayout = GraphRendererSnapshot(
+            requestID: layout.requestID,
+            generation: layout.generation,
+            nodes: nodes,
+            edges: layout.edges,
+            components: layout.components,
+            renderIdentity: Self.movedRenderIdentity(
+                base: layout.renderIdentity,
+                nodeID: nodeID,
+                oldPosition: oldNode.position,
+                newPosition: graphPoint
+            )
+        )
+
+        let oldCell = Self.gridCell(for: oldNode.position, bucketCellSize: bucketCellSize)
+        let newCell = Self.gridCell(for: graphPoint, bucketCellSize: bucketCellSize)
+        guard oldCell != newCell else {
+            return GraphHitTestIndex(
+                layout: movedLayout,
+                bucketCellSize: bucketCellSize,
+                buckets: buckets,
+                nodeIndexByID: nodeIndexByID
+            )
+        }
+
+        var movedBuckets = buckets
+        if var oldBucket = movedBuckets[oldCell] {
+            oldBucket.removeAll { $0 == nodeIndex }
+            if oldBucket.isEmpty {
+                movedBuckets.removeValue(forKey: oldCell)
+            } else {
+                movedBuckets[oldCell] = oldBucket
+            }
+        }
+        movedBuckets[newCell, default: []].append(nodeIndex)
+        return GraphHitTestIndex(
+            layout: movedLayout,
+            bucketCellSize: bucketCellSize,
+            buckets: movedBuckets,
+            nodeIndexByID: nodeIndexByID
+        )
+    }
+
     public func nearestNode(
         at screenPoint: GraphPoint,
         viewport: GraphViewport,
@@ -188,6 +257,29 @@ public struct GraphHitTestIndex: Equatable, Sendable {
             x: Int(floor(point.x / bucketCellSize)),
             y: Int(floor(point.y / bucketCellSize))
         )
+    }
+
+    private static func movedRenderIdentity(
+        base: UInt64,
+        nodeID: String,
+        oldPosition: GraphPoint,
+        newPosition: GraphPoint
+    ) -> UInt64 {
+        var hash = base
+
+        func mix(_ value: UInt64) {
+            hash ^= value
+            hash &*= 0x100000001b3
+        }
+
+        for byte in nodeID.utf8 {
+            mix(UInt64(byte))
+        }
+        mix(oldPosition.x.bitPattern)
+        mix(oldPosition.y.bitPattern)
+        mix(newPosition.x.bitPattern)
+        mix(newPosition.y.bitPattern)
+        return hash
     }
 }
 
@@ -440,33 +532,6 @@ public struct GraphNodePositionOverrides: Equatable, Sendable {
 
     public func position(for node: GraphLayoutNode) -> GraphPoint {
         positionsByNodeID[node.nodeID] ?? node.position
-    }
-}
-
-public enum GraphNodePositionUpdater {
-    public static func movingNode(
-        in layout: GraphRendererSnapshot,
-        nodeID: String,
-        to graphPoint: GraphPoint
-    ) -> GraphRendererSnapshot {
-        var moved = false
-        let nodes = layout.nodes.map { node in
-            guard node.nodeID == nodeID else {
-                return node
-            }
-            moved = true
-            return node.withPosition(graphPoint)
-        }
-        guard moved else {
-            return layout
-        }
-        return GraphRendererSnapshot(
-            requestID: layout.requestID,
-            generation: layout.generation,
-            nodes: nodes,
-            edges: layout.edges,
-            components: layout.components
-        )
     }
 }
 

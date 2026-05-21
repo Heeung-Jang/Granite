@@ -134,6 +134,30 @@ func graphHitTestUsesPositionOverrideForMovedNode() {
 }
 
 @Test
+func graphHitTestIndexMovesDroppedNodeIncrementally() {
+    let layout = interactionLayout()
+    let hitTest = GraphHitTestIndex(layout: layout, bucketCellSize: 40)
+    let movedIndex = hitTest.movingNode(nodeID: "file:a", to: GraphPoint(x: 160, y: 0))
+    let canvasSize = GraphSize(width: 400, height: 200)
+
+    let movedHit = movedIndex.nearestNode(
+        at: GraphPoint(x: 360, y: 100),
+        viewport: GraphViewport(),
+        canvasSize: canvasSize
+    )
+    let oldPositionHit = movedIndex.nearestNode(
+        at: GraphPoint(x: 200, y: 100),
+        viewport: GraphViewport(),
+        canvasSize: canvasSize
+    )
+
+    #expect(movedIndex.layout.nodes[0].position == GraphPoint(x: 160, y: 0))
+    #expect(movedIndex.layout.renderIdentity != hitTest.layout.renderIdentity)
+    #expect(movedHit?.nodeID == "file:a")
+    #expect(oldPositionHit == nil)
+}
+
+@Test
 func graphInteractionKeepsSelectionIndependentFromHover() {
     var interaction = GraphInteractionState()
 
@@ -214,29 +238,6 @@ func graphRendererInputUsesPositionOverridesWithoutChangingLayout() {
     #expect(input.position(for: layout.nodes[0]) == GraphPoint(x: 40, y: 50))
     #expect(input.position(for: layout.nodes[1]) == layout.nodes[1].position)
     #expect(input.layout == layout)
-}
-
-@Test
-func graphNodePositionUpdaterMovesOneNodeAndPreservesGraphShape() {
-    let layout = interactionLayout()
-    let moved = GraphNodePositionUpdater.movingNode(
-        in: layout,
-        nodeID: "file:b",
-        to: GraphPoint(x: 120, y: 40)
-    )
-    let unchanged = GraphNodePositionUpdater.movingNode(
-        in: layout,
-        nodeID: "missing",
-        to: GraphPoint(x: 1, y: 1)
-    )
-
-    #expect(moved.nodes[1].position == GraphPoint(x: 120, y: 40))
-    #expect(moved.nodes[0].position == layout.nodes[0].position)
-    #expect(moved.nodes.map(\.index) == layout.nodes.map(\.index))
-    #expect(moved.edges == layout.edges)
-    #expect(moved.components == layout.components)
-    #expect(moved.renderIdentity != layout.renderIdentity)
-    #expect(unchanged == layout)
 }
 
 @Test
@@ -341,6 +342,20 @@ func graphDragPerformanceBenchmarkTimesPreRendererPathFor60kNodes() {
         #expect(result.mainThreadStallMilliseconds <= GraphDragPerformanceBenchmark.strictMainThreadStallBudgetMilliseconds)
     } else {
         #expect(result.p99FrameDurationMilliseconds <= 250)
+    }
+}
+
+@Test
+func graphHitTestDropBenchmarkUpdates60kIndexWithinBudget() {
+    let result = GraphHitTestDropBenchmark.run()
+    let usesStrictBudget = ProcessInfo.processInfo.environment["GRANITE_STRICT_GRAPH_HIT_TEST_DROP_BENCHMARK"] == "1"
+
+    #expect(result.nodeCount == 60_000)
+    #expect(result.hitTestReady)
+    if usesStrictBudget {
+        #expect(result.durationMilliseconds <= GraphHitTestDropBenchmark.strictHardFailMilliseconds)
+    } else {
+        #expect(result.durationMilliseconds <= 250)
     }
 }
 

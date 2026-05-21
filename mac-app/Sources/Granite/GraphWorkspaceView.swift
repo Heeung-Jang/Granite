@@ -660,21 +660,20 @@ struct GraphWorkspaceView: View {
 
     private func commitDraggedNode(_ result: GraphNodeDragResult) {
         guard result.movedBeyondThreshold,
-              let layout = loadedLayout
+              let hitTestIndex = loadedHitTestIndex
         else {
             return
         }
 
-        let movedLayout = GraphNodePositionUpdater.movingNode(
-            in: layout,
+        let movedHitTestIndex = hitTestIndex.movingNode(
             nodeID: result.nodeID,
             to: result.nodePosition
         )
-        guard movedLayout != layout else {
+        guard movedHitTestIndex != hitTestIndex else {
             return
         }
-        loadedLayout = movedLayout
-        loadedHitTestIndex = GraphHitTestIndex(layout: movedLayout)
+        loadedLayout = movedHitTestIndex.layout
+        loadedHitTestIndex = movedHitTestIndex
     }
 
     private func openNode(_ nodeID: String, in input: GraphRendererInput) {

@@ -102,7 +102,7 @@ public enum GraphDragPerformanceBenchmark {
         return sorted[min(max(index, 0), sorted.count - 1)]
     }
 
-    private static func syntheticLayout(nodeCount: Int) -> GraphRendererSnapshot {
+    fileprivate static func syntheticLayout(nodeCount: Int) -> GraphRendererSnapshot {
         let columns = max(1, Int(Double(max(1, nodeCount)).squareRoot()))
         let nodes = (0..<nodeCount).map { index in
             GraphLayoutNode(
@@ -131,6 +131,41 @@ public enum GraphDragPerformanceBenchmark {
                     isOrphanRing: false
                 )
             ]
+        )
+    }
+}
+
+public struct GraphHitTestDropBenchmarkResult: Equatable, Sendable {
+    public let nodeCount: Int
+    public let durationMilliseconds: Double
+    public let hitTestReady: Bool
+}
+
+public enum GraphHitTestDropBenchmark {
+    public static let defaultNodeCount = 60_000
+    public static let strictHardFailMilliseconds = 33.33
+
+    public static func run(nodeCount: Int = defaultNodeCount) -> GraphHitTestDropBenchmarkResult {
+        let layout = GraphDragPerformanceBenchmark.syntheticLayout(nodeCount: nodeCount)
+        let hitTestIndex = GraphHitTestIndex(layout: layout)
+        let movedPoint = GraphPoint(x: 4_800, y: 4_800)
+        let timer = AppTelemetryTimer()
+        let movedIndex = hitTestIndex.movingNode(nodeID: "file:0", to: movedPoint)
+        let duration = timer.elapsedMilliseconds()
+        let canvasSize = GraphSize(width: 1_200, height: 800)
+        let hit = movedIndex.nearestNode(
+            at: GraphPoint(
+                x: canvasSize.width / 2 + movedPoint.x,
+                y: canvasSize.height / 2 + movedPoint.y
+            ),
+            viewport: GraphViewport(),
+            canvasSize: canvasSize
+        )
+
+        return GraphHitTestDropBenchmarkResult(
+            nodeCount: nodeCount,
+            durationMilliseconds: duration,
+            hitTestReady: hit?.nodeID == "file:0"
         )
     }
 }
