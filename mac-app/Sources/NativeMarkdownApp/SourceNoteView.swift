@@ -26,6 +26,7 @@ struct SourceNoteView: View {
     @State private var recoveryTask: Task<Void, Never>?
     @State private var fallbackProfileTask: Task<Void, Never>?
     @State private var livePreviewMetadataTask: Task<Void, Never>?
+    @AppStorage(LivePreviewMarkerStyle.storageKey) private var markerStyleRaw = LivePreviewMarkerStyle.defaultValue.rawValue
 
     init(
         vaultURL: URL,
@@ -57,6 +58,7 @@ struct SourceNoteView: View {
                     livePreviewMode: livePreviewMode,
                     linkStyleMap: livePreviewLinkStyleMap,
                     embedPreviewMap: livePreviewEmbedPreviewMap,
+                    markerStyle: livePreviewMarkerStyle,
                     documentTitle: file.displayName,
                     interactionHandler: handleEditorInteraction
                 )
@@ -199,6 +201,10 @@ struct SourceNoteView: View {
 
     private var livePreviewMode: LivePreviewMode {
         fallbackController.mode
+    }
+
+    private var livePreviewMarkerStyle: LivePreviewMarkerStyle {
+        LivePreviewMarkerStyle(rawValue: markerStyleRaw) ?? .defaultValue
     }
 
     private func toggleEditorMode() {

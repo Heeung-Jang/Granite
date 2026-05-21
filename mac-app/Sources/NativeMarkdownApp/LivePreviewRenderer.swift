@@ -8,6 +8,7 @@ enum LivePreviewRenderer {
     private static let unorderedListPrefixRegex = regex(#"^\s*[-*+]\s"#)
     private static let orderedListPrefixRegex = regex(#"^\s*\d+[.)]\s"#)
     private static let taskListPrefixRegex = regex(#"^\s*[-*+]\s+\[[ xX]\]\s"#)
+    private static let taskListMarkerRegex = regex(#"[-*+]"#)
     private static let taskCheckboxTokenRegex = regex(#"\[[ xX]\]"#)
     private static let blockquotePrefixRegex = regex(#"^\s*>\s?"#)
     private static let calloutPrefixRegex = regex(#"^\s*>\s?\[![^\]\n]+\]\s?"#)
@@ -24,7 +25,8 @@ enum LivePreviewRenderer {
         mode: LivePreviewMode = .livePreview,
         revealRange: NSRange? = nil,
         linkStyleMap: LivePreviewLinkStyleMap = LivePreviewLinkStyleMap(),
-        embedPreviewMap: LivePreviewEmbedPreviewMap = LivePreviewEmbedPreviewMap()
+        embedPreviewMap: LivePreviewEmbedPreviewMap = LivePreviewEmbedPreviewMap(),
+        markerStyle: LivePreviewMarkerStyle = .defaultValue
     ) -> MarkdownDecorationResult {
         let start = DispatchTime.now().uptimeNanoseconds
         if textView.hasMarkedText() {
@@ -70,7 +72,8 @@ enum LivePreviewRenderer {
             visibleRange: visibleRange,
             revealRange: resolvedRevealRange,
             linkStyleMap: linkStyleMap,
-            embedPreviewMap: embedPreviewMap
+            embedPreviewMap: embedPreviewMap,
+            markerStyle: markerStyle
         )
         let result = storage.withPreservedSelection(textView: textView, textLength: text.length) {
             var changes = AttributeChangeCounter()
@@ -133,7 +136,8 @@ enum LivePreviewRenderer {
         visibleRange: NSRange,
         revealRange: NSRange,
         linkStyleMap: LivePreviewLinkStyleMap,
-        embedPreviewMap: LivePreviewEmbedPreviewMap
+        embedPreviewMap: LivePreviewEmbedPreviewMap,
+        markerStyle: LivePreviewMarkerStyle
     ) {
         let parseWindow = LivePreviewVisibleParseWindow.window(
             in: source,
@@ -151,7 +155,13 @@ enum LivePreviewRenderer {
             let embedPreview = embedPreviewMap.preview(for: block)
             let table = tableModel(for: block, source: source)
             applyBlockAttributes(block, plan: plan, range: blockRange)
-            applyBlockTokenAttributes(block, source: source, plan: plan, visibleRange: visibleRange)
+            applyBlockTokenAttributes(
+                block,
+                source: source,
+                plan: plan,
+                visibleRange: visibleRange,
+                markerStyle: markerStyle
+            )
             applyPropertyAttributes(properties, source: source, plan: plan, visibleRange: visibleRange)
             applyTableAttributes(table, plan: plan, visibleRange: visibleRange)
             applyEmbedAttributes(embedPreview, plan: plan, visibleRange: visibleRange)
@@ -170,7 +180,8 @@ enum LivePreviewRenderer {
                 embedPreview: embedPreview,
                 plan: plan,
                 visibleRange: visibleRange,
-                revealRange: revealRange
+                revealRange: revealRange,
+                markerStyle: markerStyle
             )
         }
     }
@@ -236,18 +247,26 @@ enum LivePreviewRenderer {
         _ block: LivePreviewBlockSpan,
         source: String,
         plan: LivePreviewAttributePlan,
-        visibleRange: NSRange
+        visibleRange: NSRange,
+        markerStyle: LivePreviewMarkerStyle
     ) {
         for range in blockTokenRanges(for: block, source: source) {
             let range = NSIntersectionRange(range, visibleRange)
             guard range.length > 0 else {
                 continue
             }
-            plan.addAttributes([.foregroundColor: blockTokenColor(for: block)], range: range)
+            plan.addAttributes([.foregroundColor: blockTokenColor(for: block, markerStyle: markerStyle)], range: range)
         }
     }
 
-    private static func blockTokenColor(for block: LivePreviewBlockSpan) -> NSColor {
+    private static func blockTokenColor(
+        for block: LivePreviewBlockSpan,
+        markerStyle: LivePreviewMarkerStyle
+    ) -> NSColor {
+        if markerStyle == .muted {
+            return LivePreviewTheme.secondaryTextColor
+        }
+
         switch block.kind {
         case .blockquote:
             return LivePreviewTheme.quoteBarColor
@@ -545,7 +564,8 @@ enum LivePreviewRenderer {
         embedPreview: LivePreviewEmbedPreview?,
         plan: LivePreviewAttributePlan,
         visibleRange: NSRange,
-        revealRange: NSRange
+        revealRange: NSRange,
+        markerStyle: LivePreviewMarkerStyle
     ) {
         guard !shouldRevealSyntax(for: block, revealRange: revealRange) else {
             return
@@ -556,7 +576,8 @@ enum LivePreviewRenderer {
             source: source,
             properties: properties,
             table: table,
-            embedPreview: embedPreview
+            embedPreview: embedPreview,
+            markerStyle: markerStyle
         ) {
             let range = NSIntersectionRange(range, visibleRange)
             guard range.length > 0 else {
@@ -573,18 +594,25 @@ enum LivePreviewRenderer {
         source: String,
         properties: LivePreviewPropertyBlock?,
         table: LivePreviewTable?,
-        embedPreview: LivePreviewEmbedPreview?
+        embedPreview: LivePreviewEmbedPreview?,
+        markerStyle: LivePreviewMarkerStyle
     ) -> [NSRange] {
         var ranges: [NSRange]
         switch block.kind {
         case .heading:
-            ranges = prefixMatches(in: source, block: block, regex: headingPrefixRegex)
+            ranges = markerStyle.showsBlockMarkersOutsideReveal
+                ? []
+                : prefixMatches(in: source, block: block, regex: headingPrefixRegex)
         case .unorderedList:
-            ranges = prefixMatches(in: source, block: block, regex: unorderedListPrefixRegex)
+            ranges = markerStyle.showsBlockMarkersOutsideReveal
+                ? []
+                : prefixMatches(in: source, block: block, regex: unorderedListPrefixRegex)
         case .orderedList:
-            ranges = prefixMatches(in: source, block: block, regex: orderedListPrefixRegex)
+            ranges = markerStyle.showsBlockMarkersOutsideReveal
+                ? []
+                : prefixMatches(in: source, block: block, regex: orderedListPrefixRegex)
         case .taskList:
-            ranges = taskListConcealmentRanges(for: block, source: source)
+            ranges = taskListConcealmentRanges(for: block, source: source, markerStyle: markerStyle)
         case .blockquote:
             ranges = []
         case .callout:
@@ -607,15 +635,19 @@ enum LivePreviewRenderer {
 
     private static func shouldRevealSyntax(for block: LivePreviewBlockSpan, revealRange: NSRange) -> Bool {
         switch block.kind {
-        case .heading, .frontmatter, .callout, .table:
+        case .heading:
+            return block.sourceRange.nsRange.intersectsOrContainsCaret(revealRange)
+        case .frontmatter, .callout, .table:
             return false
         default:
-            return block.sourceRange.nsRange.intersects(revealRange)
+            return block.sourceRange.nsRange.intersectsOrContainsCaret(revealRange)
         }
     }
 
     private static func blockTokenRanges(for block: LivePreviewBlockSpan, source: String) -> [NSRange] {
         switch block.kind {
+        case .heading:
+            return prefixMatches(in: source, block: block, regex: headingPrefixRegex)
         case .blockquote:
             return prefixMatches(in: source, block: block, regex: blockquotePrefixRegex)
         case .callout:
@@ -631,13 +663,31 @@ enum LivePreviewRenderer {
         }
     }
 
-    private static func taskListConcealmentRanges(for block: LivePreviewBlockSpan, source: String) -> [NSRange] {
+    private static func taskListConcealmentRanges(
+        for block: LivePreviewBlockSpan,
+        source: String,
+        markerStyle: LivePreviewMarkerStyle
+    ) -> [NSRange] {
         prefixMatches(in: source, block: block, regex: taskListPrefixRegex).flatMap { prefixRange in
             guard let checkboxRange = taskCheckboxTokenRegex
                 .firstMatch(in: source, range: prefixRange)?
                 .range
             else {
-                return [prefixRange]
+                return markerStyle.showsBlockMarkersOutsideReveal ? [] : [prefixRange]
+            }
+            if markerStyle.showsBlockMarkersOutsideReveal {
+                let markerRange = taskListMarkerRange(in: prefixRange, source: source)
+                let markerEnd = markerRange.map { $0.location + $0.length } ?? prefixRange.location
+                let beforeCheckbox = NSRange(
+                    location: markerEnd,
+                    length: max(0, checkboxRange.location - markerEnd)
+                )
+                let afterLocation = checkboxRange.location + checkboxRange.length
+                let after = NSRange(
+                    location: afterLocation,
+                    length: max(0, prefixRange.location + prefixRange.length - afterLocation)
+                )
+                return [beforeCheckbox, after].filter { $0.length > 0 }
             }
             let before = NSRange(
                 location: prefixRange.location,
@@ -650,6 +700,19 @@ enum LivePreviewRenderer {
             )
             return [before, after].filter { $0.length > 0 }
         }
+    }
+
+    private static func taskListMarkerRange(in prefixRange: NSRange, source: String) -> NSRange? {
+        let text = source as NSString
+        let prefix = text.substring(with: prefixRange) as NSString
+        let markerMatch = taskListMarkerRegex.firstMatch(
+            in: prefix as String,
+            range: NSRange(location: 0, length: prefix.length)
+        )
+        guard let markerMatch else {
+            return nil
+        }
+        return NSRange(location: prefixRange.location + markerMatch.range.location, length: markerMatch.range.length)
     }
 
     private static func tableConcealmentRanges(
@@ -1034,7 +1097,10 @@ private extension NSTextStorage {
 }
 
 private extension NSRange {
-    func intersects(_ other: NSRange) -> Bool {
-        location < other.location + other.length && other.location < location + length
+    func intersectsOrContainsCaret(_ other: NSRange) -> Bool {
+        if other.length == 0 {
+            return other.location >= location && other.location < location + length
+        }
+        return location < other.location + other.length && other.location < location + length
     }
 }

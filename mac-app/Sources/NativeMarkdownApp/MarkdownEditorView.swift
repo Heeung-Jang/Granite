@@ -9,6 +9,7 @@ struct MarkdownEditorView: NSViewRepresentable {
     var livePreviewMode: LivePreviewMode = .livePreview
     var linkStyleMap = LivePreviewLinkStyleMap()
     var embedPreviewMap = LivePreviewEmbedPreviewMap()
+    var markerStyle: LivePreviewMarkerStyle = .defaultValue
     var documentTitle: String?
     var interactionHandler: ((MarkdownEditorInteraction) -> Void)?
 
@@ -19,6 +20,7 @@ struct MarkdownEditorView: NSViewRepresentable {
             livePreviewMode: livePreviewMode,
             linkStyleMap: linkStyleMap,
             embedPreviewMap: embedPreviewMap,
+            markerStyle: markerStyle,
             documentTitle: documentTitle
         )
     }
@@ -59,6 +61,7 @@ struct MarkdownEditorView: NSViewRepresentable {
             livePreviewMode: livePreviewMode,
             linkStyleMap: linkStyleMap,
             embedPreviewMap: embedPreviewMap,
+            markerStyle: markerStyle,
             documentTitle: documentTitle
         )
         guard let textView = scrollView.documentView as? NSTextView else {
@@ -103,6 +106,7 @@ struct MarkdownEditorView: NSViewRepresentable {
         private var livePreviewMode: LivePreviewMode
         private var linkStyleMap: LivePreviewLinkStyleMap
         private var embedPreviewMap: LivePreviewEmbedPreviewMap
+        private var markerStyle: LivePreviewMarkerStyle
         private var documentTitle: String?
         private var isDecoratingLivePreview = false
         private var decorationGeneration = 0
@@ -115,6 +119,7 @@ struct MarkdownEditorView: NSViewRepresentable {
             livePreviewMode: LivePreviewMode = .livePreview,
             linkStyleMap: LivePreviewLinkStyleMap = LivePreviewLinkStyleMap(),
             embedPreviewMap: LivePreviewEmbedPreviewMap = LivePreviewEmbedPreviewMap(),
+            markerStyle: LivePreviewMarkerStyle = .defaultValue,
             documentTitle: String? = nil
         ) {
             _text = text
@@ -122,6 +127,7 @@ struct MarkdownEditorView: NSViewRepresentable {
             self.livePreviewMode = livePreviewMode
             self.linkStyleMap = linkStyleMap
             self.embedPreviewMap = embedPreviewMap
+            self.markerStyle = markerStyle
             self.documentTitle = documentTitle
         }
 
@@ -131,6 +137,7 @@ struct MarkdownEditorView: NSViewRepresentable {
             livePreviewMode: LivePreviewMode,
             linkStyleMap: LivePreviewLinkStyleMap,
             embedPreviewMap: LivePreviewEmbedPreviewMap,
+            markerStyle: LivePreviewMarkerStyle,
             documentTitle: String?
         ) {
             _text = text
@@ -138,6 +145,7 @@ struct MarkdownEditorView: NSViewRepresentable {
             self.livePreviewMode = livePreviewMode
             self.linkStyleMap = linkStyleMap
             self.embedPreviewMap = embedPreviewMap
+            self.markerStyle = markerStyle
             self.documentTitle = documentTitle
             if let textView = textView as? MarkdownInteractionTextView {
                 textView.livePreviewDocumentTitle = documentTitle
@@ -201,7 +209,8 @@ struct MarkdownEditorView: NSViewRepresentable {
                 livePreviewMode: livePreviewMode,
                 revealRange: textView.selectedRange(),
                 linkStyleMap: linkStyleMap,
-                embedPreviewMap: embedPreviewMap
+                embedPreviewMap: embedPreviewMap,
+                markerStyle: markerStyle
             )
         }
 
