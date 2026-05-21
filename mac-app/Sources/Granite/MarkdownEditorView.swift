@@ -211,7 +211,9 @@ struct MarkdownEditorView: NSViewRepresentable {
                textView.toggleTaskCheckbox(at: utf16Offset) {
                 return true
             }
-            _ = textView.setActiveTableCell(at: textView.convert(event.locationInWindow, from: nil))
+            if textView.setActiveTableCell(at: textView.convert(event.locationInWindow, from: nil)) {
+                return true
+            }
 
             guard !textView.isEditable || event.modifierFlags.contains(.command),
                   let utf16Offset = textView.utf16Offset(for: event),
@@ -369,9 +371,15 @@ final class MarkdownInteractionTextView: NSTextView {
     private(set) var livePreviewOverlayState = LivePreviewOverlayState()
     private var livePreviewOverlaySourceVersion = 0
     private var tableCellMenuTarget: LivePreviewTableCell?
+    private var tableCellEditor: NSTextField?
+    private var tableCellEditorTarget: LivePreviewTableCell?
+
+    var activeTableCellEditorFrame: NSRect? {
+        tableCellEditor?.frame
+    }
 
     override func draw(_ dirtyRect: NSRect) {
-        refreshLivePreviewOverlayState()
+        refreshLivePreviewOverlayState(syncEditor: false)
         let overlayState = livePreviewOverlayState
         super.draw(dirtyRect)
         LivePreviewOverlayRenderer.drawBackgrounds(in: self, dirtyRect: dirtyRect, state: overlayState)
@@ -477,7 +485,7 @@ final class MarkdownInteractionTextView: NSTextView {
         return true
     }
 
-    func refreshLivePreviewOverlayState(revealRange: NSRange? = nil) {
+    func refreshLivePreviewOverlayState(revealRange: NSRange? = nil, syncEditor: Bool = true) {
         livePreviewOverlayState = livePreviewOverlayState.synchronized(
             mode: livePreviewMode,
             markerStyle: livePreviewMarkerStyle,
@@ -487,6 +495,9 @@ final class MarkdownInteractionTextView: NSTextView {
             hasMarkedText: hasMarkedText(),
             isSelectionDragActive: false
         )
+        if syncEditor {
+            syncTableCellEditor()
+        }
     }
 
     func noteLivePreviewSourceChanged() {
@@ -502,6 +513,7 @@ final class MarkdownInteractionTextView: NSTextView {
             hovered: hovered,
             active: active
         )
+        syncTableCellEditor()
     }
 
     func utf16Offset(for event: NSEvent) -> Int? {
@@ -582,6 +594,52 @@ final class MarkdownInteractionTextView: NSTextView {
         if !replaceTableCell(cell, with: field.stringValue) {
             NSSound.beep()
         }
+    }
+
+    private func syncTableCellEditor() {
+        guard livePreviewOverlayState.allowsTransientControls,
+              let cell = livePreviewOverlayState.activeTableCell,
+              let layoutCell = LivePreviewTableLayout.layoutCell(for: cell, in: self)
+        else {
+            removeTableCellEditor()
+            return
+        }
+        updateTableCellEditor(for: cell, frame: layoutCell.textRect.insetBy(dx: -2, dy: -2))
+    }
+
+    private func updateTableCellEditor(for cell: LivePreviewTableCell, frame: NSRect) {
+        let editor: NSTextField
+        if let existing = tableCellEditor {
+            editor = existing
+        } else {
+            let field = NSTextField(string: cell.text)
+            field.isBordered = false
+            field.isBezeled = false
+            field.drawsBackground = true
+            field.backgroundColor = LivePreviewTheme.tableCellBackgroundColor
+            field.font = LivePreviewTheme.baseFont
+            field.focusRingType = .none
+            field.usesSingleLineMode = true
+            field.lineBreakMode = .byTruncatingTail
+            addSubview(field)
+            editor = field
+            tableCellEditor = field
+        }
+
+        if tableCellEditorTarget != cell {
+            editor.stringValue = cell.text
+        }
+        tableCellEditorTarget = cell
+        editor.frame = frame
+        if window?.firstResponder !== editor.currentEditor() {
+            window?.makeFirstResponder(editor)
+        }
+    }
+
+    private func removeTableCellEditor() {
+        tableCellEditor?.removeFromSuperview()
+        tableCellEditor = nil
+        tableCellEditorTarget = nil
     }
 
     private func replaceTableCell(_ range: NSRange, with replacement: String, registersUndo: Bool) {

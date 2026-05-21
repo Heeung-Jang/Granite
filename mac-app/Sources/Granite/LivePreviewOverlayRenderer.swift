@@ -84,7 +84,7 @@ enum LivePreviewOverlayRenderer {
                 }
             case .table:
                 if let table = renderBlock.table {
-                    drawTableForeground(table, in: textView, dirtyRect: dirtyRect)
+                    drawTableForeground(table, in: textView, dirtyRect: dirtyRect, state: state)
                 }
             case .horizontalRule:
                 drawHorizontalRule(renderBlock.block, in: textView, dirtyRect: dirtyRect, state: state)
@@ -294,7 +294,12 @@ enum LivePreviewOverlayRenderer {
         }
     }
 
-    private static func drawTableForeground(_ table: LivePreviewTable, in textView: NSTextView, dirtyRect: NSRect) {
+    private static func drawTableForeground(
+        _ table: LivePreviewTable,
+        in textView: NSTextView,
+        dirtyRect: NSRect,
+        state: LivePreviewOverlayState
+    ) {
         guard let layout = LivePreviewTableLayout.make(for: table, in: textView),
               layout.outerRect.intersects(dirtyRect)
         else {
@@ -302,12 +307,19 @@ enum LivePreviewOverlayRenderer {
         }
 
         drawTableGrid(layout)
-        for cell in layout.cells {
+        for cell in layout.cells where shouldDrawTableCellText(cell.tableCell, state: state) {
             markdownInlineString(
                 displayValue(cell.tableCell.text, key: nil),
                 isHeader: cell.isHeader
             ).draw(with: cell.textRect, options: [.usesLineFragmentOrigin, .usesFontLeading])
         }
+    }
+
+    static func shouldDrawTableCellText(
+        _ cell: LivePreviewTableCell,
+        state: LivePreviewOverlayState
+    ) -> Bool {
+        !(state.allowsTransientControls && state.activeTableCell == cell)
     }
 
     static func shouldDrawHorizontalRule(_ block: LivePreviewBlockSpan, selectedRange: NSRange) -> Bool {

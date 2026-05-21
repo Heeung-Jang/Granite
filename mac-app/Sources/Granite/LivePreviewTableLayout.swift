@@ -22,6 +22,10 @@ struct LivePreviewTableLayout {
         cells.first { $0.textRect.contains(point) }?.tableCell
     }
 
+    func layoutCell(for cell: LivePreviewTableCell) -> Cell? {
+        cells.first { $0.tableCell == cell }
+    }
+
     static func tableCell(at point: NSPoint, in textView: NSTextView) -> LivePreviewTableCell? {
         LivePreviewTableParser.parse(textView.string).lazy.compactMap { table -> LivePreviewTableCell? in
             guard let layout = make(for: table, in: textView),
@@ -30,6 +34,12 @@ struct LivePreviewTableLayout {
                 return nil
             }
             return layout.cell(at: point)
+        }.first
+    }
+
+    static func layoutCell(for cell: LivePreviewTableCell, in textView: NSTextView) -> Cell? {
+        LivePreviewTableParser.parse(textView.string).lazy.compactMap { table -> Cell? in
+            make(for: table, in: textView)?.layoutCell(for: cell)
         }.first
     }
 
