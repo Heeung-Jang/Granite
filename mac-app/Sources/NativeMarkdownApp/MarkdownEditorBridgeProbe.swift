@@ -38,6 +38,7 @@ struct MarkdownEditorBridgeProbeReport: Codable, Equatable {
     var tableCellEditChangesOnlyCell: Bool
     var tableCellEditUndoRestoresCell: Bool
     var tableCellEditFailurePreservesBuffer: Bool
+    var frontmatterBoundaryDeleteUndoPreservesBuffer: Bool
     var editorAccessibilityHelpMentionsInteractions: Bool
 }
 
@@ -61,6 +62,7 @@ enum MarkdownEditorBridgeProbe {
         let selectionChangeProbe = probeSelectionChangeDecorationDoesNotReenter()
         let checkboxProbe = probeCheckboxToggle()
         let tableCellProbe = probeTableCellEdit()
+        let frontmatterBoundaryProbe = probeFrontmatterBoundaryDeleteUndo()
         let accessibilityProbe = probeEditorAccessibility()
 
         return MarkdownEditorBridgeProbeReport(
@@ -98,6 +100,7 @@ enum MarkdownEditorBridgeProbe {
             tableCellEditChangesOnlyCell: tableCellProbe.changesOnlyCell,
             tableCellEditUndoRestoresCell: tableCellProbe.undoRestoresCell,
             tableCellEditFailurePreservesBuffer: tableCellProbe.failurePreservesBuffer,
+            frontmatterBoundaryDeleteUndoPreservesBuffer: frontmatterBoundaryProbe,
             editorAccessibilityHelpMentionsInteractions: accessibilityProbe
         )
     }
@@ -601,5 +604,103 @@ enum MarkdownEditorBridgeProbe {
             && viewerHelp.contains("embeds")
             && viewerHelp.contains("tables")
             && sourceHelp.contains("Markdown syntax")
+    }
+
+    private static func probeFrontmatterBoundaryDeleteUndo() -> Bool {
+        let original = """
+        ---
+        title: fix: Normalize RestTemplate downstream error handling
+        type: fix
+        date: 2026-04-23
+        ---
+        # fix: Normalize RestTemplate downstream error handling
+
+        ## Enhancement Summary
+
+        HttpStatus 중심 설계를 HttpStatusCode 유지 중심으로 바꿔 비표준 downstream status까지 보존한다.
+        """
+        let afterDelete = original.replacingOccurrences(
+            of: "# fix: Normalize",
+            with: "#fix: Normalize",
+            options: [],
+            range: original.range(of: "# fix: Normalize")
+        )
+        var modelText = original
+        let binding = Binding<String>(
+            get: { modelText },
+            set: { modelText = $0 }
+        )
+        let coordinator = MarkdownEditorView.Coordinator(text: binding)
+        let textView = MarkdownEditorTextViewFactory.makeTextView()
+        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 900, height: 700))
+        scrollView.documentView = textView
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 900, height: 700),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: true
+        )
+        window.contentView = scrollView
+        window.makeFirstResponder(textView)
+        textView.delegate = coordinator
+        coordinator.textView = textView
+        textView.string = original
+
+        guard let headingOffset = utf16Offset(of: "# fix:", in: original) else {
+            window.close()
+            return false
+        }
+
+        textView.setSelectedRange(NSRange(location: headingOffset + 2, length: 0))
+        coordinator.decorateVisibleRange(in: textView)
+        textView.deleteBackward(nil)
+        runPendingEditorDecoration()
+        let deletePreservedBuffer = textView.string == afterDelete && modelText == afterDelete
+        let deleteGlyphRangeValid = visibleGlyphRangeIsValid(in: textView)
+        let deleteKoreanBodyRemainsVisible = foregroundColor(
+            in: textView,
+            text: afterDelete,
+            marker: "중심 설계"
+        ) != LivePreviewTheme.concealedColor
+
+        let canUndo = textView.undoManager?.canUndo ?? false
+        textView.undoManager?.undo()
+        runPendingEditorDecoration()
+        let undoPreservedBuffer = textView.string == original && modelText == original
+        let undoGlyphRangeValid = visibleGlyphRangeIsValid(in: textView)
+        let undoKoreanBodyRemainsVisible = foregroundColor(
+            in: textView,
+            text: original,
+            marker: "중심 설계"
+        ) != LivePreviewTheme.concealedColor
+        window.close()
+
+        return deletePreservedBuffer
+            && deleteGlyphRangeValid
+            && deleteKoreanBodyRemainsVisible
+            && canUndo
+            && undoPreservedBuffer
+            && undoGlyphRangeValid
+            && undoKoreanBodyRemainsVisible
+    }
+
+    private static func runPendingEditorDecoration() {
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+    }
+
+    private static func visibleGlyphRangeIsValid(in textView: NSTextView) -> Bool {
+        guard let layoutManager = textView.layoutManager,
+              let textContainer = textView.textContainer
+        else {
+            return false
+        }
+        let glyphRange = layoutManager.glyphRange(
+            forBoundingRect: textView.visibleRect,
+            in: textContainer
+        )
+        let characterRange = layoutManager.characterRange(forGlyphRange: glyphRange, actualGlyphRange: nil)
+        return characterRange.location != NSNotFound
+            && characterRange.location >= 0
+            && characterRange.location + characterRange.length <= (textView.string as NSString).length
     }
 }

@@ -105,6 +105,7 @@ struct MarkdownEditorView: NSViewRepresentable {
         private var embedPreviewMap: LivePreviewEmbedPreviewMap
         private var documentTitle: String?
         private var isDecoratingLivePreview = false
+        private var decorationGeneration = 0
         weak var textView: NSTextView?
         var isApplyingAppKitChange = false
 
@@ -153,7 +154,7 @@ struct MarkdownEditorView: NSViewRepresentable {
 
             isApplyingAppKitChange = true
             text = textView.string
-            renderCurrentSelection(in: textView)
+            scheduleLivePreviewDecoration(in: textView, afterTextMutation: true)
             isApplyingAppKitChange = false
         }
 
@@ -164,7 +165,7 @@ struct MarkdownEditorView: NSViewRepresentable {
             guard let textView = notification.object as? NSTextView else {
                 return
             }
-            renderCurrentSelection(in: textView)
+            scheduleLivePreviewDecoration(in: textView)
         }
 
         func textView(_ textView: MarkdownInteractionTextView, handleMouseDown event: NSEvent) -> Bool {
@@ -206,6 +207,47 @@ struct MarkdownEditorView: NSViewRepresentable {
 
         private func renderCurrentSelection(in textView: NSTextView) {
             decorateVisibleRange(in: textView)
+        }
+
+        private func scheduleLivePreviewDecoration(
+            in textView: NSTextView,
+            afterTextMutation: Bool = false
+        ) {
+            if afterTextMutation {
+                invalidateLayoutAfterTextMutation(in: textView)
+            }
+
+            decorationGeneration += 1
+            let generation = decorationGeneration
+            Task { @MainActor [weak self, weak textView] in
+                guard let self,
+                      let textView,
+                      generation == self.decorationGeneration,
+                      !self.isDecoratingLivePreview
+                else {
+                    return
+                }
+
+                self.renderCurrentSelection(in: textView)
+                if let textContainer = textView.textContainer {
+                    textView.layoutManager?.ensureLayout(for: textContainer)
+                }
+                textView.needsDisplay = true
+            }
+        }
+
+        private func invalidateLayoutAfterTextMutation(in textView: NSTextView) {
+            let textLength = (textView.string as NSString).length
+            guard textLength > 0 else {
+                textView.needsDisplay = true
+                return
+            }
+            let fullRange = NSRange(location: 0, length: textLength)
+            textView.layoutManager?.invalidateLayout(
+                forCharacterRange: fullRange,
+                actualCharacterRange: nil
+            )
+            textView.needsDisplay = true
         }
     }
 }
