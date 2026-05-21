@@ -13,6 +13,7 @@ use vault_engine::benchmarks::{
 use vault_engine::tantivy_search::{TantivySearchError, TantivySearchIndex};
 use vault_profiler::corpus::{QueryCorpusOptions, generate_query_corpus_bundle};
 use vault_profiler::read_benchmark::{ReadApiBenchmarkOptions, run_read_api_benchmark};
+use vault_profiler::read_indexer::{ReadIndexMaterializeOptions, materialize_read_index};
 use vault_profiler::synthetic::{
     SyntheticProfile, SyntheticVaultOptions, generate_synthetic_vault,
 };
@@ -123,6 +124,26 @@ fn run() -> Result<(), Box<dyn Error>> {
                 command.pretty,
             )
         }
+        Command::MaterializeReadIndex(command) => {
+            if is_output_inside_vault(&command.vault_root, &command.metadata_path)? {
+                return Err("refusing to write metadata index inside the vault".into());
+            }
+            if is_output_inside_vault(&command.vault_root, &command.tantivy_path)? {
+                return Err("refusing to write Tantivy index inside the vault".into());
+            }
+            let artifact = materialize_read_index(&ReadIndexMaterializeOptions {
+                vault_root: command.vault_root.clone(),
+                metadata_path: command.metadata_path,
+                tantivy_path: command.tantivy_path,
+                force: command.force,
+            })?;
+            write_json(
+                &command.vault_root,
+                command.output_path,
+                &artifact,
+                command.pretty,
+            )
+        }
     }
 }
 
@@ -174,6 +195,7 @@ enum Command {
     ObsidianRunbook(ObsidianRunbookCommand),
     TantivyQueryBenchmark(TantivyQueryBenchmarkCommand),
     ReadApiBenchmark(ReadApiBenchmarkCommand),
+    MaterializeReadIndex(MaterializeReadIndexCommand),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -245,6 +267,16 @@ struct ReadApiBenchmarkCommand {
     sampled_paths: Vec<String>,
     sampled_paths_file: Option<PathBuf>,
     result_limit: usize,
+    pretty: bool,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct MaterializeReadIndexCommand {
+    vault_root: PathBuf,
+    metadata_path: PathBuf,
+    tantivy_path: PathBuf,
+    output_path: Option<PathBuf>,
+    force: bool,
     pretty: bool,
 }
 
@@ -337,6 +369,9 @@ impl Cli {
             }
             "read-api-benchmark" => {
                 Command::ReadApiBenchmark(ReadApiBenchmarkCommand::parse(args)?)
+            }
+            "materialize-read-index" => {
+                Command::MaterializeReadIndex(MaterializeReadIndexCommand::parse(args)?)
             }
             _ => return Err(usage().into()),
         };
@@ -691,6 +726,63 @@ impl ReadApiBenchmarkCommand {
     }
 }
 
+impl MaterializeReadIndexCommand {
+    fn parse<I>(mut args: I) -> Result<Self, Box<dyn Error>>
+    where
+        I: Iterator<Item = OsString>,
+    {
+        let mut vault_root = None;
+        let mut metadata_path = None;
+        let mut tantivy_path = None;
+        let mut output_path = None;
+        let mut force = false;
+        let mut pretty = false;
+
+        while let Some(arg) = args.next() {
+            match arg.to_string_lossy().as_ref() {
+                "--vault-root" | "--vault" => {
+                    vault_root = Some(PathBuf::from(required_string(&mut args, "--vault-root")?))
+                }
+                "--metadata-path" => {
+                    metadata_path = Some(PathBuf::from(required_string(
+                        &mut args,
+                        "--metadata-path",
+                    )?))
+                }
+                "--tantivy-path" => {
+                    tantivy_path =
+                        Some(PathBuf::from(required_string(&mut args, "--tantivy-path")?))
+                }
+                "--output" => {
+                    output_path = Some(PathBuf::from(required_string(&mut args, "--output")?))
+                }
+                "--force" => force = true,
+                "--pretty" => pretty = true,
+                _ => return Err(usage().into()),
+            }
+        }
+
+        let Some(vault_root) = vault_root else {
+            return Err("missing required --vault-root argument".into());
+        };
+        let Some(metadata_path) = metadata_path else {
+            return Err("missing required --metadata-path argument".into());
+        };
+        let Some(tantivy_path) = tantivy_path else {
+            return Err("missing required --tantivy-path argument".into());
+        };
+
+        Ok(Self {
+            vault_root,
+            metadata_path,
+            tantivy_path,
+            output_path,
+            force,
+            pretty,
+        })
+    }
+}
+
 fn write_obsidian_runbook(command: &ObsidianRunbookCommand) -> Result<(), Box<dyn Error>> {
     if !has_private_path_component(&command.output_path) {
         return Err("raw Obsidian runbook output must be written under a private directory".into());
@@ -970,7 +1062,7 @@ where
 }
 
 fn usage() -> &'static str {
-    "usage: vault-profiler <profile|query-corpus|synthetic-vault|backend-benchmark|obsidian-runbook|tantivy-query-benchmark|read-api-benchmark> [options]"
+    "usage: vault-profiler <profile|query-corpus|synthetic-vault|backend-benchmark|obsidian-runbook|tantivy-query-benchmark|read-api-benchmark|materialize-read-index> [options]"
 }
 
 #[cfg(test)]
@@ -1240,6 +1332,42 @@ mod tests {
                     sampled_paths: vec!["Daily/Home.md".to_string()],
                     sampled_paths_file: Some(PathBuf::from("/tmp/private/paths.txt")),
                     result_limit: 5,
+                    pretty: true,
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_materialize_read_index_args() {
+        let cli = Cli::parse(
+            [
+                "materialize-read-index",
+                "--vault-root",
+                "/tmp/vault",
+                "--metadata-path",
+                "/tmp/index/metadata.sqlite",
+                "--tantivy-path",
+                "/tmp/index/tantivy",
+                "--output",
+                "/tmp/materialize.json",
+                "--force",
+                "--pretty",
+            ]
+            .into_iter()
+            .map(OsString::from),
+        )
+        .expect("cli");
+
+        assert_eq!(
+            cli,
+            Cli {
+                command: Command::MaterializeReadIndex(MaterializeReadIndexCommand {
+                    vault_root: PathBuf::from("/tmp/vault"),
+                    metadata_path: PathBuf::from("/tmp/index/metadata.sqlite"),
+                    tantivy_path: PathBuf::from("/tmp/index/tantivy"),
+                    output_path: Some(PathBuf::from("/tmp/materialize.json")),
+                    force: true,
                     pretty: true,
                 }),
             }

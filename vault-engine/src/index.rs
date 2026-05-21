@@ -152,6 +152,16 @@ pub struct MetadataStore {
     connection: Connection,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexedFileRecords {
+    pub file: FileRecord,
+    pub links: Vec<LinkEdgeRecord>,
+    pub tags: Vec<TagRecord>,
+    pub properties: Vec<PropertyRecord>,
+    pub headings: Vec<HeadingRecord>,
+    pub attachments: Vec<AttachmentRecord>,
+}
+
 #[derive(Debug)]
 pub enum MetadataStoreError {
     Sqlite(rusqlite::Error),
@@ -343,6 +353,135 @@ impl MetadataStore {
         }
 
         transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn bulk_load_file_records(
+        &mut self,
+        records: &[IndexedFileRecords],
+    ) -> MetadataStoreResult<()> {
+        self.connection.execute_batch(
+            "
+            PRAGMA synchronous = OFF;
+            PRAGMA temp_store = MEMORY;
+            ",
+        )?;
+        drop_projection_indexes(&self.connection)?;
+
+        let load_result: MetadataStoreResult<()> = (|| {
+            let transaction = self.connection.transaction()?;
+            {
+                let mut insert_file = transaction.prepare(
+                    "INSERT INTO files (
+                        file_id, relative_path, kind, size_bytes, modified_unix_ms, file_device, file_inode,
+                        content_hash, generation, status, last_error
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                    ON CONFLICT(file_id) DO UPDATE SET
+                        relative_path = excluded.relative_path,
+                        kind = excluded.kind,
+                        size_bytes = excluded.size_bytes,
+                        modified_unix_ms = excluded.modified_unix_ms,
+                        file_device = excluded.file_device,
+                        file_inode = excluded.file_inode,
+                        content_hash = excluded.content_hash,
+                        generation = excluded.generation,
+                        status = excluded.status,
+                        last_error = excluded.last_error",
+                )?;
+                let mut insert_link = transaction.prepare(
+                    "INSERT INTO links (
+                        source_file_id, target_text, resolved_target_file_id, heading, alias, is_embed
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                )?;
+                let mut insert_tag = transaction
+                    .prepare("INSERT INTO tags (file_id, tag, source) VALUES (?1, ?2, ?3)")?;
+                let mut insert_property = transaction.prepare(
+                    "INSERT INTO properties (file_id, key, value_kind, value_json) VALUES (?1, ?2, ?3, ?4)",
+                )?;
+                let mut insert_heading = transaction.prepare(
+                    "INSERT INTO headings (file_id, slug, title, level, byte_offset)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                )?;
+                let mut insert_attachment = transaction.prepare(
+                    "INSERT INTO attachments (source_file_id, source, raw_target, state, state_detail)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                )?;
+
+                for record in records {
+                    let file = &record.file;
+                    insert_file.execute(params![
+                        &file.file_id,
+                        path_to_string(&file.relative_path),
+                        scan_kind_to_str(file.kind),
+                        file.size_bytes as i64,
+                        system_time_to_unix_ms(file.modified),
+                        file.file_identity.device.to_string(),
+                        file.file_identity.inode.to_string(),
+                        file.content_hash.as_deref(),
+                        file.generation as i64,
+                        file_status_to_str(file.status),
+                        file.last_error.as_deref(),
+                    ])?;
+
+                    for link in &record.links {
+                        insert_link.execute(params![
+                            &link.source_file_id,
+                            &link.target_text,
+                            link.resolved_target_file_id.as_deref(),
+                            link.heading.as_deref(),
+                            link.alias.as_deref(),
+                            bool_to_int(link.is_embed),
+                        ])?;
+                    }
+                    for tag in &record.tags {
+                        insert_tag.execute(params![
+                            &tag.file_id,
+                            &tag.tag,
+                            tag_source_to_str(tag.source)
+                        ])?;
+                    }
+                    for property in &record.properties {
+                        let (kind, json) = property_value_to_storage(&property.value)?;
+                        insert_property.execute(params![
+                            &property.file_id,
+                            &property.key,
+                            kind,
+                            json
+                        ])?;
+                    }
+                    for heading in &record.headings {
+                        insert_heading.execute(params![
+                            &heading.file_id,
+                            &heading.slug,
+                            &heading.title,
+                            heading.level as i64,
+                            heading.byte_offset.map(|offset| offset as i64),
+                        ])?;
+                    }
+                    for attachment in &record.attachments {
+                        let (state, detail) = attachment_state_to_storage(&attachment.state)?;
+                        insert_attachment.execute(params![
+                            &attachment.source_file_id,
+                            attachment_source_to_str(attachment.source),
+                            &attachment.raw_target,
+                            state,
+                            detail,
+                        ])?;
+                    }
+                }
+            }
+
+            transaction.commit()?;
+            Ok(())
+        })();
+        let index_result = create_projection_indexes(&self.connection);
+        let pragma_result = self
+            .connection
+            .execute_batch("PRAGMA synchronous = NORMAL;");
+
+        load_result?;
+        index_result?;
+        pragma_result?;
         Ok(())
     }
 
@@ -740,6 +879,15 @@ fn create_schema(connection: &Connection) -> MetadataStoreResult<()> {
             state_detail TEXT,
             FOREIGN KEY(source_file_id) REFERENCES files(file_id) ON DELETE CASCADE
         );
+        ",
+    )?;
+    create_projection_indexes(connection)?;
+    Ok(())
+}
+
+fn create_projection_indexes(connection: &Connection) -> MetadataStoreResult<()> {
+    connection.execute_batch(
+        "
         CREATE INDEX IF NOT EXISTS idx_files_relative_path ON files(relative_path);
         CREATE INDEX IF NOT EXISTS idx_links_source_file_id ON links(source_file_id);
         CREATE INDEX IF NOT EXISTS idx_links_resolved_target_file_id
@@ -748,6 +896,21 @@ fn create_schema(connection: &Connection) -> MetadataStoreResult<()> {
         CREATE INDEX IF NOT EXISTS idx_tags_tag ON tags(tag);
         CREATE INDEX IF NOT EXISTS idx_properties_file_id ON properties(file_id);
         CREATE INDEX IF NOT EXISTS idx_attachments_source_file_id ON attachments(source_file_id);
+        ",
+    )?;
+    Ok(())
+}
+
+fn drop_projection_indexes(connection: &Connection) -> MetadataStoreResult<()> {
+    connection.execute_batch(
+        "
+        DROP INDEX IF EXISTS idx_files_relative_path;
+        DROP INDEX IF EXISTS idx_links_source_file_id;
+        DROP INDEX IF EXISTS idx_links_resolved_target_file_id;
+        DROP INDEX IF EXISTS idx_tags_file_id;
+        DROP INDEX IF EXISTS idx_tags_tag;
+        DROP INDEX IF EXISTS idx_properties_file_id;
+        DROP INDEX IF EXISTS idx_attachments_source_file_id;
         ",
     )?;
     Ok(())
@@ -1466,6 +1629,64 @@ mod tests {
     }
 
     #[test]
+    fn metadata_store_bulk_loads_fixture_records() {
+        let metadata = IndexSchemaMetadata::new("sqlite", "metadata-v1", "none", 1);
+        let mut store = MetadataStore::open_in_memory(&metadata).expect("store");
+        let mut home = FileRecord::from_scan_entry(&fixture_entry("Home.md"), 1);
+        home.mark_search_indexed();
+        let mut target = FileRecord::from_scan_entry(&fixture_entry("Folder/Target.md"), 1);
+        target.mark_search_indexed();
+        let link = LinkEdgeRecord {
+            source_file_id: home.file_id.clone(),
+            target_text: "Folder/Target".to_string(),
+            resolved_target_file_id: Some(target.file_id.clone()),
+            heading: None,
+            alias: None,
+            is_embed: false,
+        };
+        let tag = TagRecord {
+            file_id: home.file_id.clone(),
+            tag: "project/native".to_string(),
+            source: TagSource::Inline,
+        };
+
+        store
+            .bulk_load_file_records(&[
+                IndexedFileRecords {
+                    file: home.clone(),
+                    links: vec![link],
+                    tags: vec![tag],
+                    properties: Vec::new(),
+                    headings: Vec::new(),
+                    attachments: Vec::new(),
+                },
+                IndexedFileRecords {
+                    file: target.clone(),
+                    links: Vec::new(),
+                    tags: Vec::new(),
+                    properties: Vec::new(),
+                    headings: Vec::new(),
+                    attachments: Vec::new(),
+                },
+            ])
+            .expect("bulk load");
+
+        assert_eq!(store.row_count(MetadataTable::Files).expect("files"), 2);
+        assert_eq!(store.row_count(MetadataTable::Links).expect("links"), 1);
+        assert_eq!(
+            store
+                .backlink_projections(&target.file_id, 0, 10)
+                .expect("backlinks")
+                .len(),
+            1
+        );
+        assert!(projection_index_exists(
+            &store.connection,
+            "idx_links_source_file_id"
+        ));
+    }
+
+    #[test]
     fn metadata_schema_has_projection_indexes() {
         let connection = Connection::open_in_memory().expect("connection");
         create_schema(&connection).expect("schema");
@@ -1822,5 +2043,18 @@ mod tests {
             .into_iter()
             .find(|entry| entry.relative_path == PathBuf::from(relative_path))
             .expect("fixture entry")
+    }
+
+    fn projection_index_exists(connection: &Connection, name: &str) -> bool {
+        connection
+            .query_row(
+                "SELECT EXISTS (
+                    SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?1
+                )",
+                params![name],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("index exists query")
+            == 1
     }
 }
