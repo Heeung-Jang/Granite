@@ -63,6 +63,10 @@ struct MarkdownEditorBridgeProbeReport: Codable, Equatable {
     var checkboxToggleChangesOnlyToken: Bool
     var checkboxToggleUndoRestoresToken: Bool
     var checkboxToggleReadOnlyPreservesBuffer: Bool
+    var renderedTaskCheckboxHitTestResolvesToken: Bool
+    var renderedTaskCheckboxHitTestDisabledGuards: Bool
+    var renderedTaskCheckboxToggleChangesOnlyToken: Bool
+    var renderedTaskCheckboxToggleUndoRestoresToken: Bool
     var tableCellContextMenuResolvesCell: Bool
     var tableCellContextMenuSkipsFallback: Bool
     var tableCellEditChangesOnlyCell: Bool
@@ -167,6 +171,10 @@ enum MarkdownEditorBridgeProbe {
             checkboxToggleChangesOnlyToken: checkboxProbe.changesOnlyToken,
             checkboxToggleUndoRestoresToken: checkboxProbe.undoRestoresToken,
             checkboxToggleReadOnlyPreservesBuffer: checkboxProbe.readOnlyPreservesBuffer,
+            renderedTaskCheckboxHitTestResolvesToken: checkboxProbe.renderedHitTestResolvesToken,
+            renderedTaskCheckboxHitTestDisabledGuards: checkboxProbe.renderedHitTestDisabledGuards,
+            renderedTaskCheckboxToggleChangesOnlyToken: checkboxProbe.renderedToggleChangesOnlyToken,
+            renderedTaskCheckboxToggleUndoRestoresToken: checkboxProbe.renderedToggleUndoRestoresToken,
             tableCellContextMenuResolvesCell: tableCellProbe.contextMenuResolvesCell,
             tableCellContextMenuSkipsFallback: tableCellProbe.contextMenuSkipsFallback,
             tableCellEditChangesOnlyCell: tableCellProbe.changesOnlyCell,
@@ -779,12 +787,8 @@ enum MarkdownEditorBridgeProbe {
             text: text,
             marker: "- Bullet"
         ) == LivePreviewTheme.concealedColor
-            && foregroundColor(in: obsidianTextView, text: text, marker: "- [x]") == LivePreviewTheme.secondaryTextColor
-        let obsidianTaskCheckboxVisible = foregroundColor(
-            in: obsidianTextView,
-            text: text,
-            marker: "[x]"
-        ) != LivePreviewTheme.concealedColor
+            && foregroundColor(in: obsidianTextView, text: text, marker: "- [x]") == LivePreviewTheme.concealedColor
+        let obsidianTaskCheckboxVisible = taskCheckboxOverlayAvailable(in: obsidianTextView, text: text)
         let obsidianBlockquoteConcealed = foregroundColor(
             in: obsidianTextView,
             text: text,
@@ -951,6 +955,28 @@ enum MarkdownEditorBridgeProbe {
         return textView.textStorage?.attribute(.font, at: offset, effectiveRange: nil) as? NSFont
     }
 
+    private static func taskCheckboxOverlayAvailable(in textView: NSTextView, text: String) -> Bool {
+        guard let block = LivePreviewParser.parse(text).blocks.first(where: {
+            if case .taskList = $0.kind {
+                return true
+            }
+            return false
+        }),
+              let markerKind = LivePreviewOverlayRenderer.markerGeometries(in: textView)
+                .first(where: { $0.kind == .taskCheckbox })?.kind
+        else {
+            return false
+        }
+        return LivePreviewOverlayRenderer.shouldDrawMarkerOverlay(
+            for: block,
+            markerKind: markerKind,
+            state: LivePreviewOverlayState(
+                markerStyle: .obsidian,
+                revealRange: NSRange(location: (text as NSString).length, length: 0)
+            )
+        )
+    }
+
     private static func utf16Offset(of marker: String, in text: String) -> Int? {
         guard let range = text.range(of: marker) else {
             return nil
@@ -961,7 +987,11 @@ enum MarkdownEditorBridgeProbe {
     private static func probeCheckboxToggle() -> (
         changesOnlyToken: Bool,
         undoRestoresToken: Bool,
-        readOnlyPreservesBuffer: Bool
+        readOnlyPreservesBuffer: Bool,
+        renderedHitTestResolvesToken: Bool,
+        renderedHitTestDisabledGuards: Bool,
+        renderedToggleChangesOnlyToken: Bool,
+        renderedToggleUndoRestoresToken: Bool
     ) {
         let text = "- [ ] Task\n- [x] Done\n"
         let textView = MarkdownEditorTextViewFactory.makeTextView()
@@ -978,7 +1008,7 @@ enum MarkdownEditorBridgeProbe {
         textView.string = text
         textView.setSelectedRange(NSRange(location: 0, length: 0))
         guard let offset = utf16Offset(of: "[ ]", in: text) else {
-            return (false, false, false)
+            return (false, false, false, false, false, false, false)
         }
 
         let toggled = (textView as? MarkdownInteractionTextView)?.toggleTaskCheckbox(at: offset + 1) == true
@@ -995,7 +1025,76 @@ enum MarkdownEditorBridgeProbe {
         let readOnlyPreservesBuffer = !readOnlyToggled
             && readOnlyTextView.string == text
 
-        return (changesOnlyToken, undoRestoresToken, readOnlyPreservesBuffer)
+        let renderedText = "- [ ] Task\n"
+        let renderedTextView = MarkdownEditorTextViewFactory.makeTextView() as! MarkdownInteractionTextView
+        let renderedScrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 900, height: 700))
+        renderedScrollView.documentView = renderedTextView
+        let renderedWindow = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 900, height: 700),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: true
+        )
+        renderedWindow.contentView = renderedScrollView
+        renderedWindow.makeFirstResponder(renderedTextView)
+        renderedTextView.string = renderedText
+        renderedTextView.livePreviewMarkerStyle = .obsidian
+        renderedTextView.setSelectedRange(NSRange(location: (renderedText as NSString).length, length: 0))
+        MarkdownVisibleRangeDecorator.decorateVisibleRange(
+            in: renderedTextView,
+            livePreviewMode: .livePreview,
+            revealRange: renderedTextView.selectedRange(),
+            markerStyle: .obsidian
+        )
+        renderedTextView.refreshLivePreviewOverlayState()
+        let renderedGeometry = LivePreviewOverlayRenderer.markerGeometries(in: renderedTextView)
+            .first { $0.kind == .taskCheckbox }
+        let renderedPoint = renderedGeometry.map { NSPoint(x: $0.rect.midX, y: $0.rect.midY) }
+        let renderedOffset = renderedPoint.flatMap { renderedTextView.taskCheckboxToggleOffset(at: $0) }
+        let renderedHitTestResolvesToken = renderedOffset == (utf16Offset(of: "[ ]", in: renderedText) ?? -10) + 1
+
+        let renderedToggled = renderedOffset.map { renderedTextView.toggleTaskCheckbox(at: $0) } == true
+        let renderedToggleChangesOnlyToken = renderedToggled && renderedTextView.string == "- [x] Task\n"
+        let renderedCanUndo = renderedTextView.undoManager?.canUndo ?? false
+        renderedTextView.undoManager?.undo()
+        let renderedToggleUndoRestoresToken = renderedCanUndo && renderedTextView.string == renderedText
+
+        let sourceModeTextView = MarkdownEditorTextViewFactory.makeTextView() as! MarkdownInteractionTextView
+        sourceModeTextView.string = renderedText
+        sourceModeTextView.livePreviewMode = .source
+        sourceModeTextView.livePreviewMarkerStyle = .obsidian
+        sourceModeTextView.refreshLivePreviewOverlayState()
+
+        let readOnlyRenderedTextView = MarkdownEditorTextViewFactory.makeTextView() as! MarkdownInteractionTextView
+        readOnlyRenderedTextView.string = renderedText
+        readOnlyRenderedTextView.livePreviewMarkerStyle = .obsidian
+        readOnlyRenderedTextView.isEditable = false
+        readOnlyRenderedTextView.refreshLivePreviewOverlayState()
+
+        let markedTextView = MarkdownEditorTextViewFactory.makeTextView() as! MarkdownInteractionTextView
+        markedTextView.string = renderedText
+        markedTextView.livePreviewMarkerStyle = .obsidian
+        markedTextView.setMarkedText(
+            "한글",
+            selectedRange: NSRange(location: 2, length: 0),
+            replacementRange: NSRange(location: NSNotFound, length: 0)
+        )
+        markedTextView.refreshLivePreviewOverlayState()
+
+        let renderedTaskPoint = renderedPoint ?? .zero
+        let renderedHitTestDisabledGuards = sourceModeTextView.taskCheckboxToggleOffset(at: renderedTaskPoint) == nil
+            && readOnlyRenderedTextView.taskCheckboxToggleOffset(at: renderedTaskPoint) == nil
+            && markedTextView.taskCheckboxToggleOffset(at: renderedTaskPoint) == nil
+
+        return (
+            changesOnlyToken,
+            undoRestoresToken,
+            readOnlyPreservesBuffer,
+            renderedHitTestResolvesToken,
+            renderedHitTestDisabledGuards,
+            renderedToggleChangesOnlyToken,
+            renderedToggleUndoRestoresToken
+        )
     }
 
     private static func probeTableCellEdit() -> (

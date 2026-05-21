@@ -31,6 +31,8 @@ struct LivePreviewStyleProbeReport: Codable, Equatable {
     var obsidianTaskSourceTokenConcealedOutsideReveal: Bool
     var obsidianTaskSourceTokenRevealedInsideLine: Bool
     var obsidianTaskCheckboxVisualVisibleOutsideReveal: Bool
+    var obsidianTaskCheckboxOverlayDrawsOutsideReveal: Bool
+    var obsidianTaskCheckboxOverlaySuppressedInsideReveal: Bool
     var markerGeometry: MarkerGeometryProbeReport
     var unorderedMarkerGeometryReported: Bool
     var orderedMarkerGeometryReported: Bool
@@ -128,7 +130,6 @@ struct MarkerGeometryProbeReport: Codable, Equatable {
 @MainActor
 enum LivePreviewStyleProbe {
     private static let expectedFailures: Set<String> = [
-        "obsidianTaskSourceTokenConcealedOutsideReveal",
         "tableActiveCellEditStateVisible",
         "tableRowAddControlVisibleWhenFocused",
         "tableColumnAddControlVisibleWhenFocused"
@@ -336,6 +337,7 @@ enum LivePreviewStyleProbe {
         let unorderedOverlayFields = probeUnorderedMarkerOverlayPolicy()
         let orderedMarkerFields = probeOrderedMarkerDetection()
         let orderedOverlayFields = probeOrderedMarkerOverlayPolicy()
+        let taskOverlayFields = probeTaskCheckboxOverlayPolicy()
 
         var report = LivePreviewStyleProbeReport(
             summary: .passed,
@@ -379,7 +381,9 @@ enum LivePreviewStyleProbe {
             obsidianOrderedMarkerRevealedInsideLine: obsidianMarkerFields.orderedRevealedInsideLine,
             obsidianTaskSourceTokenConcealedOutsideReveal: obsidianMarkerFields.taskSourceTokenConcealedOutsideReveal,
             obsidianTaskSourceTokenRevealedInsideLine: obsidianMarkerFields.taskSourceTokenRevealedInsideLine,
-            obsidianTaskCheckboxVisualVisibleOutsideReveal: obsidianMarkerFields.taskCheckboxVisualVisibleOutsideReveal,
+            obsidianTaskCheckboxVisualVisibleOutsideReveal: taskOverlayFields.drawsOutsideReveal,
+            obsidianTaskCheckboxOverlayDrawsOutsideReveal: taskOverlayFields.drawsOutsideReveal,
+            obsidianTaskCheckboxOverlaySuppressedInsideReveal: taskOverlayFields.suppressedInsideReveal,
             markerGeometry: markerGeometryFields.geometry,
             unorderedMarkerGeometryReported: markerGeometryFields.unorderedReported,
             orderedMarkerGeometryReported: markerGeometryFields.orderedReported,
@@ -499,8 +503,7 @@ enum LivePreviewStyleProbe {
         orderedConcealedOutsideReveal: Bool,
         orderedRevealedInsideLine: Bool,
         taskSourceTokenConcealedOutsideReveal: Bool,
-        taskSourceTokenRevealedInsideLine: Bool,
-        taskCheckboxVisualVisibleOutsideReveal: Bool
+        taskSourceTokenRevealedInsideLine: Bool
     ) {
         let source = """
         - Unordered
@@ -563,8 +566,7 @@ enum LivePreviewStyleProbe {
             hiddenTaskMarkerColor == LivePreviewTheme.concealedColor
                 && hiddenTaskCheckboxColor == LivePreviewTheme.concealedColor,
             revealedTaskMarkerColor != LivePreviewTheme.concealedColor
-                && revealedTaskCheckboxColor != LivePreviewTheme.concealedColor,
-            hiddenTaskCheckboxColor != LivePreviewTheme.concealedColor
+                && revealedTaskCheckboxColor != LivePreviewTheme.concealedColor
         )
     }
 
@@ -912,6 +914,41 @@ enum LivePreviewStyleProbe {
             drawsOutsideReveal,
             suppressedInsideReveal,
             compatibilityPreserved
+        )
+    }
+
+    private static func probeTaskCheckboxOverlayPolicy() -> (
+        drawsOutsideReveal: Bool,
+        suppressedInsideReveal: Bool
+    ) {
+        let source = "- [x] Done\n"
+        let result = LivePreviewParser.parse(source)
+        guard let block = result.blocks.first,
+              let markerKind = LivePreviewOverlayRenderer.markerGeometries(
+                in: configuredTextView(source: source, markerStyle: .obsidian)
+              ).first?.kind,
+              let textOffset = utf16Offset(of: "Done", in: source)
+        else {
+            return (false, false)
+        }
+
+        return (
+            LivePreviewOverlayRenderer.shouldDrawMarkerOverlay(
+                for: block,
+                markerKind: markerKind,
+                state: LivePreviewOverlayState(
+                    markerStyle: .obsidian,
+                    revealRange: NSRange(location: (source as NSString).length, length: 0)
+                )
+            ),
+            !LivePreviewOverlayRenderer.shouldDrawMarkerOverlay(
+                for: block,
+                markerKind: markerKind,
+                state: LivePreviewOverlayState(
+                    markerStyle: .obsidian,
+                    revealRange: NSRange(location: textOffset, length: 0)
+                )
+            )
         )
     }
 

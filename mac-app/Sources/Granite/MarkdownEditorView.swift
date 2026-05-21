@@ -207,7 +207,7 @@ struct MarkdownEditorView: NSViewRepresentable {
 
         func textView(_ textView: MarkdownInteractionTextView, handleMouseDown event: NSEvent) -> Bool {
             if textView.isEditable,
-               let utf16Offset = textView.utf16Offset(for: event),
+               let utf16Offset = textView.taskCheckboxToggleOffset(for: event) ?? textView.utf16Offset(for: event),
                textView.toggleTaskCheckbox(at: utf16Offset) {
                 return true
             }
@@ -496,6 +496,22 @@ final class MarkdownInteractionTextView: NSTextView {
         let glyphIndex = layoutManager.glyphIndex(for: point, in: textContainer)
         let characterIndex = layoutManager.characterIndexForGlyph(at: glyphIndex)
         return min(characterIndex, (string as NSString).length - 1)
+    }
+
+    func taskCheckboxToggleOffset(for event: NSEvent) -> Int? {
+        taskCheckboxToggleOffset(at: convert(event.locationInWindow, from: nil))
+    }
+
+    func taskCheckboxToggleOffset(at point: NSPoint) -> Int? {
+        refreshLivePreviewOverlayState()
+        guard let tokenRange = LivePreviewOverlayRenderer.taskCheckboxTokenRange(
+            at: point,
+            in: self,
+            state: livePreviewOverlayState
+        ) else {
+            return nil
+        }
+        return tokenRange.location + min(1, max(0, tokenRange.length - 1))
     }
 
     @objc private func editTableCellFromMenu(_ sender: NSMenuItem) {

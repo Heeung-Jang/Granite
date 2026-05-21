@@ -760,6 +760,9 @@ enum LivePreviewRenderer {
             else {
                 return markerStyle.showsListMarkersOutsideReveal ? [] : [prefixRange]
             }
+            if markerStyle == .obsidian {
+                return [prefixRange]
+            }
             if markerStyle.showsListMarkersOutsideReveal {
                 let markerRange = taskListMarkerRange(in: prefixRange, source: source)
                 let markerEnd = markerRange.map { $0.location + $0.length } ?? prefixRange.location

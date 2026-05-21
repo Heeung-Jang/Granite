@@ -88,7 +88,7 @@ enum LivePreviewOverlayRenderer {
                 }
             case .horizontalRule:
                 drawHorizontalRule(renderBlock.block, in: textView, dirtyRect: dirtyRect, state: state)
-            case .unorderedList, .orderedList:
+            case .unorderedList, .orderedList, .taskList:
                 drawMarkerOverlay(renderBlock.block, in: textView, dirtyRect: dirtyRect, state: state)
             default:
                 continue
@@ -345,11 +345,28 @@ enum LivePreviewOverlayRenderer {
     ) -> Bool {
         guard state.drawsLivePreviewChrome,
               state.markerStyle == .obsidian,
-              markerKind == .unorderedListMarker || markerKind == .orderedListMarker
+              markerKind == .unorderedListMarker
+                || markerKind == .orderedListMarker
+                || markerKind == .taskCheckbox
         else {
             return false
         }
         return !block.sourceRange.nsRange.intersectsOrContainsCaret(state.revealRange)
+    }
+
+    static func taskCheckboxTokenRange(
+        at point: NSPoint,
+        in textView: NSTextView,
+        state: LivePreviewOverlayState
+    ) -> NSRange? {
+        guard state.allowsTransientControls,
+              state.markerStyle == .obsidian
+        else {
+            return nil
+        }
+        return markerGeometries(in: textView).first {
+            $0.kind == .taskCheckbox && taskCheckboxRect($0).contains(point)
+        }?.sourceRange
     }
 
     private static func drawHorizontalRule(
@@ -398,7 +415,7 @@ enum LivePreviewOverlayRenderer {
         case .orderedListMarker:
             drawOrderedMarker(geometry, source: textView.string, dirtyRect: dirtyRect)
         case .taskCheckbox:
-            return
+            drawTaskCheckbox(geometry, block: block, dirtyRect: dirtyRect)
         }
     }
 
@@ -448,6 +465,48 @@ enum LivePreviewOverlayRenderer {
         return (source as NSString)
             .substring(with: range)
             .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func drawTaskCheckbox(
+        _ geometry: LivePreviewMarkerGeometry,
+        block: LivePreviewBlockSpan,
+        dirtyRect: NSRect
+    ) {
+        guard case .taskList(let isChecked) = block.kind else {
+            return
+        }
+        let rect = taskCheckboxRect(geometry)
+        guard rect.intersects(dirtyRect) else {
+            return
+        }
+
+        let path = NSBezierPath(roundedRect: rect, xRadius: 3, yRadius: 3)
+        path.lineWidth = 1.2
+        LivePreviewTheme.secondaryTextColor.setStroke()
+        path.stroke()
+
+        guard isChecked else {
+            return
+        }
+        let check = NSBezierPath()
+        check.lineWidth = 1.6
+        check.lineCapStyle = .round
+        check.lineJoinStyle = .round
+        LivePreviewTheme.secondaryTextColor.setStroke()
+        check.move(to: NSPoint(x: rect.minX + 3.5, y: rect.midY))
+        check.line(to: NSPoint(x: rect.midX - 0.5, y: rect.maxY - 3.5))
+        check.line(to: NSPoint(x: rect.maxX - 3, y: rect.minY + 3.5))
+        check.stroke()
+    }
+
+    private static func taskCheckboxRect(_ geometry: LivePreviewMarkerGeometry) -> NSRect {
+        let side: CGFloat = 13
+        return NSRect(
+            x: geometry.rect.minX + 1,
+            y: floor(geometry.lineRect.midY - side / 2),
+            width: side,
+            height: side
+        )
     }
 
     private static func markerGeometry(
