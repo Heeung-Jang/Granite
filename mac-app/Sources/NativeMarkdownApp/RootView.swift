@@ -98,7 +98,7 @@ struct RootView: View {
         case .closeWindow:
             return "Discard unsaved changes in \(warning.dirtyFile.displayName) and close this window?"
         case .quitApp:
-            return "Discard unsaved changes in \(warning.dirtyFile.displayName) and quit Native Markdown?"
+            return "Discard unsaved changes in \(warning.dirtyFile.displayName) and quit Granite?"
         }
     }
 
