@@ -4,9 +4,11 @@ import SwiftUI
 struct GraphWorkspaceView: View {
     let vaultSelection: VaultSelectionState
 
+    @State private var workspaceModel = GraphWorkspaceModel()
     @State private var settings = GraphSettings()
     @State private var searchText = ""
     @State private var showsSettings = false
+    @State private var viewport = GraphViewport()
     private let enablesParityControls = false
 
     var body: some View {
@@ -16,7 +18,7 @@ struct GraphWorkspaceView: View {
 
                 Divider()
 
-                graphPlaceholder
+                graphContent
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
@@ -45,6 +47,27 @@ struct GraphWorkspaceView: View {
             Spacer()
 
             ObsidianIconButton(
+                systemName: "minus.magnifyingglass",
+                accessibilityLabel: "Zoom out graph"
+            ) {
+                zoom(by: 0.85)
+            }
+
+            ObsidianIconButton(
+                systemName: "plus.magnifyingglass",
+                accessibilityLabel: "Zoom in graph"
+            ) {
+                zoom(by: 1.15)
+            }
+
+            ObsidianIconButton(
+                systemName: "arrow.counterclockwise",
+                accessibilityLabel: "Reset graph view"
+            ) {
+                viewport.reset()
+            }
+
+            ObsidianIconButton(
                 systemName: "slider.horizontal.3",
                 accessibilityLabel: "Graph settings",
                 isSelected: showsSettings
@@ -57,15 +80,57 @@ struct GraphWorkspaceView: View {
         .background(ObsidianUI.editorBackground)
     }
 
-    private var graphPlaceholder: some View {
+    @ViewBuilder
+    private var graphContent: some View {
+        switch vaultSelection {
+        case .selected:
+            switch validatedRendererInput {
+            case .ready(let input):
+                GraphCanvasRendererView(
+                    input: input,
+                    viewport: $viewport,
+                    callbacks: GraphRendererCallbacks(
+                        didCompleteFirstDraw: { metrics in
+                            AppTelemetry.graphDrawCompleted(metrics)
+                        }
+                    )
+                )
+                .onAppear {
+                    workspaceModel.applyStableGraph(GraphStableGraphSummary(
+                        generation: input.layout.generation,
+                        nodeCount: input.layout.nodes.count,
+                        edgeCount: input.layout.edges.count
+                    ))
+                }
+            case .failed(let error):
+                rendererFailureView(error)
+                    .onAppear {
+                        workspaceModel.fail(.rendererFailed)
+                    }
+            }
+        case .noVault:
+            graphStatusPlaceholder(title: "Graph view", detail: "No vault open")
+        case .unavailable(let issue):
+            graphStatusPlaceholder(title: "Graph view", detail: issue.displayTitle)
+        }
+    }
+
+    private func rendererFailureView(_ error: GraphRendererValidationError) -> some View {
+        graphStatusPlaceholder(
+            title: "Graph renderer failed",
+            detail: rendererFailureText(error)
+        )
+    }
+
+    private func graphStatusPlaceholder(title: String, detail: String) -> some View {
         VStack(spacing: 12) {
             Image(systemName: "point.3.connected.trianglepath.dotted")
                 .font(.system(size: 32))
                 .foregroundStyle(.secondary)
-            Text("Graph view")
+            Text(title)
                 .font(.title3)
                 .foregroundStyle(.primary)
-            Text(statusText)
+            Text(detail)
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -74,15 +139,37 @@ struct GraphWorkspaceView: View {
         .accessibilityLabel("Graph view")
     }
 
-    private var statusText: String {
-        switch vaultSelection {
-        case .selected:
-            "Graph data not loaded"
-        case .noVault:
-            "No vault open"
-        case .unavailable(let issue):
-            issue.displayTitle
+    private var validatedRendererInput: RendererInputState {
+        let input = GraphCanvasRendererSmokeFixture.input(
+            viewport: viewport,
+            presentation: settings.presentation,
+            searchText: searchText
+        )
+
+        do {
+            try input.validate()
+            return .ready(input)
+        } catch let error as GraphRendererValidationError {
+            return .failed(error)
+        } catch {
+            return .failed(.edgeEndpointOutOfBounds)
         }
+    }
+
+    private func zoom(by multiplier: Double) {
+        viewport.zoomScale *= multiplier
+    }
+
+    private func rendererFailureText(_ error: GraphRendererValidationError) -> String {
+        switch error {
+        case .edgeEndpointOutOfBounds:
+            return "Graph edge endpoints are invalid"
+        }
+    }
+
+    private enum RendererInputState {
+        case ready(GraphRendererInput)
+        case failed(GraphRendererValidationError)
     }
 }
 

@@ -62,6 +62,9 @@ public enum AppTelemetry {
             "iterationCount",
             "memoryDeltaBytes",
             "mode",
+            "nodeCount",
+            "edgeCount",
+            "rendererKind",
             "resultCount",
             "source",
             "stageName",
@@ -153,6 +156,10 @@ public enum AppTelemetry {
 
     public static func graphOpened(source: GraphOpenSource) {
         graphLogger.info("graph_opened source=\(source.rawValue, privacy: .public)")
+    }
+
+    public static func graphDrawCompleted(_ metrics: GraphRendererMetrics) {
+        graphLogger.info("first_draw_completed renderer=\(metrics.rendererKind.rawValue, privacy: .public) nodes=\(metrics.nodeCount, privacy: .public) edges=\(metrics.edgeCount, privacy: .public) duration_ms=\(metrics.drawDurationMilliseconds, privacy: .public)")
     }
 
     public static func saveRequested(file: FileTreeItem?, available: Bool) {
