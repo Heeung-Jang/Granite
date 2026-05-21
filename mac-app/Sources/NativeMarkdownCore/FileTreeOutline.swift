@@ -82,36 +82,17 @@ public struct FileTreeOutline: Equatable, Sendable {
 
     public func visibleRows(expandedFolderIDs: Set<String>) -> [FileTreeOutlineRow] {
         var rows: [FileTreeOutlineRow] = []
+        appendChildren(parent: "", depth: 0, expandedFolderIDs: expandedFolderIDs, rows: &rows)
+        return rows
+    }
 
-        func appendChildren(parent: String, depth: Int) {
-            for folderID in childFoldersByParent[parent] ?? [] {
-                let isExpanded = expandedFolderIDs.contains(folderID)
-                rows.append(FileTreeOutlineRow(
-                    id: folderID,
-                    kind: .folder,
-                    title: Self.displayName(forFolderID: folderID),
-                    depth: depth,
-                    isExpanded: isExpanded,
-                    file: nil
-                ))
-                if isExpanded {
-                    appendChildren(parent: folderID, depth: depth + 1)
-                }
-            }
-
-            for file in childFilesByParent[parent] ?? [] {
-                rows.append(FileTreeOutlineRow(
-                    id: file.id,
-                    kind: .file,
-                    title: (file.displayName as NSString).deletingPathExtension,
-                    depth: depth,
-                    isExpanded: false,
-                    file: file
-                ))
-            }
-        }
-
-        appendChildren(parent: "", depth: 0)
+    public func childRows(
+        ofFolderID folderID: String,
+        depth: Int,
+        expandedFolderIDs: Set<String>
+    ) -> [FileTreeOutlineRow] {
+        var rows: [FileTreeOutlineRow] = []
+        appendChildren(parent: folderID, depth: depth, expandedFolderIDs: expandedFolderIDs, rows: &rows)
         return rows
     }
 
@@ -140,5 +121,38 @@ public struct FileTreeOutline: Equatable, Sendable {
 
     private static func displayName(forFolderID folderID: String) -> String {
         (folderID as NSString).lastPathComponent
+    }
+
+    private func appendChildren(
+        parent: String,
+        depth: Int,
+        expandedFolderIDs: Set<String>,
+        rows: inout [FileTreeOutlineRow]
+    ) {
+        for folderID in childFoldersByParent[parent] ?? [] {
+            let isExpanded = expandedFolderIDs.contains(folderID)
+            rows.append(FileTreeOutlineRow(
+                id: folderID,
+                kind: .folder,
+                title: Self.displayName(forFolderID: folderID),
+                depth: depth,
+                isExpanded: isExpanded,
+                file: nil
+            ))
+            if isExpanded {
+                appendChildren(parent: folderID, depth: depth + 1, expandedFolderIDs: expandedFolderIDs, rows: &rows)
+            }
+        }
+
+        for file in childFilesByParent[parent] ?? [] {
+            rows.append(FileTreeOutlineRow(
+                id: file.id,
+                kind: .file,
+                title: (file.displayName as NSString).deletingPathExtension,
+                depth: depth,
+                isExpanded: false,
+                file: file
+            ))
+        }
     }
 }

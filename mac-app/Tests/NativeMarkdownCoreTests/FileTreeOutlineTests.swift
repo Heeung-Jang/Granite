@@ -41,3 +41,27 @@ func fileTreeOutlineExpandsRootAndSelectedAncestors() {
         "Codex/Conversations/2026"
     ])
 }
+
+@Test
+func fileTreeOutlineBuildsOnlyExpandedBranchRows() {
+    let outline = FileTreeOutline(items: [
+        FileTreeItem(relativePath: "Codex/Conversations/2026/Note.md"),
+        FileTreeItem(relativePath: "Codex/Home.md"),
+        FileTreeItem(relativePath: "docs/Guide.md")
+    ])
+
+    let rows = outline.childRows(
+        ofFolderID: "Codex",
+        depth: 1,
+        expandedFolderIDs: ["Codex", "Codex/Conversations"]
+    )
+
+    #expect(rows.map(\.id) == [
+        "Codex/Conversations",
+        "Codex/Conversations/2026",
+        "Codex/Home.md"
+    ])
+    #expect(rows.first?.depth == 1)
+    #expect(rows.first { $0.id == "Codex/Conversations/2026" }?.depth == 2)
+    #expect(rows.first { $0.id == "Codex/Home.md" }?.title == "Home")
+}

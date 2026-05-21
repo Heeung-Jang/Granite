@@ -143,15 +143,28 @@ struct FileTreeView: View {
                     return
                 }
 
-                let outline = FileTreeOutline(snapshot: snapshot)
-                let expandedFolderIDs = outline.defaultExpandedFolderIDs(selectedFile: appState.selectedFile)
-                self.expandedFolderIDs = expandedFolderIDs
+                let selectedFile = appState.selectedFile
+                let outlineBuild = await Task.detached(priority: .userInitiated) {
+                    let outline = FileTreeOutline(snapshot: snapshot)
+                    let expandedFolderIDs = outline.defaultExpandedFolderIDs(selectedFile: selectedFile)
+                    return FileTreeOutlineBuild(
+                        outline: outline,
+                        expandedFolderIDs: expandedFolderIDs,
+                        visibleRows: outline.visibleRows(expandedFolderIDs: expandedFolderIDs)
+                    )
+                }.value
+
+                if Task.isCancelled {
+                    return
+                }
+
+                expandedFolderIDs = outlineBuild.expandedFolderIDs
                 state = snapshot.items.isEmpty
                     ? .empty
                     : .loaded(FileTreeLoadedState(
                         snapshot: snapshot,
-                        outline: outline,
-                        visibleRows: outline.visibleRows(expandedFolderIDs: expandedFolderIDs)
+                        outline: outlineBuild.outline,
+                        visibleRows: outlineBuild.visibleRows
                     ))
                 AppTelemetry.sidebarRefreshCompleted(
                     state: snapshot.state,
@@ -197,12 +210,15 @@ struct FileTreeView: View {
     private func handle(_ row: FileTreeOutlineRow) {
         switch row.kind {
         case .folder:
+            let isExpanding: Bool
             if expandedFolderIDs.contains(row.id) {
                 expandedFolderIDs.remove(row.id)
+                isExpanding = false
             } else {
                 expandedFolderIDs.insert(row.id)
+                isExpanding = true
             }
-            refreshVisibleRows()
+            applyFolderToggle(rowID: row.id, isExpanded: isExpanding)
         case .file:
             guard let file = row.file else {
                 return
@@ -235,6 +251,44 @@ struct FileTreeView: View {
         refreshVisibleRows()
     }
 
+    private func applyFolderToggle(rowID: String, isExpanded: Bool) {
+        guard case .loaded(var loaded) = state,
+              let rowIndex = loaded.visibleRows.firstIndex(where: { $0.id == rowID })
+        else {
+            refreshVisibleRows()
+            return
+        }
+
+        let row = loaded.visibleRows[rowIndex]
+        loaded.visibleRows[rowIndex] = FileTreeOutlineRow(
+            id: row.id,
+            kind: row.kind,
+            title: row.title,
+            depth: row.depth,
+            isExpanded: isExpanded,
+            file: row.file
+        )
+
+        if isExpanded {
+            let childRows = loaded.outline.childRows(
+                ofFolderID: rowID,
+                depth: row.depth + 1,
+                expandedFolderIDs: expandedFolderIDs
+            )
+            loaded.visibleRows.insert(contentsOf: childRows, at: rowIndex + 1)
+        } else {
+            let removalStart = rowIndex + 1
+            var removalEnd = removalStart
+            while removalEnd < loaded.visibleRows.count,
+                  loaded.visibleRows[removalEnd].depth > row.depth {
+                removalEnd += 1
+            }
+            loaded.visibleRows.removeSubrange(removalStart..<removalEnd)
+        }
+
+        state = .loaded(loaded)
+    }
+
     private func refreshVisibleRows() {
         guard case .loaded(var loaded) = state else {
             return
@@ -262,6 +316,12 @@ private struct FileTreeLoadedState {
     let snapshot: FileTreeSnapshot
     let outline: FileTreeOutline
     var visibleRows: [FileTreeOutlineRow]
+}
+
+private struct FileTreeOutlineBuild: Sendable {
+    let outline: FileTreeOutline
+    let expandedFolderIDs: Set<String>
+    let visibleRows: [FileTreeOutlineRow]
 }
 
 private struct FileTreeRow: View {
