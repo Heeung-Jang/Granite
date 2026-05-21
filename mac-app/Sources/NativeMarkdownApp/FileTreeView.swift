@@ -21,7 +21,10 @@ struct FileTreeView: View {
 
             content
         }
-        .task(id: appState.vaultSelection.url) {
+        .task(id: FileTreeTaskKey(
+            vaultPath: appState.vaultSelection.url?.path,
+            readGeneration: appState.readGeneration
+        )) {
             await reload(for: appState.vaultSelection)
         }
         .onChange(of: selectedFileID) { _, newValue in
@@ -125,13 +128,21 @@ struct FileTreeView: View {
         case .unavailable(let issue):
             state = .unavailable(issue)
             expandedFolderIDs = []
-        case .selected(let url):
+        case .selected:
             let timer = AppTelemetryTimer()
             state = .loading
+            guard let reader = appState.readClient, appState.readAvailability == .ready else {
+                state = appState.readAvailability == .opening
+                    ? .loading
+                    : .failed(readUnavailableTitle(appState.readAvailability))
+                return
+            }
+            let generation = appState.readGeneration
             do {
-                let snapshot = try await Task.detached(priority: .userInitiated) {
-                    try FileSystemFileTreeLoader().loadFileTree(at: url, maxItems: 5_000)
-                }.value
+                let snapshot = try await EngineFileTreeLoader(reader: reader).loadFileTree(
+                    requestID: generation,
+                    maxItems: 5_000
+                )
 
                 if Task.isCancelled {
                     return
@@ -155,6 +166,21 @@ struct FileTreeView: View {
                     durationMilliseconds: timer.elapsedMilliseconds()
                 )
             }
+        }
+    }
+
+    private func readUnavailableTitle(_ availability: ReadAvailability) -> String {
+        switch availability {
+        case .unavailable:
+            return "Index Unavailable"
+        case .opening:
+            return "Opening Index"
+        case .ready:
+            return "Index Ready"
+        case .stale:
+            return "Index Stale"
+        case .error(let message):
+            return message
         }
     }
 
@@ -277,6 +303,11 @@ struct FileTreeView: View {
     private func displayName(forFolderPath folderPath: String) -> String {
         (folderPath as NSString).lastPathComponent
     }
+}
+
+private struct FileTreeTaskKey: Hashable {
+    let vaultPath: String?
+    let readGeneration: UInt64
 }
 
 private enum FileTreeViewState {
