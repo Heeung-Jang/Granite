@@ -582,10 +582,12 @@ public enum GraphNodeOpenResolver {
 public enum GraphAccessibilitySummaryBuilder {
     public static func summary(
         input: GraphRendererInput,
-        selectedNode: GraphLayoutNode?
+        selectedNode: GraphLayoutNode?,
+        hoveredNode: GraphLayoutNode? = nil
     ) -> String {
         let searchMatchCount = input.searchMatchedNodeIDs.count
         let selectedText = selectedNode.map { ", selected \($0.label)" } ?? ""
-        return "Graph canvas, \(input.layout.nodes.count) nodes, \(input.layout.edges.count) edges, \(searchMatchCount) search matches\(selectedText), zoom \(String(format: "%.1f", input.viewport.zoomScale))"
+        let hoveredText = hoveredNode.map { ", hovered \($0.label)" } ?? ""
+        return "Graph canvas, \(input.layout.nodes.count) nodes, \(input.layout.edges.count) edges, \(searchMatchCount) search matches\(selectedText)\(hoveredText), zoom \(String(format: "%.1f", input.viewport.zoomScale))"
     }
 }

@@ -277,7 +277,8 @@ struct GraphMetalRendererView: View {
     private func accessibilitySummary(for input: GraphRendererInput) -> String {
         GraphAccessibilitySummaryBuilder.summary(
             input: input,
-            selectedNode: input.layout.nodes.first { $0.nodeID == input.selectedNodeID }
+            selectedNode: input.layout.nodes.first { $0.nodeID == input.selectedNodeID },
+            hoveredNode: input.layout.nodes.first { $0.nodeID == input.hoveredNodeID }
         )
     }
 

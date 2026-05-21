@@ -157,6 +157,10 @@ struct GraphWorkspaceView: View {
 
                                 GraphFloatingControlStack(
                                     searchIsPresented: showsSearch || searchIsActive,
+                                    searchAccessibilityLabel: showsSearch ? "Close graph search" : "Search graph",
+                                    searchAccessibilityHint: showsSearch
+                                        ? "Closes the graph search field"
+                                        : "Opens the graph search field",
                                     settingsIsPresented: showsSettings,
                                     toggleSearch: toggleGraphSearch,
                                     zoomOut: { zoom(by: 0.85) },
@@ -870,6 +874,7 @@ private struct GraphSearchOverlay: View {
                 .foregroundStyle(.secondary)
                 .help("Clear graph search")
                 .accessibilityLabel("Clear graph search")
+                .accessibilityHint("Removes the current graph search query")
             }
 
             Button(action: close) {
@@ -880,6 +885,7 @@ private struct GraphSearchOverlay: View {
             .foregroundStyle(.secondary)
             .help("Close graph search")
             .accessibilityLabel("Close graph search")
+            .accessibilityHint("Closes the search field and returns focus to the graph")
         }
         .padding(.horizontal, 8)
         .frame(width: 280, height: 32)
@@ -900,6 +906,8 @@ private struct GraphFloatingControlStack: View {
     static let centerY: CGFloat = 139
 
     let searchIsPresented: Bool
+    let searchAccessibilityLabel: String
+    let searchAccessibilityHint: String
     let settingsIsPresented: Bool
     let toggleSearch: () -> Void
     let zoomOut: () -> Void
@@ -911,28 +919,32 @@ private struct GraphFloatingControlStack: View {
         VStack(spacing: 6) {
             ObsidianIconButton(
                 systemName: "magnifyingglass",
-                accessibilityLabel: "Search graph",
+                accessibilityLabel: searchAccessibilityLabel,
                 isSelected: searchIsPresented,
                 action: toggleSearch
             )
+            .accessibilityHint(searchAccessibilityHint)
 
             ObsidianIconButton(
                 systemName: "minus.magnifyingglass",
                 accessibilityLabel: "Zoom out graph",
                 action: zoomOut
             )
+            .accessibilityHint("Decreases graph zoom")
 
             ObsidianIconButton(
                 systemName: "plus.magnifyingglass",
                 accessibilityLabel: "Zoom in graph",
                 action: zoomIn
             )
+            .accessibilityHint("Increases graph zoom")
 
             ObsidianIconButton(
                 systemName: "arrow.counterclockwise",
                 accessibilityLabel: "Reset graph view",
                 action: resetView
             )
+            .accessibilityHint("Fits the graph back into the canvas")
 
             ObsidianIconButton(
                 systemName: "slider.horizontal.3",
@@ -940,6 +952,7 @@ private struct GraphFloatingControlStack: View {
                 isSelected: settingsIsPresented,
                 action: toggleSettings
             )
+            .accessibilityHint("Opens graph display and filter settings")
         }
         .fixedSize()
     }

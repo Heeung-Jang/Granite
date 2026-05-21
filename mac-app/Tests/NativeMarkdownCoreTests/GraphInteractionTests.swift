@@ -397,13 +397,15 @@ func graphAccessibilitySummaryOmitsHiddenDebugIdentifiers() {
     )
     let summary = GraphAccessibilitySummaryBuilder.summary(
         input: input,
-        selectedNode: layout.nodes[0]
+        selectedNode: layout.nodes[0],
+        hoveredNode: layout.nodes[1]
     )
 
     #expect(summary.contains("3 nodes"))
     #expect(summary.contains("2 edges"))
     #expect(summary.contains("1 search matches"))
     #expect(summary.contains("selected Alpha"))
+    #expect(summary.contains("hovered Beta"))
     #expect(summary.contains("zoom 1.6"))
     #expect(!summary.contains("Alpha.md"))
     #expect(!summary.contains("file:a"))
