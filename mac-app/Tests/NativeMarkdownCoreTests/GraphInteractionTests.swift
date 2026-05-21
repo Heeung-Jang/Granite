@@ -178,6 +178,72 @@ func graphNodePositionUpdaterMovesOneNodeAndPreservesGraphShape() {
 }
 
 @Test
+func graphGestureDecisionStartsNodeDragFromHitNode() {
+    let layout = interactionLayout()
+    let decision = GraphGestureDecision.dragStart(
+        screenPoint: GraphPoint(x: 200, y: 100),
+        viewport: GraphViewport(),
+        canvasSize: GraphSize(width: 400, height: 200),
+        hitTestIndex: GraphHitTestIndex(layout: layout),
+        screenMovementThreshold: 6
+    )
+
+    #expect(decision == .node(GraphNodeDragStart(
+        nodeID: "file:a",
+        nodeIndex: 0,
+        nodePosition: layout.nodes[0].position,
+        pointerGraphPoint: GraphPoint(x: 0, y: 0),
+        graphMovementThreshold: 6
+    )))
+}
+
+@Test
+func graphGestureDecisionStartsCanvasPanWhenNoNodeIsHit() {
+    let decision = GraphGestureDecision.dragStart(
+        screenPoint: GraphPoint(x: 20, y: 20),
+        viewport: GraphViewport(),
+        canvasSize: GraphSize(width: 400, height: 200),
+        hitTestIndex: GraphHitTestIndex(layout: interactionLayout())
+    )
+
+    #expect(decision == .canvasPan)
+}
+
+@Test
+func graphGestureDecisionConvertsScreenThresholdToGraphThreshold() {
+    let decision = GraphGestureDecision.dragStart(
+        screenPoint: GraphPoint(x: 200, y: 100),
+        viewport: GraphViewport(zoomScale: 0.5),
+        canvasSize: GraphSize(width: 400, height: 200),
+        hitTestIndex: GraphHitTestIndex(layout: interactionLayout()),
+        screenMovementThreshold: 6
+    )
+
+    if case .node(let start) = decision {
+        #expect(start.graphMovementThreshold == 12)
+    } else {
+        Issue.record("Expected node drag decision")
+    }
+}
+
+@Test
+func graphGestureDecisionClassifiesTapAndNodeDragCompletion() {
+    let tap = GraphNodeDragResult(
+        nodeID: "file:a",
+        nodePosition: GraphPoint(x: 0, y: 0),
+        movedBeyondThreshold: false
+    )
+    let drag = GraphNodeDragResult(
+        nodeID: "file:a",
+        nodePosition: GraphPoint(x: 10, y: 10),
+        movedBeyondThreshold: true
+    )
+
+    #expect(GraphGestureDecision.completion(for: tap) == .tap(nodeID: "file:a"))
+    #expect(GraphGestureDecision.completion(for: drag) == .drag(drag))
+}
+
+@Test
 func graphSearchMatcherHighlightsWithoutChangingMembership() {
     let layout = interactionLayout()
 

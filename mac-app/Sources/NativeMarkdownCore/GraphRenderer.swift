@@ -59,6 +59,25 @@ public struct GraphRendererCallbacks: Sendable {
     }
 }
 
+public struct GraphRendererInteractionCallbacks: Sendable {
+    public let beginNodeDrag: @Sendable (GraphNodeDragStart) -> Void
+    public let updateNodeDrag: @Sendable (GraphPoint) -> Void
+    public let endNodeDrag: @Sendable () -> Void
+    public let panCanvas: @Sendable (GraphPoint) -> Void
+
+    public init(
+        beginNodeDrag: @escaping @Sendable (GraphNodeDragStart) -> Void = { _ in },
+        updateNodeDrag: @escaping @Sendable (GraphPoint) -> Void = { _ in },
+        endNodeDrag: @escaping @Sendable () -> Void = {},
+        panCanvas: @escaping @Sendable (GraphPoint) -> Void = { _ in }
+    ) {
+        self.beginNodeDrag = beginNodeDrag
+        self.updateNodeDrag = updateNodeDrag
+        self.endNodeDrag = endNodeDrag
+        self.panCanvas = panCanvas
+    }
+}
+
 public struct GraphRendererMetrics: Equatable, Sendable {
     public let rendererKind: GraphRendererKind
     public let nodeCount: Int

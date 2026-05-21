@@ -7,6 +7,7 @@ struct GraphCanvasRendererView: View {
     @Binding var viewport: GraphViewport
     let hitTestIndex: GraphHitTestIndex
     var callbacks: GraphRendererCallbacks
+    var interactionCallbacks: GraphRendererInteractionCallbacks
     var onHoverNode: (String?) -> Void
     var onSelectNode: (String?) -> Void
     var onOpenNode: (String) -> Void
@@ -21,6 +22,7 @@ struct GraphCanvasRendererView: View {
         input: GraphRendererInput,
         viewport: Binding<GraphViewport>,
         callbacks: GraphRendererCallbacks = GraphRendererCallbacks(),
+        interactionCallbacks: GraphRendererInteractionCallbacks = GraphRendererInteractionCallbacks(),
         hitTestIndex: GraphHitTestIndex? = nil,
         onHoverNode: @escaping (String?) -> Void = { _ in },
         onSelectNode: @escaping (String?) -> Void = { _ in },
@@ -29,6 +31,7 @@ struct GraphCanvasRendererView: View {
         self.input = input
         self._viewport = viewport
         self.callbacks = callbacks
+        self.interactionCallbacks = interactionCallbacks
         self.hitTestIndex = hitTestIndex ?? GraphHitTestIndex(layout: input.layout)
         self.onHoverNode = onHoverNode
         self.onSelectNode = onSelectNode

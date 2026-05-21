@@ -8,6 +8,7 @@ struct GraphRendererSurfaceView: View {
     let input: GraphRendererInput
     @Binding var viewport: GraphViewport
     var callbacks: GraphRendererCallbacks
+    var interactionCallbacks: GraphRendererInteractionCallbacks
     let hitTestIndex: GraphHitTestIndex
     var onHoverNode: (String?) -> Void
     var onSelectNode: (String?) -> Void
@@ -17,6 +18,7 @@ struct GraphRendererSurfaceView: View {
         input: GraphRendererInput,
         viewport: Binding<GraphViewport>,
         callbacks: GraphRendererCallbacks = GraphRendererCallbacks(),
+        interactionCallbacks: GraphRendererInteractionCallbacks = GraphRendererInteractionCallbacks(),
         hitTestIndex: GraphHitTestIndex,
         onHoverNode: @escaping (String?) -> Void = { _ in },
         onSelectNode: @escaping (String?) -> Void = { _ in },
@@ -25,6 +27,7 @@ struct GraphRendererSurfaceView: View {
         self.input = input
         self._viewport = viewport
         self.callbacks = callbacks
+        self.interactionCallbacks = interactionCallbacks
         self.hitTestIndex = hitTestIndex
         self.onHoverNode = onHoverNode
         self.onSelectNode = onSelectNode
@@ -37,6 +40,7 @@ struct GraphRendererSurfaceView: View {
                 input: input,
                 viewport: $viewport,
                 callbacks: callbacks,
+                interactionCallbacks: interactionCallbacks,
                 hitTestIndex: hitTestIndex,
                 onHoverNode: onHoverNode,
                 onSelectNode: onSelectNode,
@@ -47,6 +51,7 @@ struct GraphRendererSurfaceView: View {
                 input: input,
                 viewport: $viewport,
                 callbacks: callbacks,
+                interactionCallbacks: interactionCallbacks,
                 hitTestIndex: hitTestIndex,
                 onHoverNode: onHoverNode,
                 onSelectNode: onSelectNode,
@@ -69,6 +74,7 @@ struct GraphMetalRendererView: View {
     let input: GraphRendererInput
     @Binding var viewport: GraphViewport
     var callbacks: GraphRendererCallbacks
+    var interactionCallbacks: GraphRendererInteractionCallbacks
     let hitTestIndex: GraphHitTestIndex
     var onHoverNode: (String?) -> Void
     var onSelectNode: (String?) -> Void
@@ -82,6 +88,7 @@ struct GraphMetalRendererView: View {
         input: GraphRendererInput,
         viewport: Binding<GraphViewport>,
         callbacks: GraphRendererCallbacks = GraphRendererCallbacks(),
+        interactionCallbacks: GraphRendererInteractionCallbacks = GraphRendererInteractionCallbacks(),
         hitTestIndex: GraphHitTestIndex,
         onHoverNode: @escaping (String?) -> Void = { _ in },
         onSelectNode: @escaping (String?) -> Void = { _ in },
@@ -90,6 +97,7 @@ struct GraphMetalRendererView: View {
         self.input = input
         self._viewport = viewport
         self.callbacks = callbacks
+        self.interactionCallbacks = interactionCallbacks
         self.hitTestIndex = hitTestIndex
         self.onHoverNode = onHoverNode
         self.onSelectNode = onSelectNode
@@ -103,6 +111,7 @@ struct GraphMetalRendererView: View {
                 input: input,
                 viewport: $viewport,
                 callbacks: callbacks,
+                interactionCallbacks: interactionCallbacks,
                 hitTestIndex: hitTestIndex,
                 onHoverNode: onHoverNode,
                 onSelectNode: onSelectNode,

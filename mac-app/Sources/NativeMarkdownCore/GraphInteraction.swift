@@ -266,6 +266,88 @@ public struct GraphNodeDragResult: Equatable, Sendable {
     }
 }
 
+public struct GraphNodeDragStart: Equatable, Sendable {
+    public let nodeID: String
+    public let nodeIndex: Int
+    public let nodePosition: GraphPoint
+    public let pointerGraphPoint: GraphPoint
+    public let graphMovementThreshold: Double
+
+    public init(
+        nodeID: String,
+        nodeIndex: Int,
+        nodePosition: GraphPoint,
+        pointerGraphPoint: GraphPoint,
+        graphMovementThreshold: Double
+    ) {
+        self.nodeID = nodeID
+        self.nodeIndex = nodeIndex
+        self.nodePosition = nodePosition
+        self.pointerGraphPoint = pointerGraphPoint
+        self.graphMovementThreshold = graphMovementThreshold
+    }
+}
+
+public enum GraphDragStartDecision: Equatable, Sendable {
+    case node(GraphNodeDragStart)
+    case canvasPan
+}
+
+public enum GraphNodeDragCompletion: Equatable, Sendable {
+    case tap(nodeID: String)
+    case drag(GraphNodeDragResult)
+}
+
+public enum GraphGestureDecision {
+    public static func dragStart(
+        screenPoint: GraphPoint,
+        viewport: GraphViewport,
+        canvasSize: GraphSize,
+        hitTestIndex: GraphHitTestIndex,
+        screenMovementThreshold: Double = GraphNodeDragState.defaultGraphMovementThreshold
+    ) -> GraphDragStartDecision {
+        guard let hit = hitTestIndex.nearestNode(
+            at: screenPoint,
+            viewport: viewport,
+            canvasSize: canvasSize
+        ) else {
+            return .canvasPan
+        }
+        guard hitTestIndex.layout.nodes.indices.contains(hit.nodeIndex) else {
+            return .canvasPan
+        }
+
+        let node = hitTestIndex.layout.nodes[hit.nodeIndex]
+        return .node(GraphNodeDragStart(
+            nodeID: hit.nodeID,
+            nodeIndex: hit.nodeIndex,
+            nodePosition: node.position,
+            pointerGraphPoint: pointerGraphPoint(
+                screenPoint: screenPoint,
+                viewport: viewport,
+                canvasSize: canvasSize
+            ),
+            graphMovementThreshold: max(0, screenMovementThreshold) / viewport.zoomScale
+        ))
+    }
+
+    public static func completion(for result: GraphNodeDragResult) -> GraphNodeDragCompletion {
+        result.movedBeyondThreshold ? .drag(result) : .tap(nodeID: result.nodeID)
+    }
+
+    private static func pointerGraphPoint(
+        screenPoint: GraphPoint,
+        viewport: GraphViewport,
+        canvasSize: GraphSize
+    ) -> GraphPoint {
+        let centeredPoint = GraphPoint(
+            x: screenPoint.x - canvasSize.width / 2,
+            y: screenPoint.y - canvasSize.height / 2
+        )
+        return viewport.graphPoint(for: centeredPoint)
+    }
+}
+
 public struct GraphNodePositionOverrides: Equatable, Sendable {
     public private(set) var positionsByNodeID: [String: GraphPoint]
 
