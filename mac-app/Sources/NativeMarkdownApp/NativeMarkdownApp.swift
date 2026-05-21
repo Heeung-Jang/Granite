@@ -128,7 +128,7 @@ struct NativeMarkdownApp: App {
                 print(try GraphMetalBenchmarkProbe.encodedResult(payloadURL: payloadURL))
                 Foundation.exit(0)
             } catch {
-                print("Graph metal benchmark failed: \(error)")
+                print("Graph metal benchmark failed")
                 Foundation.exit(2)
             }
         }

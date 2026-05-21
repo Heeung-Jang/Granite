@@ -27,7 +27,7 @@ struct GraphRendererBenchmarkResult: Codable {
 enum GraphCanvasBenchmarkProbe {
     @MainActor
     static func run(payloadURL: URL) throws -> GraphRendererBenchmarkResult {
-        let setup = try GraphRendererBenchmarkSetup(payloadURL: payloadURL)
+        let setup = try loadBenchmarkSetup(payloadURL: payloadURL)
         let driver = GraphRendererBenchmarkDriver(
             totalTimer: setup.totalTimer,
             samples: GraphRendererBenchmarkSetup.panZoomSamples()
@@ -65,7 +65,7 @@ enum GraphMetalBenchmarkProbe {
         guard GraphMetalRendererAvailability.isAvailable else {
             throw GraphRendererBenchmarkError.metalUnavailable
         }
-        let setup = try GraphRendererBenchmarkSetup(payloadURL: payloadURL)
+        let setup = try loadBenchmarkSetup(payloadURL: payloadURL)
         let driver = GraphRendererBenchmarkDriver(
             totalTimer: setup.totalTimer,
             samples: GraphRendererBenchmarkSetup.panZoomSamples()
@@ -94,6 +94,49 @@ enum GraphMetalBenchmarkProbe {
             throw GraphRendererBenchmarkError.invalidResult
         }
         return json
+    }
+}
+
+@MainActor
+private func loadBenchmarkSetup(payloadURL: URL) throws -> GraphRendererBenchmarkSetup {
+    let box = GraphRendererBenchmarkSetupBox()
+    DispatchQueue.global(qos: .userInitiated).async {
+        box.complete(Result {
+            try GraphRendererBenchmarkSetup(payloadURL: payloadURL)
+        })
+    }
+
+    while !box.isComplete {
+        RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
+    }
+    return try box.value()
+}
+
+private final class GraphRendererBenchmarkSetupBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var result: Result<GraphRendererBenchmarkSetup, Error>?
+
+    var isComplete: Bool {
+        lock.lock()
+        let complete = result != nil
+        lock.unlock()
+        return complete
+    }
+
+    func complete(_ result: Result<GraphRendererBenchmarkSetup, Error>) {
+        lock.lock()
+        self.result = result
+        lock.unlock()
+    }
+
+    func value() throws -> GraphRendererBenchmarkSetup {
+        lock.lock()
+        let result = self.result
+        lock.unlock()
+        guard let result else {
+            throw GraphRendererBenchmarkError.timeout
+        }
+        return try result.get()
     }
 }
 
