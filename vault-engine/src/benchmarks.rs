@@ -6,6 +6,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use serde::Serialize;
 
 use crate::index::{IndexSchemaMetadata, MetadataStore, MetadataStoreError, MetadataTable};
+use crate::index_rebuild::IndexRebuildPaths;
 #[cfg(test)]
 use crate::indexing_pipeline::read_parse_source;
 pub use crate::indexing_pipeline::{
@@ -13,8 +14,8 @@ pub use crate::indexing_pipeline::{
 };
 use crate::indexing_pipeline::{
     IndexingPipelineError, PipelineCorpusStageMetrics, PipelineCorpusStats, SearchDocumentSource,
-    load_search_document_sources, read_search_document, run_read_parse_pipeline,
-    run_tantivy_rebuild_pipeline,
+    load_search_document_sources, read_search_document, run_full_rebuild_pipeline,
+    run_read_parse_pipeline, run_tantivy_rebuild_pipeline,
 };
 #[cfg(test)]
 use crate::paths::{FileIdentity, lookup_key};
@@ -24,7 +25,7 @@ use crate::scanner::ScanEntryKind;
 use crate::sqlite_fts::{SearchDocument, SearchResult, SqliteFtsError, SqliteFtsIndex};
 use crate::tantivy_search::{TantivyIndexingStageMetrics, TantivySearchError, TantivySearchIndex};
 
-pub const BACKEND_BENCHMARK_ARTIFACT_SCHEMA_VERSION: u32 = 6;
+pub const BACKEND_BENCHMARK_ARTIFACT_SCHEMA_VERSION: u32 = 7;
 
 #[derive(Debug, Clone)]
 pub struct BackendBenchmarkOptions {
@@ -42,6 +43,7 @@ pub struct VaultBackendBenchmarkOptions {
     pub queries: Vec<String>,
     pub result_limit: usize,
     pub work_dir: PathBuf,
+    pub time_to_usable_sample_count: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -55,6 +57,10 @@ pub struct BackendBenchmarkArtifact {
     pub document_count: usize,
     pub query_count: usize,
     pub total_document_bytes: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub time_to_usable_micros: Option<u64>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub time_to_usable_samples: Vec<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata_store: Option<BenchmarkMetadataStoreMetrics>,
     pub backends: Vec<BackendBenchmarkResult>,
@@ -241,6 +247,8 @@ pub fn run_shared_backend_benchmark(
         document_count: options.documents.len(),
         query_count: options.queries.len(),
         total_document_bytes,
+        time_to_usable_micros: None,
+        time_to_usable_samples: Vec::new(),
         metadata_store: None,
         backends: vec![sqlite, tantivy],
     })
@@ -270,6 +278,19 @@ pub fn run_shared_backend_benchmark_from_vault(
         run_sqlite_benchmark_from_sources(options, &loaded_sources.sources, &pipeline_options)?;
     let tantivy =
         run_tantivy_benchmark_from_sources(options, &loaded_sources.sources, &pipeline_options)?;
+    let time_to_usable_micros = loaded_sources.stages.scan_micros
+        + loaded_sources.stages.source_collection_micros
+        + metadata_store.sqlite_metadata_write_micros
+        + tantivy.result.initial_index_micros;
+    let mut time_to_usable_samples = vec![time_to_usable_micros.max(1)];
+    for sample_index in 1..options.time_to_usable_sample_count.max(1) {
+        time_to_usable_samples.push(measure_time_to_usable_sample(
+            options,
+            &loaded_sources.sources,
+            &pipeline_options,
+            sample_index,
+        )?);
+    }
 
     Ok(BackendBenchmarkArtifact {
         schema_version: BACKEND_BENCHMARK_ARTIFACT_SCHEMA_VERSION,
@@ -284,6 +305,8 @@ pub fn run_shared_backend_benchmark_from_vault(
         document_count: loaded_sources.sources.len(),
         query_count: options.queries.len(),
         total_document_bytes: sqlite.total_document_bytes,
+        time_to_usable_micros: time_to_usable_samples.first().copied(),
+        time_to_usable_samples,
         metadata_store: Some(metadata_store),
         backends: vec![sqlite.result, tantivy.result],
     })
@@ -524,6 +547,27 @@ fn metadata_table_counts(
         headings: store.row_count(MetadataTable::Headings)?,
         attachments: store.row_count(MetadataTable::Attachments)?,
     })
+}
+
+fn measure_time_to_usable_sample(
+    options: &VaultBackendBenchmarkOptions,
+    sources: &[SearchDocumentSource],
+    pipeline_options: &IndexingPipelineOptions,
+    sample_index: usize,
+) -> BackendBenchmarkResultType<u64> {
+    let sample_root = options
+        .work_dir
+        .join(format!("time-to-usable-sample-{sample_index}"));
+    reset_directory(&sample_root)?;
+    let paths = IndexRebuildPaths::new(
+        &options.vault_root,
+        &sample_root,
+        sample_root.join("data"),
+        sample_root.join("rebuild"),
+    );
+    let metadata = IndexSchemaMetadata::new("sqlite+tantivy", "metadata-v1", "tantivy", 0);
+    let result = run_full_rebuild_pipeline(&paths, sources, &metadata, pipeline_options)?;
+    Ok(result.time_to_usable_micros.unwrap_or(1).max(1))
 }
 
 fn run_sqlite_benchmark_from_sources(
@@ -919,6 +963,7 @@ mod tests {
         );
         assert_eq!(artifact.document_count, options.documents.len());
         assert_eq!(artifact.query_count, options.queries.len());
+        assert_eq!(artifact.time_to_usable_micros, None);
         assert_eq!(artifact.run_metadata.run_condition, "in_memory_documents");
         assert_eq!(artifact.run_metadata.sample_count, options.queries.len());
         assert!(artifact.run_metadata.redaction_enabled);
@@ -1130,6 +1175,7 @@ mod tests {
             queries: vec!["Shared phrase".to_string()],
             result_limit: 10,
             work_dir: temp.path().join("indexes"),
+            time_to_usable_sample_count: 1,
         };
         let serial_options = IndexingPipelineOptions::serial();
         let worker_options = IndexingPipelineOptions {
@@ -1193,6 +1239,7 @@ mod tests {
             queries: vec!["Home".to_string(), "Guide".to_string()],
             result_limit: 10,
             work_dir: temp.path().join("indexes"),
+            time_to_usable_sample_count: 1,
         };
 
         let artifact = run_shared_backend_benchmark_from_vault(&options).expect("benchmark");
@@ -1209,6 +1256,11 @@ mod tests {
         );
         assert!(artifact.corpus_stages.scan_micros > 0);
         assert!(artifact.corpus_stages.source_collection_micros > 0);
+        assert!(
+            artifact
+                .time_to_usable_micros
+                .is_some_and(|value| value > 0)
+        );
         let metadata_store = artifact.metadata_store.as_ref().expect("metadata store");
         assert!(metadata_store.sqlite_metadata_write_micros > 0);
         assert_eq!(metadata_store.table_counts.files, artifact.document_count);
@@ -1218,6 +1270,7 @@ mod tests {
         );
         assert!(json.contains("\"sqlite_metadata_write_micros\""));
         assert!(json.contains("\"table_counts\""));
+        assert!(json.contains("\"time_to_usable_micros\""));
         assert_eq!(artifact.run_metadata.run_condition, "streaming_vault");
         assert_eq!(artifact.run_metadata.sample_count, options.queries.len());
         assert!(artifact.run_metadata.redaction_enabled);

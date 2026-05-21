@@ -92,12 +92,19 @@ pub enum SnippetStorageMode {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum IndexingPipelineTier {
+    Discovered,
+    MetadataReady,
+    FilenameReady,
+    BodyIndexing,
     Complete,
+    Stale,
     Error,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum IndexingProgressStage {
     LeaseQueue,
     ReadParse,
@@ -153,7 +160,15 @@ pub struct ProductionIndexingPipelineResult {
     pub processed_count: usize,
     pub failed_count: usize,
     pub tier: IndexingPipelineTier,
+    pub tier_transitions: Vec<IndexingTierTransition>,
+    pub time_to_usable_micros: Option<u64>,
     pub stages: ProductionIndexingStageMetrics,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IndexingTierTransition {
+    pub tier: IndexingPipelineTier,
+    pub elapsed_micros: u64,
 }
 
 impl ProductionIndexingPipelineResult {
@@ -172,6 +187,35 @@ impl ProductionIndexingPipelineResult {
             } else {
                 IndexingPipelineTier::Error
             },
+            tier_transitions: Vec::new(),
+            time_to_usable_micros: None,
+            stages,
+        }
+    }
+
+    pub fn with_timing(
+        generation: u64,
+        processed_count: usize,
+        failed_count: usize,
+        tier_transitions: Vec<IndexingTierTransition>,
+        time_to_usable_micros: Option<u64>,
+        stages: ProductionIndexingStageMetrics,
+    ) -> Self {
+        let tier = tier_transitions
+            .last()
+            .map(|transition| transition.tier)
+            .unwrap_or(if failed_count == 0 {
+                IndexingPipelineTier::Complete
+            } else {
+                IndexingPipelineTier::Error
+            });
+        Self {
+            generation,
+            processed_count,
+            failed_count,
+            tier,
+            tier_transitions,
+            time_to_usable_micros,
             stages,
         }
     }
@@ -230,6 +274,7 @@ pub struct SearchDocumentSource {
 pub struct LoadedSearchDocumentSources {
     pub sources: Vec<SearchDocumentSource>,
     pub stages: PipelineCorpusStageMetrics,
+    pub tier: IndexingPipelineTier,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -359,6 +404,7 @@ pub fn load_search_document_sources(
             scan_micros,
             source_collection_micros,
         },
+        tier: IndexingPipelineTier::Discovered,
     })
 }
 
@@ -559,6 +605,11 @@ pub fn run_full_rebuild_pipeline(
     metadata: &IndexSchemaMetadata,
     pipeline_options: &IndexingPipelineOptions,
 ) -> IndexingPipelineResult<ProductionIndexingPipelineResult> {
+    let started = Instant::now();
+    let mut tier_transitions = vec![tier_transition(
+        IndexingPipelineTier::Discovered,
+        started.elapsed(),
+    )];
     fs::create_dir_all(&paths.rebuild_directory)?;
     let options = pipeline_options.normalized();
     let metadata_path = paths.rebuild_directory.join("metadata.sqlite");
@@ -587,19 +638,38 @@ pub fn run_full_rebuild_pipeline(
         metadata_store.replace_file_records_batch(&pending)?;
         sqlite_metadata_write_micros += duration_micros_nonzero(start.elapsed());
     }
+    tier_transitions.push(tier_transition(
+        IndexingPipelineTier::MetadataReady,
+        started.elapsed(),
+    ));
 
     let tantivy_dir = paths.rebuild_directory.join("tantivy");
     reset_directory(&tantivy_dir)?;
     let mut tantivy = TantivySearchIndex::open_in_dir(&tantivy_dir)?;
+    tier_transitions.push(tier_transition(
+        IndexingPipelineTier::BodyIndexing,
+        started.elapsed(),
+    ));
     let tantivy_run = run_tantivy_rebuild_pipeline(&mut tantivy, sources, &options)?;
+    let time_to_usable_micros = duration_micros_nonzero(started.elapsed());
+    tier_transitions.push(IndexingTierTransition {
+        tier: IndexingPipelineTier::FilenameReady,
+        elapsed_micros: time_to_usable_micros,
+    });
+    tier_transitions.push(IndexingTierTransition {
+        tier: IndexingPipelineTier::Complete,
+        elapsed_micros: time_to_usable_micros,
+    });
 
-    Ok(production_result(
+    Ok(production_result_with_timing(
         metadata.generation,
         tantivy_run.stages.added_document_count,
         tantivy_run.stages.failed_document_count,
         tantivy_run.stats,
         sqlite_metadata_write_micros,
         tantivy_run.stages,
+        tier_transitions,
+        Some(time_to_usable_micros),
     ))
 }
 
@@ -850,6 +920,39 @@ fn production_result(
             tantivy,
         },
     )
+}
+
+fn production_result_with_timing(
+    generation: u64,
+    processed_count: usize,
+    failed_count: usize,
+    stats: PipelineCorpusStats,
+    sqlite_metadata_write_micros: u64,
+    tantivy: TantivyIndexingStageMetrics,
+    tier_transitions: Vec<IndexingTierTransition>,
+    time_to_usable_micros: Option<u64>,
+) -> ProductionIndexingPipelineResult {
+    ProductionIndexingPipelineResult::with_timing(
+        generation,
+        processed_count,
+        failed_count,
+        tier_transitions,
+        time_to_usable_micros,
+        ProductionIndexingStageMetrics {
+            read_parse_sample_count: stats.read_micros.len(),
+            read_parse_total_bytes: stats.read_parse_bytes,
+            read_parse_peak_in_flight_items: 0,
+            sqlite_metadata_write_micros,
+            tantivy,
+        },
+    )
+}
+
+fn tier_transition(tier: IndexingPipelineTier, elapsed: Duration) -> IndexingTierTransition {
+    IndexingTierTransition {
+        tier,
+        elapsed_micros: duration_micros_nonzero(elapsed),
+    }
 }
 
 fn merge_tantivy_metrics(
@@ -1161,6 +1264,23 @@ mod tests {
     }
 
     #[test]
+    fn tier_serialization_covers_all_values() {
+        let tiers = [
+            (IndexingPipelineTier::Discovered, "\"discovered\""),
+            (IndexingPipelineTier::MetadataReady, "\"metadata_ready\""),
+            (IndexingPipelineTier::FilenameReady, "\"filename_ready\""),
+            (IndexingPipelineTier::BodyIndexing, "\"body_indexing\""),
+            (IndexingPipelineTier::Complete, "\"complete\""),
+            (IndexingPipelineTier::Stale, "\"stale\""),
+            (IndexingPipelineTier::Error, "\"error\""),
+        ];
+
+        for (tier, serialized) in tiers {
+            assert_eq!(serde_json::to_string(&tier).expect("tier json"), serialized);
+        }
+    }
+
+    #[test]
     fn queue_adapter_leases_limit_and_preserves_generation_reason() {
         let temp = tempdir().expect("tempdir");
         let root = fixture_vault(temp.path(), &["Home.md", "Guide.md", "Later.md"]);
@@ -1396,6 +1516,23 @@ mod tests {
         .expect("rebuild");
 
         assert_eq!(result.processed_count, 2);
+        assert_eq!(result.tier, IndexingPipelineTier::Complete);
+        assert!(result.time_to_usable_micros.is_some_and(|value| value > 0));
+        let tiers = result
+            .tier_transitions
+            .iter()
+            .map(|transition| transition.tier)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            tiers,
+            vec![
+                IndexingPipelineTier::Discovered,
+                IndexingPipelineTier::MetadataReady,
+                IndexingPipelineTier::BodyIndexing,
+                IndexingPipelineTier::FilenameReady,
+                IndexingPipelineTier::Complete,
+            ]
+        );
         assert!(paths.data_directory.join("old.index").exists());
         assert!(paths.rebuild_directory.join("metadata.sqlite").exists());
         assert!(paths.rebuild_directory.join("tantivy").exists());
@@ -1466,7 +1603,7 @@ mod tests {
 
         let json = serde_json::to_string(&snapshot).expect("json");
 
-        assert!(json.contains("MetadataWrite"));
+        assert!(json.contains("metadata_write"));
         assert!(json.contains("\"pending_count\":1"));
         assert!(!json.contains(".md"));
         assert!(!json.contains("Home"));

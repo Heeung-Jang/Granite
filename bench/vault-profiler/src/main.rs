@@ -93,6 +93,7 @@ fn run() -> Result<(), Box<dyn Error>> {
                     queries,
                     result_limit: command.result_limit,
                     work_dir: command.work_dir,
+                    time_to_usable_sample_count: command.time_to_usable_samples,
                 })?;
             write_json(
                 &command.vault_root,
@@ -192,6 +193,7 @@ struct BackendBenchmarkCommand {
     query_file: Option<PathBuf>,
     corpus_id: String,
     result_limit: usize,
+    time_to_usable_samples: usize,
     pretty: bool,
 }
 
@@ -436,6 +438,7 @@ impl BackendBenchmarkCommand {
         let mut query_file = None;
         let mut corpus_id = "manual".to_string();
         let mut result_limit = 10;
+        let mut time_to_usable_samples = 1;
 
         while let Some(arg) = parser.next_arg() {
             match arg.as_str() {
@@ -448,6 +451,10 @@ impl BackendBenchmarkCommand {
                 "--limit" => {
                     let value = parser.required_string_arg("--limit")?;
                     result_limit = value.parse()?;
+                }
+                "--time-to-usable-samples" => {
+                    let value = parser.required_string_arg("--time-to-usable-samples")?;
+                    time_to_usable_samples = value.parse::<usize>()?.max(1);
                 }
                 _ => parser.parse_common_arg(arg)?,
             }
@@ -466,6 +473,7 @@ impl BackendBenchmarkCommand {
             query_file,
             corpus_id,
             result_limit,
+            time_to_usable_samples,
             pretty: parser.pretty,
         })
     }
@@ -984,6 +992,8 @@ mod tests {
                 "fixture",
                 "--limit",
                 "5",
+                "--time-to-usable-samples",
+                "3",
                 "--pretty",
             ]
             .into_iter()
@@ -1002,6 +1012,7 @@ mod tests {
                     query_file: Some(PathBuf::from("/tmp/queries.txt")),
                     corpus_id: "fixture".to_string(),
                     result_limit: 5,
+                    time_to_usable_samples: 3,
                     pretty: true,
                 }),
             }
