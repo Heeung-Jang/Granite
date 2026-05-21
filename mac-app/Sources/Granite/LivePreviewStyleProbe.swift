@@ -35,6 +35,11 @@ struct LivePreviewStyleProbeReport: Codable, Equatable {
     var unorderedMarkerGeometryReported: Bool
     var orderedMarkerGeometryReported: Bool
     var taskMarkerGeometryReported: Bool
+    var unorderedDashMarkerDetected: Bool
+    var unorderedAsteriskMarkerDetected: Bool
+    var unorderedPlusMarkerDetected: Bool
+    var unorderedNestedMarkerDetected: Bool
+    var unorderedTabbedMarkerDetected: Bool
     var nestedListIndentStable: Bool
     var listRenderPreservesSource: Bool
     var blockquoteParagraphIndentApplied: Bool
@@ -321,6 +326,7 @@ enum LivePreviewStyleProbe {
         let horizontalRuleFields = probeHorizontalRuleFields()
         let headingMarkerFields = probeHeadingMarkerGeometry()
         let markerGeometryFields = probeMarkerGeometry()
+        let unorderedMarkerFields = probeUnorderedMarkerDetection()
 
         var report = LivePreviewStyleProbeReport(
             summary: .passed,
@@ -369,6 +375,11 @@ enum LivePreviewStyleProbe {
             unorderedMarkerGeometryReported: markerGeometryFields.unorderedReported,
             orderedMarkerGeometryReported: markerGeometryFields.orderedReported,
             taskMarkerGeometryReported: markerGeometryFields.taskReported,
+            unorderedDashMarkerDetected: unorderedMarkerFields.dashDetected,
+            unorderedAsteriskMarkerDetected: unorderedMarkerFields.asteriskDetected,
+            unorderedPlusMarkerDetected: unorderedMarkerFields.plusDetected,
+            unorderedNestedMarkerDetected: unorderedMarkerFields.nestedDetected,
+            unorderedTabbedMarkerDetected: unorderedMarkerFields.tabbedDetected,
             nestedListIndentStable: nestedListParagraphStyle?.headIndent == listParagraphStyle?.headIndent,
             listRenderPreservesSource: textView.string.contains("- [x] Done item"),
             blockquoteParagraphIndentApplied: blockquoteParagraphStyle?.headIndent ?? 0 > 0,
@@ -711,6 +722,45 @@ enum LivePreviewStyleProbe {
             unordered?.rect.width ?? 0 > 0,
             ordered?.rect.width ?? 0 > 0,
             task?.rect.width ?? 0 > 0
+        )
+    }
+
+    private static func probeUnorderedMarkerDetection() -> (
+        dashDetected: Bool,
+        asteriskDetected: Bool,
+        plusDetected: Bool,
+        nestedDetected: Bool,
+        tabbedDetected: Bool
+    ) {
+        let source = "- Dash\n* Star\n+ Plus\n  - Nested\n\t- Tabbed\n"
+        let textView = MarkdownEditorTextViewFactory.makeTextView()
+        textView.string = source
+        textView.setSelectedRange(NSRange(location: (source as NSString).length, length: 0))
+        MarkdownVisibleRangeDecorator.decorateVisibleRange(
+            in: textView,
+            livePreviewMode: .livePreview,
+            revealRange: textView.selectedRange(),
+            markerStyle: .obsidian
+        )
+
+        let markerTexts = LivePreviewOverlayRenderer.markerGeometries(in: textView)
+            .filter { $0.kind == .unorderedListMarker }
+            .compactMap { geometry -> String? in
+                sourceText(
+                    for: LivePreviewSourceRange(
+                        location: geometry.sourceRange.location,
+                        length: geometry.sourceRange.length
+                    ),
+                    in: source
+                )
+            }
+
+        return (
+            markerTexts.contains("- "),
+            markerTexts.contains("* "),
+            markerTexts.contains("+ "),
+            markerTexts.contains("  - "),
+            markerTexts.contains("\t- ")
         )
     }
 
