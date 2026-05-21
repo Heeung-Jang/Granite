@@ -576,20 +576,30 @@ enum LivePreviewStyleProbe {
     ) {
         let source = "# Probe Heading\n\nBody"
         let markerRange = NSRange(location: 0, length: 2)
-        let textView = MarkdownEditorTextViewFactory.makeTextView()
-        textView.string = source
-        textView.setSelectedRange(NSRange(location: (source as NSString).length, length: 0))
+        let visibleTextView = MarkdownEditorTextViewFactory.makeTextView()
+        visibleTextView.string = source
+        visibleTextView.setSelectedRange(NSRange(location: (source as NSString).length, length: 0))
         MarkdownVisibleRangeDecorator.decorateVisibleRange(
-            in: textView,
+            in: visibleTextView,
             livePreviewMode: .livePreview,
-            revealRange: textView.selectedRange(),
+            revealRange: visibleTextView.selectedRange(),
+            markerStyle: .accent
+        )
+
+        let collapsedTextView = MarkdownEditorTextViewFactory.makeTextView()
+        collapsedTextView.string = source
+        collapsedTextView.setSelectedRange(NSRange(location: (source as NSString).length, length: 0))
+        MarkdownVisibleRangeDecorator.decorateVisibleRange(
+            in: collapsedTextView,
+            livePreviewMode: .livePreview,
+            revealRange: collapsedTextView.selectedRange(),
             markerStyle: .obsidian
         )
 
         guard let headingOffset = utf16Offset(of: "Probe Heading", in: source),
-              let originalMarkerRect = boundingRect(in: textView, range: markerRange),
-              let originalTextRect = boundingRect(in: textView, range: NSRange(location: headingOffset, length: 1)),
-              let originalLineRect = lineRect(in: textView, source: source, marker: "Probe Heading")
+              let originalMarkerRect = boundingRect(in: visibleTextView, range: markerRange),
+              let originalTextRect = boundingRect(in: visibleTextView, range: NSRange(location: headingOffset, length: 1)),
+              let originalLineRect = lineRect(in: visibleTextView, source: source, marker: "Probe Heading")
         else {
             return (.empty, false, false, false, false, false, false)
         }
@@ -597,14 +607,9 @@ enum LivePreviewStyleProbe {
         let geometryMeasured = originalMarkerRect.width > 0 && originalTextRect.width > 0
         let textXPositionMeasured = originalTextRect.minX > originalMarkerRect.minX
 
-        textView.textStorage?.addAttributes([
-            .font: LivePreviewTheme.collapsedSyntaxFont,
-            .foregroundColor: LivePreviewTheme.concealedColor
-        ], range: markerRange)
-
-        guard let collapsedMarkerRect = boundingRect(in: textView, range: markerRange),
-              let collapsedTextRect = boundingRect(in: textView, range: NSRange(location: headingOffset, length: 1)),
-              let collapsedLineRect = lineRect(in: textView, source: source, marker: "Probe Heading")
+        guard let collapsedMarkerRect = boundingRect(in: collapsedTextView, range: markerRange),
+              let collapsedTextRect = boundingRect(in: collapsedTextView, range: NSRange(location: headingOffset, length: 1)),
+              let collapsedLineRect = lineRect(in: collapsedTextView, source: source, marker: "Probe Heading")
         else {
             let geometry = HeadingMarkerGeometryProbeReport(
                 originalMarkerWidth: Double(originalMarkerRect.width),
@@ -626,12 +631,12 @@ enum LivePreviewStyleProbe {
             && collapsedTextRect.minX < originalTextRect.minX
         let collapsedLineHeightPreserved = abs(collapsedLineRect.height - originalLineRect.height) <= 1
 
-        textView.setSelectedRange(NSRange(location: markerRange.location, length: 0))
-        let caretAtMarkerStartPreserved = textView.selectedRange() == NSRange(location: markerRange.location, length: 0)
-        textView.setSelectedRange(NSRange(location: markerRange.upperBound, length: 0))
-        let caretAfterMarkerPreserved = textView.selectedRange() == NSRange(location: markerRange.upperBound, length: 0)
-        textView.setSelectedRange(markerRange)
-        let selectedMarkerText = (textView.string as NSString).substring(with: markerRange)
+        collapsedTextView.setSelectedRange(NSRange(location: markerRange.location, length: 0))
+        let caretAtMarkerStartPreserved = collapsedTextView.selectedRange() == NSRange(location: markerRange.location, length: 0)
+        collapsedTextView.setSelectedRange(NSRange(location: markerRange.upperBound, length: 0))
+        let caretAfterMarkerPreserved = collapsedTextView.selectedRange() == NSRange(location: markerRange.upperBound, length: 0)
+        collapsedTextView.setSelectedRange(markerRange)
+        let selectedMarkerText = (collapsedTextView.string as NSString).substring(with: markerRange)
         let collapsedSelectionSafe = caretAtMarkerStartPreserved
             && caretAfterMarkerPreserved
             && selectedMarkerText == "# "
@@ -663,6 +668,13 @@ enum LivePreviewStyleProbe {
         window.makeFirstResponder(textView)
 
         textView.string = source
+        textView.setSelectedRange(NSRange(location: (source as NSString).length, length: 0))
+        MarkdownVisibleRangeDecorator.decorateVisibleRange(
+            in: textView,
+            livePreviewMode: .livePreview,
+            revealRange: textView.selectedRange(),
+            markerStyle: .obsidian
+        )
         textView.setSelectedRange(NSRange(location: markerRange.upperBound, length: 0))
         textView.setMarkedText(
             "한글",

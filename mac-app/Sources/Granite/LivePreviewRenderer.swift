@@ -582,6 +582,12 @@ enum LivePreviewRenderer {
             return
         }
 
+        let collapsedHeadingMarkerRanges = collapsedHeadingMarkerConcealmentRanges(
+            for: block,
+            source: source,
+            markerStyle: markerStyle
+        )
+
         for range in rawMarkerConcealmentRanges(
             for: block,
             source: source,
@@ -594,9 +600,10 @@ enum LivePreviewRenderer {
             guard range.length > 0 else {
                 continue
             }
-            plan.addAttributes([
-                .foregroundColor: LivePreviewTheme.concealedColor
-            ], range: range)
+            plan.addAttributes(
+                rawMarkerConcealmentAttributes(collapsesWidth: collapsedHeadingMarkerRanges.contains(range)),
+                range: range
+            )
         }
     }
 
@@ -606,6 +613,29 @@ enum LivePreviewRenderer {
 
     private struct RenderedMarkerOverlayPolicy {
         var isNeeded: Bool
+    }
+
+    private static func rawMarkerConcealmentAttributes(collapsesWidth: Bool) -> [NSAttributedString.Key: Any] {
+        var attributes: [NSAttributedString.Key: Any] = [
+            .foregroundColor: LivePreviewTheme.concealedColor
+        ]
+        if collapsesWidth {
+            attributes[.font] = LivePreviewTheme.collapsedSyntaxFont
+        }
+        return attributes
+    }
+
+    private static func collapsedHeadingMarkerConcealmentRanges(
+        for block: LivePreviewBlockSpan,
+        source: String,
+        markerStyle: LivePreviewMarkerStyle
+    ) -> [NSRange] {
+        guard case .heading = block.kind,
+              !markerStyle.showsHeadingMarkersOutsideReveal
+        else {
+            return []
+        }
+        return prefixMatches(in: source, block: block, regex: headingPrefixRegex)
     }
 
     private static func rawMarkerConcealmentRanges(

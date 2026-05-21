@@ -808,7 +808,7 @@ enum MarkdownEditorBridgeProbe {
             in: obsidianTextView,
             text: text,
             marker: "# Heading"
-        ) != LivePreviewTheme.concealedColor
+        ) == LivePreviewTheme.secondaryTextColor
 
         let quoteOffset = (text as NSString).range(of: "Quote").location
         obsidianTextView.setSelectedRange(NSRange(location: quoteOffset, length: 0))
