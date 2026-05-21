@@ -11,6 +11,8 @@ use crate::scanner::{ScanEntryKind, ScanError, scan_vault};
 use crate::sqlite_fts::{SearchDocument, SearchResult, SqliteFtsError, SqliteFtsIndex};
 use crate::tantivy_search::{TantivySearchError, TantivySearchIndex};
 
+pub const BACKEND_BENCHMARK_ARTIFACT_SCHEMA_VERSION: u32 = 2;
+
 #[derive(Debug, Clone)]
 pub struct BackendBenchmarkOptions {
     pub corpus_id: String,
@@ -34,6 +36,7 @@ pub struct BackendBenchmarkArtifact {
     pub schema_version: u32,
     pub generated_at_unix_seconds: u64,
     pub corpus_id: String,
+    pub run_metadata: BenchmarkRunMetadata,
     pub document_count: usize,
     pub query_count: usize,
     pub total_document_bytes: u64,
@@ -55,6 +58,47 @@ pub struct BackendBenchmarkResult {
     pub incremental_update_micros: u64,
     pub index_size_bytes: u64,
     pub peak_rss_bytes: Option<u64>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Default, PartialEq)]
+struct BenchmarkStageMetrics {
+    durations: BenchmarkStageDurations,
+    throughput: BenchmarkThroughput,
+    memory: BenchmarkMemorySummary,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct BenchmarkStageDurations {
+    scan_micros: u64,
+    read_micros: u64,
+    parse_micros: u64,
+    sqlite_write_micros: u64,
+    tantivy_write_micros: u64,
+    tantivy_commit_micros: u64,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Default, PartialEq)]
+struct BenchmarkThroughput {
+    docs_per_second: f64,
+    mb_per_second: f64,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct BenchmarkMemorySummary {
+    peak_rss_bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct BenchmarkRunMetadata {
+    pub build_mode: String,
+    pub run_condition: String,
+    pub sample_count: usize,
+    pub git_commit_hash: Option<String>,
+    pub redaction_enabled: bool,
 }
 
 #[derive(Debug)]
@@ -101,12 +145,13 @@ pub fn run_shared_backend_benchmark(
     let tantivy = run_tantivy_benchmark(options, total_document_bytes)?;
 
     Ok(BackendBenchmarkArtifact {
-        schema_version: 1,
+        schema_version: BACKEND_BENCHMARK_ARTIFACT_SCHEMA_VERSION,
         generated_at_unix_seconds: SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs(),
         corpus_id: options.corpus_id.clone(),
+        run_metadata: benchmark_run_metadata("in_memory_documents", options.queries.len()),
         document_count: options.documents.len(),
         query_count: options.queries.len(),
         total_document_bytes,
@@ -132,12 +177,13 @@ pub fn run_shared_backend_benchmark_from_vault(
     let tantivy = run_tantivy_benchmark_from_sources(options, &sources)?;
 
     Ok(BackendBenchmarkArtifact {
-        schema_version: 1,
+        schema_version: BACKEND_BENCHMARK_ARTIFACT_SCHEMA_VERSION,
         generated_at_unix_seconds: SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs(),
         corpus_id: options.corpus_id.clone(),
+        run_metadata: benchmark_run_metadata("streaming_vault", options.queries.len()),
         document_count: sources.len(),
         query_count: options.queries.len(),
         total_document_bytes: sqlite.total_document_bytes,
@@ -161,6 +207,35 @@ pub fn write_backend_benchmark_artifact(
 
 pub fn benchmark_module_ready() -> bool {
     true
+}
+
+fn benchmark_run_metadata(run_condition: &str, sample_count: usize) -> BenchmarkRunMetadata {
+    BenchmarkRunMetadata {
+        build_mode: current_build_mode().to_string(),
+        run_condition: run_condition.to_string(),
+        sample_count,
+        git_commit_hash: current_git_commit_hash(),
+        redaction_enabled: true,
+    }
+}
+
+fn current_build_mode() -> &'static str {
+    if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    }
+}
+
+fn current_git_commit_hash() -> Option<String> {
+    std::env::var("GIT_COMMIT_HASH")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            std::env::var("GITHUB_SHA")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        })
 }
 
 impl fmt::Display for BackendBenchmarkError {
@@ -640,9 +715,15 @@ mod tests {
         write_backend_benchmark_artifact(&artifact_path, &artifact, true).expect("write artifact");
         let json = fs::read_to_string(&artifact_path).expect("artifact json");
 
-        assert_eq!(artifact.schema_version, 1);
+        assert_eq!(
+            artifact.schema_version,
+            BACKEND_BENCHMARK_ARTIFACT_SCHEMA_VERSION
+        );
         assert_eq!(artifact.document_count, options.documents.len());
         assert_eq!(artifact.query_count, options.queries.len());
+        assert_eq!(artifact.run_metadata.run_condition, "in_memory_documents");
+        assert_eq!(artifact.run_metadata.sample_count, options.queries.len());
+        assert!(artifact.run_metadata.redaction_enabled);
         assert_eq!(artifact.backends.len(), 2);
         assert!(artifact.backends.iter().all(|backend| {
             backend.query_p95_micros <= backend.query_p99_micros
@@ -653,6 +734,12 @@ mod tests {
         assert!(json.contains("\"sqlite_fts\""));
         assert!(json.contains("\"tantivy\""));
         assert!(!json.contains("Welcome to the compatibility fixture vault"));
+    }
+
+    #[test]
+    fn benchmark_module_ready() {
+        assert!(super::benchmark_module_ready());
+        assert_eq!(BenchmarkStageMetrics::default().durations.scan_micros, 0);
     }
 
     #[test]
@@ -683,6 +770,9 @@ mod tests {
 
         assert_eq!(artifact.document_count, 2);
         assert_eq!(artifact.query_count, 2);
+        assert_eq!(artifact.run_metadata.run_condition, "streaming_vault");
+        assert_eq!(artifact.run_metadata.sample_count, options.queries.len());
+        assert!(artifact.run_metadata.redaction_enabled);
         assert_eq!(artifact.backends.len(), 2);
         assert!(artifact.total_document_bytes > 0);
         assert!(artifact.backends.iter().all(|backend| {
@@ -715,6 +805,9 @@ mod tests {
         assert!(!json.contains("Private/Secret Note.md"));
         assert!(!json.contains("Secret Note"));
         assert!(!json.contains("private-file-id"));
+        assert!(json.contains("\"run_metadata\""));
+        assert!(json.contains("\"sample_count\": 1"));
+        assert!(json.contains("\"redaction_enabled\": true"));
         assert!(json.contains("\"snippet_result_count\""));
     }
 
