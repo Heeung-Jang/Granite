@@ -54,6 +54,15 @@ func livePreviewParserClassifiesBasicFormattingFixture() throws {
 }
 
 @Test
+func livePreviewParserLoadsObsidianMarkersAndRulesFixture() throws {
+    let source = try fixture("obsidian-markers-and-rules.md")
+
+    #expect(source.contains("# Obsidian Marker Fixture"))
+    #expect(source.contains("- [ ] Pending task"))
+    #expect(source.contains("| Name | Status |"))
+}
+
+@Test
 func livePreviewParserGroupsObsidianCalloutBodyLines() throws {
     let source = """
     > [!summary] TL;DR

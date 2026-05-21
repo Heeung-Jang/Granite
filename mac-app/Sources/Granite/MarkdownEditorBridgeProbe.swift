@@ -4,6 +4,7 @@ import NativeMarkdownCore
 import SwiftUI
 
 struct MarkdownEditorBridgeProbeReport: Codable, Equatable {
+    var summary: ProbeCheckSummary
     var sameTextSkippedUpdate: Bool
     var sameTextSelectionPreserved: Bool
     var externalTextApplied: Bool
@@ -17,6 +18,12 @@ struct MarkdownEditorBridgeProbeReport: Codable, Equatable {
     var modeTransitionsKeptUndoEnabled: Bool
     var livePreviewReportsChangedRanges: Bool
     var livePreviewNoOpRenderSkipsChanges: Bool
+    var livePreviewRenderDoesNotMutateSource: Bool
+    var sourceModeShowsRawMarkdownSyntax: Bool
+    var activeHeadingLineMovementPreservesSource: Bool
+    var activeListLineMovementPreservesSource: Bool
+    var activeTaskLineMovementPreservesSource: Bool
+    var activeHorizontalRuleLineMovementPreservesSource: Bool
     var caretRevealRestoresHiddenSyntaxColor: Bool
     var headingSelectionRevealsMarkdownSource: Bool
     var inlineConcealmentAppliesBeyondParagraph: Bool
@@ -57,16 +64,25 @@ struct MarkdownEditorBridgeProbeReport: Codable, Equatable {
     var tableCellEditChangesOnlyCell: Bool
     var tableCellEditUndoRestoresCell: Bool
     var tableCellEditFailurePreservesBuffer: Bool
+    var tableInPlaceEditAvailable: Bool
+    var tableInPlaceEditSelectionPreserved: Bool
+    var tableInPlaceEditUndoPreservesSelection: Bool
     var frontmatterBoundaryDeleteUndoPreservesBuffer: Bool
     var editorAccessibilityHelpMentionsInteractions: Bool
 }
 
 @MainActor
 enum MarkdownEditorBridgeProbe {
-    static func encodedReport() -> String {
+    private static let expectedFailures: Set<String> = [
+        "tableInPlaceEditAvailable",
+        "tableInPlaceEditSelectionPreserved",
+        "tableInPlaceEditUndoPreservesSelection"
+    ]
+
+    static func encodedReport(_ report: MarkdownEditorBridgeProbeReport = run()) -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let data = try! encoder.encode(run())
+        let data = try! encoder.encode(report)
         return String(decoding: data, as: UTF8.self)
     }
 
@@ -78,6 +94,7 @@ enum MarkdownEditorBridgeProbe {
         let coordinatorProbe = probeCoordinatorBinding()
         let modeProbe = probeModeTransitions()
         let renderProbe = probeLivePreviewRendering()
+        let sourcePreservationProbe = probeSourcePreservationGuards()
         let markerStyleProbe = probeMarkerStyleStorageCompatibility()
         let selectionChangeProbe = probeSelectionChangeDecorationDoesNotReenter()
         let checkboxProbe = probeCheckboxToggle()
@@ -85,7 +102,8 @@ enum MarkdownEditorBridgeProbe {
         let frontmatterBoundaryProbe = probeFrontmatterBoundaryDeleteUndo()
         let accessibilityProbe = probeEditorAccessibility()
 
-        return MarkdownEditorBridgeProbeReport(
+        var report = MarkdownEditorBridgeProbeReport(
+            summary: .passed,
             sameTextSkippedUpdate: sameTextProbe.skipped,
             sameTextSelectionPreserved: sameTextProbe.selectionPreserved,
             externalTextApplied: externalTextProbe.applied,
@@ -99,6 +117,12 @@ enum MarkdownEditorBridgeProbe {
             modeTransitionsKeptUndoEnabled: modeProbe.undoEnabled,
             livePreviewReportsChangedRanges: renderProbe.reportsChangedRanges,
             livePreviewNoOpRenderSkipsChanges: renderProbe.noOpRenderSkipsChanges,
+            livePreviewRenderDoesNotMutateSource: sourcePreservationProbe.livePreviewRenderDoesNotMutateSource,
+            sourceModeShowsRawMarkdownSyntax: sourcePreservationProbe.sourceModeShowsRawMarkdownSyntax,
+            activeHeadingLineMovementPreservesSource: sourcePreservationProbe.activeHeadingLineMovementPreservesSource,
+            activeListLineMovementPreservesSource: sourcePreservationProbe.activeListLineMovementPreservesSource,
+            activeTaskLineMovementPreservesSource: sourcePreservationProbe.activeTaskLineMovementPreservesSource,
+            activeHorizontalRuleLineMovementPreservesSource: sourcePreservationProbe.activeHorizontalRuleLineMovementPreservesSource,
             caretRevealRestoresHiddenSyntaxColor: renderProbe.caretRevealRestoresHiddenSyntaxColor,
             headingSelectionRevealsMarkdownSource: renderProbe.headingSelectionRevealsMarkdownSource,
             inlineConcealmentAppliesBeyondParagraph: renderProbe.inlineConcealmentAppliesBeyondParagraph,
@@ -139,8 +163,83 @@ enum MarkdownEditorBridgeProbe {
             tableCellEditChangesOnlyCell: tableCellProbe.changesOnlyCell,
             tableCellEditUndoRestoresCell: tableCellProbe.undoRestoresCell,
             tableCellEditFailurePreservesBuffer: tableCellProbe.failurePreservesBuffer,
+            tableInPlaceEditAvailable: false,
+            tableInPlaceEditSelectionPreserved: false,
+            tableInPlaceEditUndoPreservesSelection: false,
             frontmatterBoundaryDeleteUndoPreservesBuffer: frontmatterBoundaryProbe,
             editorAccessibilityHelpMentionsInteractions: accessibilityProbe
+        )
+        report.summary = ProbeCheckSummary.evaluate(report: report, expectedFailures: expectedFailures)
+        return report
+    }
+
+    private static func probeSourcePreservationGuards() -> (
+        livePreviewRenderDoesNotMutateSource: Bool,
+        sourceModeShowsRawMarkdownSyntax: Bool,
+        activeHeadingLineMovementPreservesSource: Bool,
+        activeListLineMovementPreservesSource: Bool,
+        activeTaskLineMovementPreservesSource: Bool,
+        activeHorizontalRuleLineMovementPreservesSource: Bool
+    ) {
+        let source = """
+        # Heading
+
+        - Bullet
+        - [x] Done
+
+        ---
+
+        | Name | Status |
+        | --- | --- |
+        | Alpha | Draft |
+        """
+        let textView = MarkdownEditorTextViewFactory.makeTextView()
+        textView.string = source
+        let endSelection = NSRange(location: (source as NSString).length, length: 0)
+        textView.setSelectedRange(endSelection)
+
+        MarkdownVisibleRangeDecorator.decorateVisibleRange(
+            in: textView,
+            livePreviewMode: .livePreview,
+            revealRange: textView.selectedRange(),
+            markerStyle: .obsidian
+        )
+        let livePreviewRenderDoesNotMutateSource = textView.string == source
+
+        MarkdownVisibleRangeDecorator.decorateVisibleRange(
+            in: textView,
+            livePreviewMode: .source,
+            revealRange: textView.selectedRange(),
+            markerStyle: .obsidian
+        )
+        let sourceModeShowsRawMarkdownSyntax = textView.string == source
+            && foregroundColor(in: textView, text: source, marker: "# Heading") != LivePreviewTheme.concealedColor
+            && foregroundColor(in: textView, text: source, marker: "- Bullet") != LivePreviewTheme.concealedColor
+            && foregroundColor(in: textView, text: source, marker: "- [x]") != LivePreviewTheme.concealedColor
+            && foregroundColor(in: textView, text: source, marker: "---") != LivePreviewTheme.concealedColor
+            && foregroundColor(in: textView, text: source, marker: "| Name") != LivePreviewTheme.concealedColor
+
+        func moveSelection(to marker: String) -> Bool {
+            guard let offset = utf16Offset(of: marker, in: source) else {
+                return false
+            }
+            textView.setSelectedRange(NSRange(location: offset, length: 0))
+            MarkdownVisibleRangeDecorator.decorateVisibleRange(
+                in: textView,
+                livePreviewMode: .livePreview,
+                revealRange: textView.selectedRange(),
+                markerStyle: .obsidian
+            )
+            return textView.string == source
+        }
+
+        return (
+            livePreviewRenderDoesNotMutateSource,
+            sourceModeShowsRawMarkdownSyntax,
+            moveSelection(to: "Heading"),
+            moveSelection(to: "Bullet"),
+            moveSelection(to: "Done"),
+            moveSelection(to: "---")
         )
     }
 

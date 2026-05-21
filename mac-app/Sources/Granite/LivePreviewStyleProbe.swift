@@ -3,6 +3,7 @@ import Foundation
 import NativeMarkdownCore
 
 struct LivePreviewStyleProbeReport: Codable, Equatable {
+    var summary: ProbeCheckSummary
     var headingFontScaleApplied: Bool
     var headingParagraphSpacingApplied: Bool
     var baseParagraphSpacingApplied: Bool
@@ -16,6 +17,13 @@ struct LivePreviewStyleProbeReport: Codable, Equatable {
     var listMarkerConcealedOutsideReveal: Bool
     var listMarkerStyledInsideReveal: Bool
     var taskCheckboxVisibleOutsideReveal: Bool
+    var obsidianUnorderedMarkerConcealedOutsideReveal: Bool
+    var obsidianUnorderedMarkerRevealedInsideLine: Bool
+    var obsidianOrderedMarkerConcealedOutsideReveal: Bool
+    var obsidianOrderedMarkerRevealedInsideLine: Bool
+    var obsidianTaskSourceTokenConcealedOutsideReveal: Bool
+    var obsidianTaskSourceTokenRevealedInsideLine: Bool
+    var obsidianTaskCheckboxVisualVisibleOutsideReveal: Bool
     var nestedListIndentStable: Bool
     var listRenderPreservesSource: Bool
     var blockquoteParagraphIndentApplied: Bool
@@ -46,6 +54,14 @@ struct LivePreviewStyleProbeReport: Codable, Equatable {
     var tableSyntaxConcealedOutsideReveal: Bool
     var tableSourceStaysConcealedInsideBlock: Bool
     var tableRenderPreservesSource: Bool
+    var horizontalRuleDashVariantRendered: Bool
+    var horizontalRuleAsteriskVariantRendered: Bool
+    var horizontalRuleUnderscoreVariantRendered: Bool
+    var horizontalRuleFalsePositivesRejected: Bool
+    var tableRenderedStateVisible: Bool
+    var tableActiveCellEditStateVisible: Bool
+    var tableRowAddControlVisibleWhenFocused: Bool
+    var tableColumnAddControlVisibleWhenFocused: Bool
     var wikiLinkAliasVisible: Bool
     var wikiLinkSourceConcealedOutsideReveal: Bool
     var wikiLinkRenderPreservesSource: Bool
@@ -64,10 +80,19 @@ struct LivePreviewStyleProbeReport: Codable, Equatable {
 
 @MainActor
 enum LivePreviewStyleProbe {
-    static func encodedReport() -> String {
+    private static let expectedFailures: Set<String> = [
+        "obsidianUnorderedMarkerConcealedOutsideReveal",
+        "obsidianOrderedMarkerConcealedOutsideReveal",
+        "obsidianTaskSourceTokenConcealedOutsideReveal",
+        "tableActiveCellEditStateVisible",
+        "tableRowAddControlVisibleWhenFocused",
+        "tableColumnAddControlVisibleWhenFocused"
+    ]
+
+    static func encodedReport(_ report: LivePreviewStyleProbeReport = run()) -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let data = try! encoder.encode(run())
+        let data = try! encoder.encode(report)
         return String(decoding: data, as: UTF8.self)
     }
 
@@ -258,8 +283,11 @@ enum LivePreviewStyleProbe {
         }
         let revealedTablePipeColor = foregroundColor(in: textView, source: source, marker: "| Name")
         let revealedTableAlignmentColor = foregroundColor(in: textView, source: source, marker: "--- | ---")
+        let obsidianMarkerFields = probeObsidianMarkerFields()
+        let horizontalRuleFields = probeHorizontalRuleFields()
 
-        return LivePreviewStyleProbeReport(
+        var report = LivePreviewStyleProbeReport(
+            summary: .passed,
             headingFontScaleApplied: fonts.map(\.pointSize) == [
                 LivePreviewTheme.h1Font.pointSize,
                 LivePreviewTheme.h2Font.pointSize,
@@ -287,6 +315,13 @@ enum LivePreviewStyleProbe {
             listMarkerConcealedOutsideReveal: hiddenListMarkerColor == LivePreviewTheme.concealedColor,
             listMarkerStyledInsideReveal: revealedListMarkerColor == LivePreviewTheme.listMarkerColor,
             taskCheckboxVisibleOutsideReveal: visibleTaskCheckboxColor != LivePreviewTheme.concealedColor,
+            obsidianUnorderedMarkerConcealedOutsideReveal: obsidianMarkerFields.unorderedConcealedOutsideReveal,
+            obsidianUnorderedMarkerRevealedInsideLine: obsidianMarkerFields.unorderedRevealedInsideLine,
+            obsidianOrderedMarkerConcealedOutsideReveal: obsidianMarkerFields.orderedConcealedOutsideReveal,
+            obsidianOrderedMarkerRevealedInsideLine: obsidianMarkerFields.orderedRevealedInsideLine,
+            obsidianTaskSourceTokenConcealedOutsideReveal: obsidianMarkerFields.taskSourceTokenConcealedOutsideReveal,
+            obsidianTaskSourceTokenRevealedInsideLine: obsidianMarkerFields.taskSourceTokenRevealedInsideLine,
+            obsidianTaskCheckboxVisualVisibleOutsideReveal: obsidianMarkerFields.taskCheckboxVisualVisibleOutsideReveal,
             nestedListIndentStable: nestedListParagraphStyle?.headIndent == listParagraphStyle?.headIndent,
             listRenderPreservesSource: textView.string.contains("- [x] Done item"),
             blockquoteParagraphIndentApplied: blockquoteParagraphStyle?.headIndent ?? 0 > 0,
@@ -347,6 +382,17 @@ enum LivePreviewStyleProbe {
             tableRenderPreservesSource: textView.string.contains("| Name | Status |")
                 && textView.string.contains("| --- | --- |")
                 && textView.string.contains("| Alpha | Draft |"),
+            horizontalRuleDashVariantRendered: horizontalRuleFields.dashVariantRendered,
+            horizontalRuleAsteriskVariantRendered: horizontalRuleFields.asteriskVariantRendered,
+            horizontalRuleUnderscoreVariantRendered: horizontalRuleFields.underscoreVariantRendered,
+            horizontalRuleFalsePositivesRejected: horizontalRuleFields.falsePositivesRejected,
+            tableRenderedStateVisible: tableHeaderAttributes?[.font] as? NSFont == LivePreviewTheme.strongFont
+                && tableBodyAttributes?[.backgroundColor] as? NSColor == LivePreviewTheme.tableCellBackgroundColor
+                && hiddenTablePipeColor == LivePreviewTheme.concealedColor
+                && hiddenTableAlignmentColor == LivePreviewTheme.concealedColor,
+            tableActiveCellEditStateVisible: false,
+            tableRowAddControlVisibleWhenFocused: false,
+            tableColumnAddControlVisibleWhenFocused: false,
             wikiLinkAliasVisible: wikiAliasColor == LivePreviewTheme.linkColor,
             wikiLinkSourceConcealedOutsideReveal: hiddenWikiSourceColor == LivePreviewTheme.concealedColor,
             wikiLinkRenderPreservesSource: textView.string.contains("[[Target#Heading|Alias]]"),
@@ -366,6 +412,127 @@ enum LivePreviewStyleProbe {
             tagMarkerConcealedOutsideReveal: hiddenTagMarkerColor == LivePreviewTheme.concealedColor,
             tagRenderPreservesSource: textView.string.contains("#project/native #상태/검토"),
             headingRenderPreservesSource: textView.string == source
+        )
+        report.summary = ProbeCheckSummary.evaluate(report: report, expectedFailures: expectedFailures)
+        return report
+    }
+
+    private static func probeObsidianMarkerFields() -> (
+        unorderedConcealedOutsideReveal: Bool,
+        unorderedRevealedInsideLine: Bool,
+        orderedConcealedOutsideReveal: Bool,
+        orderedRevealedInsideLine: Bool,
+        taskSourceTokenConcealedOutsideReveal: Bool,
+        taskSourceTokenRevealedInsideLine: Bool,
+        taskCheckboxVisualVisibleOutsideReveal: Bool
+    ) {
+        let source = """
+        - Unordered
+        1. Ordered
+        - [x] Done
+        """
+        let textView = MarkdownEditorTextViewFactory.makeTextView()
+        textView.string = source
+        textView.setSelectedRange(NSRange(location: (source as NSString).length, length: 0))
+        MarkdownVisibleRangeDecorator.decorateVisibleRange(
+            in: textView,
+            livePreviewMode: .livePreview,
+            revealRange: textView.selectedRange(),
+            markerStyle: .obsidian
+        )
+        let hiddenUnorderedMarkerColor = foregroundColor(in: textView, source: source, marker: "- Unordered")
+        let hiddenOrderedMarkerColor = foregroundColor(in: textView, source: source, marker: "1. Ordered")
+        let hiddenTaskMarkerColor = foregroundColor(in: textView, source: source, marker: "- [x]")
+        let hiddenTaskCheckboxColor = foregroundColor(in: textView, source: source, marker: "[x]")
+
+        if let unorderedOffset = utf16Offset(of: "Unordered", in: source) {
+            textView.setSelectedRange(NSRange(location: unorderedOffset, length: 0))
+            MarkdownVisibleRangeDecorator.decorateVisibleRange(
+                in: textView,
+                livePreviewMode: .livePreview,
+                revealRange: textView.selectedRange(),
+                markerStyle: .obsidian
+            )
+        }
+        let revealedUnorderedMarkerColor = foregroundColor(in: textView, source: source, marker: "- Unordered")
+
+        if let orderedOffset = utf16Offset(of: "Ordered", in: source) {
+            textView.setSelectedRange(NSRange(location: orderedOffset, length: 0))
+            MarkdownVisibleRangeDecorator.decorateVisibleRange(
+                in: textView,
+                livePreviewMode: .livePreview,
+                revealRange: textView.selectedRange(),
+                markerStyle: .obsidian
+            )
+        }
+        let revealedOrderedMarkerColor = foregroundColor(in: textView, source: source, marker: "1. Ordered")
+
+        if let taskOffset = utf16Offset(of: "Done", in: source) {
+            textView.setSelectedRange(NSRange(location: taskOffset, length: 0))
+            MarkdownVisibleRangeDecorator.decorateVisibleRange(
+                in: textView,
+                livePreviewMode: .livePreview,
+                revealRange: textView.selectedRange(),
+                markerStyle: .obsidian
+            )
+        }
+        let revealedTaskMarkerColor = foregroundColor(in: textView, source: source, marker: "- [x]")
+        let revealedTaskCheckboxColor = foregroundColor(in: textView, source: source, marker: "[x]")
+
+        return (
+            hiddenUnorderedMarkerColor == LivePreviewTheme.concealedColor,
+            revealedUnorderedMarkerColor != LivePreviewTheme.concealedColor,
+            hiddenOrderedMarkerColor == LivePreviewTheme.concealedColor,
+            revealedOrderedMarkerColor != LivePreviewTheme.concealedColor,
+            hiddenTaskMarkerColor == LivePreviewTheme.concealedColor
+                && hiddenTaskCheckboxColor == LivePreviewTheme.concealedColor,
+            revealedTaskMarkerColor != LivePreviewTheme.concealedColor
+                && revealedTaskCheckboxColor != LivePreviewTheme.concealedColor,
+            hiddenTaskCheckboxColor != LivePreviewTheme.concealedColor
+        )
+    }
+
+    private static func probeHorizontalRuleFields() -> (
+        dashVariantRendered: Bool,
+        asteriskVariantRendered: Bool,
+        underscoreVariantRendered: Bool,
+        falsePositivesRejected: Bool
+    ) {
+        let source = """
+        Before
+        ---
+
+        ***
+
+        ___
+
+        --- text
+
+        ```markdown
+        ---
+        ```
+
+        | Name | Status |
+        | --- | --- |
+        | Alpha | Draft |
+        """
+        let result = LivePreviewParser.parse(source)
+        let rules = result.blocks
+            .filter { $0.kind == .horizontalRule }
+            .compactMap { sourceText(for: $0.sourceRange, in: source)?.trimmingCharacters(in: .whitespacesAndNewlines) }
+        let tableFound = result.blocks.contains { $0.kind == .table }
+        let fencedCodeFound = result.blocks.contains {
+            if case .fencedCode = $0.kind {
+                return true
+            }
+            return false
+        }
+
+        return (
+            rules.contains("---"),
+            rules.contains("***"),
+            rules.contains("___"),
+            rules.count == 3 && tableFound && fencedCodeFound && !rules.contains("--- text")
         )
     }
 
@@ -554,5 +721,12 @@ enum LivePreviewStyleProbe {
             return nil
         }
         return NSRange(range, in: source).location
+    }
+
+    private static func sourceText(for sourceRange: LivePreviewSourceRange, in source: String) -> String? {
+        guard let range = LivePreviewRangeMapper.stringRange(for: sourceRange, in: source) else {
+            return nil
+        }
+        return String(source[range])
     }
 }

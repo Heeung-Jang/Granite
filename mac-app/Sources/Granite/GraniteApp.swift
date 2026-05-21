@@ -148,8 +148,9 @@ struct GraniteApp: App {
         }
 
         if CommandLine.arguments.contains("--editor-bridge-probe") {
-            print(MarkdownEditorBridgeProbe.encodedReport())
-            Foundation.exit(0)
+            let report = MarkdownEditorBridgeProbe.run()
+            print(MarkdownEditorBridgeProbe.encodedReport(report))
+            Foundation.exit(report.summary.passed ? 0 : 2)
         }
 
         if CommandLine.arguments.contains("--markdown-decoration-probe") {
@@ -158,8 +159,9 @@ struct GraniteApp: App {
         }
 
         if CommandLine.arguments.contains("--live-preview-style-probe") {
-            print(LivePreviewStyleProbe.encodedReport())
-            Foundation.exit(0)
+            let report = LivePreviewStyleProbe.run()
+            print(LivePreviewStyleProbe.encodedReport(report))
+            Foundation.exit(report.summary.passed ? 0 : 2)
         }
 
         if CommandLine.arguments.contains("--live-preview-probe") {
