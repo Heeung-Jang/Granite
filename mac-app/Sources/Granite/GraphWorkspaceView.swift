@@ -27,18 +27,18 @@ struct GraphWorkspaceView: View {
     private let graphViewTitle = "그래프 뷰"
 
     var body: some View {
-        HStack(spacing: 0) {
+        ZStack(alignment: .topTrailing) {
             graphContent
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             if showsSettings {
-                Divider()
-
                 GraphSettingsPanel(
                     settings: $settings,
                     parityControlsEnabled: enablesParityControls
                 )
                 .frame(width: 280)
+                .padding(.top, 52)
+                .padding(.trailing, 52)
             }
         }
         .background(ObsidianUI.editorBackground)
