@@ -42,6 +42,52 @@ func graphLayoutComponentsSeparateClustersAndOrphans() {
 }
 
 @Test
+func graphLayoutBoundsIncludeNodeRadii() {
+    let bounds = GraphLayoutBounds.enclosing([
+        layoutTestNode(index: 0, id: "file:a", x: -10, y: 0, radius: 2),
+        layoutTestNode(index: 1, id: "file:b", x: 20, y: 6, radius: 4)
+    ])
+
+    #expect(bounds == GraphLayoutBounds(minX: -12, minY: -2, maxX: 24, maxY: 10))
+    #expect(bounds?.width == 36)
+    #expect(bounds?.height == 12)
+    #expect(bounds?.center == GraphPoint(x: 6, y: 4))
+    #expect(GraphLayoutBounds.enclosing([]) == nil)
+}
+
+@Test
+func graphViewportFitsLayoutBoundsWithPadding() {
+    let bounds = GraphLayoutBounds(minX: -100, minY: -50, maxX: 100, maxY: 50)
+    let viewport = GraphViewport.fit(
+        layoutBounds: bounds,
+        canvasSize: GraphSize(width: 500, height: 300),
+        padding: 50,
+        maximumZoomScale: 10
+    )
+
+    #expect(viewport.zoomScale == 2)
+    #expect(viewport.panOffset == GraphPoint(x: 0, y: 0))
+    #expect(viewport.screenPoint(for: GraphPoint(x: -100, y: -50)) == GraphPoint(x: -200, y: -100))
+    #expect(viewport.screenPoint(for: GraphPoint(x: 100, y: 50)) == GraphPoint(x: 200, y: 100))
+}
+
+@Test
+func graphViewportFitHandlesEmptyAndSingleNodeBounds() {
+    let emptyFit = GraphViewport.fit(
+        layoutBounds: nil,
+        canvasSize: GraphSize(width: 500, height: 300)
+    )
+    let singleNodeFit = GraphViewport.fit(
+        layoutBounds: GraphLayoutBounds(minX: 8, minY: 8, maxX: 12, maxY: 12),
+        canvasSize: GraphSize(width: 500, height: 300)
+    )
+
+    #expect(emptyFit == GraphViewport())
+    #expect(singleNodeFit.zoomScale == GraphVisualMetrics.maximumFitZoomScale)
+    #expect(singleNodeFit.screenPoint(for: GraphPoint(x: 10, y: 10)) == GraphPoint(x: 0, y: 0))
+}
+
+@Test
 func graphLayoutMapperPropagatesCancellation() {
     var checks = 0
 
@@ -72,9 +118,24 @@ func graphViewportRoundTripsCoordinatesAndResets() {
     #expect(viewport == GraphViewport())
 
     viewport.zoomScale = 0
-    #expect(viewport.zoomScale == 0.1)
+    #expect(viewport.zoomScale == GraphVisualMetrics.minimumZoomScale)
     viewport.zoomScale = .infinity
     #expect(viewport.zoomScale == 1)
+}
+
+@Test
+func graphViewportFitsLargeLayoutBelowLegacyMinimumZoom() {
+    let bounds = GraphLayoutBounds(minX: 0, minY: 0, maxX: 10_000, maxY: 5_000)
+    let viewport = GraphViewport.fit(
+        layoutBounds: bounds,
+        canvasSize: GraphSize(width: 500, height: 300),
+        padding: 50
+    )
+
+    #expect(viewport.zoomScale == 0.04)
+    #expect(viewport.screenPoint(for: bounds.center) == GraphPoint(x: 0, y: 0))
+    #expect(viewport.screenPoint(for: GraphPoint(x: bounds.minX, y: bounds.minY)) == GraphPoint(x: -200, y: -100))
+    #expect(viewport.screenPoint(for: GraphPoint(x: bounds.maxX, y: bounds.maxY)) == GraphPoint(x: 200, y: 100))
 }
 
 @Test
@@ -180,6 +241,24 @@ private func centerX(_ layout: GraphRendererSnapshot, indexes: [Int]) -> Double 
         sum + layout.nodes[index].position.x
     }
     return total / Double(indexes.count)
+}
+
+private func layoutTestNode(
+    index: Int,
+    id: String,
+    x: Double,
+    y: Double,
+    radius: Double
+) -> GraphLayoutNode {
+    GraphLayoutNode(
+        index: index,
+        nodeID: id,
+        label: id,
+        kind: .resolved,
+        degree: 1,
+        position: GraphPoint(x: x, y: y),
+        radius: radius
+    )
 }
 
 private func layoutFixtureSnapshot(

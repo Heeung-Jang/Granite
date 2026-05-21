@@ -153,6 +153,46 @@ public struct GraphLayoutComponent: Equatable, Sendable {
     }
 }
 
+public struct GraphLayoutBounds: Equatable, Sendable {
+    public let minX: Double
+    public let minY: Double
+    public let maxX: Double
+    public let maxY: Double
+
+    public var width: Double { maxX - minX }
+    public var height: Double { maxY - minY }
+    public var center: GraphPoint {
+        GraphPoint(x: (minX + maxX) / 2, y: (minY + maxY) / 2)
+    }
+
+    public init(minX: Double, minY: Double, maxX: Double, maxY: Double) {
+        self.minX = minX
+        self.minY = minY
+        self.maxX = maxX
+        self.maxY = maxY
+    }
+
+    public static func enclosing(_ nodes: [GraphLayoutNode]) -> GraphLayoutBounds? {
+        guard let first = nodes.first else {
+            return nil
+        }
+
+        var minX = first.position.x - first.radius
+        var minY = first.position.y - first.radius
+        var maxX = first.position.x + first.radius
+        var maxY = first.position.y + first.radius
+
+        for node in nodes.dropFirst() {
+            minX = min(minX, node.position.x - node.radius)
+            minY = min(minY, node.position.y - node.radius)
+            maxX = max(maxX, node.position.x + node.radius)
+            maxY = max(maxY, node.position.y + node.radius)
+        }
+
+        return GraphLayoutBounds(minX: minX, minY: minY, maxX: maxX, maxY: maxY)
+    }
+}
+
 public enum GraphLayoutMapper {
     public static func map(_ snapshot: WholeVaultGraphSnapshot) -> GraphRendererSnapshot {
         try! map(snapshot, checkCancellation: {})
@@ -359,6 +399,40 @@ public struct GraphViewport: Equatable, Sendable {
         zoomScale = 1
     }
 
+    public static func fit(
+        layoutBounds: GraphLayoutBounds?,
+        canvasSize: GraphSize,
+        padding: Double = GraphVisualMetrics.fitPadding,
+        maximumZoomScale: Double = GraphVisualMetrics.maximumFitZoomScale
+    ) -> GraphViewport {
+        guard let layoutBounds,
+              canvasSize.width.isFinite,
+              canvasSize.height.isFinite,
+              canvasSize.width > 0,
+              canvasSize.height > 0
+        else {
+            return GraphViewport()
+        }
+
+        let availableWidth = max(1, canvasSize.width - padding * 2)
+        let availableHeight = max(1, canvasSize.height - padding * 2)
+        let fitWidth = max(1, layoutBounds.width)
+        let fitHeight = max(1, layoutBounds.height)
+        let zoomScale = max(GraphVisualMetrics.minimumZoomScale, min(
+            maximumZoomScale,
+            availableWidth / fitWidth,
+            availableHeight / fitHeight
+        ))
+        let center = layoutBounds.center
+        return GraphViewport(
+            panOffset: GraphPoint(
+                x: -center.x * zoomScale,
+                y: -center.y * zoomScale
+            ),
+            zoomScale: zoomScale
+        )
+    }
+
     public func screenPoint(for graphPoint: GraphPoint) -> GraphPoint {
         GraphPoint(
             x: graphPoint.x * zoomScale + panOffset.x,
@@ -377,7 +451,7 @@ public struct GraphViewport: Equatable, Sendable {
         guard value.isFinite else {
             return 1
         }
-        return max(0.1, value)
+        return max(GraphVisualMetrics.minimumZoomScale, value)
     }
 }
 
