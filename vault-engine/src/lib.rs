@@ -3,6 +3,8 @@ pub mod benchmarks;
 pub mod errors;
 pub mod ffi;
 pub mod file_watcher;
+pub mod graph;
+pub(crate) mod graph_key;
 pub mod index;
 pub mod index_rebuild;
 pub mod indexing_queue;
@@ -33,6 +35,7 @@ pub fn health_check() -> EngineHealth {
             "parser",
             "paths",
             "file_watcher",
+            "graph",
             "read_api",
             "save",
             "index",
@@ -66,6 +69,7 @@ mod tests {
                 "parser",
                 "paths",
                 "file_watcher",
+                "graph",
                 "read_api",
                 "save",
                 "index",
