@@ -62,6 +62,20 @@ public struct DirtyLifecycleWarning: Equatable, Identifiable, Sendable {
     }
 }
 
+public enum DirtyEditorAction: String, Equatable, Sendable {
+    case clearSelection
+    case closeVault
+}
+
+public struct DirtyEditorActionWarning: Equatable, Identifiable, Sendable {
+    public let dirtyFile: FileTreeItem
+    public let action: DirtyEditorAction
+
+    public var id: String {
+        "\(action.rawValue)->\(dirtyFile.id)"
+    }
+}
+
 public final class AppState: ObservableObject {
     @Published public private(set) var vaultSelection: VaultSelectionState
     @Published public private(set) var engineHealth: EngineHealthStatus
@@ -74,6 +88,7 @@ public final class AppState: ObservableObject {
     @Published public private(set) var requestedSearch: WorkspaceSearchRequest?
     @Published public private(set) var dirtyNavigationWarning: DirtyNavigationWarning?
     @Published public private(set) var dirtyLifecycleWarning: DirtyLifecycleWarning?
+    @Published public private(set) var dirtyEditorActionWarning: DirtyEditorActionWarning?
 
     private let indexDirectoryResolver: any IndexDirectoryResolving
     private let vaultAccessValidator: any VaultAccessValidating
@@ -116,8 +131,7 @@ public final class AppState: ObservableObject {
             indexLocation = nil
             selectedFile = nil
             dirtyEditorFile = nil
-            dirtyNavigationWarning = nil
-            dirtyLifecycleWarning = nil
+            clearAllDirtyWarnings()
             vaultSelection = .unavailable(issue)
             rememberVault(vaultURL)
             return
@@ -138,8 +152,7 @@ public final class AppState: ObservableObject {
         vaultSelection = .selected(vaultURL)
         selectedFile = nil
         dirtyEditorFile = nil
-        dirtyNavigationWarning = nil
-        dirtyLifecycleWarning = nil
+        clearAllDirtyWarnings()
         rememberVault(vaultURL)
     }
 
@@ -152,8 +165,7 @@ public final class AppState: ObservableObject {
         indexLocation = nil
         selectedFile = nil
         dirtyEditorFile = nil
-        dirtyNavigationWarning = nil
-        dirtyLifecycleWarning = nil
+        clearAllDirtyWarnings()
         let vaultURL = url.standardizedFileURL
         vaultSelection = .unavailable(.staleBookmark(vaultURL))
         rememberVault(vaultURL)
@@ -172,8 +184,7 @@ public final class AppState: ObservableObject {
         indexLocation = nil
         selectedFile = nil
         dirtyEditorFile = nil
-        dirtyNavigationWarning = nil
-        dirtyLifecycleWarning = nil
+        clearAllDirtyWarnings()
     }
 
     public func removeRecentVault(_ recentVault: RecentVault) {
@@ -199,15 +210,15 @@ public final class AppState: ObservableObject {
         if let dirtyEditorFile,
            dirtyEditorFile != item,
            selectedFile == dirtyEditorFile {
-            dirtyNavigationWarning = DirtyNavigationWarning(
+            setDirtyNavigationWarning(DirtyNavigationWarning(
                 dirtyFile: dirtyEditorFile,
                 requestedFile: item
-            )
+            ))
             return false
         }
 
         selectedFile = item
-        dirtyNavigationWarning = nil
+        clearAllDirtyWarnings()
         AppTelemetry.noteOpened(item)
         return true
     }
@@ -217,8 +228,7 @@ public final class AppState: ObservableObject {
             dirtyEditorFile = file
         } else if dirtyEditorFile == file {
             dirtyEditorFile = nil
-            dirtyNavigationWarning = nil
-            dirtyLifecycleWarning = nil
+            clearAllDirtyWarnings()
         }
     }
 
@@ -235,9 +245,48 @@ public final class AppState: ObservableObject {
             return
         }
         dirtyEditorFile = nil
-        dirtyNavigationWarning = nil
+        clearAllDirtyWarnings()
         selectedFile = warning.requestedFile
         AppTelemetry.noteOpened(warning.requestedFile)
+    }
+
+    @discardableResult
+    public func requestClearSelectedFile() -> Bool {
+        guard let selectedFile else {
+            dirtyEditorActionWarning = nil
+            return true
+        }
+
+        guard !isSelectedEditorDirty else {
+            setDirtyEditorActionWarning(DirtyEditorActionWarning(
+                dirtyFile: selectedFile,
+                action: .clearSelection
+            ))
+            return false
+        }
+
+        self.selectedFile = nil
+        clearAllDirtyWarnings()
+        return true
+    }
+
+    @discardableResult
+    public func requestCloseVault() -> Bool {
+        guard vaultSelection.url != nil else {
+            dirtyEditorActionWarning = nil
+            return true
+        }
+
+        if let dirtyEditorFile {
+            setDirtyEditorActionWarning(DirtyEditorActionWarning(
+                dirtyFile: dirtyEditorFile,
+                action: .closeVault
+            ))
+            return false
+        }
+
+        clearVault()
+        return true
     }
 
     public func requestWindowClose() -> Bool {
@@ -257,8 +306,28 @@ public final class AppState: ObservableObject {
             return nil
         }
         dirtyEditorFile = nil
-        dirtyNavigationWarning = nil
-        dirtyLifecycleWarning = nil
+        clearAllDirtyWarnings()
+        return warning.action
+    }
+
+    public func dismissDirtyEditorActionWarning() {
+        dirtyEditorActionWarning = nil
+    }
+
+    @discardableResult
+    public func discardDirtyChangesForEditorActionWarning() -> DirtyEditorAction? {
+        guard let warning = dirtyEditorActionWarning else {
+            return nil
+        }
+
+        dirtyEditorFile = nil
+        switch warning.action {
+        case .clearSelection:
+            selectedFile = nil
+            clearAllDirtyWarnings()
+        case .closeVault:
+            clearVault()
+        }
         return warning.action
     }
 
@@ -289,8 +358,39 @@ public final class AppState: ObservableObject {
             dirtyLifecycleWarning = nil
             return true
         }
-        dirtyLifecycleWarning = DirtyLifecycleWarning(dirtyFile: dirtyEditorFile, action: action)
+        setDirtyLifecycleWarning(DirtyLifecycleWarning(dirtyFile: dirtyEditorFile, action: action))
         return false
+    }
+
+    private var isSelectedEditorDirty: Bool {
+        guard let dirtyEditorFile else {
+            return false
+        }
+        return selectedFile == dirtyEditorFile
+    }
+
+    private func clearAllDirtyWarnings() {
+        dirtyNavigationWarning = nil
+        dirtyLifecycleWarning = nil
+        dirtyEditorActionWarning = nil
+    }
+
+    private func setDirtyNavigationWarning(_ warning: DirtyNavigationWarning) {
+        dirtyNavigationWarning = warning
+        dirtyLifecycleWarning = nil
+        dirtyEditorActionWarning = nil
+    }
+
+    private func setDirtyLifecycleWarning(_ warning: DirtyLifecycleWarning) {
+        dirtyNavigationWarning = nil
+        dirtyLifecycleWarning = warning
+        dirtyEditorActionWarning = nil
+    }
+
+    private func setDirtyEditorActionWarning(_ warning: DirtyEditorActionWarning) {
+        dirtyNavigationWarning = nil
+        dirtyLifecycleWarning = nil
+        dirtyEditorActionWarning = warning
     }
 
     private func resetReadClient(availability: ReadAvailability) {

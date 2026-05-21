@@ -5,6 +5,13 @@ import SwiftUI
 struct VaultPickerView: View {
     @EnvironmentObject private var appState: AppState
     @State private var selectionError: String?
+    let closeVault: (() -> Void)?
+    let dismiss: (() -> Void)?
+
+    init(closeVault: (() -> Void)? = nil, dismiss: (() -> Void)? = nil) {
+        self.closeVault = closeVault
+        self.dismiss = dismiss
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -43,6 +50,11 @@ struct VaultPickerView: View {
                     .font(.headline)
 
                 Spacer()
+
+                if let dismiss {
+                    Button("Done", action: dismiss)
+                        .keyboardShortcut(.cancelAction)
+                }
 
                 Button {
                     openVaultPanel()
@@ -88,7 +100,7 @@ struct VaultPickerView: View {
 
             HStack {
                 Button {
-                    appState.clearVault()
+                    closeCurrentVault()
                 } label: {
                     Label("Close", systemImage: "xmark.circle")
                 }
@@ -147,6 +159,14 @@ struct VaultPickerView: View {
 
         if panel.runModal() == .OK, let url = panel.url {
             selectVault(at: url)
+        }
+    }
+
+    private func closeCurrentVault() {
+        if let closeVault {
+            closeVault()
+        } else {
+            appState.requestCloseVault()
         }
     }
 

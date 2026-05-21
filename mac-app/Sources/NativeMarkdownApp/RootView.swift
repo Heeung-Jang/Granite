@@ -4,28 +4,37 @@ import SwiftUI
 
 struct RootView: View {
     @EnvironmentObject private var appState: AppState
+    @Environment(\.openSettings) private var openSettings
     @State private var leftPanel: ObsidianLeftPanel = .files
     @State private var vaultSelectionError: String?
+    @State private var presentedSheet: RootSheet?
 
     var body: some View {
         HStack(spacing: 0) {
             ObsidianRibbonView(
                 selectedPanel: $leftPanel,
-                openVault: openVaultPanel
+                openVault: openVaultPanel,
+                showHelp: showHelp,
+                showSettings: showSettings
             )
 
             Divider()
 
             ObsidianLeftSidebar(
                 selectedPanel: $leftPanel,
-                openVault: openVaultPanel,
+                showVaultPicker: showVaultPicker,
+                revealVaultInFinder: revealVaultInFinder,
+                closeVault: closeVault,
                 vaultSelectionError: vaultSelectionError
             )
             .frame(width: ObsidianUI.leftSidebarWidth)
 
             Divider()
 
-            ObsidianWorkspaceDetail()
+            ObsidianWorkspaceDetail(
+                closeSelectedFile: closeSelectedFile,
+                showBlankWorkspace: showBlankWorkspace
+            )
 
             Divider()
 
@@ -54,6 +63,27 @@ struct RootView: View {
             }
         } message: {
             Text(dirtyLifecycleMessage)
+        }
+        .alert("Unsaved Changes", isPresented: dirtyEditorActionAlertBinding) {
+            Button("Stay", role: .cancel) {
+                appState.dismissDirtyEditorActionWarning()
+            }
+            Button(dirtyEditorActionDestructiveTitle, role: .destructive) {
+                appState.discardDirtyChangesForEditorActionWarning()
+            }
+        } message: {
+            Text(dirtyEditorActionMessage)
+        }
+        .sheet(item: $presentedSheet) { sheet in
+            switch sheet {
+            case .help:
+                GraniteHelpView(dismiss: dismissPresentedSheet)
+                .frame(width: 420, height: 320)
+            case .vaultPicker:
+                VaultPickerView(closeVault: closeVault, dismiss: dismissPresentedSheet)
+                    .environmentObject(appState)
+                    .frame(width: 360, height: 460)
+            }
         }
         .background(DirtyLifecycleWindowGuard())
         .onAppear {
@@ -113,6 +143,39 @@ struct RootView: View {
         }
     }
 
+    private var dirtyEditorActionAlertBinding: Binding<Bool> {
+        Binding {
+            appState.dirtyEditorActionWarning != nil
+        } set: { isPresented in
+            if !isPresented {
+                appState.dismissDirtyEditorActionWarning()
+            }
+        }
+    }
+
+    private var dirtyEditorActionMessage: String {
+        guard let warning = appState.dirtyEditorActionWarning else {
+            return ""
+        }
+        switch warning.action {
+        case .clearSelection:
+            return "Discard unsaved changes in \(warning.dirtyFile.displayName) and close this note?"
+        case .closeVault:
+            return "Discard unsaved changes in \(warning.dirtyFile.displayName) and close this vault?"
+        }
+    }
+
+    private var dirtyEditorActionDestructiveTitle: String {
+        switch appState.dirtyEditorActionWarning?.action {
+        case .clearSelection:
+            return "Discard"
+        case .closeVault:
+            return "Discard and Close Vault"
+        case nil:
+            return "Discard"
+        }
+    }
+
     private func openVaultPanel() {
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
@@ -130,6 +193,44 @@ struct RootView: View {
             }
         }
     }
+
+    private func showHelp() {
+        presentedSheet = .help
+    }
+
+    private func showSettings() {
+        openSettings()
+    }
+
+    private func showVaultPicker() {
+        presentedSheet = .vaultPicker
+    }
+
+    private func dismissPresentedSheet() {
+        presentedSheet = nil
+    }
+
+    private func revealVaultInFinder() {
+        guard let url = appState.vaultSelection.url,
+              FileManager.default.fileExists(atPath: url.path)
+        else {
+            return
+        }
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    private func closeVault() {
+        presentedSheet = nil
+        appState.requestCloseVault()
+    }
+
+    private func closeSelectedFile() {
+        appState.requestClearSelectedFile()
+    }
+
+    private func showBlankWorkspace() {
+        appState.requestClearSelectedFile()
+    }
 }
 
 private enum ObsidianLeftPanel {
@@ -138,9 +239,25 @@ private enum ObsidianLeftPanel {
     case bookmarks
 }
 
+private enum RootSheet: Identifiable {
+    case help
+    case vaultPicker
+
+    var id: String {
+        switch self {
+        case .help:
+            return "help"
+        case .vaultPicker:
+            return "vaultPicker"
+        }
+    }
+}
+
 private struct ObsidianRibbonView: View {
     @Binding var selectedPanel: ObsidianLeftPanel
     let openVault: () -> Void
+    let showHelp: () -> Void
+    let showSettings: () -> Void
 
     var body: some View {
         VStack(spacing: 8) {
@@ -179,13 +296,13 @@ private struct ObsidianRibbonView: View {
             ObsidianIconButton(
                 systemName: "questionmark.circle",
                 accessibilityLabel: "Help",
-                action: {}
+                action: showHelp
             )
 
             ObsidianIconButton(
                 systemName: "gearshape",
                 accessibilityLabel: "Settings",
-                action: {}
+                action: showSettings
             )
         }
         .padding(.top, 10)
@@ -198,7 +315,9 @@ private struct ObsidianRibbonView: View {
 private struct ObsidianLeftSidebar: View {
     @EnvironmentObject private var appState: AppState
     @Binding var selectedPanel: ObsidianLeftPanel
-    let openVault: () -> Void
+    let showVaultPicker: () -> Void
+    let revealVaultInFinder: () -> Void
+    let closeVault: () -> Void
     let vaultSelectionError: String?
 
     var body: some View {
@@ -224,7 +343,9 @@ private struct ObsidianLeftSidebar: View {
             ObsidianVaultFooter(
                 vaultSelection: appState.vaultSelection,
                 error: vaultSelectionError,
-                openVault: openVault
+                showVaultPicker: showVaultPicker,
+                revealVaultInFinder: revealVaultInFinder,
+                closeVault: closeVault
             )
         }
         .background(ObsidianUI.sidebarBackground)
@@ -274,40 +395,56 @@ private struct ObsidianBookmarksPlaceholder: View {
 private struct ObsidianVaultFooter: View {
     let vaultSelection: VaultSelectionState
     let error: String?
-    let openVault: () -> Void
+    let showVaultPicker: () -> Void
+    let revealVaultInFinder: () -> Void
+    let closeVault: () -> Void
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: "chevron.up.chevron.down")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            Button(action: showVaultPicker) {
+                HStack(spacing: 10) {
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.body.weight(.semibold))
-                    .lineLimit(1)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(title)
+                            .font(.body.weight(.semibold))
+                            .lineLimit(1)
 
-                if let error {
-                    Text(error)
-                        .font(.caption2)
-                        .foregroundStyle(.red)
-                        .lineLimit(1)
+                        if let error {
+                            Text(error)
+                                .font(.caption2)
+                                .foregroundStyle(.red)
+                                .lineLimit(1)
+                        }
+                    }
                 }
             }
+            .buttonStyle(.plain)
+            .help("Open vault switcher")
+            .accessibilityLabel("Open vault switcher: \(title)")
 
             Spacer()
 
-            Button(action: openVault) {
+            Menu {
+                Button("Open Vault Switcher", action: showVaultPicker)
+
+                Button("Reveal in Finder", action: revealVaultInFinder)
+                    .disabled(!canRevealVault)
+
+                Button("Close Vault", role: .destructive, action: closeVault)
+                    .disabled(!canCloseVault)
+            } label: {
                 Image(systemName: "gearshape")
                     .frame(width: 24, height: 24)
             }
             .buttonStyle(.plain)
-            .help("Open or switch vault")
+            .help("Vault actions")
+            .accessibilityLabel("Vault actions")
         }
         .padding(.horizontal, 14)
         .frame(height: 48)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(title)
     }
 
     private var title: String {
@@ -320,14 +457,31 @@ private struct ObsidianVaultFooter: View {
             return "Open Vault"
         }
     }
+
+    private var canCloseVault: Bool {
+        vaultSelection.url != nil
+    }
+
+    private var canRevealVault: Bool {
+        guard let url = vaultSelection.url else {
+            return false
+        }
+        return FileManager.default.fileExists(atPath: url.path)
+    }
 }
 
 private struct ObsidianWorkspaceDetail: View {
     @EnvironmentObject private var appState: AppState
+    let closeSelectedFile: () -> Void
+    let showBlankWorkspace: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
-            ObsidianTabBar(file: appState.selectedFile)
+            ObsidianTabBar(
+                file: appState.selectedFile,
+                closeSelectedFile: closeSelectedFile,
+                showBlankWorkspace: showBlankWorkspace
+            )
 
             Divider()
 
@@ -360,6 +514,8 @@ private struct ObsidianWorkspaceDetail: View {
 
 private struct ObsidianTabBar: View {
     let file: FileTreeItem?
+    let closeSelectedFile: () -> Void
+    let showBlankWorkspace: () -> Void
 
     var body: some View {
         HStack(spacing: 0) {
@@ -367,9 +523,15 @@ private struct ObsidianTabBar: View {
                 HStack(spacing: 10) {
                     Text(displayTitle(for: file))
                         .lineLimit(1)
-                    Image(systemName: "xmark")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    Button(action: closeSelectedFile) {
+                        Image(systemName: "xmark")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .frame(width: 18, height: 18)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Close tab")
+                    .accessibilityLabel("Close tab")
                 }
                 .padding(.horizontal, 14)
                 .frame(height: ObsidianUI.tabBarHeight)
@@ -380,7 +542,11 @@ private struct ObsidianTabBar: View {
                     .frame(height: ObsidianUI.tabBarHeight)
             }
 
-            ObsidianIconButton(systemName: "plus", accessibilityLabel: "New tab", action: {})
+            ObsidianIconButton(
+                systemName: "plus",
+                accessibilityLabel: "New tab",
+                action: showBlankWorkspace
+            )
 
             Spacer()
 
