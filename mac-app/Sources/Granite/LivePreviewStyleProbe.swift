@@ -130,7 +130,6 @@ struct MarkerGeometryProbeReport: Codable, Equatable {
 @MainActor
 enum LivePreviewStyleProbe {
     private static let expectedFailures: Set<String> = [
-        "tableActiveCellEditStateVisible",
         "tableRowAddControlVisibleWhenFocused",
         "tableColumnAddControlVisibleWhenFocused"
     ]
@@ -338,6 +337,7 @@ enum LivePreviewStyleProbe {
         let orderedMarkerFields = probeOrderedMarkerDetection()
         let orderedOverlayFields = probeOrderedMarkerOverlayPolicy()
         let taskOverlayFields = probeTaskCheckboxOverlayPolicy()
+        let tableActiveCellEditStateVisible = probeTableActiveCellEditState()
 
         var report = LivePreviewStyleProbeReport(
             summary: .passed,
@@ -470,7 +470,7 @@ enum LivePreviewStyleProbe {
                 && tableBodyAttributes?[.backgroundColor] as? NSColor == LivePreviewTheme.tableCellBackgroundColor
                 && hiddenTablePipeColor == LivePreviewTheme.concealedColor
                 && hiddenTableAlignmentColor == LivePreviewTheme.concealedColor,
-            tableActiveCellEditStateVisible: false,
+            tableActiveCellEditStateVisible: tableActiveCellEditStateVisible,
             tableRowAddControlVisibleWhenFocused: false,
             tableColumnAddControlVisibleWhenFocused: false,
             wikiLinkAliasVisible: wikiAliasColor == LivePreviewTheme.linkColor,
@@ -950,6 +950,37 @@ enum LivePreviewStyleProbe {
                 )
             )
         )
+    }
+
+    private static func probeTableActiveCellEditState() -> Bool {
+        let source = """
+        | Name | Status |
+        | --- | --- |
+        | Alpha | Draft |
+        """
+        let textView = MarkdownEditorTextViewFactory.makeTextView() as! MarkdownInteractionTextView
+        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 900, height: 700))
+        scrollView.documentView = textView
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 900, height: 700),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: true
+        )
+        window.contentView = scrollView
+        window.makeFirstResponder(textView)
+        textView.string = source
+        guard let table = LivePreviewTableParser.parse(source).first,
+              let layout = LivePreviewTableLayout.make(for: table, in: textView),
+              let cell = layout.cells.first(where: { !$0.isHeader && $0.tableCell.text == "Draft" })
+        else {
+            return false
+        }
+
+        let activated = textView.setActiveTableCell(at: NSPoint(x: cell.textRect.midX, y: cell.textRect.midY))
+        return activated
+            && textView.activeTableCellEditorFrame?.intersects(cell.textRect) == true
+            && !LivePreviewOverlayRenderer.shouldDrawTableCellText(cell.tableCell, state: textView.livePreviewOverlayState)
     }
 
     private static func probeCollapsedHeadingMarkerMarkedText(source: String, markerRange: NSRange) -> Bool {

@@ -78,6 +78,12 @@ struct MarkdownEditorBridgeProbeReport: Codable, Equatable {
     var tableCellEditorFrameFollowsRenderedCell: Bool
     var tableCellEditorCleansUpOnModeChange: Bool
     var tableActiveCellOverlayTextSuppressed: Bool
+    var tableCellEditorEnterCommitsCell: Bool
+    var tableCellEditorFocusLossCommitsCell: Bool
+    var tableCellEditorEscapeCancelsEdit: Bool
+    var tableCellEditorRejectsInvalidText: Bool
+    var tableCellEditorBlocksMarkedTextCommit: Bool
+    var tableCellEditorRejectsStaleCell: Bool
     var tableCellEditChangesOnlyCell: Bool
     var tableCellEditUndoRestoresCell: Bool
     var tableCellEditFailurePreservesBuffer: Bool
@@ -90,10 +96,7 @@ struct MarkdownEditorBridgeProbeReport: Codable, Equatable {
 
 @MainActor
 enum MarkdownEditorBridgeProbe {
-    private static let expectedFailures: Set<String> = [
-        "tableInPlaceEditSelectionPreserved",
-        "tableInPlaceEditUndoPreservesSelection"
-    ]
+    private static let expectedFailures: Set<String> = []
 
     static func encodedReport(_ report: MarkdownEditorBridgeProbeReport = run()) -> String {
         let encoder = JSONEncoder()
@@ -194,12 +197,18 @@ enum MarkdownEditorBridgeProbe {
             tableCellEditorFrameFollowsRenderedCell: tableCellProbe.cellEditorFrameFollowsRenderedCell,
             tableCellEditorCleansUpOnModeChange: tableCellProbe.cellEditorCleansUpOnModeChange,
             tableActiveCellOverlayTextSuppressed: tableCellProbe.activeCellOverlayTextSuppressed,
+            tableCellEditorEnterCommitsCell: tableCellProbe.cellEditorEnterCommitsCell,
+            tableCellEditorFocusLossCommitsCell: tableCellProbe.cellEditorFocusLossCommitsCell,
+            tableCellEditorEscapeCancelsEdit: tableCellProbe.cellEditorEscapeCancelsEdit,
+            tableCellEditorRejectsInvalidText: tableCellProbe.cellEditorRejectsInvalidText,
+            tableCellEditorBlocksMarkedTextCommit: tableCellProbe.cellEditorBlocksMarkedTextCommit,
+            tableCellEditorRejectsStaleCell: tableCellProbe.cellEditorRejectsStaleCell,
             tableCellEditChangesOnlyCell: tableCellProbe.changesOnlyCell,
             tableCellEditUndoRestoresCell: tableCellProbe.undoRestoresCell,
             tableCellEditFailurePreservesBuffer: tableCellProbe.failurePreservesBuffer,
             tableInPlaceEditAvailable: tableCellProbe.inPlaceEditAvailable,
-            tableInPlaceEditSelectionPreserved: false,
-            tableInPlaceEditUndoPreservesSelection: false,
+            tableInPlaceEditSelectionPreserved: tableCellProbe.inPlaceEditSelectionPreserved,
+            tableInPlaceEditUndoPreservesSelection: tableCellProbe.inPlaceEditUndoPreservesSelection,
             frontmatterBoundaryDeleteUndoPreservesBuffer: frontmatterBoundaryProbe,
             editorAccessibilityHelpMentionsInteractions: accessibilityProbe
         )
@@ -1143,6 +1152,14 @@ enum MarkdownEditorBridgeProbe {
         cellEditorCleansUpOnModeChange: Bool,
         activeCellOverlayTextSuppressed: Bool,
         inPlaceEditAvailable: Bool,
+        cellEditorEnterCommitsCell: Bool,
+        cellEditorFocusLossCommitsCell: Bool,
+        cellEditorEscapeCancelsEdit: Bool,
+        cellEditorRejectsInvalidText: Bool,
+        cellEditorBlocksMarkedTextCommit: Bool,
+        cellEditorRejectsStaleCell: Bool,
+        inPlaceEditSelectionPreserved: Bool,
+        inPlaceEditUndoPreservesSelection: Bool,
         changesOnlyCell: Bool,
         undoRestoresCell: Bool,
         failurePreservesBuffer: Bool
@@ -1165,7 +1182,11 @@ enum MarkdownEditorBridgeProbe {
         window.makeFirstResponder(textView)
         textView.string = text
         guard let table = LivePreviewTableParser.parse(text).first else {
-            return (false, false, false, false, false, false, false, false, false, false, false, false, false, false, false)
+            return (
+                false, false, false, false, false, false, false, false, false, false,
+                false, false, false, false, false, false, false, false, false, false,
+                false, false, false
+            )
         }
         let cell = table.bodyRows[0][1]
         let cellOffset = utf16Offset(of: "Draft", in: text) ?? -1
@@ -1215,6 +1236,139 @@ enum MarkdownEditorBridgeProbe {
         (fallbackTextView as? MarkdownInteractionTextView)?.livePreviewMode = .fallbackSource(reason: .tooManyTableCells)
         let fallbackCell = (fallbackTextView as? MarkdownInteractionTextView)?.tableCellForEditing(at: cellOffset)
         let contextMenuSkipsFallback = fallbackCell == nil
+
+        func makeInPlaceEditor() -> (
+            textView: MarkdownInteractionTextView,
+            cell: LivePreviewTableCell,
+            point: NSPoint,
+            selection: NSRange,
+            window: NSWindow
+        )? {
+            let textView = MarkdownEditorTextViewFactory.makeTextView() as! MarkdownInteractionTextView
+            let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 900, height: 700))
+            scrollView.documentView = textView
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 900, height: 700),
+                styleMask: [.titled],
+                backing: .buffered,
+                defer: true
+            )
+            window.contentView = scrollView
+            window.makeFirstResponder(textView)
+            textView.string = text
+            let selection = NSRange(location: utf16Offset(of: "Alpha", in: text) ?? 0, length: 0)
+            textView.setSelectedRange(selection)
+            guard let table = LivePreviewTableParser.parse(text).first,
+                  let layout = LivePreviewTableLayout.make(for: table, in: textView),
+                  let bodyLayout = layout.cells.first(where: { !$0.isHeader && $0.tableCell.text == "Draft" })
+            else {
+                return nil
+            }
+            return (
+                textView,
+                bodyLayout.tableCell,
+                NSPoint(x: bodyLayout.textRect.midX, y: bodyLayout.textRect.midY),
+                selection,
+                window
+            )
+        }
+
+        let enterProbe = makeInPlaceEditor()
+        let enterTextView = enterProbe?.textView
+        let enterActivated = enterProbe.map { $0.textView.setActiveTableCell(at: $0.point) } == true
+        enterTextView?.tableCellEditor?.stringValue = "Published"
+        let enterHandled = enterTextView.flatMap { textView in
+            textView.tableCellEditor.map {
+                textView.control(
+                    $0,
+                    textView: ($0.currentEditor() as? NSTextView) ?? NSTextView(),
+                    doCommandBy: #selector(NSResponder.insertNewline(_:))
+                )
+            }
+        } == true
+        let enterExpected = """
+        | Name | Status |
+        | --- | --- |
+        | Alpha | Published |
+        """
+        let cellEditorEnterCommitsCell = enterActivated && enterHandled && enterTextView?.string == enterExpected
+        let inPlaceEditSelectionPreserved = enterProbe.map {
+            $0.textView.selectedRange() == $0.selection
+        } == true
+        let canUndoInPlace = enterTextView?.undoManager?.canUndo ?? false
+        enterTextView?.undoManager?.undo()
+        let undoSelection = enterTextView?.selectedRange() ?? NSRange(location: NSNotFound, length: 0)
+        let undoTextLength = ((enterTextView?.string ?? "") as NSString).length
+        let inPlaceEditUndoPreservesSelection = canUndoInPlace
+            && enterTextView?.string == text
+            && undoSelection.location != NSNotFound
+            && undoSelection.location + undoSelection.length <= undoTextLength
+
+        let focusProbe = makeInPlaceEditor()
+        let focusTextView = focusProbe?.textView
+        _ = focusProbe.map { $0.textView.setActiveTableCell(at: $0.point) }
+        focusTextView?.tableCellEditor?.stringValue = "Focused"
+        focusProbe?.window.makeFirstResponder(focusTextView)
+        let focusExpected = """
+        | Name | Status |
+        | --- | --- |
+        | Alpha | Focused |
+        """
+        let cellEditorFocusLossCommitsCell = focusTextView?.string == focusExpected
+
+        let escapeProbe = makeInPlaceEditor()
+        let escapeTextView = escapeProbe?.textView
+        _ = escapeProbe.map { $0.textView.setActiveTableCell(at: $0.point) }
+        escapeTextView?.tableCellEditor?.stringValue = "Cancelled"
+        let escapeHandled = escapeTextView.flatMap { textView in
+            textView.tableCellEditor.map {
+                textView.control(
+                    $0,
+                    textView: ($0.currentEditor() as? NSTextView) ?? NSTextView(),
+                    doCommandBy: #selector(NSResponder.cancelOperation(_:))
+                )
+            }
+        } == true
+        let cellEditorEscapeCancelsEdit = escapeHandled
+            && escapeTextView?.string == text
+            && escapeTextView?.tableCellEditor == nil
+
+        let invalidProbe = makeInPlaceEditor()
+        let invalidTextView = invalidProbe?.textView
+        _ = invalidProbe.map { $0.textView.setActiveTableCell(at: $0.point) }
+        invalidTextView?.tableCellEditor?.stringValue = "bad|value"
+        let invalidCommit = invalidTextView?.commitActiveTableCellEditor() == true
+        let cellEditorRejectsInvalidText = !invalidCommit
+            && invalidTextView?.string == text
+            && invalidTextView?.tableCellEditor != nil
+
+        let markedProbe = makeInPlaceEditor()
+        let markedTextView = markedProbe?.textView
+        _ = markedProbe.map { $0.textView.setActiveTableCell(at: $0.point) }
+        markedTextView?.tableCellEditor?.stringValue = "Marked"
+        if let fieldEditor = markedTextView?.tableCellEditor?.currentEditor() as? NSTextView {
+            fieldEditor.setMarkedText(
+                "한",
+                selectedRange: NSRange(location: 1, length: 0),
+                replacementRange: NSRange(location: NSNotFound, length: 0)
+            )
+        }
+        let markedCommit = markedTextView?.commitActiveTableCellEditor() == true
+        let cellEditorBlocksMarkedTextCommit = !markedCommit
+            && markedTextView?.string == text
+            && markedTextView?.tableCellEditor != nil
+        (markedTextView?.tableCellEditor?.currentEditor() as? NSTextView)?.unmarkText()
+
+        let staleProbe = makeInPlaceEditor()
+        let staleTextView = staleProbe?.textView
+        _ = staleProbe.map { $0.textView.setActiveTableCell(at: $0.point) }
+        staleTextView?.tableCellEditor?.stringValue = "Published"
+        staleTextView?.string = text.replacingOccurrences(of: "Draft", with: "Changed")
+        let staleCommit = staleTextView?.commitActiveTableCellEditor() == true
+        let cellEditorRejectsStaleCell = !staleCommit
+            && staleTextView?.string.contains("Changed") == true
+            && staleTextView?.string.contains("Published") == false
+
         let disabledTextView = MarkdownEditorTextViewFactory.makeTextView() as! MarkdownInteractionTextView
         disabledTextView.string = text
         disabledTextView.livePreviewMode = .livePreview
@@ -1269,6 +1423,14 @@ enum MarkdownEditorBridgeProbe {
             cellEditorCleansUpOnModeChange,
             activeCellOverlayTextSuppressed,
             inPlaceEditAvailable,
+            cellEditorEnterCommitsCell,
+            cellEditorFocusLossCommitsCell,
+            cellEditorEscapeCancelsEdit,
+            cellEditorRejectsInvalidText,
+            cellEditorBlocksMarkedTextCommit,
+            cellEditorRejectsStaleCell,
+            inPlaceEditSelectionPreserved,
+            inPlaceEditUndoPreservesSelection,
             changesOnlyCell,
             undoRestoresCell,
             failurePreservesBuffer

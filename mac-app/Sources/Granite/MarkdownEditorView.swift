@@ -350,7 +350,7 @@ protocol MarkdownInteractionTextViewDelegate: AnyObject {
 }
 
 @MainActor
-final class MarkdownInteractionTextView: NSTextView {
+final class MarkdownInteractionTextView: NSTextView, NSTextFieldDelegate {
     weak var interactionDelegate: MarkdownInteractionTextViewDelegate?
     var livePreviewMode: LivePreviewMode = .livePreview {
         didSet {
@@ -371,8 +371,10 @@ final class MarkdownInteractionTextView: NSTextView {
     private(set) var livePreviewOverlayState = LivePreviewOverlayState()
     private var livePreviewOverlaySourceVersion = 0
     private var tableCellMenuTarget: LivePreviewTableCell?
-    private var tableCellEditor: NSTextField?
+    private(set) var tableCellEditor: NSTextField?
     private var tableCellEditorTarget: LivePreviewTableCell?
+    private var tableCellEditorSelectionBeforeEdit: NSRange?
+    private var isClosingTableCellEditor = false
 
     var activeTableCellEditorFrame: NSRect? {
         tableCellEditor?.frame
@@ -621,6 +623,7 @@ final class MarkdownInteractionTextView: NSTextView {
             field.focusRingType = .none
             field.usesSingleLineMode = true
             field.lineBreakMode = .byTruncatingTail
+            field.delegate = self
             addSubview(field)
             editor = field
             tableCellEditor = field
@@ -628,6 +631,7 @@ final class MarkdownInteractionTextView: NSTextView {
 
         if tableCellEditorTarget != cell {
             editor.stringValue = cell.text
+            tableCellEditorSelectionBeforeEdit = selectedRange()
         }
         tableCellEditorTarget = cell
         editor.frame = frame
@@ -637,9 +641,99 @@ final class MarkdownInteractionTextView: NSTextView {
     }
 
     private func removeTableCellEditor() {
+        tableCellEditor?.delegate = nil
         tableCellEditor?.removeFromSuperview()
         tableCellEditor = nil
         tableCellEditorTarget = nil
+        tableCellEditorSelectionBeforeEdit = nil
+    }
+
+    func control(
+        _ control: NSControl,
+        textView: NSTextView,
+        doCommandBy commandSelector: Selector
+    ) -> Bool {
+        guard control === tableCellEditor else {
+            return false
+        }
+        if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+            _ = commitActiveTableCellEditor()
+            return true
+        }
+        if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
+            cancelActiveTableCellEditor()
+            return true
+        }
+        return false
+    }
+
+    func controlTextDidChange(_ notification: Notification) {
+        guard notification.object as? NSTextField === tableCellEditor else {
+            return
+        }
+        tableCellEditor?.backgroundColor = LivePreviewTheme.tableCellBackgroundColor
+    }
+
+    func controlTextDidEndEditing(_ notification: Notification) {
+        guard notification.object as? NSTextField === tableCellEditor,
+              !isClosingTableCellEditor
+        else {
+            return
+        }
+        _ = commitActiveTableCellEditor()
+    }
+
+    @discardableResult
+    func commitActiveTableCellEditor() -> Bool {
+        guard let editor = tableCellEditor,
+              let target = tableCellEditorTarget,
+              (editor.currentEditor() as? NSTextView)?.hasMarkedText() != true,
+              let currentCell = LivePreviewTableParser.cell(
+                atUTF16Offset: target.contentRange.location,
+                in: string
+              ),
+              currentCell == target,
+              LivePreviewTableCellEdit.replacing(cell: currentCell, with: editor.stringValue, in: string) != nil
+        else {
+            markTableCellEditorInvalid()
+            return false
+        }
+
+        let selection = tableCellEditorSelectionBeforeEdit
+        isClosingTableCellEditor = true
+        defer { isClosingTableCellEditor = false }
+        guard replaceTableCell(currentCell, with: editor.stringValue) else {
+            markTableCellEditorInvalid()
+            return false
+        }
+        setLivePreviewOverlayTableState(hovered: nil, active: nil)
+        window?.makeFirstResponder(self)
+        restoreSelection(selection)
+        return true
+    }
+
+    func cancelActiveTableCellEditor() {
+        let selection = tableCellEditorSelectionBeforeEdit
+        isClosingTableCellEditor = true
+        defer { isClosingTableCellEditor = false }
+        setLivePreviewOverlayTableState(hovered: nil, active: nil)
+        window?.makeFirstResponder(self)
+        restoreSelection(selection)
+    }
+
+    private func markTableCellEditorInvalid() {
+        tableCellEditor?.backgroundColor = NSColor.systemRed.withAlphaComponent(0.14)
+        NSSound.beep()
+    }
+
+    private func restoreSelection(_ selection: NSRange?) {
+        guard let selection else {
+            return
+        }
+        setSelectedRange(NSRange(
+            location: min(selection.location, (string as NSString).length),
+            length: min(selection.length, max(0, (string as NSString).length - min(selection.location, (string as NSString).length)))
+        ))
     }
 
     private func replaceTableCell(_ range: NSRange, with replacement: String, registersUndo: Bool) {
