@@ -8,6 +8,15 @@ struct NativeMarkdownApp: App {
     @StateObject private var appState = AppState()
 
     init() {
+        if CommandLine.arguments.contains("--help") {
+            print(ReadApiUIProbe.helpText())
+            Foundation.exit(0)
+        }
+
+        if CommandLine.arguments.contains("--read-api-ui-probe") {
+            Foundation.exit(ReadApiUIProbe.run(arguments: CommandLine.arguments))
+        }
+
         if CommandLine.arguments.contains("--engine-smoke-test") {
             let expectedAbi = expectedAbiVersionArgument() ?? 1
             let status = EngineHealthClient(expectedAbiVersion: expectedAbi).load()

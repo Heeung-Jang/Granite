@@ -12,6 +12,7 @@ use vault_engine::benchmarks::{
 };
 use vault_engine::tantivy_search::{TantivySearchError, TantivySearchIndex};
 use vault_profiler::corpus::{QueryCorpusOptions, generate_query_corpus_bundle};
+use vault_profiler::read_benchmark::{ReadApiBenchmarkOptions, run_read_api_benchmark};
 use vault_profiler::synthetic::{
     SyntheticProfile, SyntheticVaultOptions, generate_synthetic_vault,
 };
@@ -103,6 +104,25 @@ fn run() -> Result<(), Box<dyn Error>> {
         }
         Command::ObsidianRunbook(command) => write_obsidian_runbook(&command),
         Command::TantivyQueryBenchmark(command) => run_tantivy_query_benchmark(&command),
+        Command::ReadApiBenchmark(command) => {
+            let artifact = run_read_api_benchmark(&ReadApiBenchmarkOptions {
+                vault_root: command.vault_root.clone(),
+                metadata_path: command.metadata_path,
+                tantivy_path: command.tantivy_path,
+                queries: command.queries,
+                query_file: command.query_file,
+                runbook_path: command.runbook_path,
+                sampled_paths: command.sampled_paths,
+                sampled_paths_file: command.sampled_paths_file,
+                result_limit: command.result_limit,
+            })?;
+            write_json(
+                &command.vault_root,
+                command.output_path,
+                &artifact,
+                command.pretty,
+            )
+        }
     }
 }
 
@@ -153,6 +173,7 @@ enum Command {
     BackendBenchmark(BackendBenchmarkCommand),
     ObsidianRunbook(ObsidianRunbookCommand),
     TantivyQueryBenchmark(TantivyQueryBenchmarkCommand),
+    ReadApiBenchmark(ReadApiBenchmarkCommand),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -208,6 +229,21 @@ struct TantivyQueryBenchmarkCommand {
     index_dir: PathBuf,
     runbook_path: PathBuf,
     output_path: PathBuf,
+    result_limit: usize,
+    pretty: bool,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ReadApiBenchmarkCommand {
+    vault_root: PathBuf,
+    metadata_path: PathBuf,
+    tantivy_path: PathBuf,
+    output_path: Option<PathBuf>,
+    queries: Vec<String>,
+    query_file: Option<PathBuf>,
+    runbook_path: Option<PathBuf>,
+    sampled_paths: Vec<String>,
+    sampled_paths_file: Option<PathBuf>,
     result_limit: usize,
     pretty: bool,
 }
@@ -298,6 +334,9 @@ impl Cli {
             "obsidian-runbook" => Command::ObsidianRunbook(ObsidianRunbookCommand::parse(args)?),
             "tantivy-query-benchmark" => {
                 Command::TantivyQueryBenchmark(TantivyQueryBenchmarkCommand::parse(args)?)
+            }
+            "read-api-benchmark" => {
+                Command::ReadApiBenchmark(ReadApiBenchmarkCommand::parse(args)?)
             }
             _ => return Err(usage().into()),
         };
@@ -564,6 +603,88 @@ impl TantivyQueryBenchmarkCommand {
             index_dir,
             runbook_path,
             output_path,
+            result_limit,
+            pretty,
+        })
+    }
+}
+
+impl ReadApiBenchmarkCommand {
+    fn parse<I>(mut args: I) -> Result<Self, Box<dyn Error>>
+    where
+        I: Iterator<Item = OsString>,
+    {
+        let mut vault_root = None;
+        let mut metadata_path = None;
+        let mut tantivy_path = None;
+        let mut output_path = None;
+        let mut queries = Vec::new();
+        let mut query_file = None;
+        let mut runbook_path = None;
+        let mut sampled_paths = Vec::new();
+        let mut sampled_paths_file = None;
+        let mut result_limit = 25;
+        let mut pretty = false;
+
+        while let Some(arg) = args.next() {
+            match arg.to_string_lossy().as_ref() {
+                "--vault-root" | "--vault" => {
+                    vault_root = Some(PathBuf::from(required_string(&mut args, "--vault-root")?))
+                }
+                "--metadata-path" => {
+                    metadata_path = Some(PathBuf::from(required_string(
+                        &mut args,
+                        "--metadata-path",
+                    )?))
+                }
+                "--tantivy-path" => {
+                    tantivy_path =
+                        Some(PathBuf::from(required_string(&mut args, "--tantivy-path")?))
+                }
+                "--output" => {
+                    output_path = Some(PathBuf::from(required_string(&mut args, "--output")?))
+                }
+                "--query" => queries.push(required_string(&mut args, "--query")?),
+                "--query-file" => {
+                    query_file = Some(PathBuf::from(required_string(&mut args, "--query-file")?))
+                }
+                "--runbook" => {
+                    runbook_path = Some(PathBuf::from(required_string(&mut args, "--runbook")?))
+                }
+                "--path" => sampled_paths.push(required_string(&mut args, "--path")?),
+                "--path-file" => {
+                    sampled_paths_file =
+                        Some(PathBuf::from(required_string(&mut args, "--path-file")?))
+                }
+                "--limit" => {
+                    let value = required_string(&mut args, "--limit")?;
+                    result_limit = value.parse()?;
+                }
+                "--pretty" => pretty = true,
+                _ => return Err(usage().into()),
+            }
+        }
+
+        let Some(vault_root) = vault_root else {
+            return Err("missing required --vault-root argument".into());
+        };
+        let Some(metadata_path) = metadata_path else {
+            return Err("missing required --metadata-path argument".into());
+        };
+        let Some(tantivy_path) = tantivy_path else {
+            return Err("missing required --tantivy-path argument".into());
+        };
+
+        Ok(Self {
+            vault_root,
+            metadata_path,
+            tantivy_path,
+            output_path,
+            queries,
+            query_file,
+            runbook_path,
+            sampled_paths,
+            sampled_paths_file,
             result_limit,
             pretty,
         })
@@ -849,7 +970,7 @@ where
 }
 
 fn usage() -> &'static str {
-    "usage: vault-profiler <profile|query-corpus|synthetic-vault|backend-benchmark|obsidian-runbook|tantivy-query-benchmark> [options]"
+    "usage: vault-profiler <profile|query-corpus|synthetic-vault|backend-benchmark|obsidian-runbook|tantivy-query-benchmark|read-api-benchmark> [options]"
 }
 
 #[cfg(test)]
@@ -1067,6 +1188,58 @@ mod tests {
                     runbook_path: PathBuf::from("/tmp/private/runbook.json"),
                     output_path: PathBuf::from("/tmp/native.json"),
                     result_limit: 25,
+                    pretty: true,
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_read_api_benchmark_args() {
+        let cli = Cli::parse(
+            [
+                "read-api-benchmark",
+                "--vault-root",
+                "/tmp/vault",
+                "--metadata-path",
+                "/tmp/index/metadata.sqlite",
+                "--tantivy-path",
+                "/tmp/index/tantivy",
+                "--output",
+                "/tmp/read-api.json",
+                "--query",
+                "Home",
+                "--query-file",
+                "/tmp/private/queries.txt",
+                "--runbook",
+                "/tmp/private/runbook.json",
+                "--path",
+                "Daily/Home.md",
+                "--path-file",
+                "/tmp/private/paths.txt",
+                "--limit",
+                "5",
+                "--pretty",
+            ]
+            .into_iter()
+            .map(OsString::from),
+        )
+        .expect("cli");
+
+        assert_eq!(
+            cli,
+            Cli {
+                command: Command::ReadApiBenchmark(ReadApiBenchmarkCommand {
+                    vault_root: PathBuf::from("/tmp/vault"),
+                    metadata_path: PathBuf::from("/tmp/index/metadata.sqlite"),
+                    tantivy_path: PathBuf::from("/tmp/index/tantivy"),
+                    output_path: Some(PathBuf::from("/tmp/read-api.json")),
+                    queries: vec!["Home".to_string()],
+                    query_file: Some(PathBuf::from("/tmp/private/queries.txt")),
+                    runbook_path: Some(PathBuf::from("/tmp/private/runbook.json")),
+                    sampled_paths: vec!["Daily/Home.md".to_string()],
+                    sampled_paths_file: Some(PathBuf::from("/tmp/private/paths.txt")),
+                    result_limit: 5,
                     pretty: true,
                 }),
             }
