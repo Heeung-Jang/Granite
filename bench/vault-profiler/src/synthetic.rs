@@ -411,6 +411,7 @@ mod tests {
             result_limit: 10,
             work_dir: dir.path().join("indexes"),
             time_to_usable_sample_count: 1,
+            snippet_storage_mode: vault_engine::benchmarks::SnippetStorageMode::StoredBody,
         })
         .expect("benchmark");
 

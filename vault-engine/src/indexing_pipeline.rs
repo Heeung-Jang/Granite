@@ -87,8 +87,19 @@ impl IndexingPipelineOptions {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum SnippetStorageMode {
     StoredBody,
+    LazySourceExperiment,
+}
+
+impl SnippetStorageMode {
+    pub fn config_name(self) -> &'static str {
+        match self {
+            Self::StoredBody => "stored_body",
+            Self::LazySourceExperiment => "lazy_source_experiment",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
@@ -1278,6 +1289,19 @@ mod tests {
         for (tier, serialized) in tiers {
             assert_eq!(serde_json::to_string(&tier).expect("tier json"), serialized);
         }
+    }
+
+    #[test]
+    fn snippet_storage_mode_defaults_to_stored_body_and_names_experiment() {
+        assert_eq!(
+            IndexingPipelineOptions::default().snippet_storage_mode,
+            SnippetStorageMode::StoredBody
+        );
+        assert_eq!(SnippetStorageMode::StoredBody.config_name(), "stored_body");
+        assert_eq!(
+            SnippetStorageMode::LazySourceExperiment.config_name(),
+            "lazy_source_experiment"
+        );
     }
 
     #[test]

@@ -44,6 +44,7 @@ pub struct VaultBackendBenchmarkOptions {
     pub result_limit: usize,
     pub work_dir: PathBuf,
     pub time_to_usable_sample_count: usize,
+    pub snippet_storage_mode: SnippetStorageMode,
 }
 
 #[derive(Debug, Serialize)]
@@ -268,7 +269,10 @@ pub fn run_shared_backend_benchmark_from_vault(
     }
 
     fs::create_dir_all(&options.work_dir)?;
-    let pipeline_options = IndexingPipelineOptions::default();
+    let pipeline_options = IndexingPipelineOptions {
+        snippet_storage_mode: options.snippet_storage_mode,
+        ..Default::default()
+    };
     let metadata_store = run_sqlite_metadata_benchmark_from_sources(
         options,
         &loaded_sources.sources,
@@ -507,7 +511,15 @@ fn run_sqlite_metadata_benchmark_from_sources(
 ) -> BackendBenchmarkResultType<BenchmarkMetadataStoreMetrics> {
     let db_path = options.work_dir.join("sqlite-metadata.sqlite");
     remove_sqlite_files(&db_path)?;
-    let metadata = IndexSchemaMetadata::new("sqlite", "metadata-v1", "none", 0);
+    let metadata = IndexSchemaMetadata::new(
+        "sqlite",
+        "metadata-v1",
+        pipeline_options
+            .normalized()
+            .snippet_storage_mode
+            .config_name(),
+        0,
+    );
     let mut store = MetadataStore::open(&db_path, &metadata)?;
     let batch_size = pipeline_options.normalized().metadata_batch_size;
     let mut pending = Vec::with_capacity(batch_size);
@@ -565,7 +577,15 @@ fn measure_time_to_usable_sample(
         sample_root.join("data"),
         sample_root.join("rebuild"),
     );
-    let metadata = IndexSchemaMetadata::new("sqlite+tantivy", "metadata-v1", "tantivy", 0);
+    let metadata = IndexSchemaMetadata::new(
+        "sqlite+tantivy",
+        "metadata-v1",
+        pipeline_options
+            .normalized()
+            .snippet_storage_mode
+            .config_name(),
+        0,
+    );
     let result = run_full_rebuild_pipeline(&paths, sources, &metadata, pipeline_options)?;
     Ok(result.time_to_usable_micros.unwrap_or(1).max(1))
 }
@@ -669,7 +689,10 @@ fn run_tantivy_benchmark_from_sources(
 ) -> BackendBenchmarkResultType<StreamingBenchmarkResult> {
     let index_dir = options.work_dir.join("tantivy");
     reset_directory(&index_dir)?;
-    let mut index = TantivySearchIndex::open_in_dir(&index_dir)?;
+    let mut index = TantivySearchIndex::open_in_dir_with_snippet_mode(
+        &index_dir,
+        pipeline_options.snippet_storage_mode,
+    )?;
 
     let index_start = Instant::now();
     let pipeline = run_tantivy_rebuild_pipeline(&mut index, sources, pipeline_options)?;
@@ -689,7 +712,7 @@ fn run_tantivy_benchmark_from_sources(
 
     Ok(StreamingBenchmarkResult {
         result: backend_result(
-            "tantivy",
+            tantivy_backend_name(pipeline_options.snippet_storage_mode),
             index_duration,
             stats.document_count,
             stats.total_document_bytes,
@@ -825,6 +848,13 @@ fn tantivy_stage_metrics(stages: TantivyIndexingStageMetrics) -> BenchmarkBacken
         skipped_document_count: Some(stages.skipped_document_count),
         failed_document_count: Some(stages.failed_document_count),
         ..Default::default()
+    }
+}
+
+fn tantivy_backend_name(snippet_storage_mode: SnippetStorageMode) -> &'static str {
+    match snippet_storage_mode {
+        SnippetStorageMode::StoredBody => "tantivy",
+        SnippetStorageMode::LazySourceExperiment => "tantivy_lazy_source_experiment",
     }
 }
 
@@ -1176,6 +1206,7 @@ mod tests {
             result_limit: 10,
             work_dir: temp.path().join("indexes"),
             time_to_usable_sample_count: 1,
+            snippet_storage_mode: SnippetStorageMode::StoredBody,
         };
         let serial_options = IndexingPipelineOptions::serial();
         let worker_options = IndexingPipelineOptions {
@@ -1240,6 +1271,7 @@ mod tests {
             result_limit: 10,
             work_dir: temp.path().join("indexes"),
             time_to_usable_sample_count: 1,
+            snippet_storage_mode: SnippetStorageMode::StoredBody,
         };
 
         let artifact = run_shared_backend_benchmark_from_vault(&options).expect("benchmark");
@@ -1271,6 +1303,7 @@ mod tests {
         assert!(json.contains("\"sqlite_metadata_write_micros\""));
         assert!(json.contains("\"table_counts\""));
         assert!(json.contains("\"time_to_usable_micros\""));
+        assert!(json.contains("\"snippet_storage_mode\": \"stored_body\""));
         assert_eq!(artifact.run_metadata.run_condition, "streaming_vault");
         assert_eq!(artifact.run_metadata.sample_count, options.queries.len());
         assert!(artifact.run_metadata.redaction_enabled);
@@ -1335,6 +1368,35 @@ mod tests {
         assert_eq!(tantivy.stages.deleted_document_count, Some(0));
         assert_eq!(tantivy.stages.skipped_document_count, Some(0));
         assert_eq!(tantivy.stages.failed_document_count, Some(0));
+
+        let lazy_options = VaultBackendBenchmarkOptions {
+            corpus_id: "vault-lazy-source-smoke".to_string(),
+            vault_root: options.vault_root.clone(),
+            queries: options.queries.clone(),
+            result_limit: options.result_limit,
+            work_dir: temp.path().join("lazy-indexes"),
+            time_to_usable_sample_count: 1,
+            snippet_storage_mode: SnippetStorageMode::LazySourceExperiment,
+        };
+        let lazy_artifact =
+            run_shared_backend_benchmark_from_vault(&lazy_options).expect("lazy benchmark");
+        let lazy_artifact_path = temp.path().join("lazy-vault-benchmark.json");
+        write_backend_benchmark_artifact(&lazy_artifact_path, &lazy_artifact, true)
+            .expect("lazy artifact");
+        let lazy_json = fs::read_to_string(&lazy_artifact_path).expect("lazy artifact json");
+
+        assert_eq!(
+            lazy_artifact.pipeline_config.snippet_storage_mode,
+            SnippetStorageMode::LazySourceExperiment
+        );
+        assert!(lazy_artifact.backends.iter().any(|backend| {
+            backend.backend == "tantivy_lazy_source_experiment"
+                && backend.snippet_result_count == 0
+                && backend.query_result_count > 0
+        }));
+        assert!(lazy_json.contains("\"snippet_storage_mode\": \"lazy_source_experiment\""));
+        assert!(!lazy_json.contains("Welcome to the streaming benchmark fixture"));
+        assert!(!lazy_json.contains("Guide links back to Home"));
     }
 
     #[test]

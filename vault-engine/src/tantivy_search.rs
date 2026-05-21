@@ -9,6 +9,8 @@ use tantivy::schema::{Field, STORED, STRING, Schema, TEXT, TantivyDocument, Valu
 use tantivy::snippet::SnippetGenerator;
 use tantivy::{Index, IndexReader, TantivyError, Term, doc};
 
+use crate::indexing_pipeline::SnippetStorageMode;
+use crate::paths::{FileIdentity, PathError, VaultRoot};
 use crate::sqlite_fts::{SearchDocument, SearchMeasurement, SearchResult};
 
 pub const DEFAULT_TANTIVY_WRITER_MEMORY_BUDGET_BYTES: usize = 50_000_000;
@@ -18,6 +20,7 @@ pub struct TantivySearchIndex {
     reader: IndexReader,
     fields: TantivyFields,
     index_dir: Option<PathBuf>,
+    snippet_storage_mode: SnippetStorageMode,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -59,6 +62,7 @@ pub enum TantivySearchError {
     Tantivy(TantivyError),
     QueryParser(QueryParserError),
     Io(std::io::Error),
+    Path(PathError),
     EmptyQuery,
 }
 
@@ -66,28 +70,52 @@ pub type TantivySearchResult<T> = Result<T, TantivySearchError>;
 
 impl TantivySearchIndex {
     pub fn open_in_ram() -> TantivySearchResult<Self> {
-        let (schema, fields) = search_schema();
+        Self::open_in_ram_with_snippet_mode(SnippetStorageMode::StoredBody)
+    }
+
+    pub fn open_in_ram_with_snippet_mode(
+        snippet_storage_mode: SnippetStorageMode,
+    ) -> TantivySearchResult<Self> {
+        let (schema, fields) = search_schema_for_snippet_mode(snippet_storage_mode);
         let index = Index::builder().schema(schema).create_in_ram()?;
-        Self::from_index(index, fields, None)
+        Self::from_index(index, fields, None, snippet_storage_mode)
     }
 
     pub fn open_in_dir(path: impl AsRef<Path>) -> TantivySearchResult<Self> {
-        let (schema, fields) = search_schema();
+        Self::open_in_dir_with_snippet_mode(path, SnippetStorageMode::StoredBody)
+    }
+
+    pub fn open_in_dir_with_snippet_mode(
+        path: impl AsRef<Path>,
+        snippet_storage_mode: SnippetStorageMode,
+    ) -> TantivySearchResult<Self> {
+        let (schema, fields) = search_schema_for_snippet_mode(snippet_storage_mode);
         fs::create_dir_all(path.as_ref())?;
         let index = Index::create_in_dir(path.as_ref(), schema)?;
-        Self::from_index(index, fields, Some(path.as_ref().to_path_buf()))
+        Self::from_index(
+            index,
+            fields,
+            Some(path.as_ref().to_path_buf()),
+            snippet_storage_mode,
+        )
     }
 
     pub fn open_existing_dir(path: impl AsRef<Path>) -> TantivySearchResult<Self> {
         let (_, fields) = search_schema();
         let index = Index::open_in_dir(path.as_ref())?;
-        Self::from_index(index, fields, Some(path.as_ref().to_path_buf()))
+        Self::from_index(
+            index,
+            fields,
+            Some(path.as_ref().to_path_buf()),
+            SnippetStorageMode::StoredBody,
+        )
     }
 
     fn from_index(
         index: Index,
         fields: TantivyFields,
         index_dir: Option<PathBuf>,
+        snippet_storage_mode: SnippetStorageMode,
     ) -> TantivySearchResult<Self> {
         let reader = index.reader()?;
         Ok(Self {
@@ -95,6 +123,7 @@ impl TantivySearchIndex {
             reader,
             fields,
             index_dir,
+            snippet_storage_mode,
         })
     }
 
@@ -318,7 +347,12 @@ impl TantivySearchIndex {
         let mut results = Vec::with_capacity(limit.min(top_docs.len()));
         for (score, address) in top_docs.into_iter().skip(offset).take(limit) {
             let document = searcher.doc::<TantivyDocument>(address)?;
-            let snippet = snippet_generator.snippet_from_doc(&document).to_html();
+            let snippet = match self.snippet_storage_mode {
+                SnippetStorageMode::StoredBody => {
+                    snippet_generator.snippet_from_doc(&document).to_html()
+                }
+                SnippetStorageMode::LazySourceExperiment => String::new(),
+            };
             results.push(SearchResult {
                 file_id: stored_text(&document, self.fields.file_id),
                 path: stored_text(&document, self.fields.path),
@@ -358,12 +392,37 @@ impl TantivySearchIndex {
     }
 }
 
+pub fn generate_lazy_source_snippet(
+    root: &VaultRoot,
+    relative_path: &str,
+    expected_identity: &FileIdentity,
+    indexed_generation: u64,
+    current_generation: u64,
+    query: &str,
+    max_chars: usize,
+) -> TantivySearchResult<Option<String>> {
+    let resolved = root.resolve_existing_relative(relative_path)?;
+    if &resolved.file_identity != expected_identity || indexed_generation != current_generation {
+        return Ok(None);
+    }
+    let body = fs::read_to_string(&resolved.absolute_path)?;
+    let Some(term) = first_query_term(query) else {
+        return Ok(None);
+    };
+    let body_lower = body.to_lowercase();
+    let Some(byte_index) = body_lower.find(&term.to_lowercase()) else {
+        return Ok(None);
+    };
+    Ok(Some(snippet_around(&body, byte_index, max_chars.max(1))))
+}
+
 impl fmt::Display for TantivySearchError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Tantivy(error) => write!(formatter, "tantivy search error: {error}"),
             Self::QueryParser(error) => write!(formatter, "tantivy query parse error: {error}"),
             Self::Io(error) => write!(formatter, "tantivy index io error: {error}"),
+            Self::Path(error) => write!(formatter, "tantivy path error: {error}"),
             Self::EmptyQuery => write!(formatter, "search query is empty after sanitization"),
         }
     }
@@ -389,6 +448,12 @@ impl From<std::io::Error> for TantivySearchError {
     }
 }
 
+impl From<PathError> for TantivySearchError {
+    fn from(error: PathError) -> Self {
+        Self::Path(error)
+    }
+}
+
 pub fn safe_tantivy_query(input: &str) -> Option<String> {
     let bounded = input.chars().take(128).collect::<String>();
     let terms = bounded
@@ -401,12 +466,44 @@ pub fn safe_tantivy_query(input: &str) -> Option<String> {
     (!terms.is_empty()).then(|| terms.join(" "))
 }
 
+fn first_query_term(input: &str) -> Option<String> {
+    input
+        .split(|ch: char| !ch.is_alphanumeric())
+        .find(|term| !term.is_empty())
+        .map(str::to_string)
+}
+
+fn snippet_around(body: &str, byte_index: usize, max_chars: usize) -> String {
+    let mut char_positions = body
+        .char_indices()
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    char_positions.push(body.len());
+    let center_char = char_positions
+        .binary_search(&byte_index)
+        .unwrap_or_else(|index| index.saturating_sub(1));
+    let half = max_chars / 2;
+    let start_char = center_char.saturating_sub(half);
+    let end_char = (start_char + max_chars).min(char_positions.len().saturating_sub(1));
+    body[char_positions[start_char]..char_positions[end_char]].to_string()
+}
+
 fn search_schema() -> (Schema, TantivyFields) {
+    search_schema_for_snippet_mode(SnippetStorageMode::StoredBody)
+}
+
+fn search_schema_for_snippet_mode(
+    snippet_storage_mode: SnippetStorageMode,
+) -> (Schema, TantivyFields) {
     let mut builder = Schema::builder();
     let file_id = builder.add_text_field("file_id", STRING | STORED);
     let path = builder.add_text_field("path", TEXT | STORED);
     let title = builder.add_text_field("title", TEXT | STORED);
-    let body = builder.add_text_field("body", TEXT | STORED);
+    let body_options = match snippet_storage_mode {
+        SnippetStorageMode::StoredBody => TEXT | STORED,
+        SnippetStorageMode::LazySourceExperiment => TEXT,
+    };
+    let body = builder.add_text_field("body", body_options);
     (
         builder.build(),
         TantivyFields {
@@ -455,7 +552,10 @@ fn directory_size(path: &Path) -> TantivySearchResult<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::paths::VaultRoot;
     use crate::sqlite_fts::SearchDocument;
+    #[cfg(unix)]
+    use std::os::unix::fs::symlink;
 
     #[test]
     fn safe_tantivy_query_bounds_and_quotes_user_input() {
@@ -535,6 +635,126 @@ mod tests {
             .expect("body search");
         assert!(body_results.iter().any(|result| result.path == "Home.md"));
         assert!(body_results.iter().any(|result| !result.snippet.is_empty()));
+    }
+
+    #[test]
+    fn lazy_source_experiment_indexes_body_without_stored_snippets() {
+        let mut index = TantivySearchIndex::open_in_ram_with_snippet_mode(
+            SnippetStorageMode::LazySourceExperiment,
+        )
+        .expect("index");
+        index
+            .replace_documents(&fixture_documents())
+            .expect("replace docs");
+
+        let body_results = index
+            .search("compatibility fixture", 10)
+            .expect("body search");
+
+        assert!(body_results.iter().any(|result| result.path == "Home.md"));
+        assert!(body_results.iter().all(|result| result.snippet.is_empty()));
+    }
+
+    #[test]
+    fn lazy_source_snippet_validates_path_and_file_identity() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let vault = dir.path().join("vault");
+        fs::create_dir_all(&vault).expect("vault");
+        fs::write(
+            vault.join("Home.md"),
+            "# Home\nExpected lazy snippet phrase inside source.",
+        )
+        .expect("note");
+        let root = VaultRoot::open(&vault).expect("root");
+        let resolved = root
+            .resolve_existing_relative("Home.md")
+            .expect("resolved note");
+
+        let snippet = generate_lazy_source_snippet(
+            &root,
+            "Home.md",
+            &resolved.file_identity,
+            7,
+            7,
+            "lazy phrase",
+            80,
+        )
+        .expect("snippet")
+        .expect("snippet text");
+        assert!(snippet.contains("lazy snippet phrase"));
+
+        assert!(
+            generate_lazy_source_snippet(
+                &root,
+                "Home.md",
+                &resolved.file_identity,
+                7,
+                8,
+                "lazy phrase",
+                80
+            )
+            .expect("generation check")
+            .is_none()
+        );
+
+        fs::remove_file(vault.join("Home.md")).expect("remove note");
+        fs::write(vault.join("Home.md"), "# Home\nChanged content").expect("changed");
+        assert!(
+            generate_lazy_source_snippet(
+                &root,
+                "Home.md",
+                &resolved.file_identity,
+                7,
+                7,
+                "Changed",
+                80
+            )
+            .expect("stale check")
+            .is_none()
+        );
+        assert!(matches!(
+            generate_lazy_source_snippet(
+                &root,
+                "../outside.md",
+                &resolved.file_identity,
+                7,
+                7,
+                "x",
+                80
+            ),
+            Err(TantivySearchError::Path(_))
+        ));
+        assert!(matches!(
+            generate_lazy_source_snippet(
+                &root,
+                &vault.join("Home.md").display().to_string(),
+                &resolved.file_identity,
+                7,
+                7,
+                "x",
+                80
+            ),
+            Err(TantivySearchError::Path(_))
+        ));
+
+        #[cfg(unix)]
+        {
+            let outside = dir.path().join("outside.md");
+            fs::write(&outside, "outside lazy phrase").expect("outside note");
+            symlink(&outside, vault.join("Outside.md")).expect("outside symlink");
+            assert!(matches!(
+                generate_lazy_source_snippet(
+                    &root,
+                    "Outside.md",
+                    &resolved.file_identity,
+                    7,
+                    7,
+                    "lazy",
+                    80
+                ),
+                Err(TantivySearchError::Path(_))
+            ));
+        }
     }
 
     #[test]

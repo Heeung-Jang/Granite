@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process;
 use std::time::Instant;
 use vault_engine::benchmarks::{
-    VaultBackendBenchmarkOptions, run_shared_backend_benchmark_from_vault,
+    SnippetStorageMode, VaultBackendBenchmarkOptions, run_shared_backend_benchmark_from_vault,
 };
 use vault_engine::tantivy_search::{TantivySearchError, TantivySearchIndex};
 use vault_profiler::corpus::{QueryCorpusOptions, generate_query_corpus_bundle};
@@ -94,6 +94,7 @@ fn run() -> Result<(), Box<dyn Error>> {
                     result_limit: command.result_limit,
                     work_dir: command.work_dir,
                     time_to_usable_sample_count: command.time_to_usable_samples,
+                    snippet_storage_mode: command.snippet_storage_mode,
                 })?;
             write_json(
                 &command.vault_root,
@@ -115,6 +116,14 @@ fn read_query_file(path: &Path) -> Result<Vec<String>, Box<dyn Error>> {
         .filter(|line| !line.is_empty())
         .map(str::to_string)
         .collect())
+}
+
+fn parse_snippet_storage_mode(value: &str) -> Result<SnippetStorageMode, Box<dyn Error>> {
+    match value {
+        "stored-body" => Ok(SnippetStorageMode::StoredBody),
+        "lazy-source-experiment" => Ok(SnippetStorageMode::LazySourceExperiment),
+        _ => Err(format!("unknown snippet storage mode: {value}").into()),
+    }
 }
 
 fn write_json<T: serde::Serialize>(
@@ -194,6 +203,7 @@ struct BackendBenchmarkCommand {
     corpus_id: String,
     result_limit: usize,
     time_to_usable_samples: usize,
+    snippet_storage_mode: SnippetStorageMode,
     pretty: bool,
 }
 
@@ -439,6 +449,7 @@ impl BackendBenchmarkCommand {
         let mut corpus_id = "manual".to_string();
         let mut result_limit = 10;
         let mut time_to_usable_samples = 1;
+        let mut snippet_storage_mode = SnippetStorageMode::StoredBody;
 
         while let Some(arg) = parser.next_arg() {
             match arg.as_str() {
@@ -455,6 +466,10 @@ impl BackendBenchmarkCommand {
                 "--time-to-usable-samples" => {
                     let value = parser.required_string_arg("--time-to-usable-samples")?;
                     time_to_usable_samples = value.parse::<usize>()?.max(1);
+                }
+                "--snippet-storage-mode" => {
+                    let value = parser.required_string_arg("--snippet-storage-mode")?;
+                    snippet_storage_mode = parse_snippet_storage_mode(&value)?;
                 }
                 _ => parser.parse_common_arg(arg)?,
             }
@@ -474,6 +489,7 @@ impl BackendBenchmarkCommand {
             corpus_id,
             result_limit,
             time_to_usable_samples,
+            snippet_storage_mode,
             pretty: parser.pretty,
         })
     }
@@ -994,6 +1010,8 @@ mod tests {
                 "5",
                 "--time-to-usable-samples",
                 "3",
+                "--snippet-storage-mode",
+                "lazy-source-experiment",
                 "--pretty",
             ]
             .into_iter()
@@ -1013,6 +1031,7 @@ mod tests {
                     corpus_id: "fixture".to_string(),
                     result_limit: 5,
                     time_to_usable_samples: 3,
+                    snippet_storage_mode: SnippetStorageMode::LazySourceExperiment,
                     pretty: true,
                 }),
             }
