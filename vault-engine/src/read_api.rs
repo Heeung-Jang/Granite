@@ -11,6 +11,7 @@ use crate::sqlite_fts::SearchResult;
 use crate::tantivy_search::{TantivySearchError, TantivySearchIndex};
 
 const MAX_PAGE_LIMIT: usize = 100;
+const MAX_FILE_TREE_PAGE_LIMIT: usize = 100_000;
 const MAX_GRAPH_NODES: usize = 250;
 const MAX_GRAPH_EDGES: usize = 500;
 pub const READ_BACKEND_NAME: &str = "sqlite+tantivy";
@@ -225,12 +226,20 @@ impl PageRequest {
         }
     }
 
-    fn visible_limit(self) -> usize {
-        self.limit.clamp(1, MAX_PAGE_LIMIT)
+    fn fetch_limit(self) -> usize {
+        self.fetch_limit_capped(MAX_PAGE_LIMIT)
     }
 
-    fn fetch_limit(self) -> usize {
-        self.visible_limit() + 1
+    fn file_tree_fetch_limit(self) -> usize {
+        self.fetch_limit_capped(MAX_FILE_TREE_PAGE_LIMIT)
+    }
+
+    fn visible_limit_capped(self, max_limit: usize) -> usize {
+        self.limit.clamp(1, max_limit)
+    }
+
+    fn fetch_limit_capped(self, max_limit: usize) -> usize {
+        self.visible_limit_capped(max_limit) + 1
     }
 }
 
@@ -288,9 +297,11 @@ impl VaultReadApi {
     }
 
     pub fn file_tree(&self, page: PageRequest) -> ReadApiResult<ReadPage<FileRecord>> {
-        Ok(self.page_from_overfetch(
-            self.metadata.list_files(page.offset, page.fetch_limit())?,
+        Ok(self.page_from_overfetch_with_limit(
+            self.metadata
+                .list_markdown_files(page.offset, page.file_tree_fetch_limit())?,
             page,
+            MAX_FILE_TREE_PAGE_LIMIT,
         ))
     }
 
@@ -298,10 +309,11 @@ impl VaultReadApi {
         &self,
         page: PageRequest,
     ) -> ReadApiResult<ReadPage<FileTreeProjection>> {
-        Ok(self.page_from_overfetch(
+        Ok(self.page_from_overfetch_with_limit(
             self.metadata
-                .file_tree_projection(page.offset, page.fetch_limit())?,
+                .file_tree_projection(page.offset, page.file_tree_fetch_limit())?,
             page,
+            MAX_FILE_TREE_PAGE_LIMIT,
         ))
     }
 
@@ -607,8 +619,17 @@ impl VaultReadApi {
         Ok(self.page_from_overfetch(results.into_iter().map(SearchHit::from).collect(), page))
     }
 
-    fn page_from_overfetch<T>(&self, mut items: Vec<T>, page: PageRequest) -> ReadPage<T> {
-        let visible_limit = page.visible_limit();
+    fn page_from_overfetch<T>(&self, items: Vec<T>, page: PageRequest) -> ReadPage<T> {
+        self.page_from_overfetch_with_limit(items, page, MAX_PAGE_LIMIT)
+    }
+
+    fn page_from_overfetch_with_limit<T>(
+        &self,
+        mut items: Vec<T>,
+        page: PageRequest,
+        max_limit: usize,
+    ) -> ReadPage<T> {
+        let visible_limit = page.visible_limit_capped(max_limit);
         let has_next = items.len() > visible_limit;
         if has_next {
             items.truncate(visible_limit);
@@ -1274,12 +1295,12 @@ mod tests {
 
     use crate::attachments::{AttachmentReferenceSource, AttachmentResolutionState};
     use crate::index::{
-        HeadingRecord, IndexSchemaMetadata, MetadataStore, PropertyRecord, TagRecord, TagSource,
-        slugify_heading,
+        FileRecord, HeadingRecord, IndexSchemaMetadata, MetadataStore, PropertyRecord, TagRecord,
+        TagSource, slugify_heading,
     };
     use crate::parser::PropertyValue;
     use crate::paths::{VaultRoot, lookup_key};
-    use crate::scanner::{ScanEntry, scan_vault};
+    use crate::scanner::{ScanEntry, ScanEntryKind, scan_vault};
     use crate::sqlite_fts::SearchDocument;
     use crate::tantivy_search::TantivySearchIndex;
     use tempfile::tempdir;
@@ -1438,6 +1459,41 @@ mod tests {
         let index = open_tantivy_index_for_read(&index_path).expect("open index");
 
         assert_eq!(index.search("searchable", 10).expect("search").len(), 1);
+    }
+
+    #[test]
+    fn file_tree_allows_large_markdown_pages_without_attachment_rows() {
+        let metadata = IndexSchemaMetadata::new("sqlite+tantivy", "metadata-v1", "tantivy", 1);
+        let mut store = MetadataStore::open_in_memory(&metadata).expect("store");
+        for index in 0..150 {
+            let mut file = FileRecord::from_scan_entry(&fixture_entry("Home.md"), 1);
+            file.relative_path = PathBuf::from(format!("Bulk/{index:03}.md"));
+            file.file_id = lookup_key(&file.relative_path);
+            file.file_identity.inode = index as u64 + 1;
+            store
+                .replace_file_records(&file, &[], &[], &[], &[], &[])
+                .expect("markdown file");
+        }
+        let attachment = FileRecord::from_scan_entry(&fixture_entry("attachments/diagram.svg"), 1);
+        store
+            .replace_file_records(&attachment, &[], &[], &[], &[], &[])
+            .expect("attachment file");
+        let search = TantivySearchIndex::open_in_ram().expect("search");
+        let api = VaultReadApi::with_generation(store, search, 1);
+
+        let page = api
+            .file_tree_projection(PageRequest::with_request_id(90, 0, 150))
+            .expect("file tree");
+
+        assert_eq!(page.request_id, 90);
+        assert_eq!(page.state, ReadState::Complete);
+        assert_eq!(page.items.len(), 150);
+        assert!(page.next_offset.is_none());
+        assert!(
+            page.items
+                .iter()
+                .all(|item| item.file.kind == ScanEntryKind::Markdown)
+        );
     }
 
     #[test]

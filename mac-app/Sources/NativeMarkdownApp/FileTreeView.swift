@@ -2,6 +2,8 @@ import NativeMarkdownCore
 import SwiftUI
 
 struct FileTreeView: View {
+    private static let fileTreeItemLimit = 100_000
+
     var showsHeader = true
 
     @EnvironmentObject private var appState: AppState
@@ -141,7 +143,7 @@ struct FileTreeView: View {
             do {
                 let snapshot = try await EngineFileTreeLoader(reader: reader).loadFileTree(
                     requestID: generation,
-                    maxItems: 5_000
+                    maxItems: Self.fileTreeItemLimit
                 )
 
                 if Task.isCancelled {

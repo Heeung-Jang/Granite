@@ -508,6 +508,20 @@ impl MetadataStore {
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
+    pub fn list_markdown_files(
+        &self,
+        offset: usize,
+        limit: usize,
+    ) -> MetadataStoreResult<Vec<FileRecord>> {
+        let mut statement = self.connection.prepare(
+            "SELECT file_id, relative_path, kind, size_bytes, modified_unix_ms, \
+             file_device, file_inode, content_hash, generation, status, last_error \
+             FROM files WHERE kind = 'markdown' ORDER BY relative_path LIMIT ?1 OFFSET ?2",
+        )?;
+        let rows = statement.query_map(params![limit as i64, offset as i64], row_to_file_record)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
     pub fn lookup_file(
         &self,
         file_id_or_relative_path: &str,
@@ -529,7 +543,7 @@ impl MetadataStore {
         offset: usize,
         limit: usize,
     ) -> MetadataStoreResult<Vec<FileTreeProjection>> {
-        let files = self.list_files(offset, limit)?;
+        let files = self.list_markdown_files(offset, limit)?;
         Ok(files
             .into_iter()
             .map(|file| FileTreeProjection {
@@ -1722,6 +1736,7 @@ mod tests {
             home,
             target,
             guide,
+            ..
         } = projection_fixture();
 
         let lookup = store.lookup_file("Home.md").expect("lookup").expect("home");
@@ -1735,6 +1750,17 @@ mod tests {
                 .map(|item| item.display_path.as_str())
                 .collect::<Vec<_>>(),
             vec!["Docs/Guide.md", "Folder/Target.md"]
+        );
+        assert!(
+            tree.iter()
+                .all(|item| item.file.kind == ScanEntryKind::Markdown)
+        );
+        assert!(
+            store
+                .file_tree_projection(0, 10)
+                .expect("markdown tree")
+                .iter()
+                .all(|item| item.display_path.ends_with(".md"))
         );
 
         let backlinks = store
@@ -1911,6 +1937,7 @@ mod tests {
         target.mark_search_indexed();
         let mut guide = FileRecord::from_scan_entry(&fixture_entry("Docs/Guide.md"), 1);
         guide.mark_search_indexed();
+        let attachment = FileRecord::from_scan_entry(&fixture_entry("attachments/diagram.svg"), 1);
 
         let resolved_link = LinkEdgeRecord {
             source_file_id: home.file_id.clone(),
@@ -2023,6 +2050,9 @@ mod tests {
                 .replace_file_records(file, &[], &tags, &[], &[], &[])
                 .expect("tagged file");
         }
+        store
+            .replace_file_records(&attachment, &[], &[], &[], &[], &[])
+            .expect("attachment");
 
         ProjectionFixture {
             store,

@@ -1174,7 +1174,7 @@ mod tests {
         let complete = unsafe { engine_read_file_tree(handle, 102, 0, 10) };
         let complete_header = decode_header_for_test(&complete);
         assert_eq!(complete_header.state, ENGINE_READ_STATE_COMPLETE);
-        assert_eq!(complete_header.row_count, 4);
+        assert_eq!(complete_header.row_count, 3);
         assert_eq!(complete_header.next_offset, ENGINE_READ_NO_NEXT_OFFSET);
         unsafe { engine_read_result_free(complete) };
         unsafe { engine_read_close(handle) };
