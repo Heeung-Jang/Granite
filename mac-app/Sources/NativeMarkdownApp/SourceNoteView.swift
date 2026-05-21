@@ -689,23 +689,31 @@ struct SourceNoteView: View {
         livePreviewMetadataTask?.cancel()
         let vaultURL = vaultURL
         let file = file
+        let reader = appState.readClient
+        let readAvailability = appState.readAvailability
+        let readGeneration = appState.readGeneration
         livePreviewMetadataTask = Task {
+            guard let reader, readAvailability == .ready else {
+                clearLivePreviewMetadata()
+                return
+            }
+
             let maps = try? await Task.detached(priority: .utility) {
-                let snapshot = try FileSystemNoteInspectorLoader().loadInspector(
-                    at: vaultURL,
+                let metadata = try await EngineLivePreviewMetadataLoader(reader: reader).loadMetadata(
                     file: file,
-                    maxFiles: 5_000
+                    requestID: readGeneration,
+                    contents: contents
                 )
                 let embedPreviewPlan = LivePreviewEmbedPreviewPlan(
                     source: contents,
-                    references: snapshot.attachments
+                    references: metadata.attachments
                 )
                 let previewStates = livePreviewStates(
                     vaultURL: vaultURL,
-                    references: snapshot.attachments.filter { embedPreviewPlan.referenceIDs.contains($0.id) }
+                    references: metadata.attachments.filter { embedPreviewPlan.referenceIDs.contains($0.id) }
                 )
                 return (
-                    LivePreviewLinkStyleMap(source: contents, outgoingLinks: snapshot.outgoingLinks),
+                    metadata.linkStyleMap(source: contents),
                     embedPreviewPlan.previewMap(previewStatesByID: previewStates)
                 )
             }.value

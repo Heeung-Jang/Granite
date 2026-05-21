@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::attachments::{AttachmentReferenceSource, AttachmentResolutionState};
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 
 use crate::parser::PropertyValue;
 use crate::paths::{FileIdentity, lookup_key};
@@ -98,8 +98,68 @@ pub struct AttachmentRecord {
     pub state: AttachmentResolutionState,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileLookupProjection {
+    pub file_id: String,
+    pub relative_path: PathBuf,
+    pub display_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileTreeProjection {
+    pub file: FileRecord,
+    pub display_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkProjection {
+    pub source_file_id: String,
+    pub source_relative_path: Option<PathBuf>,
+    pub target_file_id: Option<String>,
+    pub target_relative_path: Option<PathBuf>,
+    pub target_text: String,
+    pub heading: Option<String>,
+    pub alias: Option<String>,
+    pub is_embed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TagNoteProjection {
+    pub file_id: String,
+    pub relative_path: PathBuf,
+    pub tag: String,
+    pub source: TagSource,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PropertyProjection {
+    pub file_id: String,
+    pub key: String,
+    pub value: IndexPropertyValue,
+    pub display_value: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttachmentProjection {
+    pub source_file_id: String,
+    pub raw_target: String,
+    pub source: AttachmentReferenceSource,
+    pub state: AttachmentResolutionState,
+    pub resolved_relative_path: Option<PathBuf>,
+}
+
 pub struct MetadataStore {
     connection: Connection,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexedFileRecords {
+    pub file: FileRecord,
+    pub links: Vec<LinkEdgeRecord>,
+    pub tags: Vec<TagRecord>,
+    pub properties: Vec<PropertyRecord>,
+    pub headings: Vec<HeadingRecord>,
+    pub attachments: Vec<AttachmentRecord>,
 }
 
 #[derive(Debug)]
@@ -127,6 +187,16 @@ impl IndexSchemaMetadata {
             backend_version: backend_version.into(),
             tokenizer_config: tokenizer_config.into(),
             generation,
+        }
+    }
+}
+
+impl IndexPropertyValue {
+    pub fn display_value(&self) -> String {
+        match self {
+            Self::String(value) => value.clone(),
+            Self::Bool(value) => value.to_string(),
+            Self::List(values) => values.join(", "),
         }
     }
 }
@@ -213,6 +283,27 @@ impl MetadataStore {
         Self::from_connection(Connection::open_in_memory()?, expected)
     }
 
+    pub fn open_existing_read_only(
+        path: impl AsRef<Path>,
+        expected: &IndexSchemaMetadata,
+    ) -> MetadataStoreResult<(Self, IndexSchemaMetadata)> {
+        let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        let stored = read_schema_metadata(&connection)?
+            .ok_or(MetadataStoreError::InvalidStoredValue("schema_version"))?;
+        let expected_with_stored_generation = IndexSchemaMetadata {
+            generation: stored.generation,
+            ..expected.clone()
+        };
+        if stored != expected_with_stored_generation {
+            return Err(MetadataStoreError::SchemaMismatch {
+                stored: Box::new(stored),
+                expected: Box::new(expected_with_stored_generation),
+            });
+        }
+
+        Ok((Self { connection }, stored))
+    }
+
     fn from_connection(
         connection: Connection,
         expected: &IndexSchemaMetadata,
@@ -265,6 +356,135 @@ impl MetadataStore {
         Ok(())
     }
 
+    pub fn bulk_load_file_records(
+        &mut self,
+        records: &[IndexedFileRecords],
+    ) -> MetadataStoreResult<()> {
+        self.connection.execute_batch(
+            "
+            PRAGMA synchronous = OFF;
+            PRAGMA temp_store = MEMORY;
+            ",
+        )?;
+        drop_projection_indexes(&self.connection)?;
+
+        let load_result: MetadataStoreResult<()> = (|| {
+            let transaction = self.connection.transaction()?;
+            {
+                let mut insert_file = transaction.prepare(
+                    "INSERT INTO files (
+                        file_id, relative_path, kind, size_bytes, modified_unix_ms, file_device, file_inode,
+                        content_hash, generation, status, last_error
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                    ON CONFLICT(file_id) DO UPDATE SET
+                        relative_path = excluded.relative_path,
+                        kind = excluded.kind,
+                        size_bytes = excluded.size_bytes,
+                        modified_unix_ms = excluded.modified_unix_ms,
+                        file_device = excluded.file_device,
+                        file_inode = excluded.file_inode,
+                        content_hash = excluded.content_hash,
+                        generation = excluded.generation,
+                        status = excluded.status,
+                        last_error = excluded.last_error",
+                )?;
+                let mut insert_link = transaction.prepare(
+                    "INSERT INTO links (
+                        source_file_id, target_text, resolved_target_file_id, heading, alias, is_embed
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                )?;
+                let mut insert_tag = transaction
+                    .prepare("INSERT INTO tags (file_id, tag, source) VALUES (?1, ?2, ?3)")?;
+                let mut insert_property = transaction.prepare(
+                    "INSERT INTO properties (file_id, key, value_kind, value_json) VALUES (?1, ?2, ?3, ?4)",
+                )?;
+                let mut insert_heading = transaction.prepare(
+                    "INSERT INTO headings (file_id, slug, title, level, byte_offset)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                )?;
+                let mut insert_attachment = transaction.prepare(
+                    "INSERT INTO attachments (source_file_id, source, raw_target, state, state_detail)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                )?;
+
+                for record in records {
+                    let file = &record.file;
+                    insert_file.execute(params![
+                        &file.file_id,
+                        path_to_string(&file.relative_path),
+                        scan_kind_to_str(file.kind),
+                        file.size_bytes as i64,
+                        system_time_to_unix_ms(file.modified),
+                        file.file_identity.device.to_string(),
+                        file.file_identity.inode.to_string(),
+                        file.content_hash.as_deref(),
+                        file.generation as i64,
+                        file_status_to_str(file.status),
+                        file.last_error.as_deref(),
+                    ])?;
+
+                    for link in &record.links {
+                        insert_link.execute(params![
+                            &link.source_file_id,
+                            &link.target_text,
+                            link.resolved_target_file_id.as_deref(),
+                            link.heading.as_deref(),
+                            link.alias.as_deref(),
+                            bool_to_int(link.is_embed),
+                        ])?;
+                    }
+                    for tag in &record.tags {
+                        insert_tag.execute(params![
+                            &tag.file_id,
+                            &tag.tag,
+                            tag_source_to_str(tag.source)
+                        ])?;
+                    }
+                    for property in &record.properties {
+                        let (kind, json) = property_value_to_storage(&property.value)?;
+                        insert_property.execute(params![
+                            &property.file_id,
+                            &property.key,
+                            kind,
+                            json
+                        ])?;
+                    }
+                    for heading in &record.headings {
+                        insert_heading.execute(params![
+                            &heading.file_id,
+                            &heading.slug,
+                            &heading.title,
+                            heading.level as i64,
+                            heading.byte_offset.map(|offset| offset as i64),
+                        ])?;
+                    }
+                    for attachment in &record.attachments {
+                        let (state, detail) = attachment_state_to_storage(&attachment.state)?;
+                        insert_attachment.execute(params![
+                            &attachment.source_file_id,
+                            attachment_source_to_str(attachment.source),
+                            &attachment.raw_target,
+                            state,
+                            detail,
+                        ])?;
+                    }
+                }
+            }
+
+            transaction.commit()?;
+            Ok(())
+        })();
+        let index_result = create_projection_indexes(&self.connection);
+        let pragma_result = self
+            .connection
+            .execute_batch("PRAGMA synchronous = NORMAL;");
+
+        load_result?;
+        index_result?;
+        pragma_result?;
+        Ok(())
+    }
+
     pub fn get_file(&self, file_id: &str) -> MetadataStoreResult<Option<FileRecord>> {
         self.connection
             .query_row(
@@ -286,6 +506,37 @@ impl MetadataStore {
         )?;
         let rows = statement.query_map(params![limit as i64, offset as i64], row_to_file_record)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn lookup_file(
+        &self,
+        file_id_or_relative_path: &str,
+    ) -> MetadataStoreResult<Option<FileLookupProjection>> {
+        self.connection
+            .query_row(
+                "SELECT file_id, relative_path FROM files \
+                 WHERE file_id = ?1 OR relative_path = ?1 \
+                 ORDER BY relative_path LIMIT 1",
+                params![file_id_or_relative_path],
+                row_to_file_lookup_projection,
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    pub fn file_tree_projection(
+        &self,
+        offset: usize,
+        limit: usize,
+    ) -> MetadataStoreResult<Vec<FileTreeProjection>> {
+        let files = self.list_files(offset, limit)?;
+        Ok(files
+            .into_iter()
+            .map(|file| FileTreeProjection {
+                display_path: path_to_string(&file.relative_path),
+                file,
+            })
+            .collect())
     }
 
     pub fn outgoing_links(
@@ -319,6 +570,50 @@ impl MetadataStore {
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
+    pub fn backlink_projections(
+        &self,
+        file_id: &str,
+        offset: usize,
+        limit: usize,
+    ) -> MetadataStoreResult<Vec<LinkProjection>> {
+        let mut statement = self.connection.prepare(
+            "SELECT l.source_file_id, source.relative_path, l.resolved_target_file_id,
+                    target.relative_path, l.target_text, l.heading, l.alias, l.is_embed
+             FROM links l
+             LEFT JOIN files source ON source.file_id = l.source_file_id
+             LEFT JOIN files target ON target.file_id = l.resolved_target_file_id
+             WHERE l.resolved_target_file_id = ?1
+             ORDER BY source.relative_path, l.target_text, l.id LIMIT ?2 OFFSET ?3",
+        )?;
+        let rows = statement.query_map(
+            params![file_id, limit as i64, offset as i64],
+            row_to_link_projection,
+        )?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn outgoing_link_projections(
+        &self,
+        file_id: &str,
+        offset: usize,
+        limit: usize,
+    ) -> MetadataStoreResult<Vec<LinkProjection>> {
+        let mut statement = self.connection.prepare(
+            "SELECT l.source_file_id, source.relative_path, l.resolved_target_file_id,
+                    target.relative_path, l.target_text, l.heading, l.alias, l.is_embed
+             FROM links l
+             LEFT JOIN files source ON source.file_id = l.source_file_id
+             LEFT JOIN files target ON target.file_id = l.resolved_target_file_id
+             WHERE l.source_file_id = ?1
+             ORDER BY l.target_text, l.id LIMIT ?2 OFFSET ?3",
+        )?;
+        let rows = statement.query_map(
+            params![file_id, limit as i64, offset as i64],
+            row_to_link_projection,
+        )?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
     pub fn tags(
         &self,
         file_id: &str,
@@ -331,6 +626,27 @@ impl MetadataStore {
         )?;
         let rows =
             statement.query_map(params![file_id, limit as i64, offset as i64], row_to_tag)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn tag_note_projections(
+        &self,
+        tag: &str,
+        offset: usize,
+        limit: usize,
+    ) -> MetadataStoreResult<Vec<TagNoteProjection>> {
+        let mut statement = self.connection.prepare(
+            "SELECT t.file_id, f.relative_path, t.tag, MIN(t.source)
+             FROM tags t
+             JOIN files f ON f.file_id = t.file_id
+             WHERE t.tag = ?1
+             GROUP BY t.file_id, f.relative_path, t.tag
+             ORDER BY f.relative_path, t.file_id LIMIT ?2 OFFSET ?3",
+        )?;
+        let rows = statement.query_map(
+            params![tag, limit as i64, offset as i64],
+            row_to_tag_note_projection,
+        )?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
@@ -349,6 +665,24 @@ impl MetadataStore {
             row_to_property,
         )?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn property_projections(
+        &self,
+        file_id: &str,
+        offset: usize,
+        limit: usize,
+    ) -> MetadataStoreResult<Vec<PropertyProjection>> {
+        let properties = self.properties(file_id, offset, limit)?;
+        Ok(properties
+            .into_iter()
+            .map(|property| PropertyProjection {
+                display_value: property.value.display_value(),
+                file_id: property.file_id,
+                key: property.key,
+                value: property.value,
+            })
+            .collect())
     }
 
     pub fn headings(
@@ -383,6 +717,30 @@ impl MetadataStore {
             row_to_attachment,
         )?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn attachment_projections(
+        &self,
+        file_id: &str,
+        offset: usize,
+        limit: usize,
+    ) -> MetadataStoreResult<Vec<AttachmentProjection>> {
+        let attachments = self.attachments(file_id, offset, limit)?;
+        Ok(attachments
+            .into_iter()
+            .map(|attachment| AttachmentProjection {
+                resolved_relative_path: match &attachment.state {
+                    AttachmentResolutionState::Resolved { relative_path } => {
+                        Some(relative_path.clone())
+                    }
+                    _ => None,
+                },
+                source_file_id: attachment.source_file_id,
+                raw_target: attachment.raw_target,
+                source: attachment.source,
+                state: attachment.state,
+            })
+            .collect())
     }
 
     pub fn delete_file(&mut self, file_id: &str) -> MetadataStoreResult<()> {
@@ -521,6 +879,38 @@ fn create_schema(connection: &Connection) -> MetadataStoreResult<()> {
             state_detail TEXT,
             FOREIGN KEY(source_file_id) REFERENCES files(file_id) ON DELETE CASCADE
         );
+        ",
+    )?;
+    create_projection_indexes(connection)?;
+    Ok(())
+}
+
+fn create_projection_indexes(connection: &Connection) -> MetadataStoreResult<()> {
+    connection.execute_batch(
+        "
+        CREATE INDEX IF NOT EXISTS idx_files_relative_path ON files(relative_path);
+        CREATE INDEX IF NOT EXISTS idx_links_source_file_id ON links(source_file_id);
+        CREATE INDEX IF NOT EXISTS idx_links_resolved_target_file_id
+            ON links(resolved_target_file_id);
+        CREATE INDEX IF NOT EXISTS idx_tags_file_id ON tags(file_id);
+        CREATE INDEX IF NOT EXISTS idx_tags_tag ON tags(tag);
+        CREATE INDEX IF NOT EXISTS idx_properties_file_id ON properties(file_id);
+        CREATE INDEX IF NOT EXISTS idx_attachments_source_file_id ON attachments(source_file_id);
+        ",
+    )?;
+    Ok(())
+}
+
+fn drop_projection_indexes(connection: &Connection) -> MetadataStoreResult<()> {
+    connection.execute_batch(
+        "
+        DROP INDEX IF EXISTS idx_files_relative_path;
+        DROP INDEX IF EXISTS idx_links_source_file_id;
+        DROP INDEX IF EXISTS idx_links_resolved_target_file_id;
+        DROP INDEX IF EXISTS idx_tags_file_id;
+        DROP INDEX IF EXISTS idx_tags_tag;
+        DROP INDEX IF EXISTS idx_properties_file_id;
+        DROP INDEX IF EXISTS idx_attachments_source_file_id;
         ",
     )?;
     Ok(())
@@ -738,6 +1128,40 @@ fn row_to_file_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<FileRecord> {
     })
 }
 
+fn row_to_file_lookup_projection(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<FileLookupProjection> {
+    let relative_path = PathBuf::from(row.get::<_, String>(1)?);
+    Ok(FileLookupProjection {
+        file_id: row.get(0)?,
+        display_path: path_to_string(&relative_path),
+        relative_path,
+    })
+}
+
+fn row_to_link_projection(row: &rusqlite::Row<'_>) -> rusqlite::Result<LinkProjection> {
+    Ok(LinkProjection {
+        source_file_id: row.get(0)?,
+        source_relative_path: optional_path(row.get(1)?),
+        target_file_id: row.get(2)?,
+        target_relative_path: optional_path(row.get(3)?),
+        target_text: row.get(4)?,
+        heading: row.get(5)?,
+        alias: row.get(6)?,
+        is_embed: int_to_bool(row.get(7)?),
+    })
+}
+
+fn row_to_tag_note_projection(row: &rusqlite::Row<'_>) -> rusqlite::Result<TagNoteProjection> {
+    let source: String = row.get(3)?;
+    Ok(TagNoteProjection {
+        file_id: row.get(0)?,
+        relative_path: PathBuf::from(row.get::<_, String>(1)?),
+        tag: row.get(2)?,
+        source: tag_source_from_str(&source).map_err(|_| rusqlite::Error::InvalidQuery)?,
+    })
+}
+
 fn row_to_link(row: &rusqlite::Row<'_>) -> rusqlite::Result<LinkEdgeRecord> {
     Ok(LinkEdgeRecord {
         source_file_id: row.get(0)?,
@@ -888,8 +1312,16 @@ fn path_to_string(path: &Path) -> String {
     path.to_string_lossy().to_string()
 }
 
+fn optional_path(value: Option<String>) -> Option<PathBuf> {
+    value.map(PathBuf::from)
+}
+
 fn bool_to_int(value: bool) -> i64 {
     if value { 1 } else { 0 }
+}
+
+fn int_to_bool(value: i64) -> bool {
+    value != 0
 }
 
 fn system_time_to_unix_ms(time: Option<SystemTime>) -> Option<i64> {
@@ -990,10 +1422,13 @@ fn reject_reason_from_str(reason: &str) -> Option<crate::attachments::Attachment
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::attachments::{AttachmentReferenceSource, AttachmentResolutionState};
+    use crate::attachments::{
+        AttachmentReferenceSource, AttachmentRejectReason, AttachmentResolutionState,
+    };
+    use crate::parser::PropertyValue;
     use crate::paths::VaultRoot;
     use crate::scanner::scan_vault;
-    use std::path::PathBuf;
+    use std::{path::PathBuf, time::Instant};
 
     #[test]
     fn fixture_file_transitions_from_seen_to_search_indexed() {
@@ -1194,6 +1629,257 @@ mod tests {
     }
 
     #[test]
+    fn metadata_store_bulk_loads_fixture_records() {
+        let metadata = IndexSchemaMetadata::new("sqlite", "metadata-v1", "none", 1);
+        let mut store = MetadataStore::open_in_memory(&metadata).expect("store");
+        let mut home = FileRecord::from_scan_entry(&fixture_entry("Home.md"), 1);
+        home.mark_search_indexed();
+        let mut target = FileRecord::from_scan_entry(&fixture_entry("Folder/Target.md"), 1);
+        target.mark_search_indexed();
+        let link = LinkEdgeRecord {
+            source_file_id: home.file_id.clone(),
+            target_text: "Folder/Target".to_string(),
+            resolved_target_file_id: Some(target.file_id.clone()),
+            heading: None,
+            alias: None,
+            is_embed: false,
+        };
+        let tag = TagRecord {
+            file_id: home.file_id.clone(),
+            tag: "project/native".to_string(),
+            source: TagSource::Inline,
+        };
+
+        store
+            .bulk_load_file_records(&[
+                IndexedFileRecords {
+                    file: home.clone(),
+                    links: vec![link],
+                    tags: vec![tag],
+                    properties: Vec::new(),
+                    headings: Vec::new(),
+                    attachments: Vec::new(),
+                },
+                IndexedFileRecords {
+                    file: target.clone(),
+                    links: Vec::new(),
+                    tags: Vec::new(),
+                    properties: Vec::new(),
+                    headings: Vec::new(),
+                    attachments: Vec::new(),
+                },
+            ])
+            .expect("bulk load");
+
+        assert_eq!(store.row_count(MetadataTable::Files).expect("files"), 2);
+        assert_eq!(store.row_count(MetadataTable::Links).expect("links"), 1);
+        assert_eq!(
+            store
+                .backlink_projections(&target.file_id, 0, 10)
+                .expect("backlinks")
+                .len(),
+            1
+        );
+        assert!(projection_index_exists(
+            &store.connection,
+            "idx_links_source_file_id"
+        ));
+    }
+
+    #[test]
+    fn metadata_schema_has_projection_indexes() {
+        let connection = Connection::open_in_memory().expect("connection");
+        create_schema(&connection).expect("schema");
+        let mut statement = connection
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'index'")
+            .expect("index query");
+        let indexes = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .expect("index rows")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("index names");
+
+        for expected in [
+            "idx_files_relative_path",
+            "idx_links_source_file_id",
+            "idx_links_resolved_target_file_id",
+            "idx_tags_file_id",
+            "idx_tags_tag",
+            "idx_properties_file_id",
+            "idx_attachments_source_file_id",
+        ] {
+            assert!(
+                indexes.iter().any(|index| index == expected),
+                "missing index {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn metadata_projections_return_display_ready_rows() {
+        let ProjectionFixture {
+            store,
+            home,
+            target,
+            guide,
+        } = projection_fixture();
+
+        let lookup = store.lookup_file("Home.md").expect("lookup").expect("home");
+        assert_eq!(lookup.file_id, home.file_id);
+        assert_eq!(lookup.display_path, "Home.md");
+        assert!(store.lookup_file("Missing.md").expect("missing").is_none());
+
+        let tree = store.file_tree_projection(0, 2).expect("file tree");
+        assert_eq!(
+            tree.iter()
+                .map(|item| item.display_path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Docs/Guide.md", "Folder/Target.md"]
+        );
+
+        let backlinks = store
+            .backlink_projections(&target.file_id, 0, 10)
+            .expect("backlinks");
+        assert_eq!(backlinks.len(), 1);
+        assert_eq!(backlinks[0].source_file_id, home.file_id);
+        assert_eq!(
+            backlinks[0].source_relative_path.as_deref(),
+            Some(Path::new("Home.md"))
+        );
+        assert_eq!(backlinks[0].target_text, "Folder/Target");
+
+        let outgoing = store
+            .outgoing_link_projections(&home.file_id, 0, 10)
+            .expect("outgoing");
+        assert_eq!(outgoing.len(), 2);
+        assert!(outgoing.iter().any(|link| {
+            link.target_file_id.as_deref() == Some(target.file_id.as_str())
+                && link.target_relative_path.as_deref() == Some(Path::new("Folder/Target.md"))
+        }));
+        assert!(outgoing.iter().any(|link| {
+            link.target_text == "Missing Note" && link.target_relative_path.is_none()
+        }));
+
+        let tags = store.tags(&home.file_id, 0, 10).expect("current tags");
+        assert_eq!(tags.len(), 2);
+        let tag_notes = store
+            .tag_note_projections("project/native", 0, 2)
+            .expect("tag notes");
+        assert_eq!(tag_notes.len(), 2);
+        assert_eq!(tag_notes[0].relative_path, PathBuf::from("Docs/Guide.md"));
+        assert_eq!(
+            tag_notes[1].relative_path,
+            PathBuf::from("Folder/Target.md")
+        );
+        assert_eq!(
+            store
+                .tag_note_projections("project/native", 0, 10)
+                .expect("deduped tag notes")
+                .len(),
+            3
+        );
+
+        let properties = store
+            .property_projections(&home.file_id, 0, 10)
+            .expect("properties");
+        assert_eq!(
+            properties
+                .iter()
+                .map(|property| (property.key.as_str(), property.display_value.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("active", "true"), ("status", "stable"), ("tags", "a, b")]
+        );
+
+        let attachments = store
+            .attachment_projections(&home.file_id, 0, 10)
+            .expect("attachments");
+        assert_eq!(attachments.len(), 6);
+        assert!(attachments.iter().any(|attachment| {
+            attachment.raw_target == "assets/image.png"
+                && attachment.resolved_relative_path.as_deref()
+                    == Some(Path::new("assets/image.png"))
+        }));
+        assert!(
+            attachments
+                .iter()
+                .any(|attachment| matches!(attachment.state, AttachmentResolutionState::Missing))
+        );
+        assert!(attachments.iter().any(|attachment| matches!(
+            attachment.state,
+            AttachmentResolutionState::Duplicate { .. }
+        )));
+        assert!(
+            attachments
+                .iter()
+                .any(|attachment| matches!(attachment.state, AttachmentResolutionState::Remote))
+        );
+        assert!(
+            attachments.iter().any(|attachment| matches!(
+                attachment.state,
+                AttachmentResolutionState::Rejected(_)
+            ))
+        );
+        assert!(
+            attachments.iter().any(|attachment| matches!(
+                attachment.state,
+                AttachmentResolutionState::Unsupported
+            ))
+        );
+
+        assert_eq!(guide.relative_path, PathBuf::from("Docs/Guide.md"));
+    }
+
+    #[test]
+    fn projection_queries_are_bounded_smoke() {
+        let ProjectionFixture {
+            store,
+            home,
+            target,
+            ..
+        } = projection_fixture();
+        let started = Instant::now();
+
+        assert!(store.file_tree_projection(0, 2).expect("tree").len() <= 2);
+        assert!(
+            store
+                .backlink_projections(&target.file_id, 0, 2)
+                .expect("backlinks")
+                .len()
+                <= 2
+        );
+        assert!(
+            store
+                .outgoing_link_projections(&home.file_id, 0, 2)
+                .expect("outgoing")
+                .len()
+                <= 2
+        );
+        assert!(
+            store
+                .tag_note_projections("project/native", 0, 2)
+                .expect("tags")
+                .len()
+                <= 2
+        );
+        assert!(
+            store
+                .property_projections(&home.file_id, 0, 2)
+                .expect("properties")
+                .len()
+                <= 2
+        );
+        assert!(
+            store
+                .attachment_projections(&home.file_id, 0, 2)
+                .expect("attachments")
+                .len()
+                <= 2
+        );
+
+        assert!(started.elapsed().as_millis() < 250);
+    }
+
+    #[test]
     fn metadata_store_reports_schema_mismatch() {
         let expected = IndexSchemaMetadata::new("sqlite", "metadata-v1", "none", 1);
         let stored = IndexSchemaMetadata::new("sqlite", "metadata-v2", "none", 1);
@@ -1209,6 +1895,143 @@ mod tests {
         ));
     }
 
+    struct ProjectionFixture {
+        store: MetadataStore,
+        home: FileRecord,
+        target: FileRecord,
+        guide: FileRecord,
+    }
+
+    fn projection_fixture() -> ProjectionFixture {
+        let metadata = IndexSchemaMetadata::new("sqlite+tantivy", "metadata-v1", "tantivy", 1);
+        let mut store = MetadataStore::open_in_memory(&metadata).expect("store");
+        let mut home = FileRecord::from_scan_entry(&fixture_entry("Home.md"), 1);
+        home.mark_search_indexed();
+        let mut target = FileRecord::from_scan_entry(&fixture_entry("Folder/Target.md"), 1);
+        target.mark_search_indexed();
+        let mut guide = FileRecord::from_scan_entry(&fixture_entry("Docs/Guide.md"), 1);
+        guide.mark_search_indexed();
+
+        let resolved_link = LinkEdgeRecord {
+            source_file_id: home.file_id.clone(),
+            target_text: "Folder/Target".to_string(),
+            resolved_target_file_id: Some(target.file_id.clone()),
+            heading: None,
+            alias: None,
+            is_embed: false,
+        };
+        let missing_link = LinkEdgeRecord {
+            source_file_id: home.file_id.clone(),
+            target_text: "Missing Note".to_string(),
+            resolved_target_file_id: None,
+            heading: None,
+            alias: Some("Missing".to_string()),
+            is_embed: true,
+        };
+        let home_tags = [
+            TagRecord {
+                file_id: home.file_id.clone(),
+                tag: "project/native".to_string(),
+                source: TagSource::Inline,
+            },
+            TagRecord {
+                file_id: home.file_id.clone(),
+                tag: "project/native".to_string(),
+                source: TagSource::Frontmatter,
+            },
+        ];
+        let properties = [
+            PropertyRecord::from_property_value(
+                home.file_id.clone(),
+                "status",
+                &PropertyValue::String("stable".to_string()),
+            ),
+            PropertyRecord::from_property_value(
+                home.file_id.clone(),
+                "active",
+                &PropertyValue::Bool(true),
+            ),
+            PropertyRecord::from_property_value(
+                home.file_id.clone(),
+                "tags",
+                &PropertyValue::List(vec!["a".to_string(), "b".to_string()]),
+            ),
+        ];
+        let attachments = [
+            AttachmentRecord {
+                source_file_id: home.file_id.clone(),
+                source: AttachmentReferenceSource::WikiEmbed,
+                raw_target: "assets/image.png".to_string(),
+                state: AttachmentResolutionState::Resolved {
+                    relative_path: PathBuf::from("assets/image.png"),
+                },
+            },
+            AttachmentRecord {
+                source_file_id: home.file_id.clone(),
+                source: AttachmentReferenceSource::MarkdownImage,
+                raw_target: "missing.png".to_string(),
+                state: AttachmentResolutionState::Missing,
+            },
+            AttachmentRecord {
+                source_file_id: home.file_id.clone(),
+                source: AttachmentReferenceSource::WikiEmbed,
+                raw_target: "duplicate.png".to_string(),
+                state: AttachmentResolutionState::Duplicate {
+                    candidates: vec![
+                        PathBuf::from("a/duplicate.png"),
+                        PathBuf::from("b/duplicate.png"),
+                    ],
+                },
+            },
+            AttachmentRecord {
+                source_file_id: home.file_id.clone(),
+                source: AttachmentReferenceSource::MarkdownLink,
+                raw_target: "https://example.com/image.png".to_string(),
+                state: AttachmentResolutionState::Remote,
+            },
+            AttachmentRecord {
+                source_file_id: home.file_id.clone(),
+                source: AttachmentReferenceSource::MarkdownImage,
+                raw_target: "../escape.png".to_string(),
+                state: AttachmentResolutionState::Rejected(AttachmentRejectReason::OutsideVault),
+            },
+            AttachmentRecord {
+                source_file_id: home.file_id.clone(),
+                source: AttachmentReferenceSource::MarkdownLink,
+                raw_target: "note.md".to_string(),
+                state: AttachmentResolutionState::Unsupported,
+            },
+        ];
+
+        store
+            .replace_file_records(
+                &home,
+                &[resolved_link, missing_link],
+                &home_tags,
+                &properties,
+                &[],
+                &attachments,
+            )
+            .expect("home");
+        for file in [&target, &guide] {
+            let tags = [TagRecord {
+                file_id: file.file_id.clone(),
+                tag: "project/native".to_string(),
+                source: TagSource::Frontmatter,
+            }];
+            store
+                .replace_file_records(file, &[], &tags, &[], &[], &[])
+                .expect("tagged file");
+        }
+
+        ProjectionFixture {
+            store,
+            home,
+            target,
+            guide,
+        }
+    }
+
     fn fixture_entry(relative_path: &str) -> crate::scanner::ScanEntry {
         let root_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("..")
@@ -1220,5 +2043,18 @@ mod tests {
             .into_iter()
             .find(|entry| entry.relative_path == PathBuf::from(relative_path))
             .expect("fixture entry")
+    }
+
+    fn projection_index_exists(connection: &Connection, name: &str) -> bool {
+        connection
+            .query_row(
+                "SELECT EXISTS (
+                    SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?1
+                )",
+                params![name],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("index exists query")
+            == 1
     }
 }

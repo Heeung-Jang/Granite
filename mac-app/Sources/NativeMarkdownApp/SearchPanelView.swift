@@ -28,6 +28,7 @@ struct SearchPanelView: View {
         }
         .task(id: SearchTaskKey(
             vaultPath: appState.vaultSelection.url?.path,
+            readGeneration: appState.readGeneration,
             query: query,
             mode: mode,
             requestID: handledSearchRequestID
@@ -156,7 +157,7 @@ struct SearchPanelView: View {
             return
         }
 
-        guard case .selected(let vaultURL) = appState.vaultSelection else {
+        guard case .selected = appState.vaultSelection else {
             switch appState.vaultSelection {
             case .noVault:
                 status = .noVault
@@ -182,19 +183,25 @@ struct SearchPanelView: View {
             resultState = .complete
         }
 
+        guard let reader = appState.readClient, appState.readAvailability == .ready else {
+            if appState.readAvailability != .opening {
+                status = .unavailable(readUnavailableTitle(appState.readAvailability))
+                resultState = .error
+            }
+            isLoadingMore = false
+            return
+        }
+
         do {
-            let page = try await Task.detached(priority: .userInitiated) {
-                try FileSystemVaultSearchLoader().search(
-                    at: vaultURL,
-                    query: trimmedQuery,
-                    mode: searchMode,
-                    page: SearchPageRequest(
-                        requestID: requestID,
-                        offset: offset,
-                        limit: limit
-                    )
+            let page = try await EngineVaultSearchLoader(reader: reader).search(
+                query: trimmedQuery,
+                mode: searchMode,
+                page: SearchPageRequest(
+                    requestID: requestID,
+                    offset: offset,
+                    limit: limit
                 )
-            }.value
+            )
 
             guard page.requestID == activeRequestID else {
                 return
@@ -271,10 +278,26 @@ struct SearchPanelView: View {
         query = request.query
         isSearchFocused = true
     }
+
+    private func readUnavailableTitle(_ availability: ReadAvailability) -> String {
+        switch availability {
+        case .unavailable:
+            return "Index Unavailable"
+        case .opening:
+            return "Opening Index"
+        case .ready:
+            return "Index Ready"
+        case .stale:
+            return "Index Stale"
+        case .error(let message):
+            return message
+        }
+    }
 }
 
 private struct SearchTaskKey: Hashable {
     let vaultPath: String?
+    let readGeneration: UInt64
     let query: String
     let mode: SearchMode
     let requestID: UInt64?

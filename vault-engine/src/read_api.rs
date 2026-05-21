@@ -1,15 +1,36 @@
-use std::fmt;
+use std::{fmt, path::Path};
 
 use crate::index::{
-    AttachmentRecord, FileRecord, HeadingRecord, LinkEdgeRecord, MetadataStore, MetadataStoreError,
-    PropertyRecord, TagRecord,
+    AttachmentProjection, AttachmentRecord, FileLookupProjection, FileRecord, FileTreeProjection,
+    HeadingRecord, IndexSchemaMetadata, LinkEdgeRecord, LinkProjection, MetadataStore,
+    MetadataStoreError, PropertyProjection, PropertyRecord, TagRecord,
 };
+use crate::parser::{MarkdownLink, PropertyValue, WikiLink, parse_markdown};
+use crate::scanner::{ScanEntryKind, classify_file};
 use crate::sqlite_fts::SearchResult;
 use crate::tantivy_search::{TantivySearchError, TantivySearchIndex};
 
 const MAX_PAGE_LIMIT: usize = 100;
 const MAX_GRAPH_NODES: usize = 250;
 const MAX_GRAPH_EDGES: usize = 500;
+pub const READ_BACKEND_NAME: &str = "sqlite+tantivy";
+pub const READ_BACKEND_VERSION: &str = "metadata-v1";
+pub const READ_TOKENIZER_CONFIG: &str = "tantivy";
+pub const ENGINE_READ_STATE_COMPLETE: u32 = 0;
+pub const ENGINE_READ_STATE_PARTIAL: u32 = 1;
+pub const ENGINE_READ_STATE_STALE: u32 = 2;
+pub const ENGINE_READ_STATE_CANCELLED: u32 = 3;
+pub const ENGINE_READ_STATE_ERROR: u32 = 4;
+pub const ENGINE_READ_STATE_INDEX_UNAVAILABLE: u32 = 5;
+pub const ENGINE_READ_SEARCH_MODE_FILE_NAME: u32 = 1;
+pub const ENGINE_READ_SEARCH_MODE_BODY: u32 = 2;
+pub const ENGINE_READ_INSPECTOR_PANEL_BACKLINKS: u32 = 1;
+pub const ENGINE_READ_INSPECTOR_PANEL_OUTGOING: u32 = 2;
+pub const ENGINE_READ_INSPECTOR_PANEL_TAGS: u32 = 3;
+pub const ENGINE_READ_INSPECTOR_PANEL_PROPERTIES: u32 = 4;
+pub const ENGINE_READ_INSPECTOR_PANEL_ATTACHMENTS: u32 = 5;
+pub const ENGINE_READ_LOCAL_GRAPH_DEPTH_ONE_HOP: u32 = 1;
+pub const ENGINE_READ_LOCAL_GRAPH_DEPTH_TWO_HOP: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PageRequest {
@@ -110,6 +131,47 @@ pub enum LocalGraphEdgeDirection {
     Backlink,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LivePreviewMetadataItem {
+    pub kind: LivePreviewMetadataItemKind,
+    pub key: String,
+    pub value: String,
+    pub resolved_file_id: Option<String>,
+    pub resolved_relative_path: Option<String>,
+    pub heading: Option<String>,
+    pub alias: Option<String>,
+    pub state: LivePreviewMetadataState,
+    pub source: LivePreviewMetadataSource,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LivePreviewMetadataItemKind {
+    Property,
+    Tag,
+    Link,
+    Attachment,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LivePreviewMetadataState {
+    None,
+    Resolved,
+    Missing,
+    Remote,
+    Rejected,
+    Unsupported,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LivePreviewMetadataSource {
+    None,
+    Inline,
+    WikiLink,
+    MarkdownLink,
+    WikiEmbed,
+    MarkdownImage,
+}
+
 pub struct VaultReadApi {
     metadata: MetadataStore,
     search: TantivySearchIndex,
@@ -120,9 +182,35 @@ pub struct VaultReadApi {
 pub enum ReadApiError {
     Metadata(MetadataStoreError),
     Search(TantivySearchError),
+    InvalidInput(&'static str),
+    NotFound(&'static str),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReadOpenError {
+    MissingMetadata,
+    CorruptMetadata,
+    SchemaMismatch {
+        stored: u32,
+        expected: u32,
+    },
+    BackendMismatch {
+        stored_name: String,
+        stored_version: String,
+        expected_name: String,
+        expected_version: String,
+    },
+    TokenizerMismatch {
+        stored: String,
+        expected: String,
+    },
+    MissingTantivyIndex,
+    InvalidInput(&'static str),
+    Panic,
 }
 
 pub type ReadApiResult<T> = Result<T, ReadApiError>;
+pub type ReadOpenResult<T> = Result<T, ReadOpenError>;
 
 impl PageRequest {
     pub fn new(offset: usize, limit: usize) -> Self {
@@ -195,9 +283,24 @@ impl VaultReadApi {
         }
     }
 
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
     pub fn file_tree(&self, page: PageRequest) -> ReadApiResult<ReadPage<FileRecord>> {
         Ok(self.page_from_overfetch(
             self.metadata.list_files(page.offset, page.fetch_limit())?,
+            page,
+        ))
+    }
+
+    pub fn file_tree_projection(
+        &self,
+        page: PageRequest,
+    ) -> ReadApiResult<ReadPage<FileTreeProjection>> {
+        Ok(self.page_from_overfetch(
+            self.metadata
+                .file_tree_projection(page.offset, page.fetch_limit())?,
             page,
         ))
     }
@@ -239,6 +342,83 @@ impl VaultReadApi {
         page: PageRequest,
     ) -> ReadApiResult<ReadPage<SearchHit>> {
         self.search(query, page)
+    }
+
+    pub fn search_with_mode(
+        &self,
+        mode: u32,
+        query: &str,
+        page: PageRequest,
+    ) -> ReadApiResult<ReadPage<SearchHit>> {
+        match mode {
+            ENGINE_READ_SEARCH_MODE_FILE_NAME => self.file_name_search(query, page),
+            ENGINE_READ_SEARCH_MODE_BODY => self.body_search(query, page),
+            _ => Err(ReadApiError::InvalidInput("search_mode")),
+        }
+    }
+
+    pub fn backlinks_for_path(
+        &self,
+        relative_path: &str,
+        page: PageRequest,
+    ) -> ReadApiResult<ReadPage<LinkProjection>> {
+        let file = self.require_file(relative_path)?;
+        Ok(self.page_from_overfetch(
+            self.metadata
+                .backlink_projections(&file.file_id, page.offset, page.fetch_limit())?,
+            page,
+        ))
+    }
+
+    pub fn outgoing_links_for_path(
+        &self,
+        relative_path: &str,
+        page: PageRequest,
+    ) -> ReadApiResult<ReadPage<LinkProjection>> {
+        let file = self.require_file(relative_path)?;
+        Ok(self.page_from_overfetch(
+            self.metadata.outgoing_link_projections(
+                &file.file_id,
+                page.offset,
+                page.fetch_limit(),
+            )?,
+            page,
+        ))
+    }
+
+    pub fn tags_for_path(
+        &self,
+        relative_path: &str,
+        page: PageRequest,
+    ) -> ReadApiResult<ReadPage<TagRecord>> {
+        let file = self.require_file(relative_path)?;
+        self.tags(&file.file_id, page)
+    }
+
+    pub fn properties_for_path(
+        &self,
+        relative_path: &str,
+        page: PageRequest,
+    ) -> ReadApiResult<ReadPage<PropertyProjection>> {
+        let file = self.require_file(relative_path)?;
+        Ok(self.page_from_overfetch(
+            self.metadata
+                .property_projections(&file.file_id, page.offset, page.fetch_limit())?,
+            page,
+        ))
+    }
+
+    pub fn attachments_for_path(
+        &self,
+        relative_path: &str,
+        page: PageRequest,
+    ) -> ReadApiResult<ReadPage<AttachmentProjection>> {
+        let file = self.require_file(relative_path)?;
+        Ok(self.page_from_overfetch(
+            self.metadata
+                .attachment_projections(&file.file_id, page.offset, page.fetch_limit())?,
+            page,
+        ))
     }
 
     pub fn backlinks(
@@ -327,6 +507,86 @@ impl VaultReadApi {
         })
     }
 
+    pub fn local_graph_for_path(
+        &self,
+        relative_path: &str,
+        request: LocalGraphRequest,
+    ) -> ReadApiResult<ReadValue<LocalGraph>> {
+        let file = self.require_file(relative_path)?;
+        self.local_graph(&file.file_id, request)
+    }
+
+    pub fn live_preview_metadata(
+        &self,
+        request_id: u64,
+        relative_path: &str,
+        contents: &str,
+    ) -> ReadApiResult<ReadPage<LivePreviewMetadataItem>> {
+        if relative_path.trim().is_empty() {
+            return Err(ReadApiError::InvalidInput("relative_path"));
+        }
+
+        let parsed = parse_markdown(contents);
+        let mut items = Vec::new();
+
+        for (key, value) in &parsed.properties {
+            items.push(LivePreviewMetadataItem {
+                kind: LivePreviewMetadataItemKind::Property,
+                key: key.clone(),
+                value: display_property_value(value),
+                resolved_file_id: None,
+                resolved_relative_path: None,
+                heading: None,
+                alias: None,
+                state: LivePreviewMetadataState::None,
+                source: LivePreviewMetadataSource::None,
+            });
+        }
+
+        for tag in &parsed.tags {
+            items.push(LivePreviewMetadataItem {
+                kind: LivePreviewMetadataItemKind::Tag,
+                key: "tag".to_string(),
+                value: tag.clone(),
+                resolved_file_id: None,
+                resolved_relative_path: None,
+                heading: None,
+                alias: None,
+                state: LivePreviewMetadataState::None,
+                source: LivePreviewMetadataSource::Inline,
+            });
+        }
+
+        for link in &parsed.wikilinks {
+            items.push(self.live_wiki_link_item(link)?);
+        }
+
+        for embed in &parsed.embeds {
+            items.push(self.live_wiki_embed_item(embed)?);
+        }
+
+        for link in &parsed.markdown_links {
+            items.push(self.live_markdown_link_item(relative_path, link)?);
+        }
+
+        let has_next = items.len() > MAX_PAGE_LIMIT;
+        if has_next {
+            items.truncate(MAX_PAGE_LIMIT);
+        }
+
+        Ok(ReadPage {
+            request_id,
+            generation: self.generation,
+            items,
+            next_offset: has_next.then_some(MAX_PAGE_LIMIT),
+            state: if has_next {
+                ReadState::Partial
+            } else {
+                ReadState::Complete
+            },
+        })
+    }
+
     fn search(&self, query: &str, page: PageRequest) -> ReadApiResult<ReadPage<SearchHit>> {
         let results = match self
             .search
@@ -364,6 +624,113 @@ impl VaultReadApi {
                 ReadState::Complete
             },
         }
+    }
+
+    fn require_file(&self, relative_path: &str) -> ReadApiResult<FileLookupProjection> {
+        if relative_path.trim().is_empty() {
+            return Err(ReadApiError::InvalidInput("relative_path"));
+        }
+        self.metadata
+            .lookup_file(relative_path)?
+            .ok_or(ReadApiError::NotFound("relative_path"))
+    }
+
+    fn live_wiki_link_item(&self, link: &WikiLink) -> ReadApiResult<LivePreviewMetadataItem> {
+        let resolved = self.resolve_wiki_target(&link.target)?;
+        Ok(link_metadata_item(
+            LivePreviewMetadataItemKind::Link,
+            "wikilink",
+            &link.target,
+            resolved,
+            link.heading.clone(),
+            link.alias.clone(),
+            LivePreviewMetadataSource::WikiLink,
+        ))
+    }
+
+    fn live_wiki_embed_item(&self, embed: &WikiLink) -> ReadApiResult<LivePreviewMetadataItem> {
+        let resolved = self.resolve_wiki_target(&embed.target)?;
+        Ok(link_metadata_item(
+            LivePreviewMetadataItemKind::Attachment,
+            "embed",
+            &embed.target,
+            resolved,
+            embed.heading.clone(),
+            embed.alias.clone(),
+            LivePreviewMetadataSource::WikiEmbed,
+        ))
+    }
+
+    fn live_markdown_link_item(
+        &self,
+        relative_path: &str,
+        link: &MarkdownLink,
+    ) -> ReadApiResult<LivePreviewMetadataItem> {
+        let target = link.target.split('#').next().unwrap_or(&link.target);
+        let is_attachment =
+            link.image || classify_file(Path::new(target)) == ScanEntryKind::Attachment;
+        let resolved = self.resolve_markdown_target(relative_path, target)?;
+        Ok(link_metadata_item(
+            if is_attachment {
+                LivePreviewMetadataItemKind::Attachment
+            } else {
+                LivePreviewMetadataItemKind::Link
+            },
+            if link.image { "image" } else { "markdown_link" },
+            &link.target,
+            resolved,
+            None,
+            Some(link.text.clone()),
+            if link.image {
+                LivePreviewMetadataSource::MarkdownImage
+            } else {
+                LivePreviewMetadataSource::MarkdownLink
+            },
+        ))
+    }
+
+    fn resolve_wiki_target(&self, target: &str) -> ReadApiResult<LivePreviewTargetResolution> {
+        if is_remote_target(target) {
+            return Ok(LivePreviewTargetResolution::remote());
+        }
+        if is_rejected_target(target) {
+            return Ok(LivePreviewTargetResolution::rejected());
+        }
+        self.resolve_target_candidates(link_target_candidates(target))
+    }
+
+    fn resolve_markdown_target(
+        &self,
+        relative_path: &str,
+        target: &str,
+    ) -> ReadApiResult<LivePreviewTargetResolution> {
+        if is_remote_target(target) {
+            return Ok(LivePreviewTargetResolution::remote());
+        }
+        if is_rejected_target(target) {
+            return Ok(LivePreviewTargetResolution::rejected());
+        }
+
+        let target_path = Path::new(relative_path)
+            .parent()
+            .unwrap_or_else(|| Path::new(""))
+            .join(target);
+        self.resolve_target_candidates(path_target_candidates(&target_path))
+    }
+
+    fn resolve_target_candidates(
+        &self,
+        candidates: Vec<String>,
+    ) -> ReadApiResult<LivePreviewTargetResolution> {
+        if candidates.is_empty() {
+            return Ok(LivePreviewTargetResolution::missing());
+        }
+        for candidate in candidates {
+            if let Some(file) = self.metadata.lookup_file(&candidate)? {
+                return Ok(LivePreviewTargetResolution::resolved(file));
+            }
+        }
+        Ok(LivePreviewTargetResolution::missing())
     }
 
     fn build_one_hop_graph(
@@ -514,6 +881,55 @@ impl VaultReadApi {
     }
 }
 
+pub fn expected_read_schema_metadata() -> IndexSchemaMetadata {
+    IndexSchemaMetadata::new(
+        READ_BACKEND_NAME,
+        READ_BACKEND_VERSION,
+        READ_TOKENIZER_CONFIG,
+        0,
+    )
+}
+
+pub fn open_metadata_store_for_read(
+    metadata_path: impl AsRef<Path>,
+) -> ReadOpenResult<(MetadataStore, u64)> {
+    let metadata_path = metadata_path.as_ref();
+    if metadata_path.as_os_str().is_empty() {
+        return Err(ReadOpenError::InvalidInput("metadata_path"));
+    }
+    if !metadata_path.is_file() {
+        return Err(ReadOpenError::MissingMetadata);
+    }
+
+    let expected = expected_read_schema_metadata();
+    let (metadata, stored) = MetadataStore::open_existing_read_only(metadata_path, &expected)
+        .map_err(ReadOpenError::from_metadata_open)?;
+    Ok((metadata, stored.generation))
+}
+
+pub fn open_tantivy_index_for_read(
+    tantivy_path: impl AsRef<Path>,
+) -> ReadOpenResult<TantivySearchIndex> {
+    let tantivy_path = tantivy_path.as_ref();
+    if tantivy_path.as_os_str().is_empty() {
+        return Err(ReadOpenError::InvalidInput("tantivy_path"));
+    }
+    if !tantivy_path.is_dir() {
+        return Err(ReadOpenError::MissingTantivyIndex);
+    }
+    TantivySearchIndex::open_existing_dir(tantivy_path)
+        .map_err(|_| ReadOpenError::MissingTantivyIndex)
+}
+
+pub fn open_vault_read_api(
+    metadata_path: impl AsRef<Path>,
+    tantivy_path: impl AsRef<Path>,
+) -> ReadOpenResult<VaultReadApi> {
+    let (metadata, generation) = open_metadata_store_for_read(metadata_path)?;
+    let search = open_tantivy_index_for_read(tantivy_path)?;
+    Ok(VaultReadApi::with_generation(metadata, search, generation))
+}
+
 struct LocalGraphBuild {
     graph: LocalGraph,
     partial: bool,
@@ -589,6 +1005,41 @@ impl LocalGraphBuilder {
     }
 }
 
+struct LivePreviewTargetResolution {
+    file: Option<FileLookupProjection>,
+    state: LivePreviewMetadataState,
+}
+
+impl LivePreviewTargetResolution {
+    fn resolved(file: FileLookupProjection) -> Self {
+        Self {
+            file: Some(file),
+            state: LivePreviewMetadataState::Resolved,
+        }
+    }
+
+    fn missing() -> Self {
+        Self {
+            file: None,
+            state: LivePreviewMetadataState::Missing,
+        }
+    }
+
+    fn remote() -> Self {
+        Self {
+            file: None,
+            state: LivePreviewMetadataState::Remote,
+        }
+    }
+
+    fn rejected() -> Self {
+        Self {
+            file: None,
+            state: LivePreviewMetadataState::Rejected,
+        }
+    }
+}
+
 fn graph_file_node_id(file_id: &str) -> String {
     format!("file:{file_id}")
 }
@@ -612,11 +1063,80 @@ fn push_frontier_file(frontier: &mut Vec<String>, center_file_id: &str, file_id:
     }
 }
 
+fn display_property_value(value: &PropertyValue) -> String {
+    match value {
+        PropertyValue::String(value) => value.clone(),
+        PropertyValue::Bool(value) => value.to_string(),
+        PropertyValue::List(values) => values.join(", "),
+    }
+}
+
+fn link_metadata_item(
+    kind: LivePreviewMetadataItemKind,
+    key: &str,
+    value: &str,
+    resolved: LivePreviewTargetResolution,
+    heading: Option<String>,
+    alias: Option<String>,
+    source: LivePreviewMetadataSource,
+) -> LivePreviewMetadataItem {
+    LivePreviewMetadataItem {
+        kind,
+        key: key.to_string(),
+        value: value.to_string(),
+        resolved_file_id: resolved.file.as_ref().map(|file| file.file_id.clone()),
+        resolved_relative_path: resolved.file.map(|file| file.display_path),
+        heading,
+        alias,
+        state: resolved.state,
+        source,
+    }
+}
+
+fn link_target_candidates(target: &str) -> Vec<String> {
+    let target = target.trim();
+    if target.is_empty() {
+        return Vec::new();
+    }
+    path_target_candidates(Path::new(target))
+}
+
+fn path_target_candidates(path: &Path) -> Vec<String> {
+    let mut candidates = Vec::new();
+    let value = path.to_string_lossy().trim().to_string();
+    if value.is_empty() {
+        return candidates;
+    }
+    candidates.push(value.clone());
+    if path.extension().is_none() {
+        candidates.push(format!("{value}.md"));
+    }
+    candidates
+}
+
+fn is_remote_target(target: &str) -> bool {
+    target_scheme(target).is_some_and(|scheme| {
+        scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")
+    })
+}
+
+fn is_rejected_target(target: &str) -> bool {
+    target_scheme(target).is_some() && !is_remote_target(target)
+}
+
+fn target_scheme(target: &str) -> Option<&str> {
+    let colon = target.find(':')?;
+    let slash = target.find('/').unwrap_or(usize::MAX);
+    (colon < slash).then(|| &target[..colon])
+}
+
 impl fmt::Display for ReadApiError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Metadata(error) => write!(formatter, "read api metadata error: {error}"),
             Self::Search(error) => write!(formatter, "read api search error: {error}"),
+            Self::InvalidInput(field) => write!(formatter, "invalid read api input: {field}"),
+            Self::NotFound(field) => write!(formatter, "read api target not found: {field}"),
         }
     }
 }
@@ -635,6 +1155,106 @@ impl From<TantivySearchError> for ReadApiError {
     }
 }
 
+impl ReadOpenError {
+    pub fn abi_code(&self) -> &'static str {
+        match self {
+            Self::MissingMetadata => "missing_metadata",
+            Self::CorruptMetadata => "corrupt_metadata",
+            Self::SchemaMismatch { .. } => "schema_mismatch",
+            Self::BackendMismatch { .. } => "backend_mismatch",
+            Self::TokenizerMismatch { .. } => "tokenizer_mismatch",
+            Self::MissingTantivyIndex => "missing_tantivy_index",
+            Self::InvalidInput(_) => "invalid_input",
+            Self::Panic => "panic",
+        }
+    }
+
+    pub fn abi_numeric_code(&self) -> u32 {
+        match self {
+            Self::MissingMetadata => 1,
+            Self::CorruptMetadata => 2,
+            Self::SchemaMismatch { .. } => 3,
+            Self::BackendMismatch { .. } => 4,
+            Self::TokenizerMismatch { .. } => 5,
+            Self::MissingTantivyIndex => 6,
+            Self::InvalidInput(_) => 7,
+            Self::Panic => 8,
+        }
+    }
+
+    pub fn state_code(&self) -> u32 {
+        match self {
+            Self::MissingMetadata | Self::MissingTantivyIndex => {
+                ENGINE_READ_STATE_INDEX_UNAVAILABLE
+            }
+            _ => ENGINE_READ_STATE_ERROR,
+        }
+    }
+
+    fn from_metadata_open(error: MetadataStoreError) -> Self {
+        match error {
+            MetadataStoreError::SchemaMismatch { stored, expected } => {
+                if stored.schema_version != expected.schema_version {
+                    Self::SchemaMismatch {
+                        stored: stored.schema_version,
+                        expected: expected.schema_version,
+                    }
+                } else if stored.backend_name != expected.backend_name
+                    || stored.backend_version != expected.backend_version
+                {
+                    Self::BackendMismatch {
+                        stored_name: stored.backend_name,
+                        stored_version: stored.backend_version,
+                        expected_name: expected.backend_name,
+                        expected_version: expected.backend_version,
+                    }
+                } else if stored.tokenizer_config != expected.tokenizer_config {
+                    Self::TokenizerMismatch {
+                        stored: stored.tokenizer_config,
+                        expected: expected.tokenizer_config,
+                    }
+                } else {
+                    Self::CorruptMetadata
+                }
+            }
+            MetadataStoreError::Sqlite(_) | MetadataStoreError::InvalidStoredValue(_) => {
+                Self::CorruptMetadata
+            }
+        }
+    }
+}
+
+impl fmt::Display for ReadOpenError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingMetadata => write!(formatter, "metadata store is missing"),
+            Self::CorruptMetadata => write!(formatter, "metadata store is corrupt"),
+            Self::SchemaMismatch { stored, expected } => write!(
+                formatter,
+                "metadata schema mismatch: stored={stored}, expected={expected}"
+            ),
+            Self::BackendMismatch {
+                stored_name,
+                stored_version,
+                expected_name,
+                expected_version,
+            } => write!(
+                formatter,
+                "metadata backend mismatch: stored={stored_name}/{stored_version}, expected={expected_name}/{expected_version}"
+            ),
+            Self::TokenizerMismatch { stored, expected } => write!(
+                formatter,
+                "metadata tokenizer mismatch: stored={stored}, expected={expected}"
+            ),
+            Self::MissingTantivyIndex => write!(formatter, "tantivy search index is missing"),
+            Self::InvalidInput(field) => write!(formatter, "invalid read open input: {field}"),
+            Self::Panic => write!(formatter, "read ffi panic"),
+        }
+    }
+}
+
+impl std::error::Error for ReadOpenError {}
+
 impl From<SearchResult> for SearchHit {
     fn from(result: SearchResult) -> Self {
         Self {
@@ -650,7 +1270,7 @@ impl From<SearchResult> for SearchHit {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
+    use std::{fs, path::PathBuf};
 
     use crate::attachments::{AttachmentReferenceSource, AttachmentResolutionState};
     use crate::index::{
@@ -662,6 +1282,163 @@ mod tests {
     use crate::scanner::{ScanEntry, scan_vault};
     use crate::sqlite_fts::SearchDocument;
     use crate::tantivy_search::TantivySearchIndex;
+    use tempfile::tempdir;
+
+    #[test]
+    fn read_open_error_codes_are_stable() {
+        let errors = [
+            (ReadOpenError::MissingMetadata, "missing_metadata", 1),
+            (ReadOpenError::CorruptMetadata, "corrupt_metadata", 2),
+            (
+                ReadOpenError::SchemaMismatch {
+                    stored: 0,
+                    expected: 1,
+                },
+                "schema_mismatch",
+                3,
+            ),
+            (
+                ReadOpenError::BackendMismatch {
+                    stored_name: "sqlite-fts".to_string(),
+                    stored_version: "metadata-v1".to_string(),
+                    expected_name: READ_BACKEND_NAME.to_string(),
+                    expected_version: READ_BACKEND_VERSION.to_string(),
+                },
+                "backend_mismatch",
+                4,
+            ),
+            (
+                ReadOpenError::TokenizerMismatch {
+                    stored: "unicode61".to_string(),
+                    expected: READ_TOKENIZER_CONFIG.to_string(),
+                },
+                "tokenizer_mismatch",
+                5,
+            ),
+            (
+                ReadOpenError::MissingTantivyIndex,
+                "missing_tantivy_index",
+                6,
+            ),
+            (
+                ReadOpenError::InvalidInput("metadata_path"),
+                "invalid_input",
+                7,
+            ),
+            (ReadOpenError::Panic, "panic", 8),
+        ];
+
+        for (error, code, numeric_code) in errors {
+            assert_eq!(error.abi_code(), code);
+            assert_eq!(error.abi_numeric_code(), numeric_code);
+        }
+    }
+
+    #[test]
+    fn read_state_abi_constants_are_stable() {
+        assert_eq!(ENGINE_READ_STATE_COMPLETE, 0);
+        assert_eq!(ENGINE_READ_STATE_PARTIAL, 1);
+        assert_eq!(ENGINE_READ_STATE_STALE, 2);
+        assert_eq!(ENGINE_READ_STATE_CANCELLED, 3);
+        assert_eq!(ENGINE_READ_STATE_ERROR, 4);
+        assert_eq!(ENGINE_READ_STATE_INDEX_UNAVAILABLE, 5);
+    }
+
+    #[test]
+    fn metadata_read_open_preserves_stored_generation() {
+        let dir = tempdir().expect("tempdir");
+        let metadata_path = dir.path().join("metadata.sqlite");
+        let metadata = IndexSchemaMetadata::new(
+            READ_BACKEND_NAME,
+            READ_BACKEND_VERSION,
+            READ_TOKENIZER_CONFIG,
+            7,
+        );
+        let store = MetadataStore::open(&metadata_path, &metadata).expect("store");
+        drop(store);
+
+        let (_store, generation) =
+            open_metadata_store_for_read(&metadata_path).expect("open metadata");
+
+        assert_eq!(generation, 7);
+    }
+
+    #[test]
+    fn metadata_read_open_reports_missing_corrupt_and_schema_mismatch() {
+        let dir = tempdir().expect("tempdir");
+        let missing_path = dir.path().join("missing.sqlite");
+        assert_eq!(
+            open_metadata_store_for_read(&missing_path)
+                .err()
+                .expect("missing"),
+            ReadOpenError::MissingMetadata
+        );
+
+        let corrupt_path = dir.path().join("corrupt.sqlite");
+        fs::write(&corrupt_path, b"not sqlite").expect("corrupt");
+        assert_eq!(
+            open_metadata_store_for_read(&corrupt_path)
+                .err()
+                .expect("corrupt"),
+            ReadOpenError::CorruptMetadata
+        );
+
+        let schema_path = dir.path().join("schema.sqlite");
+        let metadata = IndexSchemaMetadata::new(
+            READ_BACKEND_NAME,
+            READ_BACKEND_VERSION,
+            READ_TOKENIZER_CONFIG,
+            3,
+        );
+        let store = MetadataStore::open(&schema_path, &metadata).expect("store");
+        drop(store);
+        let connection = rusqlite::Connection::open(&schema_path).expect("connection");
+        connection
+            .execute(
+                "UPDATE index_metadata SET value = '2' WHERE key = 'schema_version'",
+                [],
+            )
+            .expect("schema version update");
+        drop(connection);
+
+        assert_eq!(
+            open_metadata_store_for_read(&schema_path)
+                .err()
+                .expect("schema"),
+            ReadOpenError::SchemaMismatch {
+                stored: 2,
+                expected: 1
+            }
+        );
+    }
+
+    #[test]
+    fn tantivy_read_open_reports_missing_and_opens_existing_index() {
+        let dir = tempdir().expect("tempdir");
+        let missing_path = dir.path().join("missing-tantivy");
+        assert_eq!(
+            open_tantivy_index_for_read(&missing_path)
+                .err()
+                .expect("missing"),
+            ReadOpenError::MissingTantivyIndex
+        );
+
+        let index_path = dir.path().join("tantivy");
+        let mut index = TantivySearchIndex::open_in_dir(&index_path).expect("create index");
+        index
+            .replace_documents(&[SearchDocument {
+                file_id: "home".to_string(),
+                path: "Home.md".to_string(),
+                title: "Home".to_string(),
+                body: "searchable body".to_string(),
+            }])
+            .expect("write index");
+        drop(index);
+
+        let index = open_tantivy_index_for_read(&index_path).expect("open index");
+
+        assert_eq!(index.search("searchable", 10).expect("search").len(), 1);
+    }
 
     #[test]
     fn read_api_returns_paginated_metadata_and_search_states() {

@@ -1,14 +1,18 @@
 import Foundation
 
 public struct IndexConfiguration: Equatable {
+    public static let defaultSchemaVersion = "metadata-v1"
+    public static let defaultBackendVersion = "sqlite+tantivy"
+    public static let defaultTokenizerConfig = "tantivy"
+
     public let schemaVersion: String
     public let backendVersion: String
     public let tokenizerConfig: String
 
     public init(
-        schemaVersion: String = "schema-v1",
-        backendVersion: String = "backend-unselected-v1",
-        tokenizerConfig: String = "tokenizer-default-v1"
+        schemaVersion: String = Self.defaultSchemaVersion,
+        backendVersion: String = Self.defaultBackendVersion,
+        tokenizerConfig: String = Self.defaultTokenizerConfig
     ) {
         self.schemaVersion = schemaVersion
         self.backendVersion = backendVersion
@@ -20,6 +24,8 @@ public struct AppOwnedIndexLocation: Equatable {
     public let vaultIdentityHash: String
     public let rootDirectory: URL
     public let dataDirectory: URL
+    public let metadataStoreFile: URL
+    public let tantivyIndexDirectory: URL
     public let indexingQueueFile: URL
     public let lockFile: URL
     public let rebuildDirectory: URL
@@ -61,6 +67,14 @@ public struct AppOwnedIndexDirectoryResolver: IndexDirectoryResolving {
             .appendingPathComponent(safePathComponent(configuration.tokenizerConfig), isDirectory: true)
         let dataDirectory = rootDirectory.appendingPathComponent("data", isDirectory: true)
         let rebuildDirectory = rootDirectory.appendingPathComponent("rebuild", isDirectory: true)
+        let metadataStoreFile = dataDirectory.appendingPathComponent(
+            "metadata.sqlite",
+            isDirectory: false
+        )
+        let tantivyIndexDirectory = dataDirectory.appendingPathComponent(
+            "tantivy",
+            isDirectory: true
+        )
         let indexingQueueFile = dataDirectory.appendingPathComponent(
             "indexing-queue.sqlite",
             isDirectory: false
@@ -74,6 +88,8 @@ public struct AppOwnedIndexDirectoryResolver: IndexDirectoryResolving {
             vaultIdentityHash: identityHash,
             rootDirectory: rootDirectory,
             dataDirectory: dataDirectory,
+            metadataStoreFile: metadataStoreFile,
+            tantivyIndexDirectory: tantivyIndexDirectory,
             indexingQueueFile: indexingQueueFile,
             lockFile: lockFile,
             rebuildDirectory: rebuildDirectory,

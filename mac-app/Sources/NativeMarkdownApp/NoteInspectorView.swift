@@ -7,8 +7,11 @@ struct NoteInspectorView: View {
     let vaultURL: URL
     let file: FileTreeItem
 
-    @State private var state: NoteInspectorViewState = .loading
     @State private var selectedPanel: NoteInspectorPanel = .backlinks
+    @State private var backlinksState: InspectorPanelState<[BacklinkItem]> = .idle
+    @State private var outgoingState: InspectorPanelState<[OutgoingLinkItem]> = .idle
+    @State private var tagsState: InspectorPanelState<TagsPropertiesPayload> = .idle
+    @State private var attachmentsState: InspectorPanelState<[AttachmentReferenceItem]> = .idle
 
     var body: some View {
         VStack(spacing: 0) {
@@ -22,8 +25,13 @@ struct NoteInspectorView: View {
         }
         .frame(minWidth: 260, idealWidth: 300, maxWidth: 360)
         .background(ObsidianUI.sidebarBackground)
-        .task(id: file.id) {
-            await load()
+        .task(id: "\(file.id)-\(appState.readGeneration)") {
+            await resetAndLoadDefaultPanel()
+        }
+        .onChange(of: selectedPanel) { _, panel in
+            Task {
+                await load(panel)
+            }
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Inspector")
@@ -43,7 +51,7 @@ struct NoteInspectorView: View {
 
             Spacer()
 
-            if case .loading = state {
+            if selectedPanelIsLoading {
                 ProgressView()
                     .controlSize(.small)
             }
@@ -52,131 +60,271 @@ struct NoteInspectorView: View {
 
     @ViewBuilder
     private var content: some View {
-        switch state {
-        case .loading:
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    InspectorSection(title: "링크된 언급", count: 0) {
-                        HStack(spacing: 6) {
-                            ProgressView()
-                                .controlSize(.small)
-                            EmptyInlineText("백링크를 불러오는 중입니다.")
-                        }
-                    }
-
-                    InspectorSection(title: "링크되지 않은 언급") {
-                        EmptyInlineText("검색된 언급이 없습니다.")
-                    }
-                }
-                .padding(12)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                selectedPanelContent()
             }
-        case .failed(let message):
-            EmptyInspectorState(title: message, systemImage: "xmark.octagon")
-        case .loaded(let snapshot):
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    if snapshot.state != .complete {
-                        InspectorStateBanner(state: snapshot.state)
-                    }
-
-                    if !snapshot.warnings.isEmpty {
-                        warningsSection(snapshot)
-                    }
-
-                    selectedPanelContent(snapshot)
-                }
-                .padding(12)
-            }
-            .accessibilityLabel("Note inspector")
+            .padding(12)
         }
-    }
-
-    private func load() async {
-        state = .loading
-        let timer = AppTelemetryTimer()
-        do {
-            let snapshot = try await Task.detached(priority: .userInitiated) {
-                try FileSystemNoteInspectorLoader().loadInspector(at: vaultURL, file: file, maxFiles: 5_000)
-            }.value
-
-            if Task.isCancelled {
-                return
-            }
-            state = .loaded(snapshot)
-            AppTelemetry.inspectorRefreshCompleted(
-                state: snapshot.state,
-                outgoingCount: snapshot.outgoingLinks.count,
-                backlinkCount: snapshot.backlinks.count,
-                tagCount: snapshot.tags.count,
-                propertyCount: snapshot.properties.count,
-                durationMilliseconds: timer.elapsedMilliseconds()
-            )
-        } catch {
-            if Task.isCancelled {
-                return
-            }
-            state = .failed(error.localizedDescription)
-            AppTelemetry.inspectorRefreshCompleted(
-                state: .error,
-                outgoingCount: 0,
-                backlinkCount: 0,
-                tagCount: 0,
-                propertyCount: 0,
-                durationMilliseconds: timer.elapsedMilliseconds()
-            )
-        }
+        .accessibilityLabel("Note inspector")
     }
 
     private func open(_ file: FileTreeItem) {
         appState.openFile(file)
     }
 
-    @ViewBuilder
-    private func selectedPanelContent(_ snapshot: NoteInspectorSnapshot) -> some View {
+    private var selectedPanelIsLoading: Bool {
         switch selectedPanel {
         case .backlinks:
-            backlinksSection(snapshot)
+            backlinksState.isLoading
         case .outgoing:
-            outgoingSection(snapshot)
+            outgoingState.isLoading
         case .tags:
-            tagsSection(snapshot)
-            propertiesSection(snapshot)
+            tagsState.isLoading
         case .attachments:
-            attachmentsSection(snapshot)
+            attachmentsState.isLoading
         case .graph:
-            graphSection(snapshot)
+            false
         }
     }
 
-    private func warningsSection(_ snapshot: NoteInspectorSnapshot) -> some View {
-        InspectorSection(title: "Warnings") {
-            ForEach(snapshot.warnings, id: \.self) { warning in
-                Label(warning, systemImage: "exclamationmark.triangle")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+    private func resetAndLoadDefaultPanel() async {
+        backlinksState = .idle
+        outgoingState = .idle
+        tagsState = .idle
+        attachmentsState = .idle
+        selectedPanel = .backlinks
+        await load(.backlinks)
+    }
+
+    private func load(_ panel: NoteInspectorPanel) async {
+        switch panel {
+        case .backlinks:
+            await loadBacklinks()
+        case .outgoing:
+            await loadOutgoing()
+        case .tags:
+            await loadTagsAndProperties()
+        case .attachments:
+            await loadAttachments()
+        case .graph:
+            return
+        }
+    }
+
+    private func inspectorLoader() -> EngineInspectorPanelLoader? {
+        guard let reader = appState.readClient, appState.readAvailability == .ready else {
+            return nil
+        }
+        return EngineInspectorPanelLoader(reader: reader)
+    }
+
+    private func readUnavailableTitle(_ availability: ReadAvailability) -> String {
+        switch availability {
+        case .unavailable:
+            return "Index unavailable"
+        case .opening:
+            return "Opening index"
+        case .ready:
+            return "Index ready"
+        case .stale:
+            return "Index stale"
+        case .error(let message):
+            return message
+        }
+    }
+
+    private func errorMessage(_ error: any Error) -> String {
+        let message = String(describing: error)
+        return message.isEmpty ? "Inspector failed" : message
+    }
+
+    private func loadBacklinks() async {
+        guard backlinksState.shouldLoad else {
+            return
+        }
+        backlinksState = .loading
+        let timer = AppTelemetryTimer()
+        guard let loader = inspectorLoader() else {
+            backlinksState = .failed(readUnavailableTitle(appState.readAvailability))
+            return
+        }
+        do {
+            let payload = try await loader.loadPanel(
+                file: file,
+                panel: .backlinks,
+                requestID: appState.readGeneration,
+                limit: 100
+            )
+            guard case .backlinks(let backlinks) = payload else {
+                backlinksState = .failed("Unexpected backlinks response")
+                return
             }
+            backlinksState = .loaded(backlinks)
+            AppTelemetry.inspectorRefreshCompleted(
+                state: .complete,
+                outgoingCount: 0,
+                backlinkCount: backlinks.count,
+                tagCount: 0,
+                propertyCount: 0,
+                durationMilliseconds: timer.elapsedMilliseconds()
+            )
+        } catch {
+            backlinksState = .failed(errorMessage(error))
         }
     }
 
-    private func outgoingSection(_ snapshot: NoteInspectorSnapshot) -> some View {
+    private func loadOutgoing() async {
+        guard outgoingState.shouldLoad else {
+            return
+        }
+        outgoingState = .loading
+        guard let loader = inspectorLoader() else {
+            outgoingState = .failed(readUnavailableTitle(appState.readAvailability))
+            return
+        }
+        do {
+            let payload = try await loader.loadPanel(
+                file: file,
+                panel: .outgoing,
+                requestID: appState.readGeneration,
+                limit: 100
+            )
+            guard case .outgoing(let outgoing) = payload else {
+                outgoingState = .failed("Unexpected outgoing response")
+                return
+            }
+            outgoingState = .loaded(outgoing)
+        } catch {
+            outgoingState = .failed(errorMessage(error))
+        }
+    }
+
+    private func loadTagsAndProperties() async {
+        guard tagsState.shouldLoad else {
+            return
+        }
+        tagsState = .loading
+        guard let loader = inspectorLoader() else {
+            tagsState = .failed(readUnavailableTitle(appState.readAvailability))
+            return
+        }
+        let generation = appState.readGeneration
+        do {
+            async let tagsPayload = loader.loadPanel(
+                file: file,
+                panel: .tags,
+                requestID: generation,
+                limit: 100
+            )
+            async let propertiesPayload = loader.loadPanel(
+                file: file,
+                panel: .properties,
+                requestID: generation,
+                limit: 100
+            )
+            guard case .tags(let tags) = try await tagsPayload,
+                  case .properties(let properties) = try await propertiesPayload
+            else {
+                tagsState = .failed("Unexpected tags response")
+                return
+            }
+            tagsState = .loaded(TagsPropertiesPayload(tags: tags, properties: properties))
+        } catch {
+            tagsState = .failed(errorMessage(error))
+        }
+    }
+
+    private func loadAttachments() async {
+        guard attachmentsState.shouldLoad else {
+            return
+        }
+        attachmentsState = .loading
+        guard let loader = inspectorLoader() else {
+            attachmentsState = .failed(readUnavailableTitle(appState.readAvailability))
+            return
+        }
+        do {
+            let payload = try await loader.loadPanel(
+                file: file,
+                panel: .attachments,
+                requestID: appState.readGeneration,
+                limit: 100
+            )
+            guard case .attachments(let attachments) = payload else {
+                attachmentsState = .failed("Unexpected attachments response")
+                return
+            }
+            attachmentsState = .loaded(attachments)
+        } catch {
+            attachmentsState = .failed(errorMessage(error))
+        }
+    }
+
+    @ViewBuilder
+    private func selectedPanelContent() -> some View {
+        switch selectedPanel {
+        case .backlinks:
+            panelStateContent(backlinksState, loadingText: "백링크를 불러오는 중입니다.") { backlinks in
+                backlinksSection(backlinks)
+            }
+        case .outgoing:
+            panelStateContent(outgoingState, loadingText: "Outgoing links loading") { outgoing in
+                outgoingSection(outgoing)
+            }
+        case .tags:
+            panelStateContent(tagsState, loadingText: "Tags loading") { payload in
+                tagsSection(payload.tags)
+                propertiesSection(payload.properties)
+            }
+        case .attachments:
+            panelStateContent(attachmentsState, loadingText: "Attachments loading") { attachments in
+                attachmentsSection(attachments)
+            }
+        case .graph:
+            graphSection()
+        }
+    }
+
+    @ViewBuilder
+    private func panelStateContent<Value, Content: View>(
+        _ state: InspectorPanelState<Value>,
+        loadingText: String,
+        @ViewBuilder content: (Value) -> Content
+    ) -> some View {
+        switch state {
+        case .idle, .loading:
+            HStack(spacing: 6) {
+                ProgressView()
+                    .controlSize(.small)
+                EmptyInlineText(loadingText)
+            }
+        case .failed(let message):
+            EmptyInspectorState(title: message, systemImage: "xmark.octagon")
+        case .loaded(let value):
+            content(value)
+        }
+    }
+
+    private func outgoingSection(_ outgoingLinks: [OutgoingLinkItem]) -> some View {
         InspectorSection(title: "Outgoing links") {
-            if snapshot.outgoingLinks.isEmpty {
+            if outgoingLinks.isEmpty {
                 EmptyInlineText("No outgoing links")
             } else {
-                ForEach(snapshot.outgoingLinks) { link in
+                ForEach(outgoingLinks) { link in
                     OutgoingLinkRow(link: link, open: open)
                 }
             }
         }
     }
 
-    private func backlinksSection(_ snapshot: NoteInspectorSnapshot) -> some View {
+    private func backlinksSection(_ backlinks: [BacklinkItem]) -> some View {
         VStack(alignment: .leading, spacing: 20) {
-            InspectorSection(title: "링크된 언급", count: snapshot.backlinks.count) {
-                if snapshot.backlinks.isEmpty {
+            InspectorSection(title: "링크된 언급", count: backlinks.count) {
+                if backlinks.isEmpty {
                     EmptyInlineText("백링크를 찾지 못했습니다.")
                 } else {
-                    ForEach(snapshot.backlinks) { backlink in
+                    ForEach(backlinks) { backlink in
                         Button {
                             appState.openFile(backlink.file)
                         } label: {
@@ -201,42 +349,25 @@ struct NoteInspectorView: View {
         }
     }
 
-    private func tagsSection(_ snapshot: NoteInspectorSnapshot) -> some View {
+    private func tagsSection(_ tags: [String]) -> some View {
         InspectorSection(title: "Tags") {
-            if snapshot.tags.isEmpty {
+            if tags.isEmpty {
                 EmptyInlineText("No tags")
             } else {
-                ForEach(snapshot.tagNotes) { group in
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("#\(group.tag)")
-                            .font(.caption)
-                        if group.files.isEmpty {
-                            EmptyInlineText("No other notes")
-                        } else {
-                            ForEach(group.files) { taggedFile in
-                                Button {
-                                    appState.openFile(taggedFile)
-                                } label: {
-                                    Label(taggedFile.displayName, systemImage: "doc.text")
-                                        .lineLimit(1)
-                                }
-                                .buttonStyle(.plain)
-                                .font(.caption)
-                                .accessibilityLabel("Open tagged note \(taggedFile.displayName)")
-                            }
-                        }
-                    }
+                ForEach(tags, id: \.self) { tag in
+                    Text("#\(tag)")
+                        .font(.caption)
                 }
             }
         }
     }
 
-    private func propertiesSection(_ snapshot: NoteInspectorSnapshot) -> some View {
+    private func propertiesSection(_ properties: [PropertyItem]) -> some View {
         InspectorSection(title: "Properties") {
-            if snapshot.properties.isEmpty {
+            if properties.isEmpty {
                 EmptyInlineText("No properties")
             } else {
-                ForEach(snapshot.properties) { property in
+                ForEach(properties) { property in
                     HStack(alignment: .firstTextBaseline) {
                         Text(property.key)
                             .font(.caption)
@@ -251,29 +382,55 @@ struct NoteInspectorView: View {
         }
     }
 
-    private func attachmentsSection(_ snapshot: NoteInspectorSnapshot) -> some View {
+    private func attachmentsSection(_ attachments: [AttachmentReferenceItem]) -> some View {
         InspectorSection(title: "Attachments") {
-            if snapshot.attachments.isEmpty {
+            if attachments.isEmpty {
                 EmptyInlineText("No attachments")
             } else {
-                ForEach(snapshot.attachments) { attachment in
+                ForEach(attachments) { attachment in
                     AttachmentReferenceRow(vaultURL: vaultURL, reference: attachment)
                 }
             }
         }
     }
 
-    private func graphSection(_ snapshot: NoteInspectorSnapshot) -> some View {
+    private func graphSection() -> some View {
         InspectorSection(title: "Graph") {
-            LocalGraphSection(vaultURL: vaultURL, file: file, open: open)
+            LocalGraphSection(
+                file: file,
+                reader: appState.readClient,
+                readAvailability: appState.readAvailability,
+                readGeneration: appState.readGeneration,
+                open: open
+            )
         }
     }
 }
 
-private enum NoteInspectorViewState {
+private enum InspectorPanelState<Value> {
+    case idle
     case loading
-    case loaded(NoteInspectorSnapshot)
+    case loaded(Value)
     case failed(String)
+
+    var isLoading: Bool {
+        if case .loading = self {
+            return true
+        }
+        return false
+    }
+
+    var shouldLoad: Bool {
+        if case .idle = self {
+            return true
+        }
+        return false
+    }
+}
+
+private struct TagsPropertiesPayload: Equatable {
+    let tags: [String]
+    let properties: [PropertyItem]
 }
 
 private enum NoteInspectorPanel: CaseIterable {
@@ -559,8 +716,10 @@ private enum LocalGraphViewState {
 }
 
 private struct LocalGraphSection: View {
-    let vaultURL: URL
     let file: FileTreeItem
+    let reader: (any EngineReading)?
+    let readAvailability: ReadAvailability
+    let readGeneration: UInt64
     let open: (FileTreeItem) -> Void
 
     @State private var depth: LocalGraphDepth = .oneHop
@@ -593,7 +752,7 @@ private struct LocalGraphSection: View {
                 LocalGraphContent(snapshot: snapshot, open: open)
             }
         }
-        .task(id: "\(file.id)-\(depth.rawValue)") {
+        .task(id: "\(file.id)-\(depth.rawValue)-\(readGeneration)") {
             await loadGraph()
         }
     }
@@ -601,19 +760,19 @@ private struct LocalGraphSection: View {
     private func loadGraph() async {
         state = .loading
         let timer = AppTelemetryTimer()
-        let vaultURL = vaultURL
         let file = file
         let depth = depth
+        guard let reader, readAvailability == .ready else {
+            state = readAvailability == .opening ? .loading : .failed(readUnavailableTitle(readAvailability))
+            return
+        }
 
         do {
-            let snapshot = try await Task.detached(priority: .userInitiated) {
-                try FileSystemLocalGraphLoader().loadGraph(
-                    at: vaultURL,
-                    file: file,
-                    request: LocalGraphRequest(depth: depth),
-                    maxFiles: 5_000
-                )
-            }.value
+            let snapshot = try await EngineLocalGraphLoader(reader: reader).loadGraph(
+                file: file,
+                requestID: readGeneration,
+                request: LocalGraphRequest(depth: depth)
+            )
 
             if Task.isCancelled {
                 return
@@ -638,6 +797,21 @@ private struct LocalGraphSection: View {
                 edgeCount: 0,
                 durationMilliseconds: timer.elapsedMilliseconds()
             )
+        }
+    }
+
+    private func readUnavailableTitle(_ availability: ReadAvailability) -> String {
+        switch availability {
+        case .unavailable:
+            return "Index unavailable"
+        case .opening:
+            return "Opening index"
+        case .ready:
+            return "Index ready"
+        case .stale:
+            return "Index stale"
+        case .error(let message):
+            return message
         }
     }
 }

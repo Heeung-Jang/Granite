@@ -28,6 +28,127 @@ func appStateSelectsAndClearsVault() throws {
 }
 
 @Test
+func appStateOpensReadClientForSelectedVault() throws {
+    let supportRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let client = FakeReadClient()
+    let factory = FakeReadClientFactory(clients: [client])
+    let state = AppState(
+        engineHealth: EngineHealthStatus(state: .loaded, abiVersion: 1, message: "test"),
+        indexDirectoryResolver: AppOwnedIndexDirectoryResolver(applicationSupportRoot: supportRoot),
+        vaultAccessValidator: AllowingVaultAccessValidator(),
+        recentVaultStorage: MemoryRecentVaultStorage(),
+        readClientFactory: factory.make
+    )
+    let vaultURL = URL(fileURLWithPath: "/tmp/read-vault", isDirectory: true)
+
+    try state.selectVault(vaultURL)
+
+    let location = try #require(state.indexLocation)
+    #expect(factory.openedMetadataURLs == [location.metadataStoreFile])
+    #expect(factory.openedTantivyURLs == [location.tantivyIndexDirectory])
+    #expect(state.readAvailability == .ready)
+    #expect((state.readClient as? FakeReadClient) === client)
+    #expect(state.readGeneration == 1)
+}
+
+@Test
+func appStatePublishesReadErrorWhenClientOpenFails() throws {
+    let supportRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let factory = FakeReadClientFactory(error: FakeReadFactoryError.openFailed)
+    let state = AppState(
+        engineHealth: EngineHealthStatus(state: .loaded, abiVersion: 1, message: "test"),
+        indexDirectoryResolver: AppOwnedIndexDirectoryResolver(applicationSupportRoot: supportRoot),
+        vaultAccessValidator: AllowingVaultAccessValidator(),
+        recentVaultStorage: MemoryRecentVaultStorage(),
+        readClientFactory: factory.make
+    )
+
+    try state.selectVault(URL(fileURLWithPath: "/tmp/read-error-vault", isDirectory: true))
+
+    #expect(state.readClient == nil)
+    #expect(state.readAvailability == .error("openFailed"))
+    #expect(state.readGeneration == 1)
+}
+
+@Test
+func appStateClosesReadClientOnClearUnavailableAndStaleVault() throws {
+    let supportRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let validator = MutableVaultAccessValidator()
+    let firstClient = FakeReadClient()
+    let factory = FakeReadClientFactory(clients: [firstClient])
+    let state = AppState(
+        engineHealth: EngineHealthStatus(state: .loaded, abiVersion: 1, message: "test"),
+        indexDirectoryResolver: AppOwnedIndexDirectoryResolver(applicationSupportRoot: supportRoot),
+        vaultAccessValidator: validator,
+        recentVaultStorage: MemoryRecentVaultStorage(),
+        readClientFactory: factory.make
+    )
+    let vaultURL = URL(fileURLWithPath: "/tmp/read-clear-vault", isDirectory: true)
+
+    try state.selectVault(vaultURL)
+    state.clearVault()
+
+    #expect(firstClient.closeCount == 1)
+    #expect(state.readClient == nil)
+    #expect(state.readAvailability == .unavailable)
+    #expect(state.readGeneration == 2)
+
+    let secondClient = FakeReadClient()
+    factory.clients = [secondClient]
+    try state.selectVault(vaultURL)
+    validator.issue = .denied(vaultURL)
+    try state.selectVault(vaultURL)
+
+    #expect(secondClient.closeCount == 1)
+    #expect(state.readClient == nil)
+    #expect(state.readAvailability == .unavailable)
+    #expect(state.readGeneration == 4)
+
+    validator.issue = nil
+    let thirdClient = FakeReadClient()
+    factory.clients = [thirdClient]
+    try state.selectVault(vaultURL)
+    state.markStaleBookmark(for: vaultURL)
+
+    #expect(thirdClient.closeCount == 1)
+    #expect(state.readClient == nil)
+    #expect(state.readAvailability == .stale)
+    #expect(state.readGeneration == 6)
+}
+
+@Test
+func appStateClosesOldReadClientBeforeVaultSwitch() throws {
+    let supportRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let firstClient = FakeReadClient()
+    let secondClient = FakeReadClient()
+    let factory = FakeReadClientFactory(clients: [firstClient, secondClient])
+    let state = AppState(
+        engineHealth: EngineHealthStatus(state: .loaded, abiVersion: 1, message: "test"),
+        indexDirectoryResolver: AppOwnedIndexDirectoryResolver(applicationSupportRoot: supportRoot),
+        vaultAccessValidator: AllowingVaultAccessValidator(),
+        recentVaultStorage: MemoryRecentVaultStorage(),
+        readClientFactory: factory.make
+    )
+    let firstURL = URL(fileURLWithPath: "/tmp/read-switch-first", isDirectory: true)
+    let secondURL = URL(fileURLWithPath: "/tmp/read-switch-second", isDirectory: true)
+
+    try state.selectVault(firstURL)
+    let firstGeneration = state.readGeneration
+    try state.selectVault(secondURL)
+
+    #expect(firstClient.closeCount == 1)
+    #expect(secondClient.closeCount == 0)
+    #expect((state.readClient as? FakeReadClient) === secondClient)
+    #expect(state.readGeneration != firstGeneration)
+    #expect(state.readGeneration == 2)
+    #expect(factory.openedMetadataURLs.count == 2)
+}
+
+@Test
 func engineHealthDetectsAbiMismatch() {
     let status = EngineHealthStatus.evaluate(
         abiVersion: 2,
@@ -207,16 +328,55 @@ func indexDirectoryResolverCreatesOnlyAppOwnedDirectories() throws {
 
     #expect(location.rootDirectory.path.hasPrefix(supportRoot.path))
     #expect(location.dataDirectory.path.hasPrefix(supportRoot.path))
+    #expect(location.metadataStoreFile.path == location.dataDirectory.appendingPathComponent("metadata.sqlite").path)
+    #expect(location.tantivyIndexDirectory.path == location.dataDirectory.appendingPathComponent("tantivy").path)
     #expect(location.indexingQueueFile.path.hasPrefix(location.dataDirectory.path))
     #expect(location.rebuildDirectory.path.hasPrefix(supportRoot.path))
     #expect(location.lockFile.path.hasPrefix(supportRoot.path))
     #expect(FileManager.default.fileExists(atPath: location.dataDirectory.path))
     #expect(FileManager.default.fileExists(atPath: location.rebuildDirectory.path))
+    #expect(!FileManager.default.fileExists(atPath: location.metadataStoreFile.path))
+    #expect(!FileManager.default.fileExists(atPath: location.tantivyIndexDirectory.path))
     #expect(!FileManager.default.fileExists(atPath: location.lockFile.path))
     #expect(try FileManager.default.contentsOfDirectory(atPath: vaultURL.path).isEmpty)
     #expect(!location.rootDirectory.path.contains("schema/v1"))
     #expect(!location.rootDirectory.path.contains("sqlite-fts/v1"))
     #expect(!location.rootDirectory.path.contains("unicode61 default"))
+}
+
+@Test
+func indexConfigurationDefaultsMatchSelectedReadBackend() {
+    let configuration = IndexConfiguration()
+
+    #expect(configuration.schemaVersion == "metadata-v1")
+    #expect(configuration.backendVersion == "sqlite+tantivy")
+    #expect(configuration.tokenizerConfig == "tantivy")
+}
+
+@Test
+func indexDirectoryResolverKeepsLegacyConfigurationExplicit() throws {
+    let temporaryRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let vaultURL = temporaryRoot.appendingPathComponent("vault", isDirectory: true)
+    let supportRoot = temporaryRoot.appendingPathComponent("support", isDirectory: true)
+    try FileManager.default.createDirectory(at: vaultURL, withIntermediateDirectories: true)
+
+    let legacyConfiguration = IndexConfiguration(
+        schemaVersion: "schema-v1",
+        backendVersion: "backend-unselected-v1",
+        tokenizerConfig: "tokenizer-default-v1"
+    )
+    let resolver = AppOwnedIndexDirectoryResolver(
+        applicationSupportRoot: supportRoot,
+        configuration: legacyConfiguration
+    )
+
+    let location = try resolver.prepareIndexLocation(forVaultAt: vaultURL)
+
+    #expect(location.configuration == legacyConfiguration)
+    #expect(location.rootDirectory.path.contains("schema-v1"))
+    #expect(location.rootDirectory.path.contains("backend-unselected-v1"))
+    #expect(location.rootDirectory.path.contains("tokenizer-default-v1"))
 }
 
 @Test
@@ -382,6 +542,88 @@ private struct FixedVaultAccessValidator: VaultAccessValidating {
 
     func validateVault(at url: URL) -> VaultAccessIssue? {
         issue
+    }
+}
+
+private final class MutableVaultAccessValidator: VaultAccessValidating {
+    var issue: VaultAccessIssue?
+
+    func validateVault(at url: URL) -> VaultAccessIssue? {
+        issue
+    }
+}
+
+private enum FakeReadFactoryError: Error {
+    case openFailed
+}
+
+private final class FakeReadClientFactory: @unchecked Sendable {
+    var clients: [FakeReadClient]
+    let error: (any Error)?
+    private(set) var openedMetadataURLs: [URL] = []
+    private(set) var openedTantivyURLs: [URL] = []
+
+    init(clients: [FakeReadClient] = [], error: (any Error)? = nil) {
+        self.clients = clients
+        self.error = error
+    }
+
+    func make(metadataURL: URL, tantivyURL: URL) throws -> any EngineReading {
+        openedMetadataURLs.append(metadataURL)
+        openedTantivyURLs.append(tantivyURL)
+        if let error {
+            throw error
+        }
+        return clients.removeFirst()
+    }
+}
+
+private final class FakeReadClient: EngineReading, @unchecked Sendable {
+    private(set) var closeCount = 0
+
+    func close() {
+        closeCount += 1
+    }
+
+    func fileTree(requestID: UInt64, offset: Int, limit: Int) async throws -> FileTreeSnapshot {
+        FileTreeSnapshot(items: [], state: .complete)
+    }
+
+    func search(query: String, mode: SearchMode, page: SearchPageRequest) async throws -> SearchPage {
+        SearchPage(requestID: page.requestID, items: [], nextOffset: nil, state: .complete)
+    }
+
+    func inspectorPanel(
+        file: FileTreeItem,
+        panel: EngineReadInspectorPanel,
+        requestID: UInt64,
+        offset: Int,
+        limit: Int
+    ) async throws -> EngineReadInspectorPanelResult {
+        switch panel {
+        case .backlinks:
+            return .backlinks([])
+        case .outgoing:
+            return .outgoing([])
+        case .tags:
+            return .tags([])
+        case .properties:
+            return .properties([])
+        case .attachments:
+            return .attachments([])
+        }
+    }
+
+    func localGraph(file: FileTreeItem, requestID: UInt64, request: LocalGraphRequest) async throws -> LocalGraphSnapshot {
+        LocalGraphSnapshot(centerNodeID: file.id, nodes: [], edges: [], state: .complete)
+    }
+
+    func livePreviewMetadata(
+        file: FileTreeItem,
+        requestID: UInt64,
+        contents: String
+    ) async throws -> EngineLivePreviewMetadata {
+        EngineLivePreviewMetadata(outgoingLinks: [], attachments: [])
     }
 }
 

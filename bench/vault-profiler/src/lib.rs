@@ -1,4 +1,6 @@
 pub mod corpus;
+pub mod read_benchmark;
+pub mod read_indexer;
 pub mod synthetic;
 
 use serde::Serialize;

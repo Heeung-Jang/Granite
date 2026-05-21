@@ -12,15 +12,18 @@ let package = Package(
         .library(name: "NativeMarkdownCore", targets: ["NativeMarkdownCore"])
     ],
     targets: [
-        .target(name: "NativeMarkdownCore"),
+        .target(name: "NativeMarkdownFFI"),
+        .target(
+            name: "NativeMarkdownCore",
+            dependencies: ["NativeMarkdownFFI"]
+        ),
         .executableTarget(
             name: "NativeMarkdownApp",
             dependencies: ["NativeMarkdownCore"]
         ),
         .testTarget(
             name: "NativeMarkdownCoreTests",
-            dependencies: ["NativeMarkdownCore"]
+            dependencies: ["NativeMarkdownCore", "NativeMarkdownFFI"]
         )
     ]
 )
-
