@@ -3,12 +3,12 @@
 import PackageDescription
 
 let package = Package(
-    name: "NativeMarkdownMacApp",
+    name: "Granite",
     platforms: [
         .macOS(.v15)
     ],
     products: [
-        .executable(name: "NativeMarkdownApp", targets: ["NativeMarkdownApp"]),
+        .executable(name: "Granite", targets: ["Granite"]),
         .library(name: "NativeMarkdownCore", targets: ["NativeMarkdownCore"])
     ],
     targets: [
@@ -18,7 +18,7 @@ let package = Package(
             dependencies: ["NativeMarkdownFFI"]
         ),
         .executableTarget(
-            name: "NativeMarkdownApp",
+            name: "Granite",
             dependencies: ["NativeMarkdownCore"]
         ),
         .testTarget(

@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_NAME="Granite"
-EXECUTABLE_NAME="NativeMarkdownApp"
+EXECUTABLE_NAME="Granite"
 BUNDLE_IDENTIFIER="com.codex.granite"
 ICON_NAME="GraniteAppIcon"
 ICON_SOURCE="${ROOT_DIR}/assets/${ICON_NAME}.png"

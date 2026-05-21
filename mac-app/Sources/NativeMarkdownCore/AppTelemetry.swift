@@ -37,7 +37,7 @@ public struct AppTelemetryPrivacySchema: Codable, Equatable, Sendable {
 }
 
 public enum AppTelemetry {
-    private static let subsystem = Bundle.main.bundleIdentifier ?? "NativeMarkdownMacApp"
+    private static let subsystem = Bundle.main.bundleIdentifier ?? "Granite"
     private static let searchLogger = Logger(subsystem: subsystem, category: "Search")
     private static let navigationLogger = Logger(subsystem: subsystem, category: "Navigation")
     private static let sidebarLogger = Logger(subsystem: subsystem, category: "Sidebar")

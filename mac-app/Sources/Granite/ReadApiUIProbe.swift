@@ -39,7 +39,7 @@ private struct ReadApiUIProbeConfiguration: Sendable {
 enum ReadApiUIProbe {
     static func helpText() -> String {
         """
-        NativeMarkdownApp probe flags:
+        Granite probe flags:
           --read-api-ui-probe        Run the Rust read API UI latency probe.
           --fixture                  Use deterministic in-memory fixture data.
           --vault-root <path>        Open the app-owned read index for a vault.
@@ -66,7 +66,7 @@ enum ReadApiUIProbe {
             }
             return report.hardCeilingPassed ? 0 : 2
         } catch {
-            fputs("NativeMarkdownApp read API UI probe: \(error)\n", stderr)
+            fputs("Granite read API UI probe: \(error)\n", stderr)
             return 2
         }
     }

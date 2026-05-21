@@ -39,7 +39,7 @@ final class AppLifecycleController {
 }
 
 @MainActor
-final class NativeMarkdownAppDelegate: NSObject, NSApplicationDelegate {
+final class GraniteAppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         AppLifecycleController.shared.requestAppQuit() ? .terminateNow : .terminateCancel
     }

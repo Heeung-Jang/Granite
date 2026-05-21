@@ -115,7 +115,7 @@ public struct AppOwnedIndexDirectoryResolver: IndexDirectoryResolving {
             in: .userDomainMask
         ).first ?? FileManager.default.temporaryDirectory
 
-        return base.appendingPathComponent("NativeMarkdownMacApp", isDirectory: true)
+        return base.appendingPathComponent("Granite", isDirectory: true)
     }
 
     private func vaultIdentityHash(for vaultURL: URL) -> String {

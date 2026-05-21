@@ -3,8 +3,8 @@ import SwiftUI
 
 @main
 @MainActor
-struct NativeMarkdownApp: App {
-    @NSApplicationDelegateAdaptor(NativeMarkdownAppDelegate.self) private var appDelegate
+struct GraniteApp: App {
+    @NSApplicationDelegateAdaptor(GraniteAppDelegate.self) private var appDelegate
     @StateObject private var appState = AppState()
 
     init() {
@@ -25,7 +25,7 @@ struct NativeMarkdownApp: App {
         }
 
         if CommandLine.arguments.contains("--smoke-test") {
-            print("NativeMarkdownApp smoke test")
+            print("Granite smoke test")
             Foundation.exit(0)
         }
 
@@ -53,7 +53,7 @@ struct NativeMarkdownApp: App {
             )
             AppTelemetry.saveRequested(file: file, available: false)
             AppTelemetry.editorDecorationCompleted(textLength: 128, durationMilliseconds: 1)
-            print("NativeMarkdownApp telemetry smoke test")
+            print("Granite telemetry smoke test")
             Foundation.exit(0)
         }
 
