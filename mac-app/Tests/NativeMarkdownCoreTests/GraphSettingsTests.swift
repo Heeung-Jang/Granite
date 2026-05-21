@@ -16,6 +16,8 @@ func graphVisualMetricsMatchObsidianDensityTargets() {
     #expect(GraphVisualMetrics.hitRadiusPadding == 4.0)
     #expect(GraphVisualMetrics.nodeRadius(forDegree: 0) == GraphVisualMetrics.defaultNodeRadius)
     #expect(GraphVisualMetrics.nodeRadius(forDegree: 100) == GraphVisualMetrics.maximumHubNodeRadius)
+    #expect(GraphVisualMetrics.hitRadius(forNodeRadius: 1.25, zoomScale: 1) == 8.0)
+    #expect(GraphVisualMetrics.hitRadius(forNodeRadius: 5.0, zoomScale: 2) == 14.0)
 }
 
 @Test

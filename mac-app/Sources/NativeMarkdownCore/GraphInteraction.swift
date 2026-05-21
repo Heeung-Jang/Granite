@@ -61,7 +61,7 @@ public struct GraphHitTestIndex: Equatable, Sendable {
         at screenPoint: GraphPoint,
         viewport: GraphViewport,
         canvasSize: GraphSize,
-        maxDistance: Double = 18
+        maxDistance: Double = GraphVisualMetrics.defaultHitRadius
     ) -> GraphHitTestResult? {
         var best: GraphHitTestResult?
         let centeredPoint = GraphPoint(
@@ -82,7 +82,11 @@ public struct GraphHitTestIndex: Equatable, Sendable {
             let node = layout.nodes[nodeIndex]
             let nodePoint = nodeScreenPoint(for: node, viewport: viewport, canvasSize: canvasSize)
             let distance = hypot(screenPoint.x - nodePoint.x, screenPoint.y - nodePoint.y)
-            let hitRadius = max(maxDistance, node.radius * viewport.zoomScale + 6)
+            let hitRadius = GraphVisualMetrics.hitRadius(
+                forNodeRadius: node.radius,
+                zoomScale: viewport.zoomScale,
+                minimumHitRadius: maxDistance
+            )
             guard distance <= hitRadius else {
                 continue
             }

@@ -29,6 +29,43 @@ func graphHitTestIgnoresDistantNodes() {
 }
 
 @Test
+func graphHitTestUsesScreenHitRadiusIndependentFromVisualRadius() {
+    let layout = GraphRendererSnapshot(
+        requestID: 1,
+        generation: 1,
+        nodes: [
+            interactionNode(
+                index: 0,
+                id: "file:small",
+                label: "Small",
+                fileID: "small.md",
+                relativePath: "Small.md",
+                kind: .resolved,
+                radius: GraphVisualMetrics.minimumDrawRadius
+            )
+        ],
+        edges: [],
+        components: []
+    )
+    let hitTest = GraphHitTestIndex(layout: layout)
+    let canvasSize = GraphSize(width: 400, height: 200)
+
+    let hit = hitTest.nearestNode(
+        at: GraphPoint(x: 207.5, y: 100),
+        viewport: GraphViewport(),
+        canvasSize: canvasSize
+    )
+    let miss = hitTest.nearestNode(
+        at: GraphPoint(x: 209.5, y: 100),
+        viewport: GraphViewport(),
+        canvasSize: canvasSize
+    )
+
+    #expect(hit?.nodeID == "file:small")
+    #expect(miss == nil)
+}
+
+@Test
 func graphHitTestBuildsSpatialBuckets() {
     let index = GraphHitTestIndex(layout: interactionLayout(), bucketCellSize: 40)
 
@@ -168,7 +205,8 @@ private func interactionNode(
     relativePath: String? = nil,
     kind: WholeVaultGraphNodeKind,
     x: Double = 0,
-    y: Double = 0
+    y: Double = 0,
+    radius: Double = 6
 ) -> GraphLayoutNode {
     GraphLayoutNode(
         index: index,
@@ -179,6 +217,6 @@ private func interactionNode(
         kind: kind,
         degree: 1,
         position: GraphPoint(x: x, y: y),
-        radius: 6
+        radius: radius
     )
 }

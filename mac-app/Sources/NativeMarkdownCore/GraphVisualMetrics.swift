@@ -20,4 +20,15 @@ public enum GraphVisualMetrics {
             defaultNodeRadius + Double(max(0, degree)).squareRoot() * 0.45
         )
     }
+
+    public static func hitRadius(
+        forNodeRadius nodeRadius: Double,
+        zoomScale: Double,
+        minimumHitRadius: Double = defaultHitRadius
+    ) -> Double {
+        max(
+            minimumHitRadius,
+            nodeRadius * max(0.1, zoomScale) + hitRadiusPadding
+        )
+    }
 }
