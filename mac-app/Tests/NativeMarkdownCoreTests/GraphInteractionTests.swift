@@ -103,6 +103,81 @@ func graphInteractionKeepsSelectionIndependentFromHover() {
 }
 
 @Test
+func graphInteractionTracksNodeDragThresholdAndFinish() {
+    var interaction = GraphInteractionState()
+
+    interaction.beginDrag(
+        nodeID: "file:a",
+        nodePosition: GraphPoint(x: 100, y: 100),
+        pointerGraphPoint: GraphPoint(x: 10, y: 10),
+        graphMovementThreshold: 5
+    )
+    interaction.updateDrag(to: GraphPoint(x: 12, y: 14))
+    let belowThreshold = interaction.dragState
+    interaction.updateDrag(to: GraphPoint(x: 16, y: 18))
+    let result = interaction.finishDrag()
+
+    #expect(belowThreshold?.movedBeyondThreshold == false)
+    #expect(belowThreshold?.currentNodePosition == GraphPoint(x: 102, y: 104))
+    #expect(result == GraphNodeDragResult(
+        nodeID: "file:a",
+        nodePosition: GraphPoint(x: 106, y: 108),
+        movedBeyondThreshold: true
+    ))
+    #expect(interaction.dragState == nil)
+}
+
+@Test
+func graphInteractionCanCancelNodeDrag() {
+    var interaction = GraphInteractionState()
+
+    interaction.beginDrag(
+        nodeID: "file:a",
+        nodePosition: GraphPoint(x: 20, y: 20),
+        pointerGraphPoint: GraphPoint(x: 0, y: 0)
+    )
+    interaction.updateDrag(to: GraphPoint(x: 20, y: 0))
+    interaction.cancelDrag()
+
+    #expect(interaction.dragState == nil)
+    #expect(interaction.finishDrag() == nil)
+}
+
+@Test
+func graphNodePositionOverridesUseDraggedPositionOnlyForMatchingNode() {
+    let layout = interactionLayout()
+    var overrides = GraphNodePositionOverrides()
+
+    overrides.set(GraphPoint(x: 42, y: 84), for: "file:a")
+
+    #expect(overrides.position(for: layout.nodes[0]) == GraphPoint(x: 42, y: 84))
+    #expect(overrides.position(for: layout.nodes[1]) == layout.nodes[1].position)
+}
+
+@Test
+func graphNodePositionUpdaterMovesOneNodeAndPreservesGraphShape() {
+    let layout = interactionLayout()
+    let moved = GraphNodePositionUpdater.movingNode(
+        in: layout,
+        nodeID: "file:b",
+        to: GraphPoint(x: 120, y: 40)
+    )
+    let unchanged = GraphNodePositionUpdater.movingNode(
+        in: layout,
+        nodeID: "missing",
+        to: GraphPoint(x: 1, y: 1)
+    )
+
+    #expect(moved.nodes[1].position == GraphPoint(x: 120, y: 40))
+    #expect(moved.nodes[0].position == layout.nodes[0].position)
+    #expect(moved.nodes.map(\.index) == layout.nodes.map(\.index))
+    #expect(moved.edges == layout.edges)
+    #expect(moved.components == layout.components)
+    #expect(moved.renderIdentity != layout.renderIdentity)
+    #expect(unchanged == layout)
+}
+
+@Test
 func graphSearchMatcherHighlightsWithoutChangingMembership() {
     let layout = interactionLayout()
 

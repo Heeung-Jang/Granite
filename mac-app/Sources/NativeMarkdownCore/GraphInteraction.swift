@@ -149,13 +149,16 @@ private struct GraphGridCell: Hashable, Sendable {
 public struct GraphInteractionState: Equatable, Sendable {
     public private(set) var hoveredNodeID: String?
     public private(set) var selectedNodeID: String?
+    public private(set) var dragState: GraphNodeDragState?
 
     public init(
         hoveredNodeID: String? = nil,
-        selectedNodeID: String? = nil
+        selectedNodeID: String? = nil,
+        dragState: GraphNodeDragState? = nil
     ) {
         self.hoveredNodeID = hoveredNodeID
         self.selectedNodeID = selectedNodeID
+        self.dragState = dragState
     }
 
     public mutating func hover(_ nodeID: String?) {
@@ -168,6 +171,162 @@ public struct GraphInteractionState: Equatable, Sendable {
 
     public mutating func clearSelection() {
         selectedNodeID = nil
+    }
+
+    public mutating func beginDrag(
+        nodeID: String,
+        nodePosition: GraphPoint,
+        pointerGraphPoint: GraphPoint,
+        graphMovementThreshold: Double = GraphNodeDragState.defaultGraphMovementThreshold
+    ) {
+        dragState = GraphNodeDragState(
+            nodeID: nodeID,
+            startNodePosition: nodePosition,
+            startPointerGraphPoint: pointerGraphPoint,
+            graphMovementThreshold: graphMovementThreshold
+        )
+    }
+
+    public mutating func updateDrag(to pointerGraphPoint: GraphPoint) {
+        dragState?.update(to: pointerGraphPoint)
+    }
+
+    public mutating func finishDrag() -> GraphNodeDragResult? {
+        defer {
+            dragState = nil
+        }
+        return dragState?.result()
+    }
+
+    public mutating func cancelDrag() {
+        dragState = nil
+    }
+}
+
+public struct GraphNodeDragState: Equatable, Sendable {
+    /// Graph-space threshold; callers that start from screen events should divide the screen threshold by zoom.
+    public static let defaultGraphMovementThreshold = 3.0
+
+    public let nodeID: String
+    public let startNodePosition: GraphPoint
+    public let startPointerGraphPoint: GraphPoint
+    public private(set) var latestPointerGraphPoint: GraphPoint
+    public let graphMovementThreshold: Double
+    public private(set) var movedBeyondThreshold: Bool
+    public var currentNodePosition: GraphPoint {
+        GraphPoint(
+            x: startNodePosition.x + latestPointerGraphPoint.x - startPointerGraphPoint.x,
+            y: startNodePosition.y + latestPointerGraphPoint.y - startPointerGraphPoint.y
+        )
+    }
+
+    public init(
+        nodeID: String,
+        startNodePosition: GraphPoint,
+        startPointerGraphPoint: GraphPoint,
+        graphMovementThreshold: Double = Self.defaultGraphMovementThreshold
+    ) {
+        self.nodeID = nodeID
+        self.startNodePosition = startNodePosition
+        self.startPointerGraphPoint = startPointerGraphPoint
+        self.latestPointerGraphPoint = startPointerGraphPoint
+        self.graphMovementThreshold = max(0, graphMovementThreshold)
+        self.movedBeyondThreshold = false
+    }
+
+    public mutating func update(to pointerGraphPoint: GraphPoint) {
+        latestPointerGraphPoint = pointerGraphPoint
+        if distance(from: startPointerGraphPoint, to: pointerGraphPoint) >= graphMovementThreshold {
+            movedBeyondThreshold = true
+        }
+    }
+
+    public func result() -> GraphNodeDragResult {
+        GraphNodeDragResult(
+            nodeID: nodeID,
+            nodePosition: currentNodePosition,
+            movedBeyondThreshold: movedBeyondThreshold
+        )
+    }
+
+    private func distance(from start: GraphPoint, to end: GraphPoint) -> Double {
+        hypot(end.x - start.x, end.y - start.y)
+    }
+}
+
+public struct GraphNodeDragResult: Equatable, Sendable {
+    public let nodeID: String
+    public let nodePosition: GraphPoint
+    public let movedBeyondThreshold: Bool
+
+    public init(nodeID: String, nodePosition: GraphPoint, movedBeyondThreshold: Bool) {
+        self.nodeID = nodeID
+        self.nodePosition = nodePosition
+        self.movedBeyondThreshold = movedBeyondThreshold
+    }
+}
+
+public struct GraphNodePositionOverrides: Equatable, Sendable {
+    public private(set) var positionsByNodeID: [String: GraphPoint]
+
+    public init(positionsByNodeID: [String: GraphPoint] = [:]) {
+        self.positionsByNodeID = positionsByNodeID
+    }
+
+    public mutating func set(_ graphPoint: GraphPoint, for nodeID: String) {
+        positionsByNodeID[nodeID] = graphPoint
+    }
+
+    public mutating func remove(nodeID: String) {
+        positionsByNodeID.removeValue(forKey: nodeID)
+    }
+
+    public func position(for node: GraphLayoutNode) -> GraphPoint {
+        positionsByNodeID[node.nodeID] ?? node.position
+    }
+}
+
+public enum GraphNodePositionUpdater {
+    public static func movingNode(
+        in layout: GraphRendererSnapshot,
+        nodeID: String,
+        to graphPoint: GraphPoint
+    ) -> GraphRendererSnapshot {
+        var moved = false
+        let nodes = layout.nodes.map { node in
+            guard node.nodeID == nodeID else {
+                return node
+            }
+            moved = true
+            return node.withPosition(graphPoint)
+        }
+        guard moved else {
+            return layout
+        }
+        return GraphRendererSnapshot(
+            requestID: layout.requestID,
+            generation: layout.generation,
+            nodes: nodes,
+            edges: layout.edges,
+            components: layout.components
+        )
+    }
+}
+
+public extension GraphLayoutNode {
+    func withPosition(_ position: GraphPoint) -> GraphLayoutNode {
+        GraphLayoutNode(
+            index: index,
+            nodeID: nodeID,
+            fileID: fileID,
+            relativePath: relativePath,
+            label: label,
+            kind: kind,
+            degree: degree,
+            tags: tags,
+            position: position,
+            radius: radius
+        )
     }
 }
 
