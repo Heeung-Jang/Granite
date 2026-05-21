@@ -44,13 +44,16 @@ public struct GraphRendererContract: GraphRendering, Equatable, Sendable {
 }
 
 public struct GraphRendererCallbacks: Sendable {
+    public let didCompleteDraw: @Sendable (GraphRendererMetrics) -> Void
     public let didCompleteFirstDraw: @Sendable (GraphRendererMetrics) -> Void
     public let didFail: @Sendable (GraphRendererValidationError) -> Void
 
     public init(
+        didCompleteDraw: @escaping @Sendable (GraphRendererMetrics) -> Void = { _ in },
         didCompleteFirstDraw: @escaping @Sendable (GraphRendererMetrics) -> Void = { _ in },
         didFail: @escaping @Sendable (GraphRendererValidationError) -> Void = { _ in }
     ) {
+        self.didCompleteDraw = didCompleteDraw
         self.didCompleteFirstDraw = didCompleteFirstDraw
         self.didFail = didFail
     }

@@ -13,6 +13,7 @@ struct GraphCanvasRendererView: View {
 
     @State private var dragStartPanOffset: GraphPoint?
     @State private var drawReportGate = GraphCanvasDrawReportGate()
+    @State private var pathCache = GraphCanvasPathCache()
 
     private let renderer = GraphRendererContract(rendererKind: .canvas)
 
@@ -37,6 +38,7 @@ struct GraphCanvasRendererView: View {
     @ViewBuilder
     var body: some View {
         let renderInput = currentInput
+        let renderPaths = pathCache.paths(for: renderInput)
 
         switch validationState(for: renderInput) {
         case .ready:
@@ -44,9 +46,18 @@ struct GraphCanvasRendererView: View {
                 Canvas { context, size in
                     let timer = AppTelemetryTimer()
                     let drawSignpost = AppTelemetry.beginGraphStage(.draw)
+                    var graphContext = context
+                    graphContext.translateBy(
+                        x: size.width / 2 + CGFloat(renderInput.viewport.panOffset.x),
+                        y: size.height / 2 + CGFloat(renderInput.viewport.panOffset.y)
+                    )
+                    graphContext.scaleBy(
+                        x: CGFloat(renderInput.viewport.zoomScale),
+                        y: CGFloat(renderInput.viewport.zoomScale)
+                    )
 
-                    drawEdges(input: renderInput, context: &context, size: size)
-                    drawNodes(input: renderInput, context: &context, size: size)
+                    drawEdges(input: renderInput, paths: renderPaths, context: &graphContext)
+                    drawNodes(paths: renderPaths, context: &graphContext)
                     drawLabels(input: renderInput, context: &context, size: size)
                     AppTelemetry.endGraphStage(drawSignpost)
 
@@ -54,6 +65,7 @@ struct GraphCanvasRendererView: View {
                         for: renderInput,
                         drawDurationMilliseconds: timer.elapsedMilliseconds()
                     )
+                    callbacks.didCompleteDraw(metrics)
                     drawReportGate.reportIfNeeded(
                         identity: drawIdentity(for: renderInput),
                         metrics: metrics,
@@ -131,59 +143,37 @@ struct GraphCanvasRendererView: View {
 
     private func drawEdges(
         input: GraphRendererInput,
-        context: inout GraphicsContext,
-        size: CGSize
+        paths: GraphCanvasRenderPaths,
+        context: inout GraphicsContext
     ) {
-        for edge in input.layout.edges {
-            guard input.layout.nodes.indices.contains(edge.sourceIndex),
-                  input.layout.nodes.indices.contains(edge.targetIndex)
-            else {
-                continue
-            }
+        let zoomScale = max(0.01, input.viewport.zoomScale)
 
-            let source = canvasPoint(
-                for: input.layout.nodes[edge.sourceIndex].position,
-                input: input,
-                size: size
-            )
-            let target = canvasPoint(
-                for: input.layout.nodes[edge.targetIndex].position,
-                input: input,
-                size: size
-            )
-            var path = Path()
-            path.move(to: source)
-            path.addLine(to: target)
-
-            context.stroke(
-                path,
-                with: .color(edgeColor(edge, input: input)),
-                lineWidth: edgeLineWidth(edge, input: input)
-            )
-        }
+        context.stroke(
+            paths.resolvedEdges,
+            with: .color(Color.secondary.opacity(0.22)),
+            lineWidth: max(0.5, input.presentation.linkThickness) / zoomScale
+        )
+        context.stroke(
+            paths.unresolvedEdges,
+            with: .color(Color.secondary.opacity(0.12)),
+            lineWidth: max(0.5, input.presentation.linkThickness) / zoomScale
+        )
+        context.stroke(
+            paths.activeEdges,
+            with: .color(Color.accentColor.opacity(0.55)),
+            lineWidth: max(1.5, input.presentation.linkThickness + 1.0) / zoomScale
+        )
     }
 
     private func drawNodes(
-        input: GraphRendererInput,
-        context: inout GraphicsContext,
-        size: CGSize
+        paths: GraphCanvasRenderPaths,
+        context: inout GraphicsContext
     ) {
-        for node in input.layout.nodes {
-            let point = canvasPoint(for: node.position, input: input, size: size)
-            let radius = CGFloat(max(
-                2.0,
-                node.radius * input.presentation.nodeSize * input.viewport.zoomScale
-            ))
-            let rect = CGRect(
-                x: point.x - radius,
-                y: point.y - radius,
-                width: radius * 2,
-                height: radius * 2
-            )
-            let path = Path(ellipseIn: rect)
-
-            context.fill(path, with: .color(nodeColor(node, input: input)))
-        }
+        context.fill(paths.unresolvedNodes, with: .color(Color.secondary.opacity(0.45)))
+        context.fill(paths.resolvedNodes, with: .color(Color.primary.opacity(0.7)))
+        context.fill(paths.searchNodes, with: .color(.green))
+        context.fill(paths.hoveredNodes, with: .color(Color.accentColor.opacity(0.85)))
+        context.fill(paths.selectedNodes, with: .color(.accentColor))
     }
 
     private func drawLabels(
@@ -215,43 +205,6 @@ struct GraphCanvasRendererView: View {
             x: size.width / 2 + CGFloat(point.x),
             y: size.height / 2 + CGFloat(point.y)
         )
-    }
-
-    private func nodeColor(_ node: GraphLayoutNode, input: GraphRendererInput) -> Color {
-        if input.selectedNodeID == node.nodeID {
-            return .accentColor
-        }
-        if input.hoveredNodeID == node.nodeID {
-            return .accentColor.opacity(0.85)
-        }
-        if input.searchMatchedNodeIDs.contains(node.nodeID) {
-            return .green
-        }
-
-        switch node.kind {
-        case .resolved:
-            return Color.primary.opacity(0.7)
-        case .unresolved:
-            return Color.secondary.opacity(0.45)
-        }
-    }
-
-    private func edgeColor(_ edge: GraphLayoutEdge, input: GraphRendererInput) -> Color {
-        if edgeIsActive(edge, input: input) {
-            return .accentColor.opacity(0.55)
-        }
-
-        switch edge.kind {
-        case .resolved:
-            return Color.secondary.opacity(0.22)
-        case .unresolved:
-            return Color.secondary.opacity(0.12)
-        }
-    }
-
-    private func edgeLineWidth(_ edge: GraphLayoutEdge, input: GraphRendererInput) -> CGFloat {
-        let baseWidth = max(0.5, Double(edge.weight).squareRoot() * input.presentation.linkThickness)
-        return CGFloat(edgeIsActive(edge, input: input) ? baseWidth + 1.0 : baseWidth)
     }
 
     private func edgeIsActive(_ edge: GraphLayoutEdge, input: GraphRendererInput) -> Bool {
@@ -309,6 +262,124 @@ struct GraphCanvasRendererView: View {
             viewport: input.viewport,
             canvasSize: GraphSize(width: Double(size.width), height: Double(size.height))
         )?.nodeID
+    }
+}
+
+private struct GraphCanvasRenderPaths {
+    var resolvedEdges = Path()
+    var unresolvedEdges = Path()
+    var activeEdges = Path()
+    var resolvedNodes = Path()
+    var unresolvedNodes = Path()
+    var searchNodes = Path()
+    var hoveredNodes = Path()
+    var selectedNodes = Path()
+}
+
+private final class GraphCanvasPathCache {
+    private var cachedIdentity: String?
+    private var cachedPaths: GraphCanvasRenderPaths?
+
+    func paths(for input: GraphRendererInput) -> GraphCanvasRenderPaths {
+        let identity = cacheIdentity(for: input)
+        if cachedIdentity == identity, let cachedPaths {
+            return cachedPaths
+        }
+        let paths = buildPaths(for: input)
+        cachedIdentity = identity
+        cachedPaths = paths
+        return paths
+    }
+
+    private func buildPaths(for input: GraphRendererInput) -> GraphCanvasRenderPaths {
+        var paths = GraphCanvasRenderPaths()
+
+        for edge in input.layout.edges {
+            guard input.layout.nodes.indices.contains(edge.sourceIndex),
+                  input.layout.nodes.indices.contains(edge.targetIndex)
+            else {
+                continue
+            }
+
+            let source = graphPoint(input.layout.nodes[edge.sourceIndex].position)
+            let target = graphPoint(input.layout.nodes[edge.targetIndex].position)
+            if edgeIsActive(edge, input: input) {
+                appendEdge(from: source, to: target, path: &paths.activeEdges)
+            } else {
+                switch edge.kind {
+                case .resolved:
+                    appendEdge(from: source, to: target, path: &paths.resolvedEdges)
+                case .unresolved:
+                    appendEdge(from: source, to: target, path: &paths.unresolvedEdges)
+                }
+            }
+        }
+
+        for node in input.layout.nodes {
+            let radius = CGFloat(max(2.0, node.radius * input.presentation.nodeSize))
+            let rect = CGRect(
+                x: CGFloat(node.position.x) - radius,
+                y: CGFloat(node.position.y) - radius,
+                width: radius * 2,
+                height: radius * 2
+            )
+
+            if input.selectedNodeID == node.nodeID {
+                paths.selectedNodes.addEllipse(in: rect)
+            } else if input.hoveredNodeID == node.nodeID {
+                paths.hoveredNodes.addEllipse(in: rect)
+            } else if input.searchMatchedNodeIDs.contains(node.nodeID) {
+                paths.searchNodes.addEllipse(in: rect)
+            } else {
+                switch node.kind {
+                case .resolved:
+                    paths.resolvedNodes.addEllipse(in: rect)
+                case .unresolved:
+                    paths.unresolvedNodes.addEllipse(in: rect)
+                }
+            }
+        }
+
+        return paths
+    }
+
+    private func cacheIdentity(for input: GraphRendererInput) -> String {
+        var searchHasher = Hasher()
+        for nodeID in input.searchMatchedNodeIDs.sorted() {
+            searchHasher.combine(nodeID)
+        }
+        let parts = [
+            String(input.layout.requestID),
+            String(input.layout.generation),
+            String(input.layout.nodes.count),
+            String(input.layout.edges.count),
+            String(input.presentation.nodeSize.bitPattern),
+            String(input.presentation.linkThickness.bitPattern),
+            String(searchHasher.finalize()),
+            input.hoveredNodeID ?? "",
+            input.selectedNodeID ?? ""
+        ]
+        return parts.joined(separator: ":")
+    }
+
+    private func graphPoint(_ point: GraphPoint) -> CGPoint {
+        CGPoint(x: CGFloat(point.x), y: CGFloat(point.y))
+    }
+
+    private func appendEdge(from source: CGPoint, to target: CGPoint, path: inout Path) {
+        path.move(to: source)
+        path.addLine(to: target)
+    }
+
+    private func edgeIsActive(_ edge: GraphLayoutEdge, input: GraphRendererInput) -> Bool {
+        guard let activeNodeID = input.hoveredNodeID ?? input.selectedNodeID,
+              input.layout.nodes.indices.contains(edge.sourceIndex),
+              input.layout.nodes.indices.contains(edge.targetIndex)
+        else {
+            return false
+        }
+        return input.layout.nodes[edge.sourceIndex].nodeID == activeNodeID
+            || input.layout.nodes[edge.targetIndex].nodeID == activeNodeID
     }
 }
 

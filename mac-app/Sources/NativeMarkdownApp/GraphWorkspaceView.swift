@@ -114,7 +114,7 @@ struct GraphWorkspaceView: View {
                             Divider()
                         }
 
-                        GraphCanvasRendererView(
+                        GraphRendererSurfaceView(
                             input: input,
                             viewport: $viewport,
                             callbacks: GraphRendererCallbacks(

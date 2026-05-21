@@ -101,6 +101,38 @@ struct NativeMarkdownApp: App {
             }
         }
 
+        if let canvasBenchmarkIndex = CommandLine.arguments.firstIndex(of: "--graph-canvas-benchmark") {
+            do {
+                let payloadPathIndex = CommandLine.arguments.index(after: canvasBenchmarkIndex)
+                guard CommandLine.arguments.indices.contains(payloadPathIndex) else {
+                    print("Graph canvas benchmark failed")
+                    Foundation.exit(2)
+                }
+                let payloadURL = URL(fileURLWithPath: CommandLine.arguments[payloadPathIndex])
+                print(try GraphCanvasBenchmarkProbe.encodedResult(payloadURL: payloadURL))
+                Foundation.exit(0)
+            } catch {
+                print("Graph canvas benchmark failed")
+                Foundation.exit(2)
+            }
+        }
+
+        if let metalBenchmarkIndex = CommandLine.arguments.firstIndex(of: "--graph-metal-benchmark") {
+            do {
+                let payloadPathIndex = CommandLine.arguments.index(after: metalBenchmarkIndex)
+                guard CommandLine.arguments.indices.contains(payloadPathIndex) else {
+                    print("Graph metal benchmark failed")
+                    Foundation.exit(2)
+                }
+                let payloadURL = URL(fileURLWithPath: CommandLine.arguments[payloadPathIndex])
+                print(try GraphMetalBenchmarkProbe.encodedResult(payloadURL: payloadURL))
+                Foundation.exit(0)
+            } catch {
+                print("Graph metal benchmark failed: \(error)")
+                Foundation.exit(2)
+            }
+        }
+
         if CommandLine.arguments.contains("--textkit-strategy-probe") {
             print(TextKitStrategyProbe.encodedReport())
             Foundation.exit(0)
