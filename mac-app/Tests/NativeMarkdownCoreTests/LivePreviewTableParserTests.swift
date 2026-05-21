@@ -48,6 +48,69 @@ func livePreviewTableParserFindsEditableCellAtOffset() {
 }
 
 @Test
+func livePreviewEditableTableContractAcceptsSimpleTable() throws {
+    let source = """
+    | Name | Status |
+    | --- | --- |
+    | Alpha | Draft |
+    """
+    let table = try #require(LivePreviewTableParser.parse(source).first)
+
+    #expect(LivePreviewTableParser.editableTable(table, in: source) == table)
+}
+
+@Test
+func livePreviewEditableTableContractRejectsInconsistentRows() throws {
+    let source = """
+    | Name | Status |
+    | --- | --- |
+    | Alpha |
+    """
+    let table = try #require(LivePreviewTableParser.parse(source).first)
+
+    #expect(LivePreviewTableParser.editableTable(table, in: source) == nil)
+}
+
+@Test
+func livePreviewEditableTableContractRejectsStaleRanges() throws {
+    let source = """
+    | Name | Status |
+    | --- | --- |
+    | Alpha | Draft |
+    """
+    let table = try #require(LivePreviewTableParser.parse(source).first)
+
+    #expect(LivePreviewTableParser.editableTable(table, in: "Prefix\n" + source) == nil)
+}
+
+@Test
+func livePreviewEditableTableContractRejectsAmbiguousSyntax() throws {
+    let escaped = """
+    | Name | Status |
+    | --- | --- |
+    | Alpha \\| Beta | Draft |
+    """
+    let adjacentEmpty = """
+    | Name | Status |
+    | --- | --- |
+    | Alpha || Draft |
+    """
+    let indented = """
+        | Name | Status |
+        | --- | --- |
+        | Alpha | Draft |
+    """
+
+    for source in [escaped, adjacentEmpty, indented] {
+        if let table = LivePreviewTableParser.parse(source).first {
+            #expect(LivePreviewTableParser.editableTable(table, in: source) == nil)
+        } else {
+            #expect(LivePreviewTableParser.parse(source).isEmpty)
+        }
+    }
+}
+
+@Test
 func livePreviewTableParserIgnoresMalformedTables() {
     let source = """
     | Missing | Alignment |

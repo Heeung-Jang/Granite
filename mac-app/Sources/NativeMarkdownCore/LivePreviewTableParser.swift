@@ -108,6 +108,22 @@ public enum LivePreviewTableParser {
         )
     }
 
+    public static func editableTable(
+        _ table: LivePreviewTable,
+        in source: String
+    ) -> LivePreviewTable? {
+        guard let current = parse(source).first(where: { $0.sourceRange == table.sourceRange }),
+              current == table,
+              current.header.count == current.alignments.count,
+              current.bodyRows.allSatisfy({ $0.count == current.header.count }),
+              rangesResolve(for: current, in: source),
+              !hasAmbiguousEditableSyntax(current, in: source)
+        else {
+            return nil
+        }
+        return current
+    }
+
     private static func alignment(for text: String) -> LivePreviewTableAlignment? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let dashText = trimmed.trimmingCharacters(in: CharacterSet(charactersIn: ":"))
@@ -215,6 +231,48 @@ public enum LivePreviewTableParser {
         }
 
         return lines
+    }
+
+    private static func rangesResolve(for table: LivePreviewTable, in source: String) -> Bool {
+        guard LivePreviewRangeMapper.stringRange(for: table.sourceRange, in: source) != nil,
+              LivePreviewRangeMapper.stringRange(for: table.alignmentRowRange, in: source) != nil
+        else {
+            return false
+        }
+        return ([table.header] + table.bodyRows).flatMap { $0 }.allSatisfy { cell in
+            guard let sourceRange = LivePreviewRangeMapper.stringRange(for: cell.sourceRange, in: source),
+                  let contentRange = LivePreviewRangeMapper.stringRange(for: cell.contentRange, in: source)
+            else {
+                return false
+            }
+            return source[sourceRange].contains(source[contentRange])
+                && String(source[contentRange]) == cell.text
+        }
+    }
+
+    private static func hasAmbiguousEditableSyntax(_ table: LivePreviewTable, in source: String) -> Bool {
+        guard let range = LivePreviewRangeMapper.stringRange(for: table.sourceRange, in: source) else {
+            return true
+        }
+        return source[range].split(separator: "\n", omittingEmptySubsequences: false).contains { rawLine in
+            let line = String(rawLine)
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            return line.hasPrefix("    ")
+                || line.hasPrefix("\t")
+                || trimmed.hasPrefix(">")
+                || trimmed.hasPrefix("- ")
+                || line.contains("\\|")
+                || hasInteriorEmptyCell(in: trimmed)
+        }
+    }
+
+    private static func hasInteriorEmptyCell(in line: String) -> Bool {
+        guard line.contains("||") else {
+            return false
+        }
+        let withoutLeading = line.hasPrefix("|") ? String(line.dropFirst()) : line
+        let withoutTrailing = withoutLeading.hasSuffix("|") ? String(withoutLeading.dropLast()) : withoutLeading
+        return withoutTrailing.contains("||")
     }
 }
 
