@@ -5,8 +5,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 
-use crate::parser::parse_markdown;
-use crate::paths::{PathError, VaultRoot, lookup_key};
+use crate::parser::{ParsedMarkdown, parse_markdown};
+use crate::paths::{FileIdentity, PathError, VaultRoot, lookup_key};
 use crate::scanner::{ScanEntryKind, ScanError, scan_vault};
 use crate::sqlite_fts::{SearchDocument, SearchResult, SqliteFtsError, SqliteFtsIndex};
 use crate::tantivy_search::{TantivyIndexingStageMetrics, TantivySearchError, TantivySearchIndex};
@@ -311,6 +311,10 @@ struct SearchDocumentSource {
     relative_path: PathBuf,
     absolute_path: PathBuf,
     file_id: String,
+    kind: ScanEntryKind,
+    size_bytes: u64,
+    modified: Option<SystemTime>,
+    file_identity: FileIdentity,
 }
 
 struct LoadedSearchDocumentSources {
@@ -320,10 +324,32 @@ struct LoadedSearchDocumentSources {
 
 struct TimedSearchDocument {
     document: SearchDocument,
+    work_item: ParsedSearchWorkItem,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParsedSearchWorkItem {
+    file_id: String,
+    relative_path: PathBuf,
+    title: String,
+    body_len: usize,
+    metadata_counts: ParsedMetadataCounts,
+    file_identity: FileIdentity,
+    size_bytes: u64,
+    modified: Option<SystemTime>,
     timing: ReadParseTiming,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct ParsedMetadataCounts {
+    link_count: usize,
+    tag_count: usize,
+    property_count: usize,
+    heading_count: usize,
+    attachment_count: usize,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct ReadParseTiming {
     read_micros: u64,
     parse_micros: u64,
@@ -358,10 +384,11 @@ impl StreamingCorpusStats {
 
     fn record_timed(&mut self, timed: &TimedSearchDocument) {
         self.record(&timed.document);
-        self.read_micros.push(timed.timing.read_micros);
-        self.parse_micros.push(timed.timing.parse_micros);
-        self.combined_micros.push(timed.timing.combined_micros);
-        self.read_parse_bytes += timed.timing.bytes;
+        self.read_micros.push(timed.work_item.timing.read_micros);
+        self.parse_micros.push(timed.work_item.timing.parse_micros);
+        self.combined_micros
+            .push(timed.work_item.timing.combined_micros);
+        self.read_parse_bytes += timed.work_item.timing.bytes;
     }
 
     fn first_document(&self) -> BackendBenchmarkResultType<&SearchDocument> {
@@ -393,11 +420,16 @@ fn load_search_document_sources(
         .into_iter()
         .filter(|entry| entry.kind == ScanEntryKind::Markdown)
         .map(|entry| {
-            let absolute_path = root.canonical_root().join(&entry.relative_path);
+            let relative_path = entry.relative_path;
+            let absolute_path = root.canonical_root().join(&relative_path);
             SearchDocumentSource {
-                file_id: lookup_key(&entry.relative_path),
-                relative_path: entry.relative_path,
+                file_id: lookup_key(&relative_path),
+                relative_path,
                 absolute_path,
+                kind: entry.kind,
+                size_bytes: entry.size_bytes,
+                modified: entry.modified,
+                file_identity: entry.file_identity,
             }
         })
         .collect();
@@ -415,12 +447,13 @@ fn load_search_document_sources(
 fn read_search_document(
     source: &SearchDocumentSource,
 ) -> BackendBenchmarkResultType<SearchDocument> {
-    Ok(read_search_document_timed(source)?.document)
+    Ok(read_parse_source(source)?.document)
 }
 
-fn read_search_document_timed(
+fn read_parse_source(
     source: &SearchDocumentSource,
 ) -> BackendBenchmarkResultType<TimedSearchDocument> {
+    debug_assert_eq!(source.kind, ScanEntryKind::Markdown);
     let combined_start = Instant::now();
     let (body, read_micros) = read_markdown_body(&source.absolute_path)?;
     let parse_start = Instant::now();
@@ -433,18 +466,29 @@ fn read_search_document_timed(
         .first()
         .map(|heading| heading.text.clone())
         .unwrap_or_else(|| fallback_title(&source.relative_path));
+    let metadata_counts = parsed_metadata_counts(&parsed);
     Ok(TimedSearchDocument {
         document: SearchDocument {
             file_id: source.file_id.clone(),
             path: source.relative_path.to_string_lossy().to_string(),
-            title,
+            title: title.clone(),
             body,
         },
-        timing: ReadParseTiming {
-            read_micros,
-            parse_micros,
-            combined_micros,
-            bytes,
+        work_item: ParsedSearchWorkItem {
+            file_id: source.file_id.clone(),
+            relative_path: source.relative_path.clone(),
+            title,
+            body_len: bytes as usize,
+            metadata_counts,
+            file_identity: source.file_identity.clone(),
+            size_bytes: source.size_bytes,
+            modified: source.modified,
+            timing: ReadParseTiming {
+                read_micros,
+                parse_micros,
+                combined_micros,
+                bytes,
+            },
         },
     })
 }
@@ -454,6 +498,26 @@ fn read_markdown_body(path: &Path) -> BackendBenchmarkResultType<(String, u64)> 
     let body = fs::read_to_string(path)?;
     let read_micros = duration_micros_nonzero(start.elapsed());
     Ok((body, read_micros))
+}
+
+fn parsed_metadata_counts(parsed: &ParsedMarkdown) -> ParsedMetadataCounts {
+    ParsedMetadataCounts {
+        link_count: parsed.wikilinks.len()
+            + parsed
+                .markdown_links
+                .iter()
+                .filter(|link| !link.image)
+                .count(),
+        tag_count: parsed.tags.len(),
+        property_count: parsed.properties.len(),
+        heading_count: parsed.headings.len(),
+        attachment_count: parsed.embeds.len()
+            + parsed
+                .markdown_links
+                .iter()
+                .filter(|link| link.image)
+                .count(),
+    }
 }
 
 fn run_sqlite_benchmark(
@@ -517,7 +581,7 @@ fn run_sqlite_benchmark_from_sources(
     let index_start = Instant::now();
     let mut sqlite_upsert_micros = 0;
     for source in sources {
-        let timed = read_search_document_timed(source)?;
+        let timed = read_parse_source(source)?;
         stats.record_timed(&timed);
         let upsert_start = Instant::now();
         index.upsert_document(&timed.document)?;
@@ -605,7 +669,7 @@ fn run_tantivy_benchmark_from_sources(
     let index_start = Instant::now();
     let tantivy_stages = index.add_documents_for_rebuild_from_result_iter_with_stage_durations(
         sources.iter().map(|source| {
-            let timed = read_search_document_timed(source)?;
+            let timed = read_parse_source(source)?;
             stats.record_timed(&timed);
             Ok::<SearchDocument, BackendBenchmarkError>(timed.document)
         }),
@@ -935,23 +999,80 @@ mod tests {
     }
 
     #[test]
-    fn read_search_document_timed_reports_nonzero_bytes() {
+    fn source_fixture_builds_markdown_and_attachment_sources() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let markdown = source_fixture(temp.path(), "Home.md", ScanEntryKind::Markdown);
+        let attachment = source_fixture(
+            temp.path(),
+            "attachments/diagram.svg",
+            ScanEntryKind::Attachment,
+        );
+
+        assert_eq!(markdown.kind, ScanEntryKind::Markdown);
+        assert_eq!(markdown.file_id, "home.md");
+        assert_eq!(attachment.kind, ScanEntryKind::Attachment);
+        assert_eq!(
+            attachment.relative_path,
+            PathBuf::from("attachments/diagram.svg")
+        );
+    }
+
+    #[test]
+    fn read_parse_source_reports_nonzero_bytes() {
         let temp = tempfile::tempdir().expect("tempdir");
         let path = temp.path().join("Home.md");
         fs::write(&path, "# Home\nFixture body.").expect("fixture markdown");
-        let source = SearchDocumentSource {
-            relative_path: PathBuf::from("Home.md"),
-            absolute_path: path,
-            file_id: "home.md".to_string(),
-        };
+        let source = source_fixture(temp.path(), "Home.md", ScanEntryKind::Markdown);
 
-        let timed = read_search_document_timed(&source).expect("timed document");
+        let timed = read_parse_source(&source).expect("timed document");
 
         assert_eq!(timed.document.title, "Home");
-        assert!(timed.timing.bytes > 0);
-        assert!(timed.timing.read_micros > 0);
-        assert!(timed.timing.parse_micros > 0);
-        assert!(timed.timing.combined_micros > 0);
+        assert_eq!(timed.work_item.file_id, "home.md");
+        assert_eq!(timed.work_item.relative_path, PathBuf::from("Home.md"));
+        assert_eq!(timed.work_item.title, "Home");
+        assert!(timed.work_item.body_len > 0);
+        assert!(timed.work_item.timing.bytes > 0);
+        assert!(timed.work_item.timing.read_micros > 0);
+        assert!(timed.work_item.timing.parse_micros > 0);
+        assert!(timed.work_item.timing.combined_micros > 0);
+    }
+
+    #[test]
+    fn read_parse_source_uses_heading_and_fallback_titles() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        fs::write(temp.path().join("Heading.md"), "# Heading Title\nBody").expect("heading");
+        fs::write(temp.path().join("NoHeading.md"), "Body only").expect("fallback");
+
+        let heading = read_parse_source(&source_fixture(
+            temp.path(),
+            "Heading.md",
+            ScanEntryKind::Markdown,
+        ))
+        .expect("heading source");
+        let fallback = read_parse_source(&source_fixture(
+            temp.path(),
+            "NoHeading.md",
+            ScanEntryKind::Markdown,
+        ))
+        .expect("fallback source");
+
+        assert_eq!(heading.document.title, "Heading Title");
+        assert_eq!(fallback.document.title, "NoHeading");
+    }
+
+    #[test]
+    fn parsed_work_item_counts_compatibility_fixture_metadata() {
+        let root = workspace_root().join("fixtures/compatibility-vault");
+        let source = source_fixture(&root, "Home.md", ScanEntryKind::Markdown);
+
+        let timed = read_parse_source(&source).expect("fixture source");
+        let counts = timed.work_item.metadata_counts;
+
+        assert!(counts.link_count > 0);
+        assert!(counts.tag_count > 0);
+        assert!(counts.property_count > 0);
+        assert!(counts.heading_count > 0);
+        assert!(counts.attachment_count > 0);
     }
 
     #[test]
@@ -1133,5 +1254,34 @@ mod tests {
                 body: "This note is the resolved target for heading links.".to_string(),
             },
         ]
+    }
+
+    fn source_fixture(
+        root: &Path,
+        relative_path: &str,
+        kind: ScanEntryKind,
+    ) -> SearchDocumentSource {
+        let relative_path = PathBuf::from(relative_path);
+        let absolute_path = root.join(&relative_path);
+        let metadata = fs::metadata(&absolute_path).ok();
+        SearchDocumentSource {
+            file_id: lookup_key(&relative_path),
+            relative_path,
+            absolute_path,
+            kind,
+            size_bytes: metadata.as_ref().map_or(0, |metadata| metadata.len()),
+            modified: metadata.and_then(|metadata| metadata.modified().ok()),
+            file_identity: FileIdentity {
+                device: 1,
+                inode: 1,
+            },
+        }
+    }
+
+    fn workspace_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("workspace root")
+            .to_path_buf()
     }
 }
