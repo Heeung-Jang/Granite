@@ -308,6 +308,257 @@ func appStateCanDiscardDirtyLifecycleWarning() {
 }
 
 @Test
+func appStateClearsCleanSelectedFile() {
+    let state = AppState()
+    let file = FileTreeItem(relativePath: "Draft.md")
+
+    #expect(state.openFile(file))
+    #expect(state.requestClearSelectedFile())
+
+    #expect(state.selectedFile == nil)
+    #expect(state.dirtyEditorActionWarning == nil)
+}
+
+@Test
+func appStateClearsNoSelectedFileAsNoOp() {
+    let state = AppState()
+
+    #expect(state.requestClearSelectedFile())
+
+    #expect(state.selectedFile == nil)
+    #expect(state.dirtyEditorActionWarning == nil)
+}
+
+@Test
+func appStateBlocksClearingDirtySelectedFile() {
+    let state = AppState()
+    let file = FileTreeItem(relativePath: "Draft.md")
+
+    #expect(state.openFile(file))
+    state.updateEditorDirtyState(file: file, isDirty: true)
+
+    #expect(state.requestClearSelectedFile() == false)
+    #expect(state.selectedFile == file)
+    #expect(state.dirtyEditorActionWarning == DirtyEditorActionWarning(
+        dirtyFile: file,
+        action: .clearSelection
+    ))
+
+    state.dismissDirtyEditorActionWarning()
+    #expect(state.selectedFile == file)
+    #expect(state.dirtyEditorActionWarning == nil)
+}
+
+@Test
+func appStateAllowsClearSelectionWhenDirtyFileIsNotSelected() {
+    let state = AppState()
+    let staleDirtyFile = FileTreeItem(relativePath: "Stale.md")
+    let selectedFile = FileTreeItem(relativePath: "Selected.md")
+
+    state.updateEditorDirtyState(file: staleDirtyFile, isDirty: true)
+    #expect(state.openFile(selectedFile))
+
+    #expect(state.requestClearSelectedFile())
+    #expect(state.selectedFile == nil)
+    #expect(state.dirtyEditorActionWarning == nil)
+}
+
+@Test
+func appStateClosesCleanSelectedVault() {
+    let vaultURL = URL(fileURLWithPath: "/tmp/clean-vault", isDirectory: true)
+    let state = AppState(vaultSelection: .selected(vaultURL))
+    let file = FileTreeItem(relativePath: "Clean.md")
+
+    #expect(state.openFile(file))
+    #expect(state.requestCloseVault())
+
+    #expect(state.vaultSelection == .noVault)
+    #expect(state.selectedFile == nil)
+    #expect(state.dirtyEditorActionWarning == nil)
+}
+
+@Test
+func appStateCloseVaultIsNoOpWithoutVault() {
+    let state = AppState()
+
+    #expect(state.requestCloseVault())
+
+    #expect(state.vaultSelection == .noVault)
+    #expect(state.dirtyEditorActionWarning == nil)
+}
+
+@Test
+func appStateClosesUnavailableVault() {
+    let vaultURL = URL(fileURLWithPath: "/tmp/missing-vault", isDirectory: true)
+    let issue = VaultAccessIssue.missing(vaultURL)
+    let state = AppState(vaultSelection: .unavailable(issue))
+
+    #expect(state.requestCloseVault())
+
+    #expect(state.vaultSelection == .noVault)
+    #expect(state.dirtyEditorActionWarning == nil)
+}
+
+@Test
+func appStateBlocksClosingVaultWithDirtySelectedFile() {
+    let vaultURL = URL(fileURLWithPath: "/tmp/dirty-vault", isDirectory: true)
+    let state = AppState(vaultSelection: .selected(vaultURL))
+    let file = FileTreeItem(relativePath: "Dirty.md")
+
+    #expect(state.openFile(file))
+    state.updateEditorDirtyState(file: file, isDirty: true)
+
+    #expect(state.requestCloseVault() == false)
+    #expect(state.vaultSelection == .selected(vaultURL))
+    #expect(state.selectedFile == file)
+    #expect(state.dirtyEditorActionWarning == DirtyEditorActionWarning(
+        dirtyFile: file,
+        action: .closeVault
+    ))
+
+    state.dismissDirtyEditorActionWarning()
+    #expect(state.vaultSelection == .selected(vaultURL))
+    #expect(state.selectedFile == file)
+    #expect(state.dirtyEditorActionWarning == nil)
+}
+
+@Test
+func appStateBlocksClosingVaultWithAnyDirtyEditorFile() {
+    let vaultURL = URL(fileURLWithPath: "/tmp/dirty-unselected-vault", isDirectory: true)
+    let state = AppState(vaultSelection: .selected(vaultURL))
+    let dirtyFile = FileTreeItem(relativePath: "Dirty.md")
+    let selectedFile = FileTreeItem(relativePath: "Selected.md")
+
+    state.updateEditorDirtyState(file: dirtyFile, isDirty: true)
+    #expect(state.openFile(selectedFile))
+
+    #expect(state.requestCloseVault() == false)
+    #expect(state.vaultSelection == .selected(vaultURL))
+    #expect(state.selectedFile == selectedFile)
+    #expect(state.dirtyEditorActionWarning == DirtyEditorActionWarning(
+        dirtyFile: dirtyFile,
+        action: .closeVault
+    ))
+}
+
+@Test
+func appStateCanDiscardDirtyClearSelectionWarning() {
+    let vaultURL = URL(fileURLWithPath: "/tmp/clear-vault", isDirectory: true)
+    let state = AppState(vaultSelection: .selected(vaultURL))
+    let file = FileTreeItem(relativePath: "Dirty.md")
+
+    #expect(state.openFile(file))
+    state.updateEditorDirtyState(file: file, isDirty: true)
+    #expect(state.requestClearSelectedFile() == false)
+
+    #expect(state.discardDirtyChangesForEditorActionWarning() == .clearSelection)
+
+    #expect(state.vaultSelection == .selected(vaultURL))
+    #expect(state.selectedFile == nil)
+    #expect(state.dirtyEditorActionWarning == nil)
+    #expect(state.isEditorDirty(file: file) == false)
+}
+
+@Test
+func appStateCanDiscardDirtyCloseVaultWarning() {
+    let vaultURL = URL(fileURLWithPath: "/tmp/discard-close-vault", isDirectory: true)
+    let state = AppState(vaultSelection: .selected(vaultURL))
+    let file = FileTreeItem(relativePath: "Dirty.md")
+
+    #expect(state.openFile(file))
+    state.updateEditorDirtyState(file: file, isDirty: true)
+    #expect(state.requestCloseVault() == false)
+
+    #expect(state.discardDirtyChangesForEditorActionWarning() == .closeVault)
+
+    #expect(state.vaultSelection == .noVault)
+    #expect(state.selectedFile == nil)
+    #expect(state.dirtyEditorActionWarning == nil)
+    #expect(state.isEditorDirty(file: file) == false)
+}
+
+@Test
+func appStateDiscardDirtyEditorActionWithoutWarningIsSafe() {
+    let state = AppState()
+
+    #expect(state.discardDirtyChangesForEditorActionWarning() == nil)
+}
+
+@Test
+func appStateKeepsOnlyEditorActionWarningAfterNavigationWarning() {
+    let state = AppState()
+    let first = FileTreeItem(relativePath: "First.md")
+    let second = FileTreeItem(relativePath: "Second.md")
+
+    #expect(state.openFile(first))
+    state.updateEditorDirtyState(file: first, isDirty: true)
+    #expect(state.openFile(second) == false)
+    #expect(state.dirtyNavigationWarning != nil)
+
+    #expect(state.requestClearSelectedFile() == false)
+
+    #expect(state.dirtyNavigationWarning == nil)
+    #expect(state.dirtyLifecycleWarning == nil)
+    #expect(state.dirtyEditorActionWarning == DirtyEditorActionWarning(
+        dirtyFile: first,
+        action: .clearSelection
+    ))
+}
+
+@Test
+func appStateKeepsOnlyLifecycleWarningAfterEditorActionWarning() {
+    let state = AppState()
+    let file = FileTreeItem(relativePath: "Draft.md")
+
+    #expect(state.openFile(file))
+    state.updateEditorDirtyState(file: file, isDirty: true)
+    #expect(state.requestClearSelectedFile() == false)
+
+    #expect(state.requestWindowClose() == false)
+
+    #expect(state.dirtyEditorActionWarning == nil)
+    #expect(state.dirtyNavigationWarning == nil)
+    #expect(state.dirtyLifecycleWarning == DirtyLifecycleWarning(
+        dirtyFile: file,
+        action: .closeWindow
+    ))
+}
+
+@Test
+func appStateClearsEditorActionWarningWhenDirtyFileBecomesClean() {
+    let state = AppState()
+    let file = FileTreeItem(relativePath: "Draft.md")
+
+    #expect(state.openFile(file))
+    state.updateEditorDirtyState(file: file, isDirty: true)
+    #expect(state.requestClearSelectedFile() == false)
+
+    state.updateEditorDirtyState(file: file, isDirty: false)
+
+    #expect(state.dirtyEditorActionWarning == nil)
+}
+
+@Test
+func appStateClearsEditorActionWarningWhenVaultChanges() throws {
+    let vaultURL = URL(fileURLWithPath: "/tmp/new-vault", isDirectory: true)
+    let file = FileTreeItem(relativePath: "Draft.md")
+    let state = AppState(
+        engineHealth: EngineHealthStatus(state: .loaded, abiVersion: 1, message: "test"),
+        vaultAccessValidator: FixedVaultAccessValidator(issue: .missing(vaultURL)),
+        recentVaultStorage: MemoryRecentVaultStorage()
+    )
+
+    #expect(state.openFile(file))
+    state.updateEditorDirtyState(file: file, isDirty: true)
+    #expect(state.requestClearSelectedFile() == false)
+
+    try state.selectVault(vaultURL)
+
+    #expect(state.selectedFile == nil)
+    #expect(state.dirtyEditorActionWarning == nil)
+}
+
+@Test
 func indexDirectoryResolverCreatesOnlyAppOwnedDirectories() throws {
     let temporaryRoot = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString, isDirectory: true)
