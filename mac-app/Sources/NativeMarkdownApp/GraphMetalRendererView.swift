@@ -347,6 +347,7 @@ private final class GraphMetalRenderer {
     private var nodeBuffer: (any MTLBuffer)?
     private var edgeVertexCount = 0
     private var nodeVertexCount = 0
+    private var edgePrimitiveType: MTLPrimitiveType = .line
 
     init(device: any MTLDevice) throws {
         self.device = device
@@ -382,8 +383,10 @@ private final class GraphMetalRenderer {
             return
         }
 
+        let usesExpandedEdges = input.presentation.showArrows
+            || input.presentation.linkThickness > 1.0
         var edgeVertices: [GraphMetalVertex] = []
-        edgeVertices.reserveCapacity(input.layout.edges.count * (input.presentation.showArrows ? 6 : 2))
+        edgeVertices.reserveCapacity(input.layout.edges.count * (usesExpandedEdges ? 9 : 2))
         for edge in input.layout.edges {
             guard input.layout.nodes.indices.contains(edge.sourceIndex),
                   input.layout.nodes.indices.contains(edge.targetIndex)
@@ -393,23 +396,33 @@ private final class GraphMetalRenderer {
             let color = edgeColor(edge, input: input)
             let source = metalPoint(input.layout.nodes[edge.sourceIndex].position)
             let target = metalPoint(input.layout.nodes[edge.targetIndex].position)
-            edgeVertices.append(GraphMetalVertex(
-                position: source,
-                color: color,
-                radius: 1
-            ))
-            edgeVertices.append(GraphMetalVertex(
-                position: target,
-                color: color,
-                radius: 1
-            ))
-            if input.presentation.showArrows {
-                appendArrowHeadVertices(
+            if usesExpandedEdges {
+                appendThickEdgeVertices(
                     from: source,
                     to: target,
                     color: color,
+                    thickness: Float(max(0.5, input.presentation.linkThickness)),
                     vertices: &edgeVertices
                 )
+                if input.presentation.showArrows {
+                    appendArrowHeadVertices(
+                        from: source,
+                        to: target,
+                        color: color,
+                        vertices: &edgeVertices
+                    )
+                }
+            } else {
+                edgeVertices.append(GraphMetalVertex(
+                    position: source,
+                    color: color,
+                    radius: 1
+                ))
+                edgeVertices.append(GraphMetalVertex(
+                    position: target,
+                    color: color,
+                    radius: 1
+                ))
             }
         }
 
@@ -427,6 +440,7 @@ private final class GraphMetalRenderer {
         nodeBuffer = Self.makeBuffer(device: device, vertices: nodeVertices)
         edgeVertexCount = edgeVertices.count
         nodeVertexCount = nodeVertices.count
+        edgePrimitiveType = usesExpandedEdges ? .triangle : .line
         cachedIdentity = identity
     }
 
@@ -471,7 +485,11 @@ private final class GraphMetalRenderer {
                 length: MemoryLayout<GraphMetalUniforms>.stride,
                 index: 1
             )
-            encoder.drawPrimitives(type: .line, vertexStart: 0, vertexCount: edgeVertexCount)
+            encoder.drawPrimitives(
+                type: edgePrimitiveType,
+                vertexStart: 0,
+                vertexCount: edgeVertexCount
+            )
         }
 
         if let nodeBuffer, nodeVertexCount > 0 {
@@ -638,8 +656,31 @@ private final class GraphMetalRenderer {
 
         vertices.append(GraphMetalVertex(position: target, color: color, radius: 1))
         vertices.append(GraphMetalVertex(position: left, color: color, radius: 1))
-        vertices.append(GraphMetalVertex(position: target, color: color, radius: 1))
         vertices.append(GraphMetalVertex(position: right, color: color, radius: 1))
+    }
+
+    private func appendThickEdgeVertices(
+        from source: SIMD2<Float>,
+        to target: SIMD2<Float>,
+        color: SIMD4<Float>,
+        thickness: Float,
+        vertices: inout [GraphMetalVertex]
+    ) {
+        let delta = target - source
+        let length = max(0.001, sqrt(delta.x * delta.x + delta.y * delta.y))
+        let unit = delta / length
+        let normal = SIMD2<Float>(-unit.y, unit.x) * max(0.25, thickness * 0.5)
+        let sourceLeft = source + normal
+        let sourceRight = source - normal
+        let targetLeft = target + normal
+        let targetRight = target - normal
+
+        vertices.append(GraphMetalVertex(position: sourceLeft, color: color, radius: 1))
+        vertices.append(GraphMetalVertex(position: sourceRight, color: color, radius: 1))
+        vertices.append(GraphMetalVertex(position: targetLeft, color: color, radius: 1))
+        vertices.append(GraphMetalVertex(position: targetLeft, color: color, radius: 1))
+        vertices.append(GraphMetalVertex(position: sourceRight, color: color, radius: 1))
+        vertices.append(GraphMetalVertex(position: targetRight, color: color, radius: 1))
     }
 
     private func groupColorIdentity(_ colors: [String: String]) -> String {
