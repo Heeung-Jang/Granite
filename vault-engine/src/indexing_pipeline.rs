@@ -12,11 +12,12 @@ use serde::Serialize;
 use crate::attachments::{AttachmentReferenceSource, AttachmentResolutionState};
 use crate::index::{
     AttachmentRecord, FileIndexStatus, FileMetadataRecords, FileRecord, HeadingRecord,
-    LinkEdgeRecord, MetadataStore, MetadataStoreError, PropertyRecord, TagRecord, TagSource,
-    slugify_heading,
+    IndexSchemaMetadata, LinkEdgeRecord, MetadataStore, MetadataStoreError, PropertyRecord,
+    TagRecord, TagSource, slugify_heading,
 };
+use crate::index_rebuild::{IndexRebuildError, IndexRebuildPaths, commit_index_rebuild};
 use crate::indexing_queue::{
-    IndexingQueue, IndexingQueueError, IndexingQueueItem, IndexingQueueReason,
+    IndexingQueue, IndexingQueueError, IndexingQueueItem, IndexingQueueReason, IndexingQueueSummary,
 };
 use crate::parser::{ParsedMarkdown, PropertyValue, parse_markdown};
 use crate::paths::{FileIdentity, PathError, VaultRoot, lookup_key};
@@ -90,10 +91,51 @@ pub enum SnippetStorageMode {
     StoredBody,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 pub enum IndexingPipelineTier {
     Complete,
     Error,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+pub enum IndexingProgressStage {
+    LeaseQueue,
+    ReadParse,
+    MetadataWrite,
+    SearchIndex,
+    CommitRebuild,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct IndexingProgressSnapshot {
+    pub generation: u64,
+    pub tier: IndexingPipelineTier,
+    pub stage: IndexingProgressStage,
+    pub pending_count: usize,
+    pub in_progress_count: usize,
+    pub completed_count: usize,
+    pub failed_count: usize,
+    pub cancelled_count: usize,
+}
+
+impl IndexingProgressSnapshot {
+    pub fn from_queue_summary(
+        generation: u64,
+        tier: IndexingPipelineTier,
+        stage: IndexingProgressStage,
+        summary: IndexingQueueSummary,
+    ) -> Self {
+        Self {
+            generation,
+            tier,
+            stage,
+            pending_count: summary.pending,
+            in_progress_count: summary.in_progress,
+            completed_count: summary.completed,
+            failed_count: summary.failed,
+            cancelled_count: summary.cancelled,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -166,6 +208,7 @@ pub enum IndexingPipelineError {
     Io(std::io::Error),
     Path(PathError),
     Scan(String),
+    Rebuild(IndexRebuildError),
     Metadata(MetadataStoreError),
     Queue(IndexingQueueError),
     Tantivy(TantivySearchError),
@@ -510,6 +553,67 @@ pub fn process_indexing_queue_batch(
     ))
 }
 
+pub fn run_full_rebuild_pipeline(
+    paths: &IndexRebuildPaths,
+    sources: &[SearchDocumentSource],
+    metadata: &IndexSchemaMetadata,
+    pipeline_options: &IndexingPipelineOptions,
+) -> IndexingPipelineResult<ProductionIndexingPipelineResult> {
+    fs::create_dir_all(&paths.rebuild_directory)?;
+    let options = pipeline_options.normalized();
+    let metadata_path = paths.rebuild_directory.join("metadata.sqlite");
+    remove_sqlite_files(&metadata_path)?;
+    let mut metadata_store = MetadataStore::open(&metadata_path, metadata)?;
+    let batch_size = options.metadata_batch_size;
+    let mut pending = Vec::with_capacity(batch_size);
+    let mut sqlite_metadata_write_micros = 0;
+
+    run_read_parse_pipeline(sources, &options, |timed| {
+        let mut records = timed.work_item.metadata_records;
+        records.file.generation = metadata.generation;
+        records.file.mark_search_indexed();
+        pending.push(records);
+        if pending.len() >= batch_size {
+            let start = Instant::now();
+            metadata_store.replace_file_records_batch(&pending)?;
+            sqlite_metadata_write_micros += duration_micros_nonzero(start.elapsed());
+            pending.clear();
+        }
+        Ok::<(), IndexingPipelineError>(())
+    })?;
+
+    if !pending.is_empty() {
+        let start = Instant::now();
+        metadata_store.replace_file_records_batch(&pending)?;
+        sqlite_metadata_write_micros += duration_micros_nonzero(start.elapsed());
+    }
+
+    let tantivy_dir = paths.rebuild_directory.join("tantivy");
+    reset_directory(&tantivy_dir)?;
+    let mut tantivy = TantivySearchIndex::open_in_dir(&tantivy_dir)?;
+    let tantivy_run = run_tantivy_rebuild_pipeline(&mut tantivy, sources, &options)?;
+
+    Ok(production_result(
+        metadata.generation,
+        tantivy_run.stages.added_document_count,
+        tantivy_run.stages.failed_document_count,
+        tantivy_run.stats,
+        sqlite_metadata_write_micros,
+        tantivy_run.stages,
+    ))
+}
+
+pub fn run_full_rebuild_pipeline_and_commit(
+    paths: &IndexRebuildPaths,
+    sources: &[SearchDocumentSource],
+    metadata: &IndexSchemaMetadata,
+    pipeline_options: &IndexingPipelineOptions,
+) -> IndexingPipelineResult<ProductionIndexingPipelineResult> {
+    let result = run_full_rebuild_pipeline(paths, sources, metadata, pipeline_options)?;
+    commit_index_rebuild(paths)?;
+    Ok(result)
+}
+
 pub fn read_search_document(
     source: &SearchDocumentSource,
 ) -> IndexingPipelineResult<SearchDocument> {
@@ -769,6 +873,7 @@ impl fmt::Display for IndexingPipelineError {
             Self::Io(error) => write!(formatter, "indexing pipeline io error: {error}"),
             Self::Path(error) => write!(formatter, "indexing pipeline path error: {error}"),
             Self::Scan(error) => write!(formatter, "indexing pipeline scan error: {error}"),
+            Self::Rebuild(error) => write!(formatter, "indexing pipeline rebuild error: {error}"),
             Self::Metadata(error) => {
                 write!(formatter, "indexing pipeline metadata error: {error}")
             }
@@ -789,6 +894,12 @@ impl From<std::io::Error> for IndexingPipelineError {
 impl From<PathError> for IndexingPipelineError {
     fn from(error: PathError) -> Self {
         Self::Path(error)
+    }
+}
+
+impl From<IndexRebuildError> for IndexingPipelineError {
+    fn from(error: IndexRebuildError) -> Self {
+        Self::Rebuild(error)
     }
 }
 
@@ -978,6 +1089,27 @@ fn fallback_title(relative_path: &Path) -> String {
 
 fn document_bytes(document: &SearchDocument) -> u64 {
     document.path.len() as u64 + document.title.len() as u64 + document.body.len() as u64
+}
+
+fn remove_file_if_exists(path: &Path) -> std::io::Result<()> {
+    if path.exists() {
+        fs::remove_file(path)?;
+    }
+    Ok(())
+}
+
+fn remove_sqlite_files(path: &Path) -> std::io::Result<()> {
+    remove_file_if_exists(path)?;
+    remove_file_if_exists(&path.with_extension("sqlite-wal"))?;
+    remove_file_if_exists(&path.with_extension("sqlite-shm"))?;
+    Ok(())
+}
+
+fn reset_directory(path: &Path) -> std::io::Result<()> {
+    if path.exists() {
+        fs::remove_dir_all(path)?;
+    }
+    fs::create_dir_all(path)
 }
 
 fn duration_micros(duration: Duration) -> u64 {
@@ -1246,6 +1378,101 @@ mod tests {
         );
     }
 
+    #[test]
+    fn full_rebuild_writes_artifacts_under_rebuild_directory() {
+        let temp = tempdir().expect("tempdir");
+        let root = fixture_vault(temp.path(), &["Home.md", "Guide.md"]);
+        let paths = rebuild_paths(temp.path());
+        std::fs::create_dir_all(&paths.data_directory).expect("data");
+        std::fs::write(paths.data_directory.join("old.index"), "old").expect("old data");
+        let loaded = load_search_document_sources(&root).expect("sources");
+
+        let result = run_full_rebuild_pipeline(
+            &paths,
+            &loaded.sources,
+            &IndexSchemaMetadata::new("sqlite+tantivy", "metadata-v1", "tantivy", 4),
+            &IndexingPipelineOptions::serial(),
+        )
+        .expect("rebuild");
+
+        assert_eq!(result.processed_count, 2);
+        assert!(paths.data_directory.join("old.index").exists());
+        assert!(paths.rebuild_directory.join("metadata.sqlite").exists());
+        assert!(paths.rebuild_directory.join("tantivy").exists());
+    }
+
+    #[test]
+    fn full_rebuild_commits_only_after_stores_succeed() {
+        let temp = tempdir().expect("tempdir");
+        let root = fixture_vault(temp.path(), &["Home.md"]);
+        let paths = rebuild_paths(temp.path());
+        std::fs::create_dir_all(&paths.data_directory).expect("data");
+        std::fs::write(paths.data_directory.join("old.index"), "old").expect("old data");
+        let loaded = load_search_document_sources(&root).expect("sources");
+
+        let result = run_full_rebuild_pipeline_and_commit(
+            &paths,
+            &loaded.sources,
+            &IndexSchemaMetadata::new("sqlite+tantivy", "metadata-v1", "tantivy", 5),
+            &IndexingPipelineOptions::serial(),
+        )
+        .expect("rebuild commit");
+
+        assert_eq!(result.processed_count, 1);
+        assert!(!paths.rebuild_directory.exists());
+        assert!(!paths.data_directory.join("old.index").exists());
+        assert!(paths.data_directory.join("metadata.sqlite").exists());
+        assert!(paths.data_directory.join("tantivy").exists());
+    }
+
+    #[test]
+    fn failed_rebuild_keeps_active_data_uncommitted() {
+        let temp = tempdir().expect("tempdir");
+        let root = fixture_vault(temp.path(), &["Home.md"]);
+        let paths = rebuild_paths(temp.path());
+        std::fs::create_dir_all(&paths.data_directory).expect("data");
+        std::fs::write(paths.data_directory.join("old.index"), "old").expect("old data");
+        std::fs::create_dir_all(&paths.rebuild_directory).expect("rebuild");
+        std::fs::write(paths.rebuild_directory.join("tantivy"), "not a directory")
+            .expect("tantivy blocker");
+        let loaded = load_search_document_sources(&root).expect("sources");
+
+        let result = run_full_rebuild_pipeline_and_commit(
+            &paths,
+            &loaded.sources,
+            &IndexSchemaMetadata::new("sqlite+tantivy", "metadata-v1", "tantivy", 6),
+            &IndexingPipelineOptions::serial(),
+        );
+
+        assert!(matches!(result, Err(IndexingPipelineError::Io(_))));
+        assert!(paths.data_directory.join("old.index").exists());
+        assert!(paths.rebuild_directory.exists());
+    }
+
+    #[test]
+    fn progress_snapshot_serializes_counts_and_redacted_stage_only() {
+        let snapshot = IndexingProgressSnapshot::from_queue_summary(
+            9,
+            IndexingPipelineTier::Complete,
+            IndexingProgressStage::MetadataWrite,
+            IndexingQueueSummary {
+                pending: 1,
+                in_progress: 2,
+                completed: 3,
+                failed: 4,
+                cancelled: 5,
+            },
+        );
+
+        let json = serde_json::to_string(&snapshot).expect("json");
+
+        assert!(json.contains("MetadataWrite"));
+        assert!(json.contains("\"pending_count\":1"));
+        assert!(!json.contains(".md"));
+        assert!(!json.contains("Home"));
+        assert!(!json.contains("/"));
+    }
+
     fn metadata_store() -> MetadataStore {
         MetadataStore::open_in_memory(&IndexSchemaMetadata::new(
             "sqlite",
@@ -1267,6 +1494,16 @@ mod tests {
             .expect("write fixture");
         }
         VaultRoot::open(&vault).expect("vault root")
+    }
+
+    fn rebuild_paths(parent: &Path) -> IndexRebuildPaths {
+        let index_root = parent.join("support").join("Indexes").join("vault-id");
+        IndexRebuildPaths::new(
+            parent.join("vault"),
+            &index_root,
+            index_root.join("data"),
+            index_root.join("rebuild"),
+        )
     }
 
     fn file_record(root: &VaultRoot, relative_path: &str, generation: u64) -> FileRecord {
