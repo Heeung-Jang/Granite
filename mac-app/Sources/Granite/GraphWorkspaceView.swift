@@ -145,12 +145,19 @@ struct GraphWorkspaceView: View {
                                 GraphCanvasHeader(
                                     title: graphViewTitle,
                                     searchQuery: $settings.searchQuery,
-                                    width: proxy.size.width,
+                                    width: proxy.size.width
+                                )
+
+                                GraphFloatingControlStack(
                                     settingsIsPresented: showsSettings,
                                     zoomOut: { zoom(by: 0.85) },
                                     zoomIn: { zoom(by: 1.15) },
                                     resetView: resetViewportToFit,
                                     toggleSettings: { showsSettings.toggle() }
+                                )
+                                .position(
+                                    x: max(15, proxy.size.width - 29),
+                                    y: GraphFloatingControlStack.centerY
                                 )
                             }
                         }
@@ -797,31 +804,25 @@ private struct GraphCanvasHeader: View {
     let title: String
     @Binding var searchQuery: String
     let width: CGFloat
-    let settingsIsPresented: Bool
-    let zoomOut: () -> Void
-    let zoomIn: () -> Void
-    let resetView: () -> Void
-    let toggleSettings: () -> Void
 
     private var usesCenteredTitle: Bool {
-        width >= 840
+        width >= 640
     }
 
     private var showsCompactTitle: Bool {
-        width >= 560
+        width >= 460
     }
 
     private var searchFieldWidth: CGFloat {
         if usesCenteredTitle {
-            return min(240, max(180, width * 0.28))
+            return min(260, max(180, width * 0.32))
         }
 
         let titleWidth: CGFloat = showsCompactTitle ? 60 : 0
-        let spacing: CGFloat = showsCompactTitle ? 24 : 8
+        let spacing: CGFloat = showsCompactTitle ? 8 : 0
         let horizontalPadding: CGFloat = 28
-        let controlsWidth: CGFloat = 138
-        let availableWidth = width - horizontalPadding - titleWidth - spacing - controlsWidth
-        return min(180, max(88, availableWidth))
+        let availableWidth = width - horizontalPadding - titleWidth - spacing
+        return min(260, max(120, availableWidth))
     }
 
     var body: some View {
@@ -834,9 +835,7 @@ private struct GraphCanvasHeader: View {
                     HStack(spacing: 8) {
                         searchField
 
-                        Spacer(minLength: 16)
-
-                        controlButtons
+                        Spacer(minLength: 0)
                     }
                 }
             } else {
@@ -847,9 +846,7 @@ private struct GraphCanvasHeader: View {
 
                     searchField
 
-                    Spacer(minLength: 8)
-
-                    controlButtons
+                    Spacer(minLength: 0)
                 }
             }
         }
@@ -874,9 +871,19 @@ private struct GraphCanvasHeader: View {
             .frame(width: searchFieldWidth)
             .accessibilityLabel("Graph search")
     }
+}
 
-    private var controlButtons: some View {
-        HStack(spacing: 6) {
+private struct GraphFloatingControlStack: View {
+    static let centerY: CGFloat = 121
+
+    let settingsIsPresented: Bool
+    let zoomOut: () -> Void
+    let zoomIn: () -> Void
+    let resetView: () -> Void
+    let toggleSettings: () -> Void
+
+    var body: some View {
+        VStack(spacing: 6) {
             ObsidianIconButton(
                 systemName: "minus.magnifyingglass",
                 accessibilityLabel: "Zoom out graph",
@@ -902,6 +909,7 @@ private struct GraphCanvasHeader: View {
                 action: toggleSettings
             )
         }
+        .fixedSize()
     }
 }
 
