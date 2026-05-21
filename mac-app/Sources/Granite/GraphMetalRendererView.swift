@@ -80,7 +80,7 @@ struct GraphMetalRendererView: View {
     var onSelectNode: (String?) -> Void
     var onOpenNode: (String) -> Void
 
-    @State private var dragStartPanOffset: GraphPoint?
+    @State private var dragMode: GraphMetalDragMode?
     @State private var drawReportGate = GraphMetalDrawReportGate()
     @State private var metalInitializationFailed = false
 
@@ -141,8 +141,7 @@ struct GraphMetalRendererView: View {
                         .allowsHitTesting(false)
                 }
                 .background(ObsidianUI.editorBackground)
-                .gesture(panGesture)
-                .simultaneousGesture(tapGesture(input: renderInput, size: proxy.size))
+                .gesture(panGesture(size: proxy.size))
                 .onContinuousHover { phase in
                     updateHover(phase: phase, input: renderInput, size: proxy.size)
                 }
@@ -168,34 +167,84 @@ struct GraphMetalRendererView: View {
         return renderInput
     }
 
-    private var panGesture: some Gesture {
-        DragGesture(minimumDistance: 1)
+    private func panGesture(size: CGSize) -> some Gesture {
+        DragGesture(minimumDistance: 0)
             .onChanged { value in
-                if dragStartPanOffset == nil {
-                    dragStartPanOffset = viewport.panOffset
-                }
-                guard let start = dragStartPanOffset else {
-                    return
-                }
-                viewport.panOffset = GraphPoint(
-                    x: start.x + Double(value.translation.width),
-                    y: start.y + Double(value.translation.height)
-                )
+                updateDrag(value, size: size)
             }
-            .onEnded { _ in
-                dragStartPanOffset = nil
+            .onEnded { value in
+                updateDrag(value, size: size)
+                switch dragMode {
+                case .node:
+                    interactionCallbacks.endNodeDrag()
+                case .canvasPan(_, false):
+                    onSelectNode(nil)
+                case .canvasPan, nil:
+                    break
+                }
+                dragMode = nil
             }
     }
 
-    private func tapGesture(input: GraphRendererInput, size: CGSize) -> some Gesture {
-        SpatialTapGesture()
-            .onEnded { value in
-                let nodeID = hitNodeID(at: value.location, input: input, size: size)
-                onSelectNode(nodeID)
-                if let nodeID {
-                    onOpenNode(nodeID)
-                }
+    private func updateDrag(_ value: DragGesture.Value, size: CGSize) {
+        if dragMode == nil {
+            dragMode = dragMode(
+                at: value.startLocation,
+                input: currentInput,
+                size: size
+            )
+        }
+        switch dragMode {
+        case .node:
+            interactionCallbacks.updateNodeDrag(GraphGestureDecision.pointerGraphPoint(
+                screenPoint: GraphPoint(x: Double(value.location.x), y: Double(value.location.y)),
+                viewport: viewport,
+                canvasSize: graphSize(size)
+            ))
+        case .canvasPan(let startPanOffset, let didPan):
+            let translation = GraphPoint(
+                x: Double(value.translation.width),
+                y: Double(value.translation.height)
+            )
+            guard didPan || !isTapTranslation(value.translation) else {
+                return
             }
+            dragMode = .canvasPan(startPanOffset: startPanOffset, didPan: true)
+            viewport.panOffset = GraphPoint(
+                x: startPanOffset.x + translation.x,
+                y: startPanOffset.y + translation.y
+            )
+            interactionCallbacks.panCanvas(translation)
+        case nil:
+            break
+        }
+    }
+
+    private func dragMode(
+        at location: CGPoint,
+        input: GraphRendererInput,
+        size: CGSize
+    ) -> GraphMetalDragMode {
+        switch GraphGestureDecision.dragStart(
+            screenPoint: GraphPoint(x: Double(location.x), y: Double(location.y)),
+            viewport: input.viewport,
+            canvasSize: graphSize(size),
+            hitTestIndex: hitTestIndex
+        ) {
+        case .node(let start):
+            interactionCallbacks.beginNodeDrag(start)
+            return .node
+        case .canvasPan:
+            return .canvasPan(startPanOffset: viewport.panOffset, didPan: false)
+        }
+    }
+
+    private func graphSize(_ size: CGSize) -> GraphSize {
+        GraphSize(width: Double(size.width), height: Double(size.height))
+    }
+
+    private func isTapTranslation(_ translation: CGSize) -> Bool {
+        hypot(Double(translation.width), Double(translation.height)) < GraphNodeDragState.defaultGraphMovementThreshold
     }
 
     private func updateHover(
@@ -219,7 +268,7 @@ struct GraphMetalRendererView: View {
         hitTestIndex.nearestNode(
             at: GraphPoint(x: Double(location.x), y: Double(location.y)),
             viewport: input.viewport,
-            canvasSize: GraphSize(width: Double(size.width), height: Double(size.height))
+            canvasSize: graphSize(size)
         )?.nodeID
     }
 
@@ -245,6 +294,11 @@ struct GraphMetalRendererView: View {
         case ready(GraphRendererInput)
         case failed(GraphRendererValidationError)
     }
+}
+
+private enum GraphMetalDragMode {
+    case node
+    case canvasPan(startPanOffset: GraphPoint, didPan: Bool)
 }
 
 private struct GraphMetalRepresentable: NSViewRepresentable {
