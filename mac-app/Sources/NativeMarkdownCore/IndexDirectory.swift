@@ -43,23 +43,50 @@ public enum IndexDirectoryError: Error, Equatable {
 public struct AppOwnedIndexDirectoryResolver: IndexDirectoryResolving {
     private let fileManager: FileManager
     private let applicationSupportRoot: URL
+    private let legacyApplicationSupportRoots: [URL]
     private let configuration: IndexConfiguration
 
     public init(
         fileManager: FileManager = .default,
         applicationSupportRoot: URL? = nil,
+        legacyApplicationSupportRoots: [URL]? = nil,
         configuration: IndexConfiguration = IndexConfiguration()
     ) {
         self.fileManager = fileManager
         self.applicationSupportRoot = applicationSupportRoot ?? Self.defaultApplicationSupportRoot()
+        self.legacyApplicationSupportRoots = legacyApplicationSupportRoots ?? Self.defaultLegacyApplicationSupportRoots(
+            whenUsingDefaultRoot: applicationSupportRoot == nil
+        )
         self.configuration = configuration
     }
 
     public func prepareIndexLocation(forVaultAt vaultURL: URL) throws -> AppOwnedIndexLocation {
-        try validateApplicationSupportRootOutsideVault(vaultURL)
+        try validateSupportRoot(applicationSupportRoot, outsideVault: vaultURL)
+        for legacyRoot in legacyApplicationSupportRoots {
+            try validateSupportRoot(legacyRoot, outsideVault: vaultURL)
+        }
 
         let identityHash = vaultIdentityHash(for: vaultURL)
-        let rootDirectory = applicationSupportRoot
+        let preferredLocation = indexLocation(
+            supportRoot: applicationSupportRoot,
+            identityHash: identityHash
+        )
+        let location = legacyIndexLocation(
+            for: identityHash,
+            preferredLocation: preferredLocation
+        ) ?? preferredLocation
+
+        try fileManager.createDirectory(at: location.dataDirectory, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: location.rebuildDirectory, withIntermediateDirectories: true)
+
+        return location
+    }
+
+    private func indexLocation(
+        supportRoot: URL,
+        identityHash: String
+    ) -> AppOwnedIndexLocation {
+        let rootDirectory = supportRoot
             .appendingPathComponent("Indexes", isDirectory: true)
             .appendingPathComponent(identityHash, isDirectory: true)
             .appendingPathComponent(safePathComponent(configuration.schemaVersion), isDirectory: true)
@@ -81,9 +108,6 @@ public struct AppOwnedIndexDirectoryResolver: IndexDirectoryResolving {
         )
         let lockFile = rootDirectory.appendingPathComponent("index.lock", isDirectory: false)
 
-        try fileManager.createDirectory(at: dataDirectory, withIntermediateDirectories: true)
-        try fileManager.createDirectory(at: rebuildDirectory, withIntermediateDirectories: true)
-
         return AppOwnedIndexLocation(
             vaultIdentityHash: identityHash,
             rootDirectory: rootDirectory,
@@ -97,13 +121,26 @@ public struct AppOwnedIndexDirectoryResolver: IndexDirectoryResolving {
         )
     }
 
-    private func validateApplicationSupportRootOutsideVault(_ vaultURL: URL) throws {
+    private func legacyIndexLocation(
+        for identityHash: String,
+        preferredLocation: AppOwnedIndexLocation
+    ) -> AppOwnedIndexLocation? {
+        guard !fileManager.fileExists(atPath: preferredLocation.metadataStoreFile.path) else {
+            return nil
+        }
+
+        return legacyApplicationSupportRoots
+            .map { indexLocation(supportRoot: $0, identityHash: identityHash) }
+            .first { fileManager.fileExists(atPath: $0.metadataStoreFile.path) }
+    }
+
+    private func validateSupportRoot(_ supportRoot: URL, outsideVault vaultURL: URL) throws {
         let vaultPath = canonicalDirectoryPath(vaultURL)
-        let supportPath = canonicalDirectoryPath(applicationSupportRoot)
+        let supportPath = canonicalDirectoryPath(supportRoot)
 
         if supportPath == vaultPath || supportPath.hasPrefix("\(vaultPath)/") {
             throw IndexDirectoryError.applicationSupportInsideVault(
-                applicationSupportRoot: applicationSupportRoot,
+                applicationSupportRoot: supportRoot,
                 vaultURL: vaultURL
             )
         }
@@ -116,6 +153,20 @@ public struct AppOwnedIndexDirectoryResolver: IndexDirectoryResolving {
         ).first ?? FileManager.default.temporaryDirectory
 
         return base.appendingPathComponent("Granite", isDirectory: true)
+    }
+
+    private static func defaultLegacyApplicationSupportRoots(whenUsingDefaultRoot: Bool) -> [URL] {
+        guard whenUsingDefaultRoot else {
+            return []
+        }
+        let base = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first ?? FileManager.default.temporaryDirectory
+
+        return [
+            base.appendingPathComponent("NativeMarkdownMacApp", isDirectory: true)
+        ]
     }
 
     private func vaultIdentityHash(for vaultURL: URL) -> String {

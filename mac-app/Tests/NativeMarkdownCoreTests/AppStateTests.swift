@@ -631,6 +631,62 @@ func indexDirectoryResolverKeepsLegacyConfigurationExplicit() throws {
 }
 
 @Test
+func indexDirectoryResolverUsesLegacyLocationWhenPreferredMetadataIsMissing() throws {
+    let temporaryRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let vaultURL = temporaryRoot.appendingPathComponent("vault", isDirectory: true)
+    let preferredRoot = temporaryRoot.appendingPathComponent("Granite", isDirectory: true)
+    let legacyRoot = temporaryRoot.appendingPathComponent("NativeMarkdownMacApp", isDirectory: true)
+    try FileManager.default.createDirectory(at: vaultURL, withIntermediateDirectories: true)
+
+    let legacyLocation = try AppOwnedIndexDirectoryResolver(
+        applicationSupportRoot: legacyRoot
+    ).prepareIndexLocation(forVaultAt: vaultURL)
+    try Data("legacy".utf8).write(to: legacyLocation.metadataStoreFile)
+
+    let resolver = AppOwnedIndexDirectoryResolver(
+        applicationSupportRoot: preferredRoot,
+        legacyApplicationSupportRoots: [legacyRoot]
+    )
+
+    let location = try resolver.prepareIndexLocation(forVaultAt: vaultURL)
+
+    #expect(location.rootDirectory.path == legacyLocation.rootDirectory.path)
+    #expect(location.metadataStoreFile.path == legacyLocation.metadataStoreFile.path)
+    #expect(!FileManager.default.fileExists(atPath: preferredRoot.path))
+}
+
+@Test
+func indexDirectoryResolverPrefersGraniteLocationWhenMetadataExists() throws {
+    let temporaryRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let vaultURL = temporaryRoot.appendingPathComponent("vault", isDirectory: true)
+    let preferredRoot = temporaryRoot.appendingPathComponent("Granite", isDirectory: true)
+    let legacyRoot = temporaryRoot.appendingPathComponent("NativeMarkdownMacApp", isDirectory: true)
+    try FileManager.default.createDirectory(at: vaultURL, withIntermediateDirectories: true)
+
+    let preferredLocation = try AppOwnedIndexDirectoryResolver(
+        applicationSupportRoot: preferredRoot
+    ).prepareIndexLocation(forVaultAt: vaultURL)
+    try Data("preferred".utf8).write(to: preferredLocation.metadataStoreFile)
+
+    let legacyLocation = try AppOwnedIndexDirectoryResolver(
+        applicationSupportRoot: legacyRoot
+    ).prepareIndexLocation(forVaultAt: vaultURL)
+    try Data("legacy".utf8).write(to: legacyLocation.metadataStoreFile)
+
+    let resolver = AppOwnedIndexDirectoryResolver(
+        applicationSupportRoot: preferredRoot,
+        legacyApplicationSupportRoots: [legacyRoot]
+    )
+
+    let location = try resolver.prepareIndexLocation(forVaultAt: vaultURL)
+
+    #expect(location.rootDirectory.path == preferredLocation.rootDirectory.path)
+    #expect(location.metadataStoreFile.path == preferredLocation.metadataStoreFile.path)
+}
+
+@Test
 func indexDirectoryResolverRejectsSupportRootInsideVault() throws {
     let temporaryRoot = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -638,6 +694,30 @@ func indexDirectoryResolverRejectsSupportRootInsideVault() throws {
     try FileManager.default.createDirectory(at: vaultURL, withIntermediateDirectories: true)
     let badSupportRoot = vaultURL.appendingPathComponent(".native-index", isDirectory: true)
     let resolver = AppOwnedIndexDirectoryResolver(applicationSupportRoot: badSupportRoot)
+
+    var rejected = false
+    do {
+        _ = try resolver.prepareIndexLocation(forVaultAt: vaultURL)
+    } catch IndexDirectoryError.applicationSupportInsideVault {
+        rejected = true
+    }
+
+    #expect(rejected)
+    #expect(try FileManager.default.contentsOfDirectory(atPath: vaultURL.path).isEmpty)
+}
+
+@Test
+func indexDirectoryResolverRejectsLegacySupportRootInsideVault() throws {
+    let temporaryRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let vaultURL = temporaryRoot.appendingPathComponent("vault", isDirectory: true)
+    let supportRoot = temporaryRoot.appendingPathComponent("support", isDirectory: true)
+    let badLegacyRoot = vaultURL.appendingPathComponent(".legacy-index", isDirectory: true)
+    try FileManager.default.createDirectory(at: vaultURL, withIntermediateDirectories: true)
+    let resolver = AppOwnedIndexDirectoryResolver(
+        applicationSupportRoot: supportRoot,
+        legacyApplicationSupportRoots: [badLegacyRoot]
+    )
 
     var rejected = false
     do {
