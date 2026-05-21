@@ -23,6 +23,8 @@ struct MarkdownEditorBridgeProbeReport: Codable, Equatable {
     var tagMarkersConcealed: Bool
     var markerStyleShowsHeadingAndListMarkers: Bool
     var markerStyleCanHideHeadingAndListMarkers: Bool
+    var markerStyleDefaultIsObsidian: Bool
+    var markerStyleRawValuesRemainCompatible: Bool
     var markedTextRenderDeferred: Bool
     var sourceModeClearsLivePreviewAttributes: Bool
     var sourceEquivalentSelectionText: Bool
@@ -62,6 +64,7 @@ enum MarkdownEditorBridgeProbe {
         let coordinatorProbe = probeCoordinatorBinding()
         let modeProbe = probeModeTransitions()
         let renderProbe = probeLivePreviewRendering()
+        let markerStyleProbe = probeMarkerStyleStorageCompatibility()
         let selectionChangeProbe = probeSelectionChangeDecorationDoesNotReenter()
         let checkboxProbe = probeCheckboxToggle()
         let tableCellProbe = probeTableCellEdit()
@@ -88,6 +91,8 @@ enum MarkdownEditorBridgeProbe {
             tagMarkersConcealed: renderProbe.tagMarkersConcealed,
             markerStyleShowsHeadingAndListMarkers: renderProbe.markerStyleShowsHeadingAndListMarkers,
             markerStyleCanHideHeadingAndListMarkers: renderProbe.markerStyleCanHideHeadingAndListMarkers,
+            markerStyleDefaultIsObsidian: markerStyleProbe.defaultIsObsidian,
+            markerStyleRawValuesRemainCompatible: markerStyleProbe.rawValuesRemainCompatible,
             markedTextRenderDeferred: renderProbe.markedTextRenderDeferred,
             sourceModeClearsLivePreviewAttributes: renderProbe.sourceModeClearsLivePreviewAttributes,
             sourceEquivalentSelectionText: renderProbe.sourceEquivalentSelectionText,
@@ -108,6 +113,21 @@ enum MarkdownEditorBridgeProbe {
             tableCellEditFailurePreservesBuffer: tableCellProbe.failurePreservesBuffer,
             frontmatterBoundaryDeleteUndoPreservesBuffer: frontmatterBoundaryProbe,
             editorAccessibilityHelpMentionsInteractions: accessibilityProbe
+        )
+    }
+
+    private static func probeMarkerStyleStorageCompatibility() -> (
+        defaultIsObsidian: Bool,
+        rawValuesRemainCompatible: Bool
+    ) {
+        let rawValuesRemainCompatible = LivePreviewMarkerStyle(rawValue: "obsidian") == .obsidian
+            && LivePreviewMarkerStyle(rawValue: "accent") == .accent
+            && LivePreviewMarkerStyle(rawValue: "muted") == .muted
+            && LivePreviewMarkerStyle(rawValue: "hidden") == .hidden
+
+        return (
+            LivePreviewMarkerStyle.defaultValue == .obsidian,
+            rawValuesRemainCompatible
         )
     }
 

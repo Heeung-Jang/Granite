@@ -1,12 +1,13 @@
 import Foundation
 
 enum LivePreviewMarkerStyle: String, CaseIterable, Identifiable {
+    case obsidian
     case accent
     case muted
     case hidden
 
     static let storageKey = "LivePreviewMarkerStyle"
-    static let defaultValue: LivePreviewMarkerStyle = .accent
+    static let defaultValue: LivePreviewMarkerStyle = .obsidian
 
     var id: String {
         rawValue
@@ -14,12 +15,14 @@ enum LivePreviewMarkerStyle: String, CaseIterable, Identifiable {
 
     var menuTitle: String {
         switch self {
+        case .obsidian:
+            return "Obsidian"
         case .accent:
-            return "Accent #/-"
+            return "Accent Markers"
         case .muted:
-            return "Muted #/-"
+            return "Muted Markers"
         case .hidden:
-            return "Hidden"
+            return "Hidden Markers"
         }
     }
 
