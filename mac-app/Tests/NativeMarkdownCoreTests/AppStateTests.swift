@@ -331,6 +331,24 @@ func appStateClosesTabsWithNeighborSelectionAndRecentlyClosedRestore() {
 }
 
 @Test
+func appStateRestoresRecentlyClosedFinalTab() {
+    let state = AppState()
+    let file = FileTreeItem(relativePath: "Only.md")
+
+    #expect(state.openFile(file))
+    #expect(state.requestCloseActiveTab())
+
+    #expect(state.workspaceTabs.isEmpty)
+    #expect(state.selectedFile == nil)
+    #expect(state.recentlyClosedTabs.last?.relativePathKey == "Only.md")
+
+    state.restoreRecentlyClosedTab()
+
+    #expect(state.workspaceTabs.map(\.file) == [file])
+    #expect(state.selectedFile == file)
+}
+
+@Test
 func appStateDirtyTabCloseWarningCanCancelOrDiscard() {
     let state = AppState()
     let first = FileTreeItem(relativePath: "First.md")
@@ -1129,6 +1147,29 @@ func appStatePersistsDeduplicatedRecentVaults() throws {
 
     #expect(state.recentVaults.map(\.url) == [third, first])
     #expect(storage.savedURLs == [third, first])
+}
+
+@Test
+func appStateRemovingRecentVaultClearsStoredTabSession() {
+    let vaultURL = URL(fileURLWithPath: "/tmp/session-forgotten-vault", isDirectory: true)
+    let recentStorage = MemoryRecentVaultStorage(urls: [vaultURL])
+    let tabStore = MemoryWorkspaceTabSessionStore(sessions: [
+        RecentVault.storageKey(for: vaultURL): WorkspaceTabSession(
+            tabs: ["A.md"],
+            activeRelativePath: "A.md"
+        )
+    ])
+    let state = AppState(
+        recentVaultStorage: recentStorage,
+        workspaceTabSessionStore: tabStore
+    )
+
+    state.removeRecentVault(at: vaultURL)
+
+    #expect(state.recentVaults.isEmpty)
+    #expect(recentStorage.savedURLs.isEmpty)
+    #expect(tabStore.loadSession(forVaultAt: vaultURL) == nil)
+    #expect(tabStore.clearCount == 1)
 }
 
 @Test

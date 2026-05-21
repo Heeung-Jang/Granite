@@ -568,18 +568,20 @@ private struct ObsidianWorkspaceDetail: View {
                     systemImage: "exclamationmark.triangle"
                 )
             case .selected(let url):
-                if let activeFile = appState.activeFile {
+                ZStack {
                     EditorTabContentStack(
                         vaultURL: url,
                         tabs: appState.workspaceTabs,
                         activeTabID: appState.activeTabID,
-                        activeFile: activeFile
+                        activeFile: appState.activeFile
                     )
-                } else {
-                    ObsidianEmptyWorkspace(
-                        title: url.lastPathComponent,
-                        systemImage: "doc.text"
-                    )
+                    if appState.activeFile == nil {
+                        ObsidianEmptyWorkspace(
+                            title: url.lastPathComponent,
+                            systemImage: "doc.text"
+                        )
+                        .zIndex(1)
+                    }
                 }
             }
         }
@@ -742,7 +744,7 @@ private struct EditorTabContentStack: View {
     let vaultURL: URL
     let tabs: [WorkspaceTab]
     let activeTabID: WorkspaceTab.ID?
-    let activeFile: FileTreeItem
+    let activeFile: FileTreeItem?
     @State private var mountedTabIDs: [WorkspaceTab.ID] = []
     @State private var focusRequestID: WorkspaceTab.ID?
 
@@ -764,17 +766,17 @@ private struct EditorTabContentStack: View {
             }
         }
         .onAppear {
-            focusRequestID = activeTabID
+            focusRequestID = activeFile == nil ? nil : activeTabID
             reconcileMountedTabs()
         }
         .onChange(of: activeTabID) { _, _ in
-            focusRequestID = activeTabID
+            focusRequestID = activeFile == nil ? nil : activeTabID
             reconcileMountedTabs()
         }
         .onChange(of: tabs.map(\.id)) { _, _ in
             reconcileMountedTabs()
         }
-        .onChange(of: activeFile.id) { _, _ in
+        .onChange(of: activeFile?.id) { _, _ in
             reconcileMountedTabs()
         }
     }

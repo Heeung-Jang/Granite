@@ -49,7 +49,11 @@ struct WorkspaceTabKeyCommandGuard: NSViewRepresentable {
                 detach()
                 return
             }
+            if let window, window !== newWindow {
+                WorkspaceTabCommandRegistry.shared.unregister(window: window)
+            }
             window = newWindow
+            WorkspaceTabCommandRegistry.shared.register(action: action, for: newWindow)
             if monitor == nil {
                 monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
                     self?.handle(event) == true ? nil : event
@@ -61,6 +65,7 @@ struct WorkspaceTabKeyCommandGuard: NSViewRepresentable {
             if let monitor {
                 NSEvent.removeMonitor(monitor)
             }
+            WorkspaceTabCommandRegistry.shared.unregister(window: window)
             monitor = nil
             window = nil
         }

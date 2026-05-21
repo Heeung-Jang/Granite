@@ -233,6 +233,7 @@ public final class AppState: ObservableObject {
         let key = RecentVault.storageKey(for: url)
         recentVaults.removeAll { $0.id == key }
         persistRecentVaults()
+        workspaceTabSessionStore.clearSession(forVaultAt: url)
 
         if vaultSelection.url.map(RecentVault.storageKey(for:)) == key {
             clearVault()

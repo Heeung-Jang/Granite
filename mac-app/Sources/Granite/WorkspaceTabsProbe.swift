@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import NativeMarkdownCore
 
@@ -11,6 +12,8 @@ struct WorkspaceTabsProbeReport: Codable, Equatable {
     let restoreClosed: Bool
     let sessionRestore: Bool
     let shortcutSelection: Bool
+    let commandRegistryRequiresKeyWindow: Bool
+    let emptyActiveDirtyMounted: Bool
     let sessionCap: Bool
     let openTabCount: Int
     let mountedEditorBudget: Int
@@ -30,6 +33,8 @@ struct WorkspaceTabsProbeReport: Codable, Equatable {
     var passed: Bool {
         open && reuse && dirtySwitch && closeDirtyWarning && restoreClosed
             && sessionRestore && shortcutSelection && sessionCap
+            && commandRegistryRequiresKeyWindow
+            && emptyActiveDirtyMounted
             && mountedEditorBudget == WorkspaceMountedEditorPlanner.cleanInactiveBudget
             && mountedEditorCount <= mountedEditorBudget + dirtyMountedCount + 1
             && cleanInactiveMountedCount <= mountedEditorBudget
@@ -43,6 +48,7 @@ struct WorkspaceTabsProbeReport: Codable, Equatable {
     }
 }
 
+@MainActor
 enum WorkspaceTabsProbe {
     static func run() -> WorkspaceTabsProbeReport {
         let first = FileTreeItem(relativePath: "First.md")
@@ -75,7 +81,9 @@ enum WorkspaceTabsProbe {
         let restoreClosed = state.workspaceTabs.map(\.file).contains(second)
 
         let session = runSessionRestoreProbe()
+        let commandRegistryRequiresKeyWindow = runCommandRegistryProbe()
         let mounted = runMountedEditorProbe()
+        let emptyActiveDirtyMounted = runEmptyActiveDirtyMountedProbe()
         let switchTimings = runTabSwitchProbe()
         let eventCounters = runInactiveEventProbe()
 
@@ -87,6 +95,8 @@ enum WorkspaceTabsProbe {
             restoreClosed: restoreClosed,
             sessionRestore: session.restoredActive,
             shortcutSelection: shortcutSelection,
+            commandRegistryRequiresKeyWindow: commandRegistryRequiresKeyWindow,
+            emptyActiveDirtyMounted: emptyActiveDirtyMounted,
             sessionCap: session.capped,
             openTabCount: mounted.openTabCount,
             mountedEditorBudget: WorkspaceMountedEditorPlanner.cleanInactiveBudget,
@@ -189,6 +199,52 @@ enum WorkspaceTabsProbe {
             }
             return state.isEditorDirty(file: file)
         }
+    }
+
+    private static func runCommandRegistryProbe() -> Bool {
+        let workspaceWindow = NSWindow()
+        let otherWindow = NSWindow()
+        var didInvoke = false
+        let action = WorkspaceTabAction(
+            isAvailable: true,
+            newTab: {
+                didInvoke = true
+            },
+            closeActiveTab: {},
+            restoreClosedTab: {},
+            activateNextTab: {},
+            activatePreviousTab: {},
+            activateTabAtShortcutIndex: { _ in }
+        )
+
+        WorkspaceTabCommandRegistry.shared.register(action: action, for: workspaceWindow)
+        let blockedForOtherWindow = WorkspaceTabCommandRegistry.shared.action(for: otherWindow) == nil
+        let allowedForWorkspaceWindow = WorkspaceTabCommandRegistry.shared.action(for: workspaceWindow) != nil
+        WorkspaceTabCommandRegistry.shared.action(for: otherWindow)?.newTab()
+        let didNotInvokeForOtherWindow = didInvoke == false
+        WorkspaceTabCommandRegistry.shared.unregister(window: workspaceWindow)
+        return blockedForOtherWindow && allowedForWorkspaceWindow && didNotInvokeForOtherWindow
+    }
+
+    private static func runEmptyActiveDirtyMountedProbe() -> Bool {
+        let state = AppState()
+        let dirtyFile = FileTreeItem(relativePath: "Dirty.md")
+        _ = state.openFile(dirtyFile)
+        let dirtyTabID = state.activeTabID
+        state.updateEditorDirtyState(file: dirtyFile, isDirty: true)
+        state.newEmptyTab()
+
+        let plan = WorkspaceMountedEditorPlanner.reconcile(
+            tabs: state.workspaceTabs,
+            activeTabID: state.activeTabID,
+            existingMountedTabIDs: dirtyTabID.map { [$0] } ?? []
+        ) { tab in
+            guard let file = tab.file else {
+                return false
+            }
+            return state.isEditorDirty(file: file)
+        }
+        return dirtyTabID.map(plan.mountedTabIDs.contains) == true
     }
 
     private static func runTabSwitchProbe() -> (p50: Double, p95: Double) {
