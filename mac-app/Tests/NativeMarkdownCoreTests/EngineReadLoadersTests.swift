@@ -59,6 +59,67 @@ func engineVaultSearchLoaderUsesReadClientAndRejectsEmptyQuery() async throws {
     }
 }
 
+@Test
+func engineInspectorGraphAndLivePreviewLoadersUseReadClient() async throws {
+    let reader = LoaderFakeReadClient()
+    let file = FileTreeItem(relativePath: "Home.md")
+    reader.inspectorResult = .tags(["project/native"])
+    reader.graphSnapshot = LocalGraphSnapshot(
+        centerNodeID: "file:Home.md",
+        nodes: [LocalGraphNode(id: "file:Home.md", file: file, label: "Home", kind: .center)],
+        edges: [],
+        state: .complete
+    )
+    reader.livePreviewMetadata = EngineLivePreviewMetadata(
+        outgoingLinks: [OutgoingLinkItem(
+            id: "0-Target",
+            label: "Target",
+            target: "Target.md",
+            heading: nil,
+            state: .resolved(FileTreeItem(relativePath: "Target.md"))
+        )],
+        attachments: []
+    )
+
+    let panel = try await EngineInspectorPanelLoader(reader: reader).loadPanel(
+        file: file,
+        panel: .tags,
+        requestID: 11,
+        limit: 50
+    )
+    let graph = try await EngineLocalGraphLoader(reader: reader).loadGraph(
+        file: file,
+        requestID: 12,
+        request: LocalGraphRequest(depth: .twoHop, maxNodes: 10, maxEdges: 20)
+    )
+    let metadata = try await EngineLivePreviewMetadataLoader(reader: reader).loadMetadata(
+        file: file,
+        requestID: 13,
+        contents: "[[Target]]"
+    )
+
+    #expect(panel == .tags(["project/native"]))
+    #expect(graph == reader.graphSnapshot)
+    #expect(metadata == reader.livePreviewMetadata)
+    #expect(reader.inspectorRequests == [LoaderFakeReadClient.InspectorRequest(
+        file: file,
+        panel: .tags,
+        requestID: 11,
+        offset: 0,
+        limit: 50
+    )])
+    #expect(reader.graphRequests == [LoaderFakeReadClient.GraphRequest(
+        file: file,
+        requestID: 12,
+        request: LocalGraphRequest(depth: .twoHop, maxNodes: 10, maxEdges: 20)
+    )])
+    #expect(reader.livePreviewRequests == [LoaderFakeReadClient.LivePreviewRequest(
+        file: file,
+        requestID: 13,
+        contents: "[[Target]]"
+    )])
+}
+
 private final class LoaderFakeReadClient: EngineReading, @unchecked Sendable {
     struct FileTreeRequest: Equatable {
         let requestID: UInt64
@@ -72,10 +133,36 @@ private final class LoaderFakeReadClient: EngineReading, @unchecked Sendable {
         let page: SearchPageRequest
     }
 
+    struct InspectorRequest: Equatable {
+        let file: FileTreeItem
+        let panel: EngineReadInspectorPanel
+        let requestID: UInt64
+        let offset: Int
+        let limit: Int
+    }
+
+    struct GraphRequest: Equatable {
+        let file: FileTreeItem
+        let requestID: UInt64
+        let request: LocalGraphRequest
+    }
+
+    struct LivePreviewRequest: Equatable {
+        let file: FileTreeItem
+        let requestID: UInt64
+        let contents: String
+    }
+
     var fileTreeSnapshot = FileTreeSnapshot(items: [], state: .complete)
     var searchPage = SearchPage(requestID: 0, items: [], nextOffset: nil, state: .complete)
+    var inspectorResult = EngineReadInspectorPanelResult.backlinks([])
+    var graphSnapshot = LocalGraphSnapshot(centerNodeID: "", nodes: [], edges: [], state: .complete)
+    var livePreviewMetadata = EngineLivePreviewMetadata(outgoingLinks: [], attachments: [])
     private(set) var fileTreeRequests: [FileTreeRequest] = []
     private(set) var searchRequests: [SearchRequest] = []
+    private(set) var inspectorRequests: [InspectorRequest] = []
+    private(set) var graphRequests: [GraphRequest] = []
+    private(set) var livePreviewRequests: [LivePreviewRequest] = []
 
     func close() {}
 
@@ -96,7 +183,14 @@ private final class LoaderFakeReadClient: EngineReading, @unchecked Sendable {
         offset: Int,
         limit: Int
     ) async throws -> EngineReadInspectorPanelResult {
-        .backlinks([])
+        inspectorRequests.append(InspectorRequest(
+            file: file,
+            panel: panel,
+            requestID: requestID,
+            offset: offset,
+            limit: limit
+        ))
+        return inspectorResult
     }
 
     func localGraph(
@@ -104,7 +198,8 @@ private final class LoaderFakeReadClient: EngineReading, @unchecked Sendable {
         requestID: UInt64,
         request: LocalGraphRequest
     ) async throws -> LocalGraphSnapshot {
-        LocalGraphSnapshot(centerNodeID: file.id, nodes: [], edges: [], state: .complete)
+        graphRequests.append(GraphRequest(file: file, requestID: requestID, request: request))
+        return graphSnapshot
     }
 
     func livePreviewMetadata(
@@ -112,6 +207,7 @@ private final class LoaderFakeReadClient: EngineReading, @unchecked Sendable {
         requestID: UInt64,
         contents: String
     ) async throws -> EngineLivePreviewMetadata {
-        EngineLivePreviewMetadata(outgoingLinks: [], attachments: [])
+        livePreviewRequests.append(LivePreviewRequest(file: file, requestID: requestID, contents: contents))
+        return livePreviewMetadata
     }
 }

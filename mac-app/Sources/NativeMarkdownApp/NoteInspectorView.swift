@@ -265,7 +265,13 @@ struct NoteInspectorView: View {
 
     private func graphSection(_ snapshot: NoteInspectorSnapshot) -> some View {
         InspectorSection(title: "Graph") {
-            LocalGraphSection(vaultURL: vaultURL, file: file, open: open)
+            LocalGraphSection(
+                file: file,
+                reader: appState.readClient,
+                readAvailability: appState.readAvailability,
+                readGeneration: appState.readGeneration,
+                open: open
+            )
         }
     }
 }
@@ -559,8 +565,10 @@ private enum LocalGraphViewState {
 }
 
 private struct LocalGraphSection: View {
-    let vaultURL: URL
     let file: FileTreeItem
+    let reader: (any EngineReading)?
+    let readAvailability: ReadAvailability
+    let readGeneration: UInt64
     let open: (FileTreeItem) -> Void
 
     @State private var depth: LocalGraphDepth = .oneHop
@@ -593,7 +601,7 @@ private struct LocalGraphSection: View {
                 LocalGraphContent(snapshot: snapshot, open: open)
             }
         }
-        .task(id: "\(file.id)-\(depth.rawValue)") {
+        .task(id: "\(file.id)-\(depth.rawValue)-\(readGeneration)") {
             await loadGraph()
         }
     }
@@ -601,19 +609,19 @@ private struct LocalGraphSection: View {
     private func loadGraph() async {
         state = .loading
         let timer = AppTelemetryTimer()
-        let vaultURL = vaultURL
         let file = file
         let depth = depth
+        guard let reader, readAvailability == .ready else {
+            state = readAvailability == .opening ? .loading : .failed(readUnavailableTitle(readAvailability))
+            return
+        }
 
         do {
-            let snapshot = try await Task.detached(priority: .userInitiated) {
-                try FileSystemLocalGraphLoader().loadGraph(
-                    at: vaultURL,
-                    file: file,
-                    request: LocalGraphRequest(depth: depth),
-                    maxFiles: 5_000
-                )
-            }.value
+            let snapshot = try await EngineLocalGraphLoader(reader: reader).loadGraph(
+                file: file,
+                requestID: readGeneration,
+                request: LocalGraphRequest(depth: depth)
+            )
 
             if Task.isCancelled {
                 return
@@ -638,6 +646,21 @@ private struct LocalGraphSection: View {
                 edgeCount: 0,
                 durationMilliseconds: timer.elapsedMilliseconds()
             )
+        }
+    }
+
+    private func readUnavailableTitle(_ availability: ReadAvailability) -> String {
+        switch availability {
+        case .unavailable:
+            return "Index unavailable"
+        case .opening:
+            return "Opening index"
+        case .ready:
+            return "Index ready"
+        case .stale:
+            return "Index stale"
+        case .error(let message):
+            return message
         }
     }
 }
