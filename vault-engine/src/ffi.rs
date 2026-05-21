@@ -1034,6 +1034,20 @@ mod tests {
     }
 
     #[test]
+    fn graph_ffi_rejects_null_inputs_without_panic() {
+        let metadata = CString::new("/tmp/metadata.sqlite").expect("metadata");
+        let request = CString::new(graph_request_json(1, 1, 1024 * 1024)).expect("request");
+
+        let missing_metadata =
+            unsafe { take_response(engine_graph_snapshot(std::ptr::null(), request.as_ptr())) };
+        assert_graph_error(&missing_metadata, "invalid_input");
+
+        let missing_request =
+            unsafe { take_response(engine_graph_snapshot(metadata.as_ptr(), std::ptr::null())) };
+        assert_graph_error(&missing_request, "invalid_input");
+    }
+
+    #[test]
     fn graph_ffi_reports_oversized_response_without_private_values() {
         let dir = tempdir().expect("tempdir");
         let metadata_path = dir.path().join("metadata.sqlite");
