@@ -328,6 +328,23 @@ func graphGestureDecisionClassifiesTapAndNodeDragCompletion() {
 }
 
 @Test
+func graphDragPerformanceBenchmarkTimesPreRendererPathFor60kNodes() {
+    let result = GraphDragPerformanceBenchmark.run()
+    let usesStrictBudget = ProcessInfo.processInfo.environment["GRANITE_STRICT_GRAPH_DRAG_BENCHMARK"] == "1"
+
+    #expect(result.nodeCount == 60_000)
+    #expect(result.sampleCount == GraphDragPerformanceBenchmark.defaultSampleCount)
+    #expect(result.finishedDragResult?.movedBeyondThreshold == true)
+    if usesStrictBudget {
+        #expect(result.p95FrameDurationMilliseconds <= GraphDragPerformanceBenchmark.strictP95BudgetMilliseconds)
+        #expect(result.p99FrameDurationMilliseconds <= GraphDragPerformanceBenchmark.strictP99BudgetMilliseconds)
+        #expect(result.mainThreadStallMilliseconds <= GraphDragPerformanceBenchmark.strictMainThreadStallBudgetMilliseconds)
+    } else {
+        #expect(result.p99FrameDurationMilliseconds <= 250)
+    }
+}
+
+@Test
 func graphSearchMatcherHighlightsWithoutChangingMembership() {
     let layout = interactionLayout()
 
