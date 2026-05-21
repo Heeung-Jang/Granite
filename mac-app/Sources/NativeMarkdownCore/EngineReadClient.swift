@@ -43,7 +43,7 @@ public enum EngineReadInspectorPanelResult: Equatable, Sendable {
 }
 
 public protocol EngineReading: Sendable {
-    func close() async
+    func close()
     func fileTree(requestID: UInt64, offset: Int, limit: Int) async throws -> FileTreeSnapshot
     func search(query: String, mode: SearchMode, page: SearchPageRequest) async throws -> SearchPage
     func inspectorPanel(
@@ -220,15 +220,12 @@ public final class EngineReadClient: EngineReading, @unchecked Sendable {
     }
 
     deinit {
-        closeLocked()
+        close()
     }
 
-    public func close() async {
-        await withCheckedContinuation { continuation in
-            queue.async {
-                self.closeLocked()
-                continuation.resume()
-            }
+    public func close() {
+        queue.sync {
+            self.closeLocked()
         }
     }
 

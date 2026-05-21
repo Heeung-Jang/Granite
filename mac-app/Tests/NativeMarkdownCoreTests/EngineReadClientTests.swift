@@ -181,8 +181,8 @@ func engineReadClientWrapsReadFFIMethodsAndErrors() async throws {
     )
     #expect(metadata.outgoingLinks.first?.state == .resolved(FileTreeItem(relativePath: "Target.md")))
 
-    await client.close()
-    await client.close()
+    client.close()
+    client.close()
     #expect(EngineReadClientFakeFFI.closeCount == 1)
     await #expect(throws: EngineReadClientError.closed) {
         _ = try await client.fileTree(requestID: 19, offset: 0, limit: 10)
@@ -230,7 +230,7 @@ func engineReadClientWrapsReadFFIMethodsAndErrors() async throws {
     ))) {
         _ = try await errorClient.fileTree(requestID: 21, offset: 0, limit: 10)
     }
-    await errorClient.close()
+    errorClient.close()
 
     EngineReadClientFakeFFI.reset()
     EngineReadClientFakeFFI.openData = {

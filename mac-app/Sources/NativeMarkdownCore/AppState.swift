@@ -29,6 +29,16 @@ public struct WorkspaceSearchRequest: Equatable, Sendable {
     }
 }
 
+public enum ReadAvailability: Equatable, Sendable {
+    case unavailable
+    case opening
+    case ready
+    case stale
+    case error(String)
+}
+
+public typealias ReadClientFactory = @Sendable (URL, URL) throws -> any EngineReading
+
 public struct DirtyNavigationWarning: Equatable, Identifiable, Sendable {
     public let dirtyFile: FileTreeItem
     public let requestedFile: FileTreeItem
@@ -56,6 +66,9 @@ public final class AppState: ObservableObject {
     @Published public private(set) var vaultSelection: VaultSelectionState
     @Published public private(set) var engineHealth: EngineHealthStatus
     @Published public private(set) var indexLocation: AppOwnedIndexLocation?
+    @Published public private(set) var readClient: (any EngineReading)?
+    @Published public private(set) var readAvailability: ReadAvailability
+    @Published public private(set) var readGeneration: UInt64
     @Published public private(set) var recentVaults: [RecentVault]
     @Published public private(set) var selectedFile: FileTreeItem?
     @Published public private(set) var requestedSearch: WorkspaceSearchRequest?
@@ -65,6 +78,7 @@ public final class AppState: ObservableObject {
     private let indexDirectoryResolver: any IndexDirectoryResolving
     private let vaultAccessValidator: any VaultAccessValidating
     private let recentVaultStorage: any RecentVaultStoring
+    private let readClientFactory: ReadClientFactory
     private let maxRecentVaults: Int
     private var nextSearchRequestID: UInt64 = 0
     private var dirtyEditorFile: FileTreeItem?
@@ -75,6 +89,9 @@ public final class AppState: ObservableObject {
         indexDirectoryResolver: any IndexDirectoryResolving = AppOwnedIndexDirectoryResolver(),
         vaultAccessValidator: any VaultAccessValidating = FileSystemVaultAccessValidator(),
         recentVaultStorage: any RecentVaultStoring = UserDefaultsRecentVaultStorage(),
+        readClientFactory: @escaping ReadClientFactory = { metadataURL, tantivyURL in
+            try EngineReadClient.open(metadataURL: metadataURL, tantivyURL: tantivyURL)
+        },
         maxRecentVaults: Int = 10
     ) {
         self.vaultSelection = vaultSelection
@@ -82,7 +99,10 @@ public final class AppState: ObservableObject {
         self.indexDirectoryResolver = indexDirectoryResolver
         self.vaultAccessValidator = vaultAccessValidator
         self.recentVaultStorage = recentVaultStorage
+        self.readClientFactory = readClientFactory
         self.maxRecentVaults = max(1, maxRecentVaults)
+        self.readAvailability = .unavailable
+        self.readGeneration = 0
         self.recentVaults = Self.normalizedRecentVaults(
             from: recentVaultStorage.loadRecentVaultURLs(),
             limit: self.maxRecentVaults
@@ -92,6 +112,7 @@ public final class AppState: ObservableObject {
     public func selectVault(_ url: URL) throws {
         let vaultURL = url.standardizedFileURL
         if let issue = vaultAccessValidator.validateVault(at: vaultURL) {
+            resetReadClient(availability: readAvailability(for: issue))
             indexLocation = nil
             selectedFile = nil
             dirtyEditorFile = nil
@@ -102,7 +123,18 @@ public final class AppState: ObservableObject {
             return
         }
 
-        indexLocation = try indexDirectoryResolver.prepareIndexLocation(forVaultAt: vaultURL)
+        let preparedIndexLocation = try indexDirectoryResolver.prepareIndexLocation(forVaultAt: vaultURL)
+        resetReadClient(availability: .opening)
+        indexLocation = preparedIndexLocation
+        do {
+            readClient = try readClientFactory(
+                preparedIndexLocation.metadataStoreFile,
+                preparedIndexLocation.tantivyIndexDirectory
+            )
+            readAvailability = .ready
+        } catch {
+            readAvailability = .error(Self.readErrorMessage(error))
+        }
         vaultSelection = .selected(vaultURL)
         selectedFile = nil
         dirtyEditorFile = nil
@@ -116,6 +148,7 @@ public final class AppState: ObservableObject {
     }
 
     public func markStaleBookmark(for url: URL) {
+        resetReadClient(availability: .stale)
         indexLocation = nil
         selectedFile = nil
         dirtyEditorFile = nil
@@ -134,6 +167,7 @@ public final class AppState: ObservableObject {
     }
 
     public func clearVault() {
+        resetReadClient(availability: .unavailable)
         vaultSelection = .noVault
         indexLocation = nil
         selectedFile = nil
@@ -257,6 +291,25 @@ public final class AppState: ObservableObject {
         }
         dirtyLifecycleWarning = DirtyLifecycleWarning(dirtyFile: dirtyEditorFile, action: action)
         return false
+    }
+
+    private func resetReadClient(availability: ReadAvailability) {
+        readClient?.close()
+        readClient = nil
+        readGeneration &+= 1
+        readAvailability = availability
+    }
+
+    private func readAvailability(for issue: VaultAccessIssue) -> ReadAvailability {
+        if case .staleBookmark = issue {
+            return .stale
+        }
+        return .unavailable
+    }
+
+    private static func readErrorMessage(_ error: any Error) -> String {
+        let description = String(describing: error)
+        return description.isEmpty ? "read client unavailable" : description
     }
 
     private static func normalizedRecentVaults(from urls: [URL], limit: Int) -> [RecentVault] {
