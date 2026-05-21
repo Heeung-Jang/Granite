@@ -8,6 +8,7 @@ struct NoteInspectorView: View {
     let file: FileTreeItem
 
     @State private var state: NoteInspectorViewState = .loading
+    @State private var selectedPanel: NoteInspectorPanel = .backlinks
 
     var body: some View {
         VStack(spacing: 0) {
@@ -20,6 +21,7 @@ struct NoteInspectorView: View {
             content
         }
         .frame(minWidth: 260, idealWidth: 300, maxWidth: 360)
+        .background(ObsidianUI.sidebarBackground)
         .task(id: file.id) {
             await load()
         }
@@ -28,10 +30,19 @@ struct NoteInspectorView: View {
     }
 
     private var header: some View {
-        HStack {
-            Text("Inspector")
-                .font(.headline)
+        HStack(spacing: 8) {
+            ForEach(NoteInspectorPanel.allCases, id: \.self) { panel in
+                ObsidianIconButton(
+                    systemName: panel.systemImage,
+                    accessibilityLabel: panel.accessibilityLabel,
+                    isSelected: selectedPanel == panel
+                ) {
+                    selectedPanel = panel
+                }
+            }
+
             Spacer()
+
             if case .loading = state {
                 ProgressView()
                     .controlSize(.small)
@@ -43,7 +54,22 @@ struct NoteInspectorView: View {
     private var content: some View {
         switch state {
         case .loading:
-            EmptyInspectorState(title: "Loading Metadata", systemImage: "hourglass")
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    InspectorSection(title: "링크된 언급", count: 0) {
+                        HStack(spacing: 6) {
+                            ProgressView()
+                                .controlSize(.small)
+                            EmptyInlineText("백링크를 불러오는 중입니다.")
+                        }
+                    }
+
+                    InspectorSection(title: "링크되지 않은 언급") {
+                        EmptyInlineText("검색된 언급이 없습니다.")
+                    }
+                }
+                .padding(12)
+            }
         case .failed(let message):
             EmptyInspectorState(title: message, systemImage: "xmark.octagon")
         case .loaded(let snapshot):
@@ -54,107 +80,10 @@ struct NoteInspectorView: View {
                     }
 
                     if !snapshot.warnings.isEmpty {
-                        InspectorSection(title: "Warnings") {
-                            ForEach(snapshot.warnings, id: \.self) { warning in
-                                Label(warning, systemImage: "exclamationmark.triangle")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
+                        warningsSection(snapshot)
                     }
 
-                    InspectorSection(title: "Outgoing") {
-                        if snapshot.outgoingLinks.isEmpty {
-                            EmptyInlineText("No outgoing links")
-                        } else {
-                            ForEach(snapshot.outgoingLinks) { link in
-                                OutgoingLinkRow(link: link, open: open)
-                            }
-                        }
-                    }
-
-                    InspectorSection(title: "Backlinks") {
-                        if snapshot.backlinks.isEmpty {
-                            EmptyInlineText("No backlinks")
-                        } else {
-                            ForEach(snapshot.backlinks) { backlink in
-                                Button {
-                                    appState.openFile(backlink.file)
-                                } label: {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(backlink.file.displayName)
-                                            .lineLimit(1)
-                                        Text(backlink.snippet)
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                            .lineLimit(2)
-                                    }
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityLabel("Open backlink \(backlink.file.displayName)")
-                            }
-                        }
-                    }
-
-                    InspectorSection(title: "Tags") {
-                        if snapshot.tags.isEmpty {
-                            EmptyInlineText("No tags")
-                        } else {
-                            ForEach(snapshot.tagNotes) { group in
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text("#\(group.tag)")
-                                        .font(.caption)
-                                    if group.files.isEmpty {
-                                        EmptyInlineText("No other notes")
-                                    } else {
-                                        ForEach(group.files) { taggedFile in
-                                            Button {
-                                                appState.openFile(taggedFile)
-                                            } label: {
-                                                Label(taggedFile.displayName, systemImage: "doc.text")
-                                                    .lineLimit(1)
-                                            }
-                                            .buttonStyle(.plain)
-                                            .font(.caption)
-                                            .accessibilityLabel("Open tagged note \(taggedFile.displayName)")
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    InspectorSection(title: "Properties") {
-                        if snapshot.properties.isEmpty {
-                            EmptyInlineText("No properties")
-                        } else {
-                            ForEach(snapshot.properties) { property in
-                                HStack(alignment: .firstTextBaseline) {
-                                    Text(property.key)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                    Spacer()
-                                    Text(property.value)
-                                        .font(.caption)
-                                        .lineLimit(2)
-                                }
-                            }
-                        }
-                    }
-
-                    InspectorSection(title: "Attachments") {
-                        if snapshot.attachments.isEmpty {
-                            EmptyInlineText("No attachments")
-                        } else {
-                            ForEach(snapshot.attachments) { attachment in
-                                AttachmentReferenceRow(vaultURL: vaultURL, reference: attachment)
-                            }
-                        }
-                    }
-
-                    InspectorSection(title: "Graph") {
-                        LocalGraphSection(vaultURL: vaultURL, file: file, open: open)
-                    }
+                    selectedPanelContent(snapshot)
                 }
                 .padding(12)
             }
@@ -201,12 +130,188 @@ struct NoteInspectorView: View {
     private func open(_ file: FileTreeItem) {
         appState.openFile(file)
     }
+
+    @ViewBuilder
+    private func selectedPanelContent(_ snapshot: NoteInspectorSnapshot) -> some View {
+        switch selectedPanel {
+        case .backlinks:
+            backlinksSection(snapshot)
+        case .outgoing:
+            outgoingSection(snapshot)
+        case .tags:
+            tagsSection(snapshot)
+            propertiesSection(snapshot)
+        case .attachments:
+            attachmentsSection(snapshot)
+        case .graph:
+            graphSection(snapshot)
+        }
+    }
+
+    private func warningsSection(_ snapshot: NoteInspectorSnapshot) -> some View {
+        InspectorSection(title: "Warnings") {
+            ForEach(snapshot.warnings, id: \.self) { warning in
+                Label(warning, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func outgoingSection(_ snapshot: NoteInspectorSnapshot) -> some View {
+        InspectorSection(title: "Outgoing links") {
+            if snapshot.outgoingLinks.isEmpty {
+                EmptyInlineText("No outgoing links")
+            } else {
+                ForEach(snapshot.outgoingLinks) { link in
+                    OutgoingLinkRow(link: link, open: open)
+                }
+            }
+        }
+    }
+
+    private func backlinksSection(_ snapshot: NoteInspectorSnapshot) -> some View {
+        VStack(alignment: .leading, spacing: 20) {
+            InspectorSection(title: "링크된 언급", count: snapshot.backlinks.count) {
+                if snapshot.backlinks.isEmpty {
+                    EmptyInlineText("백링크를 찾지 못했습니다.")
+                } else {
+                    ForEach(snapshot.backlinks) { backlink in
+                        Button {
+                            appState.openFile(backlink.file)
+                        } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text((backlink.file.displayName as NSString).deletingPathExtension)
+                                    .lineLimit(1)
+                                Text(backlink.snippet)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(2)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Open backlink \(backlink.file.displayName)")
+                    }
+                }
+            }
+
+            InspectorSection(title: "링크되지 않은 언급") {
+                EmptyInlineText("검색된 언급이 없습니다.")
+            }
+        }
+    }
+
+    private func tagsSection(_ snapshot: NoteInspectorSnapshot) -> some View {
+        InspectorSection(title: "Tags") {
+            if snapshot.tags.isEmpty {
+                EmptyInlineText("No tags")
+            } else {
+                ForEach(snapshot.tagNotes) { group in
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("#\(group.tag)")
+                            .font(.caption)
+                        if group.files.isEmpty {
+                            EmptyInlineText("No other notes")
+                        } else {
+                            ForEach(group.files) { taggedFile in
+                                Button {
+                                    appState.openFile(taggedFile)
+                                } label: {
+                                    Label(taggedFile.displayName, systemImage: "doc.text")
+                                        .lineLimit(1)
+                                }
+                                .buttonStyle(.plain)
+                                .font(.caption)
+                                .accessibilityLabel("Open tagged note \(taggedFile.displayName)")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func propertiesSection(_ snapshot: NoteInspectorSnapshot) -> some View {
+        InspectorSection(title: "Properties") {
+            if snapshot.properties.isEmpty {
+                EmptyInlineText("No properties")
+            } else {
+                ForEach(snapshot.properties) { property in
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(property.key)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Text(property.value)
+                            .font(.caption)
+                            .lineLimit(2)
+                    }
+                }
+            }
+        }
+    }
+
+    private func attachmentsSection(_ snapshot: NoteInspectorSnapshot) -> some View {
+        InspectorSection(title: "Attachments") {
+            if snapshot.attachments.isEmpty {
+                EmptyInlineText("No attachments")
+            } else {
+                ForEach(snapshot.attachments) { attachment in
+                    AttachmentReferenceRow(vaultURL: vaultURL, reference: attachment)
+                }
+            }
+        }
+    }
+
+    private func graphSection(_ snapshot: NoteInspectorSnapshot) -> some View {
+        InspectorSection(title: "Graph") {
+            LocalGraphSection(vaultURL: vaultURL, file: file, open: open)
+        }
+    }
 }
 
 private enum NoteInspectorViewState {
     case loading
     case loaded(NoteInspectorSnapshot)
     case failed(String)
+}
+
+private enum NoteInspectorPanel: CaseIterable {
+    case backlinks
+    case outgoing
+    case tags
+    case attachments
+    case graph
+
+    var systemImage: String {
+        switch self {
+        case .backlinks:
+            return "link"
+        case .outgoing:
+            return "link.badge.plus"
+        case .tags:
+            return "tag"
+        case .attachments:
+            return "doc"
+        case .graph:
+            return "list.bullet"
+        }
+    }
+
+    var accessibilityLabel: String {
+        switch self {
+        case .backlinks:
+            return "Backlinks"
+        case .outgoing:
+            return "Outgoing links"
+        case .tags:
+            return "Tags and properties"
+        case .attachments:
+            return "Attachments"
+        case .graph:
+            return "Graph"
+        }
+    }
 }
 
 private struct InspectorStateBanner: View {
@@ -221,14 +326,22 @@ private struct InspectorStateBanner: View {
 
 private struct InspectorSection<Content: View>: View {
     let title: String
+    var count: Int?
     @ViewBuilder let content: Content
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(title)
-                .font(.caption)
-                .fontWeight(.semibold)
-                .foregroundStyle(.secondary)
+            HStack {
+                Text(title)
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.primary)
+                Spacer()
+                if let count {
+                    Text("\(count)")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .font(.caption)
             content
         }
         .frame(maxWidth: .infinity, alignment: .leading)

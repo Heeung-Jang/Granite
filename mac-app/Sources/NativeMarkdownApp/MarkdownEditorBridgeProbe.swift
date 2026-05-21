@@ -235,6 +235,7 @@ enum MarkdownEditorBridgeProbe {
             effectiveRange: nil
         ) as? NSColor
         let hiddenHeadingInlineTokenColor = foregroundColor(in: textView, text: text, marker: "**Heading")
+        let hiddenStrongInlineTokenColor = foregroundColor(in: textView, text: text, marker: "**Strong")
         let hiddenTagMarkerColor = foregroundColor(in: textView, text: text, marker: "#tag")
         let noOpResult = MarkdownVisibleRangeDecorator.decorateVisibleRange(
             in: textView,
@@ -242,17 +243,13 @@ enum MarkdownEditorBridgeProbe {
             revealRange: textView.selectedRange()
         )
 
-        textView.setSelectedRange(NSRange(location: 2, length: 0))
+        textView.setSelectedRange(NSRange(location: (text as NSString).range(of: "Strong").location, length: 0))
         MarkdownVisibleRangeDecorator.decorateVisibleRange(
             in: textView,
             livePreviewMode: .livePreview,
             revealRange: textView.selectedRange()
         )
-        let revealedHeadingColor = textView.textStorage?.attribute(
-            .foregroundColor,
-            at: 0,
-            effectiveRange: nil
-        ) as? NSColor
+        let revealedStrongInlineTokenColor = foregroundColor(in: textView, text: text, marker: "**Strong")
 
         MarkdownVisibleRangeDecorator.decorateVisibleRange(in: textView, livePreviewMode: .source)
         let sourceHeadingColor = textView.textStorage?.attribute(
@@ -357,7 +354,9 @@ enum MarkdownEditorBridgeProbe {
         return (
             hiddenResult.changedRangeCount > 0 && hiddenResult.changedUTF16Length > 0,
             noOpResult.changedRangeCount == 0 && noOpResult.changedUTF16Length == 0,
-            hiddenHeadingColor == LivePreviewTheme.concealedColor && revealedHeadingColor != LivePreviewTheme.concealedColor,
+            hiddenHeadingColor == LivePreviewTheme.concealedColor
+                && hiddenStrongInlineTokenColor == LivePreviewTheme.concealedColor
+                && revealedStrongInlineTokenColor != LivePreviewTheme.concealedColor,
             hiddenHeadingInlineTokenColor == LivePreviewTheme.concealedColor,
             hiddenTagMarkerColor == LivePreviewTheme.concealedColor,
             markedTextWasActive && markedResult.mode == "marked-text-deferred",

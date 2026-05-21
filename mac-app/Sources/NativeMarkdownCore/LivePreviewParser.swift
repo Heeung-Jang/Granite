@@ -45,6 +45,10 @@ public enum LivePreviewParser {
                 blocks.append(block)
                 continue
             }
+            if let block = parseCallout(source: source, lines: lines, index: &index) {
+                blocks.append(block)
+                continue
+            }
             if let block = parseSingleLineBlock(source: source, line: line, index: &index) {
                 blocks.append(block)
                 continue
@@ -147,6 +151,32 @@ public enum LivePreviewParser {
             start: start,
             end: index,
             kind: .table
+        )
+    }
+
+    private static func parseCallout(
+        source: String,
+        lines: [LineIndex.Line],
+        index: inout Int
+    ) -> LivePreviewBlockSpan? {
+        let line = lines[index]
+        guard let calloutKind = calloutKind(in: line.trimmed) else {
+            return nil
+        }
+
+        let start = index
+        index += 1
+        while index < lines.count,
+              lines[index].trimmed.hasPrefix(">") {
+            index += 1
+        }
+
+        return makeBlock(
+            source: source,
+            lines: lines,
+            start: start,
+            end: index,
+            kind: .callout(kind: calloutKind)
         )
     }
 

@@ -9,6 +9,7 @@ struct MarkdownEditorView: NSViewRepresentable {
     var livePreviewMode: LivePreviewMode = .livePreview
     var linkStyleMap = LivePreviewLinkStyleMap()
     var embedPreviewMap = LivePreviewEmbedPreviewMap()
+    var documentTitle: String?
     var interactionHandler: ((MarkdownEditorInteraction) -> Void)?
 
     func makeCoordinator() -> Coordinator {
@@ -17,7 +18,8 @@ struct MarkdownEditorView: NSViewRepresentable {
             interactionHandler: interactionHandler,
             livePreviewMode: livePreviewMode,
             linkStyleMap: linkStyleMap,
-            embedPreviewMap: embedPreviewMap
+            embedPreviewMap: embedPreviewMap,
+            documentTitle: documentTitle
         )
     }
 
@@ -27,6 +29,7 @@ struct MarkdownEditorView: NSViewRepresentable {
         textView.isEditable = isEditable
         if let textView = textView as? MarkdownInteractionTextView {
             textView.livePreviewMode = livePreviewMode
+            textView.livePreviewDocumentTitle = documentTitle
         }
         let decorationTimer = AppTelemetryTimer()
         context.coordinator.decorateVisibleRange(in: textView)
@@ -55,7 +58,8 @@ struct MarkdownEditorView: NSViewRepresentable {
             interactionHandler: interactionHandler,
             livePreviewMode: livePreviewMode,
             linkStyleMap: linkStyleMap,
-            embedPreviewMap: embedPreviewMap
+            embedPreviewMap: embedPreviewMap,
+            documentTitle: documentTitle
         )
         guard let textView = scrollView.documentView as? NSTextView else {
             return
@@ -75,6 +79,7 @@ struct MarkdownEditorView: NSViewRepresentable {
         textView.isEditable = isEditable
         if let textView = textView as? MarkdownInteractionTextView {
             textView.livePreviewMode = livePreviewMode
+            textView.livePreviewDocumentTitle = documentTitle
         }
         MarkdownEditorAccessibility.apply(to: textView, isEditable: isEditable, mode: livePreviewMode)
     }
@@ -98,6 +103,7 @@ struct MarkdownEditorView: NSViewRepresentable {
         private var livePreviewMode: LivePreviewMode
         private var linkStyleMap: LivePreviewLinkStyleMap
         private var embedPreviewMap: LivePreviewEmbedPreviewMap
+        private var documentTitle: String?
         private var isDecoratingLivePreview = false
         weak var textView: NSTextView?
         var isApplyingAppKitChange = false
@@ -107,13 +113,15 @@ struct MarkdownEditorView: NSViewRepresentable {
             interactionHandler: ((MarkdownEditorInteraction) -> Void)? = nil,
             livePreviewMode: LivePreviewMode = .livePreview,
             linkStyleMap: LivePreviewLinkStyleMap = LivePreviewLinkStyleMap(),
-            embedPreviewMap: LivePreviewEmbedPreviewMap = LivePreviewEmbedPreviewMap()
+            embedPreviewMap: LivePreviewEmbedPreviewMap = LivePreviewEmbedPreviewMap(),
+            documentTitle: String? = nil
         ) {
             _text = text
             self.interactionHandler = interactionHandler
             self.livePreviewMode = livePreviewMode
             self.linkStyleMap = linkStyleMap
             self.embedPreviewMap = embedPreviewMap
+            self.documentTitle = documentTitle
         }
 
         func update(
@@ -121,13 +129,18 @@ struct MarkdownEditorView: NSViewRepresentable {
             interactionHandler: ((MarkdownEditorInteraction) -> Void)?,
             livePreviewMode: LivePreviewMode,
             linkStyleMap: LivePreviewLinkStyleMap,
-            embedPreviewMap: LivePreviewEmbedPreviewMap
+            embedPreviewMap: LivePreviewEmbedPreviewMap,
+            documentTitle: String?
         ) {
             _text = text
             self.interactionHandler = interactionHandler
             self.livePreviewMode = livePreviewMode
             self.linkStyleMap = linkStyleMap
             self.embedPreviewMap = embedPreviewMap
+            self.documentTitle = documentTitle
+            if let textView = textView as? MarkdownInteractionTextView {
+                textView.livePreviewDocumentTitle = documentTitle
+            }
         }
 
         func textDidChange(_ notification: Notification) {
@@ -206,9 +219,12 @@ enum MarkdownEditorTextViewFactory {
         textView.allowsUndo = true
         textView.isEditable = true
         textView.isSelectable = true
-        textView.font = .monospacedSystemFont(ofSize: 14, weight: .regular)
-        textView.textContainerInset = NSSize(width: 12, height: 12)
+        textView.font = LivePreviewTheme.baseFont
+        textView.backgroundColor = .textBackgroundColor
+        textView.drawsBackground = true
+        textView.textContainerInset = NSSize(width: 18, height: 18)
         textView.textContainer?.widthTracksTextView = true
+        textView.layoutManager?.allowsNonContiguousLayout = true
         MarkdownEditorAccessibility.apply(to: textView, isEditable: true, mode: .livePreview)
         textView.setAccessibilityIdentifier("markdown-editor")
         return textView
@@ -244,8 +260,23 @@ protocol MarkdownInteractionTextViewDelegate: AnyObject {
 @MainActor
 final class MarkdownInteractionTextView: NSTextView {
     weak var interactionDelegate: MarkdownInteractionTextViewDelegate?
-    var livePreviewMode: LivePreviewMode = .livePreview
+    var livePreviewMode: LivePreviewMode = .livePreview {
+        didSet {
+            needsDisplay = true
+        }
+    }
+    var livePreviewDocumentTitle: String? {
+        didSet {
+            needsDisplay = true
+        }
+    }
     private var tableCellMenuTarget: LivePreviewTableCell?
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        LivePreviewOverlayRenderer.drawBackgrounds(in: self, dirtyRect: dirtyRect)
+        LivePreviewOverlayRenderer.drawForegrounds(in: self, dirtyRect: dirtyRect)
+    }
 
     override func mouseDown(with event: NSEvent) {
         if interactionDelegate?.textView(self, handleMouseDown: event) == true {

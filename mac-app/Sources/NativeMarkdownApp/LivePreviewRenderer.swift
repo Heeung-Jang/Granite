@@ -11,6 +11,7 @@ enum LivePreviewRenderer {
     private static let taskCheckboxTokenRegex = regex(#"\[[ xX]\]"#)
     private static let blockquotePrefixRegex = regex(#"^\s*>\s?"#)
     private static let calloutPrefixRegex = regex(#"^\s*>\s?\[![^\]\n]+\]\s?"#)
+    private static let calloutQuotePrefixRegex = regex(#"^\s*>\s?"#)
     private static let tablePipeRegex = regex(#"\|"#)
     private static let fenceLineRegex = regex(#"^\s*(```+|~~~+).*$"#)
     private static let wikiEmbedTokenRegex = regex(#"!\[\[|\]\]"#)
@@ -76,6 +77,7 @@ enum LivePreviewRenderer {
             plan.apply(to: storage, changes: &changes)
             return changes
         }
+        textView.needsDisplay = true
 
         return MarkdownDecorationResult(
             mode: "live-preview",
@@ -192,8 +194,7 @@ enum LivePreviewRenderer {
             ], range: range)
         case .callout:
             plan.addAttributes([
-                .foregroundColor: LivePreviewTheme.quoteColor,
-                .backgroundColor: LivePreviewTheme.calloutBackgroundColor,
+                .foregroundColor: LivePreviewTheme.textColor,
                 .paragraphStyle: LivePreviewTheme.calloutParagraphStyle
             ], range: range)
         case .fencedCode:
@@ -251,7 +252,7 @@ enum LivePreviewRenderer {
         case .blockquote:
             return LivePreviewTheme.quoteBarColor
         case .callout:
-            return LivePreviewTheme.calloutAccentColor
+            return LivePreviewTheme.calloutAccentColor(for: block.kind)
         default:
             return LivePreviewTheme.listMarkerColor
         }
@@ -339,6 +340,14 @@ enum LivePreviewRenderer {
                     .backgroundColor: LivePreviewTheme.tableCellBackgroundColor
                 ], range: range)
             }
+        }
+
+        let alignmentRange = NSIntersectionRange(table.alignmentRowRange.nsRange, visibleRange)
+        if alignmentRange.length > 0 {
+            plan.addAttributes([
+                .font: LivePreviewTheme.collapsedSyntaxFont,
+                .paragraphStyle: LivePreviewTheme.collapsedSyntaxParagraphStyle
+            ], range: alignmentRange)
         }
     }
 
@@ -459,7 +468,7 @@ enum LivePreviewRenderer {
         visibleRange: NSRange,
         revealRange: NSRange
     ) {
-        guard !block.sourceRange.nsRange.intersects(revealRange) else {
+        guard !shouldRevealSyntax(for: block, revealRange: revealRange) else {
             return
         }
 
@@ -500,9 +509,10 @@ enum LivePreviewRenderer {
         case .blockquote:
             ranges = []
         case .callout:
-            ranges = prefixMatches(in: source, block: block, regex: calloutPrefixRegex)
+            ranges = prefixMatches(in: source, block: block, regex: calloutQuotePrefixRegex)
+            ranges += prefixMatches(in: source, block: block, regex: calloutPrefixRegex)
         case .table:
-            return tableConcealmentRanges(for: block, source: source, table: table)
+            return [block.sourceRange.nsRange]
         case .embed:
             return embedTokenRanges(for: block, source: source, preview: embedPreview)
         case .paragraph:
@@ -510,10 +520,19 @@ enum LivePreviewRenderer {
         case .fencedCode:
             return matches(in: source, range: block.sourceRange.nsRange, regex: fenceLineRegex)
         case .frontmatter:
-            return properties?.tokenRanges.map(\.nsRange) ?? []
+            return [block.sourceRange.nsRange]
         }
         ranges += inlineTokenRanges(block.inlineSpans, source: source)
         return ranges
+    }
+
+    private static func shouldRevealSyntax(for block: LivePreviewBlockSpan, revealRange: NSRange) -> Bool {
+        switch block.kind {
+        case .heading, .frontmatter, .callout, .table:
+            return false
+        default:
+            return block.sourceRange.nsRange.intersects(revealRange)
+        }
     }
 
     private static func blockTokenRanges(for block: LivePreviewBlockSpan, source: String) -> [NSRange] {
@@ -521,7 +540,7 @@ enum LivePreviewRenderer {
         case .blockquote:
             return prefixMatches(in: source, block: block, regex: blockquotePrefixRegex)
         case .callout:
-            return prefixMatches(in: source, block: block, regex: calloutPrefixRegex)
+            return prefixMatches(in: source, block: block, regex: calloutQuotePrefixRegex)
         case .unorderedList:
             return prefixMatches(in: source, block: block, regex: unorderedListPrefixRegex)
         case .orderedList:

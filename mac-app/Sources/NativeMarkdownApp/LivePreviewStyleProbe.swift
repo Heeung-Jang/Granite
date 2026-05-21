@@ -23,11 +23,11 @@ struct LivePreviewStyleProbeReport: Codable, Equatable {
     var blockquoteRenderPreservesSource: Bool
     var calloutChromeApplied: Bool
     var calloutSyntaxConcealedOutsideReveal: Bool
-    var calloutSyntaxRevealedInsideBlock: Bool
+    var calloutSyntaxStaysConcealedInsideBlock: Bool
     var calloutRenderPreservesSource: Bool
     var propertiesChromeApplied: Bool
     var propertyYamlConcealedOutsideReveal: Bool
-    var propertyYamlRevealedInsideBlock: Bool
+    var propertiesSourceStaysConcealedInsideBlock: Bool
     var propertiesRenderPreservesSource: Bool
     var imageEmbedPreviewStyled: Bool
     var blockedEmbedPreviewStyled: Bool
@@ -38,7 +38,7 @@ struct LivePreviewStyleProbeReport: Codable, Equatable {
     var tableHeaderChromeApplied: Bool
     var tableBodyChromeApplied: Bool
     var tableSyntaxConcealedOutsideReveal: Bool
-    var tableSyntaxRevealedInsideBlock: Bool
+    var tableSourceStaysConcealedInsideBlock: Bool
     var tableRenderPreservesSource: Bool
     var wikiLinkAliasVisible: Bool
     var wikiLinkSourceConcealedOutsideReveal: Bool
@@ -272,19 +272,18 @@ enum LivePreviewStyleProbe {
             blockquoteParagraphIndentApplied: blockquoteParagraphStyle?.headIndent ?? 0 > 0,
             blockquoteMarkerStyledAsBar: blockquoteMarkerColor == LivePreviewTheme.quoteBarColor,
             blockquoteRenderPreservesSource: textView.string.contains("> Quote line"),
-            calloutChromeApplied: calloutAttributes?[.backgroundColor] as? NSColor == LivePreviewTheme.calloutBackgroundColor
+            calloutChromeApplied: calloutAttributes?[.foregroundColor] as? NSColor == LivePreviewTheme.textColor
                 && (calloutAttributes?[.paragraphStyle] as? NSParagraphStyle)?.headIndent ?? 0 > 0,
             calloutSyntaxConcealedOutsideReveal: hiddenCalloutSyntaxColor == LivePreviewTheme.concealedColor,
-            calloutSyntaxRevealedInsideBlock: revealedCalloutSyntaxColor != LivePreviewTheme.concealedColor,
+            calloutSyntaxStaysConcealedInsideBlock: revealedCalloutSyntaxColor == LivePreviewTheme.concealedColor,
             calloutRenderPreservesSource: textView.string.contains("> [!note] Callout body"),
-            propertiesChromeApplied: propertyKeyAttributes?[.foregroundColor] as? NSColor == LivePreviewTheme.propertyKeyColor
-                && propertyKeyAttributes?[.backgroundColor] as? NSColor == LivePreviewTheme.propertyBackgroundColor
-                && propertyValueAttributes?[.foregroundColor] as? NSColor == LivePreviewTheme.propertyValueColor
-                && propertyValueAttributes?[.backgroundColor] as? NSColor == LivePreviewTheme.propertyBackgroundColor,
+            propertiesChromeApplied: propertyKeyAttributes?[.foregroundColor] as? NSColor == LivePreviewTheme.concealedColor
+                && propertyValueAttributes?[.foregroundColor] as? NSColor == LivePreviewTheme.concealedColor
+                && propertyKeyAttributes?[.backgroundColor] as? NSColor == LivePreviewTheme.propertyBackgroundColor,
             propertyYamlConcealedOutsideReveal: hiddenPropertyDelimiterColor == LivePreviewTheme.concealedColor
                 && hiddenPropertyColonColor == LivePreviewTheme.concealedColor,
-            propertyYamlRevealedInsideBlock: revealedPropertyDelimiterColor != LivePreviewTheme.concealedColor
-                && revealedPropertyColonColor != LivePreviewTheme.concealedColor,
+            propertiesSourceStaysConcealedInsideBlock: revealedPropertyDelimiterColor == LivePreviewTheme.concealedColor
+                && revealedPropertyColonColor == LivePreviewTheme.concealedColor,
             propertiesRenderPreservesSource: textView.string.contains("secret_token: \"fixture-secret-not-real\""),
             imageEmbedPreviewStyled: imageEmbedColor == LivePreviewTheme.embedImageColor,
             blockedEmbedPreviewStyled: missingEmbedColor == LivePreviewTheme.embedBlockedColor,
@@ -303,8 +302,8 @@ enum LivePreviewStyleProbe {
             tableBodyChromeApplied: tableBodyAttributes?[.backgroundColor] as? NSColor == LivePreviewTheme.tableCellBackgroundColor,
             tableSyntaxConcealedOutsideReveal: hiddenTablePipeColor == LivePreviewTheme.concealedColor
                 && hiddenTableAlignmentColor == LivePreviewTheme.concealedColor,
-            tableSyntaxRevealedInsideBlock: revealedTablePipeColor != LivePreviewTheme.concealedColor
-                && revealedTableAlignmentColor != LivePreviewTheme.concealedColor,
+            tableSourceStaysConcealedInsideBlock: revealedTablePipeColor == LivePreviewTheme.concealedColor
+                && revealedTableAlignmentColor == LivePreviewTheme.concealedColor,
             tableRenderPreservesSource: textView.string.contains("| Name | Status |")
                 && textView.string.contains("| --- | --- |")
                 && textView.string.contains("| Alpha | Draft |"),

@@ -54,6 +54,31 @@ func livePreviewParserClassifiesBasicFormattingFixture() throws {
 }
 
 @Test
+func livePreviewParserGroupsObsidianCalloutBodyLines() throws {
+    let source = """
+    > [!summary] TL;DR
+    > First line with `code`.
+    > - Nested point
+
+    ## Next
+    """
+
+    let result = LivePreviewParser.parse(source)
+    let callouts = result.blocks.filter {
+        if case .callout(kind: "summary") = $0.kind {
+            return true
+        }
+        return false
+    }
+
+    #expect(callouts.count == 1)
+    let callout = try #require(callouts.first)
+    #expect(string(for: callout.sourceRange, in: source)?.contains("Nested point") == true)
+    #expect(callout.inlineSpans.contains { $0.kind == .inlineCode })
+    #expect(result.blocks.containsBlock { if case .heading(level: 2) = $0 { true } else { false } })
+}
+
+@Test
 func livePreviewParserKeepsMalformedFenceBounded() throws {
     let source = "Before\n```swift\nlet value = `not inline`\n"
     let result = LivePreviewParser.parse(source)

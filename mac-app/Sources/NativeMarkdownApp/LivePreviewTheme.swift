@@ -1,17 +1,18 @@
 import AppKit
+import NativeMarkdownCore
 
 @MainActor
 enum LivePreviewTheme {
-    static let baseFont = NSFont.systemFont(ofSize: 14, weight: .regular)
+    static let baseFont = NSFont.systemFont(ofSize: 16, weight: .regular)
     static let sourceFont = NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
-    static let codeFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
-    static let strongFont = NSFont.systemFont(ofSize: 14, weight: .bold)
-    static let h1Font = NSFont.systemFont(ofSize: 24, weight: .bold)
-    static let h2Font = NSFont.systemFont(ofSize: 20, weight: .bold)
-    static let h3Font = NSFont.systemFont(ofSize: 18, weight: .semibold)
-    static let h4Font = NSFont.systemFont(ofSize: 16, weight: .semibold)
-    static let h5Font = NSFont.systemFont(ofSize: 15, weight: .semibold)
-    static let h6Font = NSFont.systemFont(ofSize: 14, weight: .semibold)
+    static let codeFont = NSFont.monospacedSystemFont(ofSize: 15, weight: .regular)
+    static let strongFont = NSFont.systemFont(ofSize: 16, weight: .bold)
+    static let h1Font = NSFont.systemFont(ofSize: 28, weight: .bold)
+    static let h2Font = NSFont.systemFont(ofSize: 23, weight: .bold)
+    static let h3Font = NSFont.systemFont(ofSize: 20, weight: .semibold)
+    static let h4Font = NSFont.systemFont(ofSize: 18, weight: .semibold)
+    static let h5Font = NSFont.systemFont(ofSize: 17, weight: .semibold)
+    static let h6Font = NSFont.systemFont(ofSize: 16, weight: .semibold)
 
     static let textColor = NSColor.labelColor
     static let secondaryTextColor = NSColor.secondaryLabelColor
@@ -24,12 +25,14 @@ enum LivePreviewTheme {
     static let propertyBackgroundColor = NSColor.controlBackgroundColor
     static let propertyKeyColor = NSColor.secondaryLabelColor
     static let propertyValueColor = NSColor.labelColor
+    static let propertyIconColor = NSColor.secondaryLabelColor.withAlphaComponent(0.82)
     static let embedBackgroundColor = NSColor.controlBackgroundColor
     static let embedImageColor = NSColor.systemGreen
     static let embedBlockedColor = NSColor.systemRed
     static let embedFallbackColor = NSColor.secondaryLabelColor
-    static let tableHeaderBackgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.10)
-    static let tableCellBackgroundColor = NSColor.controlBackgroundColor.withAlphaComponent(0.55)
+    static let tableHeaderBackgroundColor = NSColor.controlBackgroundColor
+    static let tableCellBackgroundColor = NSColor.textBackgroundColor
+    static let tableBorderColor = NSColor.separatorColor
     static let codeColor = NSColor.systemBrown
     static let inlineCodeBackgroundColor = NSColor.controlBackgroundColor
     static let codeBlockBackgroundColor = NSColor.controlBackgroundColor
@@ -39,6 +42,7 @@ enum LivePreviewTheme {
     static let calloutBackgroundColor = NSColor.controlBackgroundColor
     static let listMarkerColor = NSColor.systemOrange
     static let concealedColor = NSColor.clear
+    static let collapsedSyntaxFont = NSFont.systemFont(ofSize: 1, weight: .regular)
 
     static func headingFont(level: Int) -> NSFont {
         switch level {
@@ -59,16 +63,25 @@ enum LivePreviewTheme {
 
     static var baseParagraphStyle: NSParagraphStyle {
         let style = NSMutableParagraphStyle()
-        style.lineHeightMultiple = 1.16
-        style.paragraphSpacing = 4
+        style.lineHeightMultiple = 1.28
+        style.paragraphSpacing = 6
+        return style.copy() as! NSParagraphStyle
+    }
+
+    static var collapsedSyntaxParagraphStyle: NSParagraphStyle {
+        let style = NSMutableParagraphStyle()
+        style.minimumLineHeight = 1
+        style.maximumLineHeight = 1
+        style.paragraphSpacing = 0
+        style.paragraphSpacingBefore = 0
         return style.copy() as! NSParagraphStyle
     }
 
     static func headingParagraphStyle(level: Int) -> NSParagraphStyle {
         let style = NSMutableParagraphStyle()
-        style.lineHeightMultiple = 1.04
-        style.paragraphSpacingBefore = level <= 2 ? 10 : 8
-        style.paragraphSpacing = level <= 2 ? 7 : 5
+        style.lineHeightMultiple = 1.12
+        style.paragraphSpacingBefore = level <= 2 ? 18 : 12
+        style.paragraphSpacing = level <= 2 ? 8 : 6
         return style.copy() as! NSParagraphStyle
     }
 
@@ -136,5 +149,31 @@ enum LivePreviewTheme {
         style.paragraphSpacingBefore = 3
         style.paragraphSpacing = 3
         return style.copy() as! NSParagraphStyle
+    }
+
+    static func calloutAccentColor(for kind: LivePreviewBlockKind) -> NSColor {
+        guard case .callout(let rawKind) = kind else {
+            return calloutAccentColor
+        }
+        switch rawKind?.lowercased() {
+        case "summary", "tldr", "abstract":
+            return NSColor.systemTeal
+        case "info", "todo":
+            return NSColor.systemBlue
+        case "success", "check", "done":
+            return NSColor.systemGreen
+        case "warning", "caution", "attention":
+            return NSColor.systemOrange
+        case "bug", "failure", "fail", "danger", "error":
+            return NSColor.systemRed
+        case "quote", "cite":
+            return NSColor.systemGray
+        default:
+            return calloutAccentColor
+        }
+    }
+
+    static func calloutBackgroundColor(for kind: LivePreviewBlockKind) -> NSColor {
+        calloutAccentColor(for: kind).withAlphaComponent(0.12)
     }
 }

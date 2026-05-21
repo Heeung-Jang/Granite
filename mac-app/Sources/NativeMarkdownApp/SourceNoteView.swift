@@ -10,6 +10,7 @@ struct SourceNoteView: View {
     @EnvironmentObject private var appState: AppState
     let vaultURL: URL
     let file: FileTreeItem
+    let chrome: SourceNoteChrome
     private let noteSaver: any EngineNoteSaving
 
     @State private var state: SourceNoteViewState = .loading
@@ -29,16 +30,20 @@ struct SourceNoteView: View {
     init(
         vaultURL: URL,
         file: FileTreeItem,
+        chrome: SourceNoteChrome = .native,
         noteSaver: any EngineNoteSaving = EngineSaveClient()
     ) {
         self.vaultURL = vaultURL
         self.file = file
+        self.chrome = chrome
         self.noteSaver = noteSaver
     }
 
     var body: some View {
-        VStack(spacing: 12) {
-            header
+        VStack(spacing: chrome.verticalSpacing) {
+            if chrome.showsHeader {
+                header
+            }
 
             switch state {
             case .loading:
@@ -52,21 +57,37 @@ struct SourceNoteView: View {
                     livePreviewMode: livePreviewMode,
                     linkStyleMap: livePreviewLinkStyleMap,
                     embedPreviewMap: livePreviewEmbedPreviewMap,
+                    documentTitle: file.displayName,
                     interactionHandler: handleEditorInteraction
                 )
                     .frame(minHeight: 320)
+                    .padding(.horizontal, chrome.editorHorizontalPadding)
+                    .padding(.vertical, chrome.editorVerticalPadding)
                     .accessibilityLabel("Markdown editor for \(file.displayName)")
-                LivePreviewStatusStrip(
-                    mode: livePreviewMode,
-                    retryLivePreview: retryLivePreview
-                )
-                SaveStatusStrip(
-                    session: saveSession,
-                    save: saveCurrentNote,
-                    reloadAfterConflict: reloadAfterConflict,
-                    keepConflictAsNewNote: keepConflictAsNewNote,
-                    overwriteAfterConflict: overwriteAfterConflict
-                )
+
+                if chrome == .native {
+                    LivePreviewStatusStrip(
+                        mode: livePreviewMode,
+                        retryLivePreview: retryLivePreview
+                    )
+                    SaveStatusStrip(
+                        session: saveSession,
+                        save: saveCurrentNote,
+                        reloadAfterConflict: reloadAfterConflict,
+                        keepConflictAsNewNote: keepConflictAsNewNote,
+                        overwriteAfterConflict: overwriteAfterConflict
+                    )
+                } else {
+                    ObsidianEditorStatusBar(
+                        mode: livePreviewMode,
+                        session: saveSession,
+                        save: saveCurrentNote,
+                        retryLivePreview: retryLivePreview,
+                        reloadAfterConflict: reloadAfterConflict,
+                        keepConflictAsNewNote: keepConflictAsNewNote,
+                        overwriteAfterConflict: overwriteAfterConflict
+                    )
+                }
             case .failed(let message):
                 VStack(spacing: 8) {
                     Image(systemName: "exclamationmark.triangle")
@@ -80,7 +101,8 @@ struct SourceNoteView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding()
+        .padding(chrome.outerPadding)
+        .background(ObsidianUI.editorBackground)
         .task(id: file.id) {
             await load()
         }
@@ -752,6 +774,31 @@ struct SourceNoteView: View {
     }
 }
 
+enum SourceNoteChrome {
+    case native
+    case obsidian
+
+    var showsHeader: Bool {
+        self == .native
+    }
+
+    var verticalSpacing: CGFloat {
+        self == .native ? 12 : 0
+    }
+
+    var outerPadding: CGFloat {
+        self == .native ? 16 : 0
+    }
+
+    var editorHorizontalPadding: CGFloat {
+        self == .native ? 0 : 34
+    }
+
+    var editorVerticalPadding: CGFloat {
+        self == .native ? 0 : 22
+    }
+}
+
 private func livePreviewStates(
     vaultURL: URL,
     references: [AttachmentReferenceItem]
@@ -836,6 +883,81 @@ private struct SaveStatusStrip: View {
         .foregroundStyle(.secondary)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Save status")
+    }
+
+    @ViewBuilder
+    private var statusContent: some View {
+        switch session?.status {
+        case .baselinePending:
+            ProgressView()
+                .controlSize(.small)
+            Text("Preparing safe save")
+        case .unavailable(let message):
+            Label("Read-only: \(message)", systemImage: "lock")
+                .lineLimit(1)
+        case .clean:
+            Label("Saved", systemImage: "checkmark.circle")
+        case .dirty:
+            Label("Unsaved changes", systemImage: "circle.fill")
+        case .saving:
+            ProgressView()
+                .controlSize(.small)
+            Text("Saving")
+        case .failed(let failure):
+            Label("\(failure.title): \(failure.message)", systemImage: "exclamationmark.triangle")
+                .lineLimit(1)
+        case nil:
+            EmptyView()
+        }
+    }
+}
+
+private struct ObsidianEditorStatusBar: View {
+    let mode: LivePreviewMode
+    let session: EditorSaveSession?
+    let save: () -> Void
+    let retryLivePreview: () -> Void
+    let reloadAfterConflict: () -> Void
+    let keepConflictAsNewNote: () -> Void
+    let overwriteAfterConflict: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            statusContent
+
+            Spacer(minLength: 12)
+
+            if case .fallbackSource = mode {
+                Button(action: retryLivePreview) {
+                    Label("Retry", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(.borderless)
+            }
+
+            if session?.conflict != nil {
+                Button("Reload", action: reloadAfterConflict)
+                    .buttonStyle(.borderless)
+                Button("Keep Copy", action: keepConflictAsNewNote)
+                    .buttonStyle(.borderless)
+                Button("Overwrite", action: overwriteAfterConflict)
+                    .buttonStyle(.borderless)
+            }
+
+            Button(action: save) {
+                Image(systemName: "square.and.arrow.down")
+            }
+            .buttonStyle(.borderless)
+            .disabled(session?.canSave != true)
+            .help("Save")
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 12)
+        .frame(height: ObsidianUI.statusBarHeight)
+        .background(ObsidianUI.sidebarBackground.opacity(0.55))
+        .overlay(alignment: .top) {
+            ObsidianUI.border.frame(height: 1)
+        }
     }
 
     @ViewBuilder

@@ -1,7 +1,7 @@
 import Foundation
 
 public struct LivePreviewPropertyBlock: Equatable, Sendable {
-    var sourceRange: LivePreviewSourceRange
+    public var sourceRange: LivePreviewSourceRange
     public var rows: [LivePreviewPropertyRow]
     public var tokenRanges: [LivePreviewSourceRange]
     public var isClosed: Bool
