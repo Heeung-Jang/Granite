@@ -76,6 +76,7 @@ struct GraphMetalRendererView: View {
 
     @State private var dragStartPanOffset: GraphPoint?
     @State private var drawReportGate = GraphMetalDrawReportGate()
+    @State private var metalInitializationFailed = false
 
     init(
         input: GraphRendererInput,
@@ -97,6 +98,23 @@ struct GraphMetalRendererView: View {
 
     @ViewBuilder
     var body: some View {
+        if metalInitializationFailed {
+            GraphCanvasRendererView(
+                input: input,
+                viewport: $viewport,
+                callbacks: callbacks,
+                hitTestIndex: hitTestIndex,
+                onHoverNode: onHoverNode,
+                onSelectNode: onSelectNode,
+                onOpenNode: onOpenNode
+            )
+        } else {
+            metalBody
+        }
+    }
+
+    @ViewBuilder
+    private var metalBody: some View {
         switch validationState(for: currentInput) {
         case .ready(let renderInput):
             GeometryReader { proxy in
@@ -104,7 +122,10 @@ struct GraphMetalRendererView: View {
                     GraphMetalRepresentable(
                         input: renderInput,
                         callbacks: callbacks,
-                        drawReportGate: drawReportGate
+                        drawReportGate: drawReportGate,
+                        onInitializationFailed: {
+                            metalInitializationFailed = true
+                        }
                     )
 
                     GraphMetalLabelsOverlay(input: renderInput)
@@ -219,9 +240,10 @@ private struct GraphMetalRepresentable: NSViewRepresentable {
     let input: GraphRendererInput
     var callbacks: GraphRendererCallbacks
     let drawReportGate: GraphMetalDrawReportGate
+    let onInitializationFailed: @MainActor () -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator()
+        Coordinator(onInitializationFailed: onInitializationFailed)
     }
 
     func makeNSView(context: Context) -> MTKView {
@@ -248,17 +270,27 @@ private struct GraphMetalRepresentable: NSViewRepresentable {
 
     final class Coordinator: NSObject, MTKViewDelegate {
         private let renderer = GraphRendererContract(rendererKind: .metal)
+        private let onInitializationFailed: @MainActor () -> Void
         private var metalRenderer: GraphMetalRenderer?
         private var input: GraphRendererInput?
         private var callbacks = GraphRendererCallbacks()
         private var drawReportGate = GraphMetalDrawReportGate()
 
+        init(onInitializationFailed: @escaping @MainActor () -> Void) {
+            self.onInitializationFailed = onInitializationFailed
+        }
+
         @MainActor
         func attach(_ view: MTKView) {
             guard let device = view.device else {
+                onInitializationFailed()
                 return
             }
-            metalRenderer = try? GraphMetalRenderer(device: device)
+            do {
+                metalRenderer = try GraphMetalRenderer(device: device)
+            } catch {
+                onInitializationFailed()
+            }
         }
 
         @MainActor
@@ -273,7 +305,11 @@ private struct GraphMetalRepresentable: NSViewRepresentable {
 
             do {
                 try renderer.validate(input)
-                try metalRenderer?.updateBuffers(for: input)
+                guard let metalRenderer else {
+                    onInitializationFailed()
+                    return
+                }
+                try metalRenderer.updateBuffers(for: input)
             } catch let error as GraphRendererValidationError {
                 callbacks.didFail(error)
             } catch {
@@ -500,6 +536,7 @@ private final class GraphMetalRenderer {
         return [
             String(input.layout.requestID),
             String(input.layout.generation),
+            String(input.layout.renderIdentity),
             String(input.layout.nodes.count),
             String(input.layout.edges.count),
             String(input.presentation.nodeSize.bitPattern),

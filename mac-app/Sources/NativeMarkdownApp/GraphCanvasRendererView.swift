@@ -351,6 +351,7 @@ private final class GraphCanvasPathCache {
         let parts = [
             String(input.layout.requestID),
             String(input.layout.generation),
+            String(input.layout.renderIdentity),
             String(input.layout.nodes.count),
             String(input.layout.edges.count),
             String(input.presentation.nodeSize.bitPattern),

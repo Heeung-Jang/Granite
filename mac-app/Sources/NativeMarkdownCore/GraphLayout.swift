@@ -16,19 +16,74 @@ public struct GraphRendererSnapshot: Equatable, Sendable {
     public let nodes: [GraphLayoutNode]
     public let edges: [GraphLayoutEdge]
     public let components: [GraphLayoutComponent]
+    public let renderIdentity: UInt64
 
     public init(
         requestID: UInt64,
         generation: UInt64,
         nodes: [GraphLayoutNode],
         edges: [GraphLayoutEdge],
-        components: [GraphLayoutComponent]
+        components: [GraphLayoutComponent],
+        renderIdentity: UInt64? = nil
     ) {
         self.requestID = requestID
         self.generation = generation
         self.nodes = nodes
         self.edges = edges
         self.components = components
+        self.renderIdentity = renderIdentity ?? Self.makeRenderIdentity(
+            requestID: requestID,
+            generation: generation,
+            nodes: nodes,
+            edges: edges
+        )
+    }
+
+    private static func makeRenderIdentity(
+        requestID: UInt64,
+        generation: UInt64,
+        nodes: [GraphLayoutNode],
+        edges: [GraphLayoutEdge]
+    ) -> UInt64 {
+        var hash: UInt64 = 0xcbf29ce484222325
+
+        func mix(_ value: UInt64) {
+            hash ^= value
+            hash &*= 0x100000001b3
+        }
+
+        mix(requestID)
+        mix(generation)
+        mix(UInt64(nodes.count))
+        mix(UInt64(edges.count))
+
+        for node in nodes {
+            mix(UInt64(bitPattern: Int64(node.index)))
+            mix(stableHash(node.nodeID))
+            mix(UInt64(bitPattern: Int64(node.degree)))
+            mix(node.position.x.bitPattern)
+            mix(node.position.y.bitPattern)
+            mix(node.radius.bitPattern)
+            mix(stableHash(node.kind.rawValue))
+        }
+
+        for edge in edges {
+            mix(UInt64(bitPattern: Int64(edge.sourceIndex)))
+            mix(UInt64(bitPattern: Int64(edge.targetIndex)))
+            mix(UInt64(bitPattern: Int64(edge.weight)))
+            mix(stableHash(edge.kind.rawValue))
+        }
+
+        return hash
+    }
+
+    private static func stableHash(_ value: String) -> UInt64 {
+        var hash: UInt64 = 0xcbf29ce484222325
+        for byte in value.utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 0x100000001b3
+        }
+        return hash
     }
 }
 
