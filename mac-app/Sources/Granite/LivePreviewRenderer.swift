@@ -151,11 +151,13 @@ enum LivePreviewRenderer {
             blocks: parsed.blocks,
             parseWindow: parseWindow
         )
+        var listParagraphStylesByDepth: [Int: NSParagraphStyle] = [:]
         for block in parsed.blocks {
             let blockRange = NSIntersectionRange(block.sourceRange.nsRange, visibleRange)
             guard blockRange.length > 0 else {
                 continue
             }
+            let listContext = listResolution.contextsByBlockRange[block.sourceRange]
             let properties = frontmatterProperties(for: block, source: source)
             let embedPreview = embedPreviewMap.preview(for: block)
             let table = tableModel(for: block, source: source)
@@ -163,7 +165,9 @@ enum LivePreviewRenderer {
                 block,
                 plan: plan,
                 range: blockRange,
-                listContext: listResolution.contextsByBlockRange[block.sourceRange]
+                listParagraphStyle: listContext.map {
+                    cachedListParagraphStyle(depth: $0.depth, in: &listParagraphStylesByDepth)
+                }
             )
             applyBlockTokenAttributes(
                 block,
@@ -200,7 +204,7 @@ enum LivePreviewRenderer {
         _ block: LivePreviewBlockSpan,
         plan: LivePreviewAttributePlan,
         range: NSRange,
-        listContext: LivePreviewListMarkerContext?
+        listParagraphStyle: NSParagraphStyle?
     ) {
         switch block.kind {
         case .heading(let level):
@@ -245,7 +249,7 @@ enum LivePreviewRenderer {
         case .unorderedList, .orderedList, .taskList:
             plan.addAttributes([
                 .foregroundColor: LivePreviewTheme.textColor,
-                .paragraphStyle: LivePreviewTheme.listParagraphStyle(depth: listContext?.depth ?? 0)
+                .paragraphStyle: listParagraphStyle ?? LivePreviewTheme.listParagraphStyle
             ], range: range)
         case .frontmatter:
             plan.addAttributes([
@@ -257,6 +261,19 @@ enum LivePreviewRenderer {
         case .paragraph:
             break
         }
+    }
+
+    private static func cachedListParagraphStyle(
+        depth: Int,
+        in cache: inout [Int: NSParagraphStyle]
+    ) -> NSParagraphStyle {
+        let normalizedDepth = max(0, depth)
+        if let style = cache[normalizedDepth] {
+            return style
+        }
+        let style = LivePreviewTheme.listParagraphStyle(depth: normalizedDepth)
+        cache[normalizedDepth] = style
+        return style
     }
 
     private static func applyBlockTokenAttributes(

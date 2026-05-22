@@ -19,6 +19,9 @@ struct LivePreviewProbeCaseReport: Codable, Equatable {
     var hardCeilingPassed: Bool
     var hardCeilingViolations: [String]
     var memoryDeltaBytes: Int?
+    var appKitControlCountBefore: Int
+    var appKitControlCountAfter: Int
+    var appKitControlDelta: Int
     var blockCount: Int
     var tableCellCount: Int
     var embedCount: Int
@@ -74,6 +77,7 @@ enum LivePreviewProbe {
         textView.textContainer?.widthTracksTextView = true
         textView.string = fixture.document
         let memoryBefore = residentMemoryBytes()
+        let controlCountBefore = appKitControlCount(in: textView)
 
         for _ in 0..<fixture.iterations {
             var profile: EditorDocumentProfile!
@@ -107,6 +111,8 @@ enum LivePreviewProbe {
         }
 
         let memoryAfter = residentMemoryBytes()
+        let controlCountAfter = appKitControlCount(in: textView)
+        let controlDelta = max(0, controlCountAfter - controlCountBefore)
         let memoryDelta = memoryBefore.flatMap { before in
             memoryAfter.map { max(0, $0 - before) }
         }
@@ -114,7 +120,12 @@ enum LivePreviewProbe {
             stageReport(name: stageName, samples: values)
         }.sorted { $0.stageName < $1.stageName }
         let hardCeilingViolations = fallbackReason == nil
-            ? violations(stages: stages, memoryDeltaBytes: memoryDelta, thresholds: thresholds)
+            ? violations(
+                stages: stages,
+                memoryDeltaBytes: memoryDelta,
+                appKitControlDelta: controlDelta,
+                thresholds: thresholds
+            )
             : []
 
         return LivePreviewProbeCaseReport(
@@ -127,6 +138,9 @@ enum LivePreviewProbe {
             hardCeilingPassed: hardCeilingViolations.isEmpty,
             hardCeilingViolations: hardCeilingViolations,
             memoryDeltaBytes: memoryDelta,
+            appKitControlCountBefore: controlCountBefore,
+            appKitControlCountAfter: controlCountAfter,
+            appKitControlDelta: controlDelta,
             blockCount: blockCount,
             tableCellCount: tableCellCount,
             embedCount: embedCount,
@@ -263,6 +277,7 @@ enum LivePreviewProbe {
     private static func violations(
         stages: [LivePreviewProbeStageReport],
         memoryDeltaBytes: Int?,
+        appKitControlDelta: Int,
         thresholds: EditorDegradationThresholds
     ) -> [String] {
         var violations: [String] = []
@@ -284,7 +299,17 @@ enum LivePreviewProbe {
            memoryDeltaBytes > thresholds.maxRenderMemoryDeltaBytes {
             violations.append("memoryDeltaBytes")
         }
+        if appKitControlDelta > 0 {
+            violations.append("appKitControlDelta")
+        }
         return violations
+    }
+
+    private static func appKitControlCount(in view: NSView) -> Int {
+        let ownCount = view is NSControl ? 1 : 0
+        return view.subviews.reduce(ownCount) { total, subview in
+            total + appKitControlCount(in: subview)
+        }
     }
 
     private static func p95(_ stageName: String, in stages: [LivePreviewProbeStageReport]) -> Double {
