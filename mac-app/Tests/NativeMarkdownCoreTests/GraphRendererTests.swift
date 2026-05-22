@@ -84,6 +84,37 @@ func graphRendererFailureStateRetainsPreviousStableGraph() {
     #expect(model.previousStableGraph == stable)
 }
 
+@Test
+func graphMagnificationEventConvertsDeltaToMultiplierAndCenteredPoint() {
+    let event = GraphMagnificationEvent(
+        magnification: 0.25,
+        localPoint: GraphPoint(x: 300, y: 20),
+        canvasSize: GraphSize(width: 400, height: 200)
+    )
+
+    #expect(event.zoomMultiplier == 1.25)
+    #expect(event.centeredScreenPoint == GraphPoint(x: 100, y: -80))
+    #expect(GraphMagnificationEvent.zoomMultiplier(for: -1) == nil)
+    #expect(GraphMagnificationEvent.zoomMultiplier(for: .infinity) == nil)
+}
+
+@Test
+func graphRendererInteractionCallbacksForwardMagnificationEvent() {
+    let event = GraphMagnificationEvent(
+        magnification: 0.1,
+        localPoint: GraphPoint(x: 10, y: 20),
+        canvasSize: GraphSize(width: 100, height: 80)
+    )
+    var receivedEvent: GraphMagnificationEvent?
+    let callbacks = GraphRendererInteractionCallbacks(
+        magnifyCanvas: { receivedEvent = $0 }
+    )
+
+    callbacks.magnifyCanvas(event)
+
+    #expect(receivedEvent == event)
+}
+
 private func rendererFixtureLayout() -> GraphRendererSnapshot {
     GraphRendererSnapshot(
         requestID: 1,

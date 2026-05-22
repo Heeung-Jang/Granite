@@ -59,22 +59,62 @@ public struct GraphRendererCallbacks: Sendable {
     }
 }
 
+public struct GraphMagnificationEvent: Equatable, Sendable {
+    public let magnification: Double
+    public let localPoint: GraphPoint
+    public let canvasSize: GraphSize
+
+    public init(
+        magnification: Double,
+        localPoint: GraphPoint,
+        canvasSize: GraphSize
+    ) {
+        self.magnification = magnification
+        self.localPoint = localPoint
+        self.canvasSize = canvasSize
+    }
+
+    public var zoomMultiplier: Double? {
+        Self.zoomMultiplier(for: magnification)
+    }
+
+    public var centeredScreenPoint: GraphPoint? {
+        GraphViewport.centeredScreenPoint(
+            forLocalPoint: localPoint,
+            canvasSize: canvasSize
+        )
+    }
+
+    public static func zoomMultiplier(for magnification: Double) -> Double? {
+        let multiplier = 1 + magnification
+        guard multiplier.isFinite,
+              multiplier > 0
+        else {
+            return nil
+        }
+        return multiplier
+    }
+}
+
 public struct GraphRendererInteractionCallbacks {
     public let beginNodeDrag: (GraphNodeDragStart) -> Void
     public let updateNodeDrag: (GraphPoint) -> Void
     public let endNodeDrag: () -> Void
     public let panCanvas: (GraphPoint) -> Void
+    public let magnifyCanvas: (GraphMagnificationEvent) -> Void
 
     public init(
         beginNodeDrag: @escaping (GraphNodeDragStart) -> Void = { _ in },
         updateNodeDrag: @escaping (GraphPoint) -> Void = { _ in },
         endNodeDrag: @escaping () -> Void = {},
-        panCanvas: @escaping (GraphPoint) -> Void = { _ in }
+        panCanvas: @escaping (GraphPoint) -> Void = { _ in },
+        magnifyCanvas: @escaping (GraphMagnificationEvent) -> Void = { _ in }
     ) {
         self.beginNodeDrag = beginNodeDrag
         self.updateNodeDrag = updateNodeDrag
         self.endNodeDrag = endNodeDrag
         self.panCanvas = panCanvas
+        self.magnifyCanvas = magnifyCanvas
     }
 }
 

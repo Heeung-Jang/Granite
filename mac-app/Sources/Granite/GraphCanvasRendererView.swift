@@ -46,34 +46,42 @@ struct GraphCanvasRendererView: View {
         switch validationState(for: renderInput) {
         case .ready:
             GeometryReader { proxy in
-                Canvas { context, size in
-                    let timer = AppTelemetryTimer()
-                    let drawSignpost = AppTelemetry.beginGraphStage(.draw)
-                    var graphContext = context
-                    graphContext.translateBy(
-                        x: size.width / 2 + CGFloat(renderInput.viewport.panOffset.x),
-                        y: size.height / 2 + CGFloat(renderInput.viewport.panOffset.y)
-                    )
-                    graphContext.scaleBy(
-                        x: CGFloat(renderInput.viewport.zoomScale),
-                        y: CGFloat(renderInput.viewport.zoomScale)
-                    )
+                ZStack {
+                    Canvas { context, size in
+                        let timer = AppTelemetryTimer()
+                        let drawSignpost = AppTelemetry.beginGraphStage(.draw)
+                        var graphContext = context
+                        graphContext.translateBy(
+                            x: size.width / 2 + CGFloat(renderInput.viewport.panOffset.x),
+                            y: size.height / 2 + CGFloat(renderInput.viewport.panOffset.y)
+                        )
+                        graphContext.scaleBy(
+                            x: CGFloat(renderInput.viewport.zoomScale),
+                            y: CGFloat(renderInput.viewport.zoomScale)
+                        )
 
-                    drawEdges(input: renderInput, paths: renderPaths, context: &graphContext)
-                    drawNodes(input: renderInput, paths: renderPaths, context: &graphContext)
-                    drawLabels(input: renderInput, context: &context, size: size)
-                    AppTelemetry.endGraphStage(drawSignpost)
+                        drawEdges(input: renderInput, paths: renderPaths, context: &graphContext)
+                        drawNodes(input: renderInput, paths: renderPaths, context: &graphContext)
+                        drawLabels(input: renderInput, context: &context, size: size)
+                        AppTelemetry.endGraphStage(drawSignpost)
 
-                    let metrics = renderer.metrics(
-                        for: renderInput,
-                        drawDurationMilliseconds: timer.elapsedMilliseconds()
+                        let metrics = renderer.metrics(
+                            for: renderInput,
+                            drawDurationMilliseconds: timer.elapsedMilliseconds()
+                        )
+                        callbacks.didCompleteDraw(metrics)
+                        drawReportGate.reportIfNeeded(
+                            identity: drawIdentity(for: renderInput),
+                            metrics: metrics,
+                            callbacks: callbacks
+                        )
+                    }
+
+                    GraphMagnificationGestureBridge(
+                        canvasSize: graphSize(proxy.size),
+                        onMagnify: interactionCallbacks.magnifyCanvas
                     )
-                    callbacks.didCompleteDraw(metrics)
-                    drawReportGate.reportIfNeeded(
-                        identity: drawIdentity(for: renderInput),
-                        metrics: metrics,
-                        callbacks: callbacks
-                    )
+                    .frame(width: proxy.size.width, height: proxy.size.height)
                 }
                 .background(ObsidianUI.editorBackground)
                 .gesture(panGesture(size: proxy.size))
@@ -271,7 +279,15 @@ struct GraphCanvasRendererView: View {
         context: inout GraphicsContext,
         size: CGSize
     ) {
-        for node in input.layout.nodes where input.labelIsVisible(for: node) {
+        let visibleBounds = input.viewport.visibleGraphBounds(
+            canvasSize: graphSize(size),
+            padding: GraphVisualMetrics.labelCullingPadding
+        )
+        for node in input.layout.nodes where labelIsVisible(
+            for: node,
+            input: input,
+            visibleBounds: visibleBounds
+        ) {
             let point = canvasPoint(for: input.position(for: node), input: input, size: size)
             let text = Text(node.label)
                 .font(.caption)
@@ -283,6 +299,20 @@ struct GraphCanvasRendererView: View {
                 anchor: .leading
             )
         }
+    }
+
+    private func labelIsVisible(
+        for node: GraphLayoutNode,
+        input: GraphRendererInput,
+        visibleBounds: GraphLayoutBounds?
+    ) -> Bool {
+        guard input.labelIsVisible(for: node) else {
+            return false
+        }
+        guard let visibleBounds else {
+            return true
+        }
+        return visibleBounds.contains(input.position(for: node))
     }
 
     private func canvasPoint(

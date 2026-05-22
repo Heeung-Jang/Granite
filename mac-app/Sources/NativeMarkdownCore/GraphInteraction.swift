@@ -485,10 +485,10 @@ public enum GraphGestureDecision {
         viewport: GraphViewport,
         canvasSize: GraphSize
     ) -> GraphPoint {
-        let centeredPoint = GraphPoint(
-            x: screenPoint.x - canvasSize.width / 2,
-            y: screenPoint.y - canvasSize.height / 2
-        )
+        let centeredPoint = GraphViewport.centeredScreenPoint(
+            forLocalPoint: screenPoint,
+            canvasSize: canvasSize
+        ) ?? GraphPoint(x: 0, y: 0)
         return viewport.graphPoint(for: centeredPoint)
     }
 }

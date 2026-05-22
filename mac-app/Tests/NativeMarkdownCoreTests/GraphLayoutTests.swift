@@ -83,6 +83,8 @@ func graphLayoutBoundsIncludeNodeRadii() {
     #expect(bounds?.width == 36)
     #expect(bounds?.height == 12)
     #expect(bounds?.center == GraphPoint(x: 6, y: 4))
+    #expect(bounds?.contains(GraphPoint(x: 6, y: 4)) == true)
+    #expect(bounds?.contains(GraphPoint(x: 25, y: 4)) == false)
     #expect(GraphLayoutBounds.enclosing([]) == nil)
 }
 
@@ -150,8 +152,131 @@ func graphViewportRoundTripsCoordinatesAndResets() {
 
     viewport.zoomScale = 0
     #expect(viewport.zoomScale == GraphVisualMetrics.minimumZoomScale)
+    viewport.zoomScale = 100
+    #expect(viewport.zoomScale == GraphVisualMetrics.maximumZoomScale)
     viewport.zoomScale = .infinity
     #expect(viewport.zoomScale == 1)
+}
+
+@Test
+func graphViewportConvertsLocalPointToCenteredScreenPoint() {
+    let canvasSize = GraphSize(width: 400, height: 200)
+
+    #expect(GraphViewport.centeredScreenPoint(
+        forLocalPoint: GraphPoint(x: 200, y: 100),
+        canvasSize: canvasSize
+    ) == GraphPoint(x: 0, y: 0))
+    #expect(GraphViewport.centeredScreenPoint(
+        forLocalPoint: GraphPoint(x: 0, y: 0),
+        canvasSize: canvasSize
+    ) == GraphPoint(x: -200, y: -100))
+    #expect(GraphViewport.centeredScreenPoint(
+        forLocalPoint: GraphPoint(x: 400, y: 0),
+        canvasSize: canvasSize
+    ) == GraphPoint(x: 200, y: -100))
+    #expect(GraphViewport.centeredScreenPoint(
+        forLocalPoint: GraphPoint(x: 0, y: 200),
+        canvasSize: canvasSize
+    ) == GraphPoint(x: -200, y: 100))
+    #expect(GraphViewport.centeredScreenPoint(
+        forLocalPoint: GraphPoint(x: 400, y: 200),
+        canvasSize: canvasSize
+    ) == GraphPoint(x: 200, y: 100))
+    #expect(GraphViewport.centeredScreenPoint(
+        forLocalPoint: GraphPoint(x: 200, y: 100),
+        canvasSize: GraphSize(width: 0, height: 200)
+    ) == nil)
+}
+
+@Test
+func graphViewportAnchoredZoomInPreservesAnchorPoint() {
+    let viewport = GraphViewport(
+        panOffset: GraphPoint(x: 10, y: -20),
+        zoomScale: 2
+    )
+    let anchor = GraphPoint(x: 75, y: -25)
+    let graphAnchor = viewport.graphPoint(for: anchor)
+
+    let zoomed = viewport.zoomed(by: 1.5, around: anchor)
+
+    #expect(zoomed.zoomScale == 3)
+    #expect(zoomed.panOffset == GraphPoint(x: -22.5, y: -17.5))
+    #expect(zoomed.screenPoint(for: graphAnchor) == anchor)
+}
+
+@Test
+func graphViewportAnchoredZoomOutPreservesAnchorPoint() {
+    let viewport = GraphViewport(
+        panOffset: GraphPoint(x: 10, y: -20),
+        zoomScale: 2
+    )
+    let anchor = GraphPoint(x: 75, y: -25)
+    let graphAnchor = viewport.graphPoint(for: anchor)
+
+    let zoomed = viewport.zoomed(by: 0.5, around: anchor)
+
+    #expect(zoomed.zoomScale == 1)
+    #expect(zoomed.panOffset == GraphPoint(x: 42.5, y: -22.5))
+    #expect(zoomed.screenPoint(for: graphAnchor) == anchor)
+}
+
+@Test
+func graphViewportAnchoredZoomUsesClampedUpperBound() {
+    let viewport = GraphViewport(zoomScale: 8)
+    let anchor = GraphPoint(x: 100, y: 50)
+    let graphAnchor = viewport.graphPoint(for: anchor)
+
+    let zoomed = viewport.zoomed(by: 2, around: anchor)
+
+    #expect(zoomed.zoomScale == GraphVisualMetrics.maximumZoomScale)
+    #expect(zoomed.panOffset == GraphPoint(x: -25, y: -12.5))
+    #expect(zoomed.screenPoint(for: graphAnchor) == anchor)
+}
+
+@Test
+func graphViewportAnchoredZoomUsesClampedLowerBound() {
+    let viewport = GraphViewport(zoomScale: 0.02)
+    let anchor = GraphPoint(x: 100, y: 50)
+    let graphAnchor = viewport.graphPoint(for: anchor)
+
+    let zoomed = viewport.zoomed(by: 0.1, around: anchor)
+
+    #expect(zoomed.zoomScale == GraphVisualMetrics.minimumZoomScale)
+    #expect(zoomed.panOffset == GraphPoint(x: 50, y: 25))
+    #expect(zoomed.screenPoint(for: graphAnchor) == anchor)
+}
+
+@Test
+func graphViewportAnchoredZoomIgnoresInvalidMultiplier() {
+    let viewport = GraphViewport(
+        panOffset: GraphPoint(x: 10, y: -20),
+        zoomScale: 2
+    )
+    let anchor = GraphPoint(x: 75, y: -25)
+
+    #expect(viewport.zoomed(by: 0, around: anchor) == viewport)
+    #expect(viewport.zoomed(by: -1, around: anchor) == viewport)
+    #expect(viewport.zoomed(by: .infinity, around: anchor) == viewport)
+    #expect(viewport.zoomed(by: 1.2, around: GraphPoint(x: .infinity, y: 0)) == viewport)
+}
+
+@Test
+func graphViewportVisibleGraphBoundsHandlesPanZoomAndInvalidCanvas() {
+    let viewport = GraphViewport(
+        panOffset: GraphPoint(x: 10, y: -20),
+        zoomScale: 2
+    )
+
+    #expect(viewport.visibleGraphBounds(
+        canvasSize: GraphSize(width: 400, height: 200),
+        padding: 20
+    ) == GraphLayoutBounds(minX: -115, minY: -50, maxX: 105, maxY: 70))
+    #expect(GraphViewport(zoomScale: 0.5).visibleGraphBounds(
+        canvasSize: GraphSize(width: 100, height: 100)
+    ) == GraphLayoutBounds(minX: -100, minY: -100, maxX: 100, maxY: 100))
+    #expect(viewport.visibleGraphBounds(
+        canvasSize: GraphSize(width: 0, height: 100)
+    ) == nil)
 }
 
 @Test
