@@ -63,6 +63,24 @@ func livePreviewParserLoadsObsidianMarkersAndRulesFixture() throws {
 }
 
 @Test
+func livePreviewParserLoadsNestedListHierarchyFixture() throws {
+    let source = try fixture("nested-list-hierarchy.md")
+    let result = LivePreviewParser.parse(source)
+
+    #expect(source.contains("case: unordered-3-level"))
+    #expect(source.contains("case: ordered-width-normalization"))
+    #expect(source.contains("case: mixed-bullet-ordered-task"))
+    #expect(source.contains("case: code-fence-negative"))
+    #expect(result.blocks.containsBlock { $0 == .unorderedList })
+    #expect(result.blocks.containsBlock { $0 == .orderedList })
+    #expect(result.blocks.containsBlock { if case .taskList(isChecked: false) = $0 { true } else { false } })
+    #expect(result.blocks.containsBlock { if case .taskList(isChecked: true) = $0 { true } else { false } })
+    #expect(result.blocks.containsBlock { $0 == .horizontalRule })
+    #expect(result.blocks.containsBlock { $0 == .table })
+    #expect(result.blocks.containsBlock { if case .fencedCode = $0 { true } else { false } })
+}
+
+@Test
 func livePreviewParserGroupsObsidianCalloutBodyLines() throws {
     let source = """
     > [!summary] TL;DR

@@ -19,6 +19,9 @@ struct LivePreviewProbeCaseReport: Codable, Equatable {
     var hardCeilingPassed: Bool
     var hardCeilingViolations: [String]
     var memoryDeltaBytes: Int?
+    var appKitControlCountBefore: Int
+    var appKitControlCountAfter: Int
+    var appKitControlDelta: Int
     var blockCount: Int
     var tableCellCount: Int
     var embedCount: Int
@@ -61,13 +64,20 @@ enum LivePreviewProbe {
         var blockCount = 0
         var tableCellCount = 0
         var embedCount = 0
-        let visibleRange = NSRange(
-            location: 0,
-            length: min(fixture.visibleRangeLength, (fixture.document as NSString).length)
+        let documentLength = (fixture.document as NSString).length
+        let visibleLength = min(fixture.visibleRangeLength, documentLength)
+        let visibleLocation = min(
+            max(0, fixture.visibleRangeLocation),
+            max(0, documentLength - visibleLength)
         )
+        let visibleRange = NSRange(location: visibleLocation, length: visibleLength)
         let textView = MarkdownEditorTextViewFactory.makeTextView()
+        textView.frame = NSRect(x: 0, y: 0, width: 900, height: 1400)
+        textView.textContainer?.containerSize = NSSize(width: 900, height: CGFloat.greatestFiniteMagnitude)
+        textView.textContainer?.widthTracksTextView = true
         textView.string = fixture.document
         let memoryBefore = residentMemoryBytes()
+        let controlCountBefore = appKitControlCount(in: textView)
 
         for _ in 0..<fixture.iterations {
             var profile: EditorDocumentProfile!
@@ -101,6 +111,8 @@ enum LivePreviewProbe {
         }
 
         let memoryAfter = residentMemoryBytes()
+        let controlCountAfter = appKitControlCount(in: textView)
+        let controlDelta = max(0, controlCountAfter - controlCountBefore)
         let memoryDelta = memoryBefore.flatMap { before in
             memoryAfter.map { max(0, $0 - before) }
         }
@@ -108,7 +120,12 @@ enum LivePreviewProbe {
             stageReport(name: stageName, samples: values)
         }.sorted { $0.stageName < $1.stageName }
         let hardCeilingViolations = fallbackReason == nil
-            ? violations(stages: stages, memoryDeltaBytes: memoryDelta, thresholds: thresholds)
+            ? violations(
+                stages: stages,
+                memoryDeltaBytes: memoryDelta,
+                appKitControlDelta: controlDelta,
+                thresholds: thresholds
+            )
             : []
 
         return LivePreviewProbeCaseReport(
@@ -121,6 +138,9 @@ enum LivePreviewProbe {
             hardCeilingPassed: hardCeilingViolations.isEmpty,
             hardCeilingViolations: hardCeilingViolations,
             memoryDeltaBytes: memoryDelta,
+            appKitControlCountBefore: controlCountBefore,
+            appKitControlCountAfter: controlCountAfter,
+            appKitControlDelta: controlDelta,
             blockCount: blockCount,
             tableCellCount: tableCellCount,
             embedCount: embedCount,
@@ -138,14 +158,23 @@ enum LivePreviewProbe {
         embedCount: inout Int
     ) {
         var parsed: LivePreviewParseResult!
+        var parseWindow: LivePreviewSourceRange!
+        var listResolution: LivePreviewListMarkerResolution!
         record("parse", in: &samples) {
-            let parseWindow = LivePreviewVisibleParseWindow.window(
+            parseWindow = LivePreviewVisibleParseWindow.window(
                 in: document,
                 visibleRange: LivePreviewSourceRange(location: visibleRange.location, length: visibleRange.length),
                 paddingLines: 2,
                 maxUTF16Length: max(visibleRange.length + 4_096, 8_192)
             )
             parsed = LivePreviewParser.parse(document, in: parseWindow)
+        }
+        record("listDepthResolve", in: &samples) {
+            listResolution = LivePreviewListMarkerResolver.resolve(
+                source: document,
+                blocks: parsed.blocks,
+                parseWindow: parseWindow
+            )
         }
         record("spanDiff", in: &samples) {
             blockCount = parsed.blocks.count
@@ -158,6 +187,15 @@ enum LivePreviewProbe {
         }
         record("embedParse", in: &samples) {
             embedCount = LivePreviewEmbedParser.parse(document).count
+        }
+        var listGuideSegmentCount = 0
+        record("listGuideBuild", in: &samples) {
+            listGuideSegmentCount = guideSegmentCount(
+                contexts: Array(listResolution.contextsByBlockRange.values)
+            )
+        }
+        record("listGuideDrawPlanning", in: &samples) {
+            _ = listGuideSegmentCount + listResolution.contextsByBlockRange.count
         }
         record("textKitApply", in: &samples) {
             MarkdownVisibleRangeDecorator.decorateVisibleRange(
@@ -204,6 +242,27 @@ enum LivePreviewProbe {
         samples[stageName, default: []].append(elapsed.rounded(toPlaces: 3))
     }
 
+    private static func guideSegmentCount(contexts: [LivePreviewListMarkerContext]) -> Int {
+        let sorted = contexts.sorted { $0.blockRange.location < $1.blockRange.location }
+        guard sorted.count > 1 else {
+            return 0
+        }
+
+        var count = 0
+        for index in sorted.indices {
+            let parent = sorted[index]
+            let childStartIndex = index + 1
+            guard childStartIndex < sorted.endIndex,
+                  sorted[childStartIndex].clusterID == parent.clusterID,
+                  sorted[childStartIndex].depth > parent.depth
+            else {
+                continue
+            }
+            count += 1
+        }
+        return count
+    }
+
     private static func stageReport(name: String, samples: [Double]) -> LivePreviewProbeStageReport {
         LivePreviewProbeStageReport(
             stageName: name,
@@ -218,6 +277,7 @@ enum LivePreviewProbe {
     private static func violations(
         stages: [LivePreviewProbeStageReport],
         memoryDeltaBytes: Int?,
+        appKitControlDelta: Int,
         thresholds: EditorDegradationThresholds
     ) -> [String] {
         var violations: [String] = []
@@ -239,7 +299,17 @@ enum LivePreviewProbe {
            memoryDeltaBytes > thresholds.maxRenderMemoryDeltaBytes {
             violations.append("memoryDeltaBytes")
         }
+        if appKitControlDelta > 0 {
+            violations.append("appKitControlDelta")
+        }
         return violations
+    }
+
+    private static func appKitControlCount(in view: NSView) -> Int {
+        let ownCount = view is NSControl ? 1 : 0
+        return view.subviews.reduce(ownCount) { total, subview in
+            total + appKitControlCount(in: subview)
+        }
     }
 
     private static func p95(_ stageName: String, in stages: [LivePreviewProbeStageReport]) -> Double {
@@ -270,11 +340,32 @@ enum LivePreviewProbe {
     }
 
     private static func fixtures() -> [LivePreviewProbeFixture] {
-        [
+        let nested100KB = nestedListDenseDocument(targetBytes: 100 * 1024)
+        let nested1MB = nestedListDenseDocument(targetBytes: 1024 * 1024)
+        return [
             LivePreviewProbeFixture(id: "compatibility-100kb", document: markdownDocument(targetBytes: 100 * 1024), iterations: 10),
             LivePreviewProbeFixture(id: "compatibility-1mb", document: markdownDocument(targetBytes: 1024 * 1024), iterations: 5),
             LivePreviewProbeFixture(id: "horizontal-rule-dense", document: horizontalRuleDenseDocument(targetBytes: 100 * 1024), iterations: 10),
             LivePreviewProbeFixture(id: "marker-policy-dense", document: markerPolicyDenseDocument(targetBytes: 100 * 1024), iterations: 10),
+            LivePreviewProbeFixture(id: "nested-list-100kb-top", document: nested100KB, iterations: 10),
+            LivePreviewProbeFixture(
+                id: "nested-list-100kb-middle",
+                document: nested100KB,
+                iterations: 10,
+                visibleRangeLocation: middleVisibleLocation(in: nested100KB)
+            ),
+            LivePreviewProbeFixture(
+                id: "nested-list-100kb-end",
+                document: nested100KB,
+                iterations: 10,
+                visibleRangeLocation: endVisibleLocation(in: nested100KB)
+            ),
+            LivePreviewProbeFixture(
+                id: "nested-list-1mb-middle",
+                document: nested1MB,
+                iterations: 5,
+                visibleRangeLocation: middleVisibleLocation(in: nested1MB)
+            ),
             LivePreviewProbeFixture(id: "attachment-heavy", document: attachmentHeavyDocument(count: 40), iterations: 5),
             LivePreviewProbeFixture(id: "table-heavy", document: tableDocument(columns: 20, rows: 50), iterations: 5),
             LivePreviewProbeFixture(id: "huge-table", document: tableDocument(columns: 100, rows: 100), iterations: 3),
@@ -322,6 +413,48 @@ enum LivePreviewProbe {
         return "---\nstatus: dense\n---\n\n" + String(repeating: line, count: repeatCount)
     }
 
+    private static func nestedListDenseDocument(targetBytes: Int) -> String {
+        let section = """
+        ## Nested Section
+        - Bullet parent
+          - Bullet child with [[Wiki Link]] and #tag/native
+            - Bullet grandchild with **strong** text
+        1. Ordered parent
+           1. Ordered child
+              10. Ordered grandchild
+        - [ ] Task parent
+          - [x] Task child
+            - [ ] Task grandchild
+        - Mixed parent
+          1. Mixed ordered child
+             - [ ] Mixed task grandchild
+
+        Paragraph break between clusters.
+
+        ---
+
+        | Name | Status |
+        | --- | --- |
+        | Alpha | Draft |
+
+        ```markdown
+        - Not a rendered child
+        ```
+
+        """
+        let repeatCount = targetBytes / section.utf8.count + 1
+        return "# Nested List Dense Fixture\n\n" + String(repeating: section, count: repeatCount)
+    }
+
+    private static func middleVisibleLocation(in document: String, visibleRangeLength: Int = 16_384) -> Int {
+        let length = (document as NSString).length
+        return max(0, length / 2 - visibleRangeLength / 2)
+    }
+
+    private static func endVisibleLocation(in document: String, visibleRangeLength: Int = 16_384) -> Int {
+        max(0, (document as NSString).length - visibleRangeLength)
+    }
+
     private static func attachmentHeavyDocument(count: Int) -> String {
         (0..<count).map { index in
             "![fixture-\(index)](fixture-\(index).png)"
@@ -357,6 +490,7 @@ private struct LivePreviewProbeFixture {
     var document: String
     var iterations: Int
     var visibleRangeLength: Int = 16_384
+    var visibleRangeLocation: Int = 0
 }
 
 private extension Double {

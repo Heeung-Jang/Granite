@@ -146,15 +146,29 @@ enum LivePreviewRenderer {
             maxUTF16Length: max(visibleRange.length + 4_096, 8_192)
         )
         let parsed = LivePreviewParser.parse(source, in: parseWindow)
+        let listResolution = LivePreviewListMarkerResolver.resolve(
+            source: source,
+            blocks: parsed.blocks,
+            parseWindow: parseWindow
+        )
+        var listParagraphStylesByDepth: [Int: NSParagraphStyle] = [:]
         for block in parsed.blocks {
             let blockRange = NSIntersectionRange(block.sourceRange.nsRange, visibleRange)
             guard blockRange.length > 0 else {
                 continue
             }
+            let listContext = listResolution.contextsByBlockRange[block.sourceRange]
             let properties = frontmatterProperties(for: block, source: source)
             let embedPreview = embedPreviewMap.preview(for: block)
             let table = tableModel(for: block, source: source)
-            applyBlockAttributes(block, plan: plan, range: blockRange)
+            applyBlockAttributes(
+                block,
+                plan: plan,
+                range: blockRange,
+                listParagraphStyle: listContext.map {
+                    cachedListParagraphStyle(depth: $0.depth, in: &listParagraphStylesByDepth)
+                }
+            )
             applyBlockTokenAttributes(
                 block,
                 source: source,
@@ -189,7 +203,8 @@ enum LivePreviewRenderer {
     private static func applyBlockAttributes(
         _ block: LivePreviewBlockSpan,
         plan: LivePreviewAttributePlan,
-        range: NSRange
+        range: NSRange,
+        listParagraphStyle: NSParagraphStyle?
     ) {
         switch block.kind {
         case .heading(let level):
@@ -234,7 +249,7 @@ enum LivePreviewRenderer {
         case .unorderedList, .orderedList, .taskList:
             plan.addAttributes([
                 .foregroundColor: LivePreviewTheme.textColor,
-                .paragraphStyle: LivePreviewTheme.listParagraphStyle
+                .paragraphStyle: listParagraphStyle ?? LivePreviewTheme.listParagraphStyle
             ], range: range)
         case .frontmatter:
             plan.addAttributes([
@@ -246,6 +261,19 @@ enum LivePreviewRenderer {
         case .paragraph:
             break
         }
+    }
+
+    private static func cachedListParagraphStyle(
+        depth: Int,
+        in cache: inout [Int: NSParagraphStyle]
+    ) -> NSParagraphStyle {
+        let normalizedDepth = max(0, depth)
+        if let style = cache[normalizedDepth] {
+            return style
+        }
+        let style = LivePreviewTheme.listParagraphStyle(depth: normalizedDepth)
+        cache[normalizedDepth] = style
+        return style
     }
 
     private static func applyBlockTokenAttributes(
@@ -582,7 +610,7 @@ enum LivePreviewRenderer {
             return
         }
 
-        let collapsedHeadingMarkerRanges = collapsedHeadingMarkerConcealmentRanges(
+        let collapsedMarkerRanges = collapsedRawMarkerConcealmentRanges(
             for: block,
             source: source,
             markerStyle: markerStyle
@@ -601,7 +629,7 @@ enum LivePreviewRenderer {
                 continue
             }
             plan.addAttributes(
-                rawMarkerConcealmentAttributes(collapsesWidth: collapsedHeadingMarkerRanges.contains(range)),
+                rawMarkerConcealmentAttributes(collapsesWidth: rangeIsCovered(range, by: collapsedMarkerRanges)),
                 range: range
             )
         }
@@ -625,17 +653,22 @@ enum LivePreviewRenderer {
         return attributes
     }
 
-    private static func collapsedHeadingMarkerConcealmentRanges(
+    private static func collapsedRawMarkerConcealmentRanges(
         for block: LivePreviewBlockSpan,
         source: String,
         markerStyle: LivePreviewMarkerStyle
     ) -> [NSRange] {
-        guard case .heading = block.kind,
-              !markerStyle.showsHeadingMarkersOutsideReveal
-        else {
+        switch block.kind {
+        case .heading where !markerStyle.showsHeadingMarkersOutsideReveal:
+            return prefixMatches(in: source, block: block, regex: headingPrefixRegex)
+        case .unorderedList where markerStyle == .obsidian,
+             .orderedList where markerStyle == .obsidian,
+             .taskList where markerStyle == .obsidian:
+            return LivePreviewListMarkerResolver.context(for: block, source: source)
+                .map { [$0.prefixRange] } ?? []
+        default:
             return []
         }
-        return prefixMatches(in: source, block: block, regex: headingPrefixRegex)
     }
 
     private static func rawMarkerConcealmentRanges(
@@ -654,11 +687,11 @@ enum LivePreviewRenderer {
                 : prefixMatches(in: source, block: block, regex: headingPrefixRegex)
         case .unorderedList:
             ranges = markerStyle == .obsidian || !markerStyle.showsListMarkersOutsideReveal
-                ? prefixMatches(in: source, block: block, regex: unorderedListPrefixRegex)
+                ? LivePreviewListMarkerResolver.context(for: block, source: source).map { [$0.prefixRange] } ?? []
                 : []
         case .orderedList:
             ranges = markerStyle == .obsidian || !markerStyle.showsListMarkersOutsideReveal
-                ? prefixMatches(in: source, block: block, regex: orderedListPrefixRegex)
+                ? LivePreviewListMarkerResolver.context(for: block, source: source).map { [$0.prefixRange] } ?? []
                 : []
         case .taskList:
             ranges = taskListConcealmentRanges(for: block, source: source, markerStyle: markerStyle)
@@ -736,11 +769,11 @@ enum LivePreviewRenderer {
         case .callout:
             return prefixMatches(in: source, block: block, regex: calloutQuotePrefixRegex)
         case .unorderedList:
-            return prefixMatches(in: source, block: block, regex: unorderedListPrefixRegex)
+            return LivePreviewListMarkerResolver.context(for: block, source: source).map { [$0.prefixRange] } ?? []
         case .orderedList:
-            return prefixMatches(in: source, block: block, regex: orderedListPrefixRegex)
+            return LivePreviewListMarkerResolver.context(for: block, source: source).map { [$0.prefixRange] } ?? []
         case .taskList:
-            return prefixMatches(in: source, block: block, regex: taskListPrefixRegex)
+            return LivePreviewListMarkerResolver.context(for: block, source: source).map { [$0.prefixRange] } ?? []
         case .horizontalRule:
             return [block.contentRange.nsRange]
         default:
@@ -753,13 +786,11 @@ enum LivePreviewRenderer {
         source: String,
         markerStyle: LivePreviewMarkerStyle
     ) -> [NSRange] {
-        prefixMatches(in: source, block: block, regex: taskListPrefixRegex).flatMap { prefixRange in
-            guard let checkboxRange = taskCheckboxTokenRegex
-                .firstMatch(in: source, range: prefixRange)?
-                .range
-            else {
-                return markerStyle.showsListMarkersOutsideReveal ? [] : [prefixRange]
-            }
+        guard let context = LivePreviewListMarkerResolver.context(for: block, source: source) else {
+            return []
+        }
+        let prefixRange = context.prefixRange
+        let checkboxRange = context.markerRange
             if markerStyle == .obsidian {
                 return [prefixRange]
             }
@@ -787,7 +818,6 @@ enum LivePreviewRenderer {
                 length: max(0, prefixRange.location + prefixRange.length - afterLocation)
             )
             return [before, after].filter { $0.length > 0 }
-        }
     }
 
     private static func taskListMarkerRange(in prefixRange: NSRange, source: String) -> NSRange? {
@@ -1005,6 +1035,13 @@ enum LivePreviewRenderer {
 
     private static func regex(_ pattern: String) -> NSRegularExpression {
         try! NSRegularExpression(pattern: pattern, options: [.anchorsMatchLines])
+    }
+
+    private static func rangeIsCovered(_ range: NSRange, by ranges: [NSRange]) -> Bool {
+        ranges.contains { candidate in
+            let intersection = NSIntersectionRange(range, candidate)
+            return intersection.location == range.location && intersection.length == range.length
+        }
     }
 
     private static func baseAttributes() -> [NSAttributedString.Key: Any] {

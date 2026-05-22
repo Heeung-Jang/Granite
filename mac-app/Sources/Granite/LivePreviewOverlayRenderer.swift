@@ -3,21 +3,24 @@ import NativeMarkdownCore
 
 @MainActor
 enum LivePreviewOverlayRenderer {
-    private static let unorderedMarkerRegex = regex(#"^\s*[-*+]\s"#)
-    private static let orderedMarkerRegex = regex(#"^\s*\d+[.)]\s"#)
-    private static let taskPrefixRegex = regex(#"^\s*[-*+]\s+\[[ xX]\]\s"#)
-    private static let taskCheckboxRegex = regex(#"\[[ xX]\]"#)
-
     private struct RenderBlock {
         var block: LivePreviewBlockSpan
         var properties: LivePreviewPropertyBlock?
         var table: LivePreviewTable?
+        var listContext: LivePreviewListMarkerContext?
     }
 
     private struct LineFragment {
         var characterRange: NSRange
         var lineRect: NSRect
         var usedRect: NSRect
+    }
+
+    struct ListGuideSegment: Codable, Equatable {
+        var depth: Int
+        var x: Double
+        var startY: Double
+        var endY: Double
     }
 
     private struct PropertyGroup {
@@ -76,7 +79,8 @@ enum LivePreviewOverlayRenderer {
         guard state.drawsLivePreviewChrome else {
             return
         }
-        for renderBlock in visibleBlocks(in: textView) {
+        let renderBlocks = visibleBlocks(in: textView)
+        for renderBlock in renderBlocks {
             switch renderBlock.block.kind {
             case .frontmatter:
                 if let properties = renderBlock.properties {
@@ -89,10 +93,19 @@ enum LivePreviewOverlayRenderer {
             case .horizontalRule:
                 drawHorizontalRule(renderBlock.block, in: textView, dirtyRect: dirtyRect, state: state)
             case .unorderedList, .orderedList, .taskList:
-                drawMarkerOverlay(renderBlock.block, in: textView, dirtyRect: dirtyRect, state: state)
+                drawMarkerOverlay(renderBlock, in: textView, dirtyRect: dirtyRect, state: state)
             default:
                 continue
             }
+        }
+        if state.markerStyle == .obsidian {
+            drawListGuideSegments(
+                renderBlocks
+                    .compactMap(\.listContext)
+                    .sorted { $0.blockRange.location < $1.blockRange.location }
+                    .guideSegments(in: textView),
+                dirtyRect: dirtyRect
+            )
         }
     }
 
@@ -112,6 +125,11 @@ enum LivePreviewOverlayRenderer {
             maxUTF16Length: max(visibleRange.length + 4_096, 8_192)
         )
         let parsed = LivePreviewParser.parse(source, in: parseWindow)
+        let listResolution = LivePreviewListMarkerResolver.resolve(
+            source: source,
+            blocks: parsed.blocks,
+            parseWindow: parseWindow
+        )
         let frontmatter = LivePreviewPropertyParser.parse(source)
 
         return parsed.blocks.compactMap { block in
@@ -122,7 +140,8 @@ enum LivePreviewOverlayRenderer {
             return RenderBlock(
                 block: block,
                 properties: frontmatterProperties(frontmatter, for: block),
-                table: LivePreviewTableParser.parse(block, in: source)
+                table: LivePreviewTableParser.parse(block, in: source),
+                listContext: listResolution.contextsByBlockRange[block.sourceRange]
             )
         }
     }
@@ -363,9 +382,21 @@ enum LivePreviewOverlayRenderer {
         guard !source.isEmpty else {
             return []
         }
-        return LivePreviewParser.parse(source).blocks.compactMap { block in
-            markerGeometry(for: block, source: source, in: textView)
+        let parsed = LivePreviewParser.parse(source)
+        let listResolution = LivePreviewListMarkerResolver.resolve(source: source, blocks: parsed.blocks)
+        return parsed.blocks.compactMap { block in
+            guard let context = listResolution.contextsByBlockRange[block.sourceRange] else {
+                return nil
+            }
+            return markerGeometry(for: block, context: context, in: textView)
         }
+    }
+
+    static func guideSegments(in textView: NSTextView) -> [ListGuideSegment] {
+        visibleBlocks(in: textView)
+            .compactMap(\.listContext)
+            .sorted { $0.blockRange.location < $1.blockRange.location }
+            .guideSegments(in: textView)
     }
 
     static func shouldDrawMarkerOverlay(
@@ -428,13 +459,14 @@ enum LivePreviewOverlayRenderer {
     }
 
     private static func drawMarkerOverlay(
-        _ block: LivePreviewBlockSpan,
+        _ renderBlock: RenderBlock,
         in textView: NSTextView,
         dirtyRect: NSRect,
         state: LivePreviewOverlayState
     ) {
-        guard let geometry = markerGeometry(for: block, source: textView.string, in: textView),
-              shouldDrawMarkerOverlay(for: block, markerKind: geometry.kind, state: state)
+        guard let context = renderBlock.listContext,
+              let geometry = markerGeometry(for: renderBlock.block, context: context, in: textView),
+              shouldDrawMarkerOverlay(for: renderBlock.block, markerKind: geometry.kind, state: state)
         else {
             return
         }
@@ -445,7 +477,7 @@ enum LivePreviewOverlayRenderer {
         case .orderedListMarker:
             drawOrderedMarker(geometry, source: textView.string, dirtyRect: dirtyRect)
         case .taskCheckbox:
-            drawTaskCheckbox(geometry, block: block, dirtyRect: dirtyRect)
+            drawTaskCheckbox(geometry, block: renderBlock.block, dirtyRect: dirtyRect)
         }
     }
 
@@ -541,44 +573,59 @@ enum LivePreviewOverlayRenderer {
 
     private static func markerGeometry(
         for block: LivePreviewBlockSpan,
-        source: String,
+        context: LivePreviewListMarkerContext,
         in textView: NSTextView
     ) -> LivePreviewMarkerGeometry? {
-        guard let marker = markerRange(for: block, source: source),
-              let rect = boundingRect(for: marker.range, in: textView),
-              let lineRect = unionLineRect(for: block.sourceRange.nsRange, in: textView)
+        guard let lineRect = lineFragments(for: block.sourceRange.nsRange, in: textView).first?.lineRect
         else {
             return nil
         }
         return LivePreviewMarkerGeometry(
-            kind: marker.kind,
-            sourceRange: marker.range,
-            rect: rect,
+            kind: markerKind(for: context),
+            sourceRange: context.markerRange,
+            rect: LivePreviewTheme.listMarkerSlotRect(depth: context.depth, lineRect: lineRect),
             lineRect: lineRect
         )
     }
 
-    private static func markerRange(
-        for block: LivePreviewBlockSpan,
-        source: String
-    ) -> (kind: LivePreviewMarkerGeometry.Kind, range: NSRange)? {
-        switch block.kind {
-        case .unorderedList:
-            return firstMatch(in: source, range: block.sourceRange.nsRange, regex: unorderedMarkerRegex)
-                .map { (.unorderedListMarker, $0) }
-        case .orderedList:
-            return firstMatch(in: source, range: block.sourceRange.nsRange, regex: orderedMarkerRegex)
-                .map { (.orderedListMarker, $0) }
-        case .taskList:
-            guard let prefix = firstMatch(in: source, range: block.sourceRange.nsRange, regex: taskPrefixRegex),
-                  let checkbox = firstMatch(in: source, range: prefix, regex: taskCheckboxRegex)
-            else {
-                return nil
-            }
-            return (.taskCheckbox, checkbox)
-        default:
-            return nil
+    private static func markerKind(for context: LivePreviewListMarkerContext) -> LivePreviewMarkerGeometry.Kind {
+        switch context.kind {
+        case .unordered:
+            return .unorderedListMarker
+        case .ordered:
+            return .orderedListMarker
+        case .task:
+            return .taskCheckbox
         }
+    }
+
+    private static func drawListGuideSegments(_ segments: [ListGuideSegment], dirtyRect: NSRect) {
+        let visibleSegments = segments.filter {
+            NSRect(
+                x: $0.x - 1,
+                y: min($0.startY, $0.endY),
+                width: 2,
+                height: abs($0.endY - $0.startY)
+            ).intersects(dirtyRect)
+        }
+        guard !visibleSegments.isEmpty else {
+            return
+        }
+
+        let path = NSBezierPath()
+        path.lineWidth = 1
+        for segment in visibleSegments {
+            let x = floor(segment.x) + 0.5
+            let startY = max(min(segment.startY, segment.endY), Double(dirtyRect.minY))
+            let endY = min(max(segment.startY, segment.endY), Double(dirtyRect.maxY))
+            guard endY > startY else {
+                continue
+            }
+            path.move(to: NSPoint(x: x, y: startY))
+            path.line(to: NSPoint(x: x, y: endY))
+        }
+        LivePreviewTheme.listGuideLineColor.setStroke()
+        path.stroke()
     }
 
     private static func drawTableGrid(_ layout: LivePreviewTableLayout) {
@@ -800,6 +847,10 @@ enum LivePreviewOverlayRenderer {
         return fragments.dropFirst().reduce(first.lineRect) { $0.union($1.lineRect) }
     }
 
+    static func lineRectForGuide(range: NSRange, in textView: NSTextView) -> NSRect? {
+        unionLineRect(for: range, in: textView)
+    }
+
     private static func lineFragments(for range: NSRange, in textView: NSTextView) -> [LineFragment] {
         guard let layoutManager = textView.layoutManager,
               let textContainer = textView.textContainer
@@ -857,18 +908,6 @@ enum LivePreviewOverlayRenderer {
         return offset(layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer), by: textView.textContainerOrigin)
     }
 
-    private static func firstMatch(
-        in source: String,
-        range: NSRange,
-        regex: NSRegularExpression
-    ) -> NSRange? {
-        regex.firstMatch(in: source, range: range)?.range
-    }
-
-    private static func regex(_ pattern: String) -> NSRegularExpression {
-        try! NSRegularExpression(pattern: pattern, options: [.anchorsMatchLines])
-    }
-
     private static func offset(_ rect: NSRect, by point: NSPoint) -> NSRect {
         NSRect(x: rect.minX + point.x, y: rect.minY + point.y, width: rect.width, height: rect.height)
     }
@@ -902,6 +941,56 @@ struct LivePreviewMarkerGeometry: Equatable {
     var sourceRange: NSRange
     var rect: NSRect
     var lineRect: NSRect
+}
+
+private extension Array where Element == LivePreviewListMarkerContext {
+    @MainActor
+    func guideSegments(in textView: NSTextView) -> [LivePreviewOverlayRenderer.ListGuideSegment] {
+        guard count > 1 else {
+            return []
+        }
+
+        var segments: [LivePreviewOverlayRenderer.ListGuideSegment] = []
+        for index in indices {
+            let parent = self[index]
+            let childStartIndex = index + 1
+            guard childStartIndex < endIndex,
+                  self[childStartIndex].clusterID == parent.clusterID,
+                  self[childStartIndex].depth > parent.depth
+            else {
+                continue
+            }
+
+            var childEndIndex = childStartIndex
+            var cursor = childStartIndex + 1
+            while cursor < endIndex,
+                  self[cursor].clusterID == parent.clusterID,
+                  self[cursor].depth > parent.depth {
+                childEndIndex = cursor
+                cursor += 1
+            }
+
+            guard let firstChildLine = LivePreviewOverlayRenderer.lineRectForGuide(
+                range: self[childStartIndex].blockRange,
+                in: textView
+            ),
+                  let lastChildLine = LivePreviewOverlayRenderer.lineRectForGuide(
+                    range: self[childEndIndex].blockRange,
+                    in: textView
+                  )
+            else {
+                continue
+            }
+            let x = LivePreviewTheme.listGuideX(depth: parent.depth + 1, lineRect: firstChildLine)
+            segments.append(LivePreviewOverlayRenderer.ListGuideSegment(
+                depth: parent.depth + 1,
+                x: Double(x),
+                startY: Double(firstChildLine.minY),
+                endY: Double(lastChildLine.maxY)
+            ))
+        }
+        return segments
+    }
 }
 
 private extension NSRange {

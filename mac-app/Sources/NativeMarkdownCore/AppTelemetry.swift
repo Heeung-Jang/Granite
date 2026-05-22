@@ -79,6 +79,9 @@ public enum AppTelemetry {
     public static let privacySchema = AppTelemetryPrivacySchema(
         allowedPublicFields: [
             "appliedRuns",
+            "appKitControlCountAfter",
+            "appKitControlCountBefore",
+            "appKitControlDelta",
             "blockCount",
             "byteCount",
             "changedRangeCount",
