@@ -34,6 +34,7 @@ enum LivePreviewTheme {
     static let tableCellBackgroundColor = NSColor.textBackgroundColor
     static let tableBorderColor = NSColor.separatorColor
     static let horizontalRuleColor = NSColor.separatorColor.withAlphaComponent(0.8)
+    static let listGuideLineColor = NSColor.separatorColor.withAlphaComponent(0.72)
     static let codeColor = NSColor.systemBrown
     static let inlineCodeBackgroundColor = NSColor.controlBackgroundColor
     static let codeBlockBackgroundColor = NSColor.controlBackgroundColor
@@ -101,12 +102,35 @@ enum LivePreviewTheme {
     }
 
     static var listParagraphStyle: NSParagraphStyle {
+        listParagraphStyle(depth: 0)
+    }
+
+    static let listDepthIndentStep: CGFloat = 24
+    static let listMarkerSlotWidth: CGFloat = 18
+
+    static func listParagraphStyle(depth: Int) -> NSParagraphStyle {
         let style = NSMutableParagraphStyle()
         style.lineHeightMultiple = 1.12
-        style.firstLineHeadIndent = 0
-        style.headIndent = 18
+        let indent = listMarkerSlotWidth + CGFloat(max(0, depth)) * listDepthIndentStep
+        style.firstLineHeadIndent = indent
+        style.headIndent = indent
+        style.defaultTabInterval = 1
+        style.tabStops = []
         style.paragraphSpacing = 2
         return style.copy() as! NSParagraphStyle
+    }
+
+    static func listMarkerSlotRect(depth: Int, lineRect: NSRect) -> NSRect {
+        NSRect(
+            x: lineRect.minX + CGFloat(max(0, depth)) * listDepthIndentStep,
+            y: lineRect.minY,
+            width: listMarkerSlotWidth,
+            height: lineRect.height
+        )
+    }
+
+    static func listGuideX(depth: Int, lineRect: NSRect) -> CGFloat {
+        lineRect.minX + CGFloat(max(0, depth)) * listDepthIndentStep - 10
     }
 
     static var quoteParagraphStyle: NSParagraphStyle {

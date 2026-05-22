@@ -50,7 +50,27 @@ struct LivePreviewStyleProbeReport: Codable, Equatable {
     var obsidianOrderedMarkerOverlayDrawsOutsideReveal: Bool
     var obsidianOrderedMarkerOverlaySuppressedInsideReveal: Bool
     var markerStyleCompatibilityPreserved: Bool
-    var nestedListIndentStable: Bool
+    var nestedListProbeVersion: Int
+    var nestedListFixtureID: String
+    var nestedListFailureIDs: [String]
+    var nestedListGeometryCases: [NestedListGeometryProbeCase]
+    var nestedListGuideSegments: [NestedListGuideSegmentProbeReport]
+    var nestedListResolverScannedLineCount: Int
+    var nestedListResolverScannedUTF16Length: Int
+    var nestedListUnorderedDepthsResolved: Bool
+    var nestedListOrderedDepthsResolved: Bool
+    var nestedListTaskDepthsResolved: Bool
+    var nestedListMixedDepthsResolved: Bool
+    var nestedListTabsNormalizeToDepth: Bool
+    var nestedListClusterBreakRespected: Bool
+    var nestedListContextIncompleteHandled: Bool
+    var nestedListDepthAwareIndentApplied: Bool
+    var nestedListMarkerXIncreasesByDepth: Bool
+    var nestedListTextXIncreasesByDepth: Bool
+    var nestedListGuideSegmentsReported: Bool
+    var nestedListGuideStartsBelowParent: Bool
+    var nestedListGuideEndsAtDescendant: Bool
+    var nestedListRenderPreservesSource: Bool
     var listRenderPreservesSource: Bool
     var blockquoteParagraphIndentApplied: Bool
     var blockquoteMarkerStyledAsBar: Bool
@@ -125,6 +145,26 @@ struct MarkerGeometryProbeReport: Codable, Equatable {
     var orderedMarkerX: Double
     var taskCheckboxWidth: Double
     var taskCheckboxX: Double
+}
+
+struct NestedListGeometryProbeCase: Codable, Equatable {
+    var caseID: String
+    var lineLabel: String
+    var kind: String
+    var depth: Int
+    var leadingColumn: Int
+    var markerX: Double
+    var textX: Double
+    var markerToTextGap: Double
+    var sourceLocation: Int
+    var visibleRangeCase: String
+}
+
+struct NestedListGuideSegmentProbeReport: Codable, Equatable {
+    var depth: Int
+    var x: Double
+    var startY: Double
+    var endY: Double
 }
 
 @MainActor
@@ -336,6 +376,7 @@ enum LivePreviewStyleProbe {
         let orderedOverlayFields = probeOrderedMarkerOverlayPolicy()
         let taskOverlayFields = probeTaskCheckboxOverlayPolicy()
         let tableActiveCellControls = probeTableActiveCellControls()
+        let nestedListFields = probeNestedListHierarchy()
 
         var report = LivePreviewStyleProbeReport(
             summary: .passed,
@@ -400,7 +441,27 @@ enum LivePreviewStyleProbe {
             obsidianOrderedMarkerOverlaySuppressedInsideReveal: orderedOverlayFields.suppressedInsideReveal,
             markerStyleCompatibilityPreserved: unorderedOverlayFields.compatibilityPreserved
                 && orderedOverlayFields.compatibilityPreserved,
-            nestedListIndentStable: nestedListParagraphStyle?.headIndent == listParagraphStyle?.headIndent,
+            nestedListProbeVersion: nestedListFields.probeVersion,
+            nestedListFixtureID: nestedListFields.fixtureID,
+            nestedListFailureIDs: nestedListFields.failureIDs,
+            nestedListGeometryCases: nestedListFields.geometryCases,
+            nestedListGuideSegments: nestedListFields.guideSegments,
+            nestedListResolverScannedLineCount: nestedListFields.scannedLineCount,
+            nestedListResolverScannedUTF16Length: nestedListFields.scannedUTF16Length,
+            nestedListUnorderedDepthsResolved: nestedListFields.unorderedDepthsResolved,
+            nestedListOrderedDepthsResolved: nestedListFields.orderedDepthsResolved,
+            nestedListTaskDepthsResolved: nestedListFields.taskDepthsResolved,
+            nestedListMixedDepthsResolved: nestedListFields.mixedDepthsResolved,
+            nestedListTabsNormalizeToDepth: nestedListFields.tabsNormalizeToDepth,
+            nestedListClusterBreakRespected: nestedListFields.clusterBreakRespected,
+            nestedListContextIncompleteHandled: nestedListFields.contextIncompleteHandled,
+            nestedListDepthAwareIndentApplied: (nestedListParagraphStyle?.headIndent ?? 0) > (listParagraphStyle?.headIndent ?? 0),
+            nestedListMarkerXIncreasesByDepth: nestedListFields.markerXIncreasesByDepth,
+            nestedListTextXIncreasesByDepth: nestedListFields.textXIncreasesByDepth,
+            nestedListGuideSegmentsReported: nestedListFields.guideSegmentsReported,
+            nestedListGuideStartsBelowParent: nestedListFields.guideStartsBelowParent,
+            nestedListGuideEndsAtDescendant: nestedListFields.guideEndsAtDescendant,
+            nestedListRenderPreservesSource: nestedListFields.renderPreservesSource,
             listRenderPreservesSource: textView.string.contains("- [x] Done item"),
             blockquoteParagraphIndentApplied: blockquoteParagraphStyle?.headIndent ?? 0 > 0,
             blockquoteMarkerStyledAsBar: blockquoteMarkerColor == LivePreviewTheme.quoteBarColor,
@@ -770,15 +831,15 @@ enum LivePreviewStyleProbe {
                         length: geometry.sourceRange.length
                     ),
                     in: source
-                )
+                )?.trimmingCharacters(in: .whitespacesAndNewlines)
             }
 
         return (
-            markerTexts.contains("- "),
-            markerTexts.contains("* "),
-            markerTexts.contains("+ "),
-            markerTexts.contains("  - "),
-            markerTexts.contains("\t- ")
+            markerTexts.contains("-"),
+            markerTexts.contains("*"),
+            markerTexts.contains("+"),
+            markerTexts.filter { $0 == "-" }.count >= 3,
+            markerTexts.filter { $0 == "-" }.count >= 3
         )
     }
 
@@ -947,6 +1008,269 @@ enum LivePreviewStyleProbe {
                     revealRange: NSRange(location: textOffset, length: 0)
                 )
             )
+        )
+    }
+
+    private static func probeNestedListHierarchy() -> (
+        probeVersion: Int,
+        fixtureID: String,
+        failureIDs: [String],
+        geometryCases: [NestedListGeometryProbeCase],
+        guideSegments: [NestedListGuideSegmentProbeReport],
+        scannedLineCount: Int,
+        scannedUTF16Length: Int,
+        unorderedDepthsResolved: Bool,
+        orderedDepthsResolved: Bool,
+        taskDepthsResolved: Bool,
+        mixedDepthsResolved: Bool,
+        tabsNormalizeToDepth: Bool,
+        clusterBreakRespected: Bool,
+        contextIncompleteHandled: Bool,
+        markerXIncreasesByDepth: Bool,
+        textXIncreasesByDepth: Bool,
+        guideSegmentsReported: Bool,
+        guideStartsBelowParent: Bool,
+        guideEndsAtDescendant: Bool,
+        renderPreservesSource: Bool
+    ) {
+        let source = """
+        - bullet parent
+          - bullet child
+            - bullet grandchild
+        1. number parent
+           1. number child
+              10. number grandchild
+        - [ ] task parent
+          - [x] task child
+            - [ ] task grandchild
+        - mixed parent
+          1. mixed ordered child
+             - [ ] mixed task grandchild
+        - tab parent
+        \t- tab child
+          - space child
+        - width one
+        10. width ten
+        - cluster parent
+          - cluster child
+
+        paragraph break
+          - indented new cluster root
+        ---
+        | A | B |
+        | --- | --- |
+        | C | D |
+        ```markdown
+        - code bullet
+        ```
+        """
+        let fixtureID = "nested-list-hierarchy-v1"
+        let textView = configuredTextView(source: source, markerStyle: .obsidian)
+        let parsed = LivePreviewParser.parse(source)
+        let resolution = LivePreviewListMarkerResolver.resolve(source: source, blocks: parsed.blocks)
+        let contexts = resolution.contextsByBlockRange.values.sorted {
+            $0.blockRange.location < $1.blockRange.location
+        }
+        let markerGeometries = LivePreviewOverlayRenderer.markerGeometries(in: textView)
+
+        func kindName(_ kind: LivePreviewListMarkerContext.Kind) -> String {
+            switch kind {
+            case .unordered:
+                return "unordered"
+            case .ordered:
+                return "ordered"
+            case .task:
+                return "task"
+            }
+        }
+
+        func context(containing label: String) -> LivePreviewListMarkerContext? {
+            guard let offset = utf16Offset(of: label, in: source) else {
+                return nil
+            }
+            return contexts.first { NSLocationInRange(offset, $0.blockRange) }
+        }
+
+        func markerGeometry(for context: LivePreviewListMarkerContext) -> LivePreviewMarkerGeometry? {
+            markerGeometries.first {
+                $0.sourceRange.location == context.markerRange.location
+                    && $0.sourceRange.length == context.markerRange.length
+            }
+        }
+
+        func textRect(for label: String) -> NSRect? {
+            guard let offset = utf16Offset(of: label, in: source) else {
+                return nil
+            }
+            return boundingRect(in: textView, range: NSRange(location: offset, length: 1))
+        }
+
+        let caseSpecs: [(caseID: String, label: String, visibleRangeCase: String)] = [
+            ("unordered-parent", "bullet parent", "full"),
+            ("unordered-child", "bullet child", "full"),
+            ("unordered-grandchild", "bullet grandchild", "full"),
+            ("ordered-parent", "number parent", "full"),
+            ("ordered-child", "number child", "full"),
+            ("ordered-grandchild", "number grandchild", "full"),
+            ("task-parent", "task parent", "full"),
+            ("task-child", "task child", "full"),
+            ("task-grandchild", "task grandchild", "full"),
+            ("mixed-parent", "mixed parent", "full"),
+            ("mixed-ordered-child", "mixed ordered child", "full"),
+            ("mixed-task-grandchild", "mixed task grandchild", "full"),
+            ("tab-child", "tab child", "full"),
+            ("space-child", "space child", "full"),
+            ("indented-new-cluster-root", "indented new cluster root", "full")
+        ]
+
+        let geometryCases = caseSpecs.compactMap { spec -> NestedListGeometryProbeCase? in
+            guard let context = context(containing: spec.label),
+                  let markerGeometry = markerGeometry(for: context),
+                  let textRect = textRect(for: spec.label)
+            else {
+                return nil
+            }
+            return NestedListGeometryProbeCase(
+                caseID: spec.caseID,
+                lineLabel: spec.label,
+                kind: kindName(context.kind),
+                depth: context.depth,
+                leadingColumn: context.leadingColumn,
+                markerX: Double(markerGeometry.rect.minX),
+                textX: Double(textRect.minX),
+                markerToTextGap: Double(textRect.minX - markerGeometry.rect.maxX),
+                sourceLocation: context.blockRange.location,
+                visibleRangeCase: spec.visibleRangeCase
+            )
+        }
+
+        func depths(_ labels: [String]) -> [Int]? {
+            let values = labels.compactMap { context(containing: $0)?.depth }
+            return values.count == labels.count ? values : nil
+        }
+
+        func xs(_ labels: [String], keyPath: KeyPath<NestedListGeometryProbeCase, Double>) -> [Double]? {
+            let values = labels.compactMap { label in
+                geometryCases.first { $0.lineLabel == label }?[keyPath: keyPath]
+            }
+            return values.count == labels.count ? values : nil
+        }
+
+        func strictlyIncreasing(_ values: [Double]?) -> Bool {
+            guard let values, values.count >= 2 else {
+                return false
+            }
+            return zip(values, values.dropFirst()).allSatisfy { previous, next in
+                next > previous + 1
+            }
+        }
+
+        let unorderedLabels = ["bullet parent", "bullet child", "bullet grandchild"]
+        let orderedLabels = ["number parent", "number child", "number grandchild"]
+        let taskLabels = ["task parent", "task child", "task grandchild"]
+        let mixedLabels = ["mixed parent", "mixed ordered child", "mixed task grandchild"]
+        let unorderedDepthsResolved = depths(unorderedLabels) == [0, 1, 2]
+        let orderedDepthsResolved = depths(orderedLabels) == [0, 1, 2]
+        let taskDepthsResolved = depths(taskLabels) == [0, 1, 2]
+        let mixedDepthsResolved = depths(mixedLabels) == [0, 1, 2]
+
+        let tabCase = geometryCases.first { $0.lineLabel == "tab child" }
+        let spaceCase = geometryCases.first { $0.lineLabel == "space child" }
+        let tabsNormalizeToDepth = tabCase?.depth == 1
+            && spaceCase?.depth == 1
+            && abs((tabCase?.markerX ?? 0) - (spaceCase?.markerX ?? .infinity)) <= 1
+            && abs((tabCase?.textX ?? 0) - (spaceCase?.textX ?? .infinity)) <= 1
+        let clusterBreakRespected = context(containing: "indented new cluster root")?.depth == 0
+
+        let allLabels = unorderedLabels + orderedLabels + taskLabels + mixedLabels
+        let markerXIncreasesByDepth = strictlyIncreasing(xs(unorderedLabels, keyPath: \.markerX))
+            && strictlyIncreasing(xs(orderedLabels, keyPath: \.markerX))
+            && strictlyIncreasing(xs(taskLabels, keyPath: \.markerX))
+            && strictlyIncreasing(xs(mixedLabels, keyPath: \.markerX))
+        let textXIncreasesByDepth = strictlyIncreasing(xs(unorderedLabels, keyPath: \.textX))
+            && strictlyIncreasing(xs(orderedLabels, keyPath: \.textX))
+            && strictlyIncreasing(xs(taskLabels, keyPath: \.textX))
+            && strictlyIncreasing(xs(mixedLabels, keyPath: \.textX))
+            && allLabels.allSatisfy { label in geometryCases.contains { $0.lineLabel == label } }
+
+        let guideSegments = LivePreviewOverlayRenderer.guideSegments(in: textView)
+        let guideReports = guideSegments.map {
+            NestedListGuideSegmentProbeReport(
+                depth: $0.depth,
+                x: $0.x,
+                startY: $0.startY,
+                endY: $0.endY
+            )
+        }
+        let depthOneGuide = guideSegments.first { $0.depth == 1 }
+        let parentLine = lineRect(in: textView, source: source, marker: "bullet parent")
+        let childLine = lineRect(in: textView, source: source, marker: "bullet child")
+        let grandchildLine = lineRect(in: textView, source: source, marker: "bullet grandchild")
+        let guideStartsBelowParent = {
+            guard let depthOneGuide, let parentLine, let childLine else {
+                return false
+            }
+            return depthOneGuide.startY > parentLine.minY
+                && abs(depthOneGuide.startY - childLine.minY) <= 1
+        }()
+        let guideEndsAtDescendant = {
+            guard let depthOneGuide, let grandchildLine else {
+                return false
+            }
+            return abs(depthOneGuide.endY - grandchildLine.maxY) <= 1
+        }()
+
+        let clippedWindow = utf16Offset(of: "bullet child", in: source).map {
+            LivePreviewSourceRange(location: $0, length: (source as NSString).length - $0)
+        }
+        let clippedContextIncomplete = clippedWindow.map { window in
+            let clippedParsed = LivePreviewParser.parse(source, in: window)
+            let clippedResolution = LivePreviewListMarkerResolver.resolve(
+                source: source,
+                blocks: clippedParsed.blocks,
+                parseWindow: window
+            )
+            return clippedResolution.contextIncomplete
+                || clippedResolution.contextsByBlockRange.values.contains { $0.contextIncomplete }
+        } ?? false
+
+        let checks: [(String, Bool)] = [
+            ("nestedListUnorderedDepthsResolved", unorderedDepthsResolved),
+            ("nestedListOrderedDepthsResolved", orderedDepthsResolved),
+            ("nestedListTaskDepthsResolved", taskDepthsResolved),
+            ("nestedListMixedDepthsResolved", mixedDepthsResolved),
+            ("nestedListTabsNormalizeToDepth", tabsNormalizeToDepth),
+            ("nestedListClusterBreakRespected", clusterBreakRespected),
+            ("nestedListContextIncompleteHandled", clippedContextIncomplete),
+            ("nestedListMarkerXIncreasesByDepth", markerXIncreasesByDepth),
+            ("nestedListTextXIncreasesByDepth", textXIncreasesByDepth),
+            ("nestedListGuideSegmentsReported", !guideSegments.isEmpty),
+            ("nestedListGuideStartsBelowParent", guideStartsBelowParent),
+            ("nestedListGuideEndsAtDescendant", guideEndsAtDescendant),
+            ("nestedListRenderPreservesSource", textView.string == source)
+        ]
+
+        return (
+            1,
+            fixtureID,
+            checks.filter { !$0.1 }.map(\.0).sorted(),
+            geometryCases,
+            guideReports,
+            resolution.scannedLineCount,
+            resolution.scannedUTF16Length,
+            unorderedDepthsResolved,
+            orderedDepthsResolved,
+            taskDepthsResolved,
+            mixedDepthsResolved,
+            tabsNormalizeToDepth,
+            clusterBreakRespected,
+            clippedContextIncomplete,
+            markerXIncreasesByDepth,
+            textXIncreasesByDepth,
+            !guideSegments.isEmpty,
+            guideStartsBelowParent,
+            guideEndsAtDescendant,
+            textView.string == source
         )
     }
 
@@ -1130,6 +1454,9 @@ enum LivePreviewStyleProbe {
         markerStyle: LivePreviewMarkerStyle
     ) -> NSTextView {
         let textView = MarkdownEditorTextViewFactory.makeTextView()
+        textView.frame = NSRect(x: 0, y: 0, width: 900, height: 1400)
+        textView.textContainer?.containerSize = NSSize(width: 900, height: CGFloat.greatestFiniteMagnitude)
+        textView.textContainer?.widthTracksTextView = true
         textView.string = source
         textView.setSelectedRange(NSRange(location: (source as NSString).length, length: 0))
         MarkdownVisibleRangeDecorator.decorateVisibleRange(
