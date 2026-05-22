@@ -34,6 +34,12 @@ struct MarkdownEditorBridgeProbeReport: Codable, Equatable {
     var nestedActiveTaskTokenRevealedInsideLine: Bool
     var nestedSiblingMarkersRemainRendered: Bool
     var nestedListRenderPreservesSource: Bool
+    var nestedSourceModeKeepsRawMarkdown: Bool
+    var nestedFallbackModeKeepsRawMarkdown: Bool
+    var nestedSourceAndFallbackDisableChrome: Bool
+    var nestedMultiLineSelectionRevealLocalized: Bool
+    var nestedMarkedTextPreservesState: Bool
+    var nestedSelectionAndUndoPreserved: Bool
     var caretRevealRestoresHiddenSyntaxColor: Bool
     var headingSelectionRevealsMarkdownSource: Bool
     var inlineConcealmentAppliesBeyondParagraph: Bool
@@ -70,6 +76,7 @@ struct MarkdownEditorBridgeProbeReport: Codable, Equatable {
     var checkboxToggleUndoRestoresToken: Bool
     var checkboxToggleReadOnlyPreservesBuffer: Bool
     var renderedTaskCheckboxHitTestResolvesToken: Bool
+    var renderedTaskCheckboxHitTestSurvivesScrollResize: Bool
     var renderedTaskCheckboxHitTestDisabledGuards: Bool
     var renderedTaskCheckboxToggleChangesOnlyToken: Bool
     var renderedTaskCheckboxToggleUndoRestoresToken: Bool
@@ -124,6 +131,10 @@ enum MarkdownEditorBridgeProbe {
         let renderProbe = probeLivePreviewRendering()
         let sourcePreservationProbe = probeSourcePreservationGuards()
         let nestedActiveRevealProbe = probeNestedListActiveReveal()
+        let nestedModeBypassProbe = probeNestedListModeBypass()
+        let nestedMultiLineSelectionProbe = probeNestedListMultiLineSelection()
+        let nestedMarkedTextProbe = probeNestedListMarkedTextSafety()
+        let nestedSelectionUndoProbe = probeNestedListSelectionAndUndoPreservation()
         let overlayStateProbe = probeOverlayStateLifecycle()
         let markerStyleProbe = probeMarkerStyleStorageCompatibility()
         let selectionChangeProbe = probeSelectionChangeDecorationDoesNotReenter()
@@ -163,6 +174,12 @@ enum MarkdownEditorBridgeProbe {
             nestedActiveTaskTokenRevealedInsideLine: nestedActiveRevealProbe.taskRevealed,
             nestedSiblingMarkersRemainRendered: nestedActiveRevealProbe.siblingMarkersRemainRendered,
             nestedListRenderPreservesSource: nestedActiveRevealProbe.sourcePreserved,
+            nestedSourceModeKeepsRawMarkdown: nestedModeBypassProbe.sourceModeRaw,
+            nestedFallbackModeKeepsRawMarkdown: nestedModeBypassProbe.fallbackModeRaw,
+            nestedSourceAndFallbackDisableChrome: nestedModeBypassProbe.chromeDisabled,
+            nestedMultiLineSelectionRevealLocalized: nestedMultiLineSelectionProbe,
+            nestedMarkedTextPreservesState: nestedMarkedTextProbe,
+            nestedSelectionAndUndoPreserved: nestedSelectionUndoProbe,
             caretRevealRestoresHiddenSyntaxColor: renderProbe.caretRevealRestoresHiddenSyntaxColor,
             headingSelectionRevealsMarkdownSource: renderProbe.headingSelectionRevealsMarkdownSource,
             inlineConcealmentAppliesBeyondParagraph: renderProbe.inlineConcealmentAppliesBeyondParagraph,
@@ -199,6 +216,7 @@ enum MarkdownEditorBridgeProbe {
             checkboxToggleUndoRestoresToken: checkboxProbe.undoRestoresToken,
             checkboxToggleReadOnlyPreservesBuffer: checkboxProbe.readOnlyPreservesBuffer,
             renderedTaskCheckboxHitTestResolvesToken: checkboxProbe.renderedHitTestResolvesToken,
+            renderedTaskCheckboxHitTestSurvivesScrollResize: checkboxProbe.renderedHitTestSurvivesScrollResize,
             renderedTaskCheckboxHitTestDisabledGuards: checkboxProbe.renderedHitTestDisabledGuards,
             renderedTaskCheckboxToggleChangesOnlyToken: checkboxProbe.renderedToggleChangesOnlyToken,
             renderedTaskCheckboxToggleUndoRestoresToken: checkboxProbe.renderedToggleUndoRestoresToken,
@@ -428,6 +446,188 @@ enum MarkdownEditorBridgeProbe {
             unorderedParentConcealed && unorderedGrandchildConcealed && parentOverlayStillDraws,
             sourcePreserved
         )
+    }
+
+    private static func probeNestedListModeBypass() -> (
+        sourceModeRaw: Bool,
+        fallbackModeRaw: Bool,
+        chromeDisabled: Bool
+    ) {
+        let source = "- parent\n  - [ ] child\n"
+        let selection = NSRange(location: (source as NSString).length, length: 0)
+
+        let sourceTextView = MarkdownEditorTextViewFactory.makeTextView() as! MarkdownInteractionTextView
+        sourceTextView.string = source
+        sourceTextView.setSelectedRange(selection)
+        sourceTextView.livePreviewMode = .source
+        sourceTextView.livePreviewMarkerStyle = .obsidian
+        MarkdownVisibleRangeDecorator.decorateVisibleRange(
+            in: sourceTextView,
+            livePreviewMode: .source,
+            revealRange: sourceTextView.selectedRange(),
+            markerStyle: .obsidian
+        )
+        sourceTextView.refreshLivePreviewOverlayState()
+        let sourceMarkerColor = foregroundColor(in: sourceTextView, text: source, marker: "  - [ ] child")
+        let sourceModeRaw = sourceTextView.string == source
+            && sourceMarkerColor != LivePreviewTheme.concealedColor
+            && font(in: sourceTextView, text: source, marker: "child") == LivePreviewTheme.sourceFont
+
+        let fallbackTextView = MarkdownEditorTextViewFactory.makeTextView() as! MarkdownInteractionTextView
+        fallbackTextView.string = source
+        fallbackTextView.setSelectedRange(selection)
+        fallbackTextView.livePreviewMode = .fallbackSource(reason: .fileTooLarge)
+        fallbackTextView.livePreviewMarkerStyle = .obsidian
+        MarkdownVisibleRangeDecorator.decorateVisibleRange(
+            in: fallbackTextView,
+            livePreviewMode: .fallbackSource(reason: .fileTooLarge),
+            revealRange: fallbackTextView.selectedRange(),
+            markerStyle: .obsidian
+        )
+        fallbackTextView.refreshLivePreviewOverlayState()
+        let fallbackMarkerColor = foregroundColor(in: fallbackTextView, text: source, marker: "  - [ ] child")
+        let fallbackModeRaw = fallbackTextView.string == source
+            && fallbackMarkerColor != LivePreviewTheme.concealedColor
+            && font(in: fallbackTextView, text: source, marker: "child") == LivePreviewTheme.sourceFont
+
+        let livePreviewTextView = MarkdownEditorTextViewFactory.makeTextView() as! MarkdownInteractionTextView
+        livePreviewTextView.string = source
+        livePreviewTextView.livePreviewMode = .livePreview
+        livePreviewTextView.livePreviewMarkerStyle = .obsidian
+        MarkdownVisibleRangeDecorator.decorateVisibleRange(
+            in: livePreviewTextView,
+            livePreviewMode: .livePreview,
+            revealRange: selection,
+            markerStyle: .obsidian
+        )
+        livePreviewTextView.refreshLivePreviewOverlayState()
+        let taskPoint = LivePreviewOverlayRenderer.markerGeometries(in: livePreviewTextView)
+            .first(where: { $0.kind == .taskCheckbox })
+            .map { NSPoint(x: $0.rect.midX, y: $0.rect.midY) } ?? .zero
+
+        let chromeDisabled = !sourceTextView.livePreviewOverlayState.drawsLivePreviewChrome
+            && !fallbackTextView.livePreviewOverlayState.drawsLivePreviewChrome
+            && sourceTextView.taskCheckboxToggleOffset(at: taskPoint) == nil
+            && fallbackTextView.taskCheckboxToggleOffset(at: taskPoint) == nil
+
+        return (sourceModeRaw, fallbackModeRaw, chromeDisabled)
+    }
+
+    private static func probeNestedListMultiLineSelection() -> Bool {
+        let source = """
+        - parent
+          - child
+            - grandchild
+        - sibling
+        """
+        guard let childLineStart = utf16Offset(of: "  - child", in: source),
+              let grandchildText = utf16Offset(of: "grandchild", in: source)
+        else {
+            return false
+        }
+        let selection = NSRange(location: childLineStart, length: grandchildText - childLineStart + "grandchild".utf16.count)
+        let textView = MarkdownEditorTextViewFactory.makeTextView()
+        textView.string = source
+        textView.setSelectedRange(selection)
+        MarkdownVisibleRangeDecorator.decorateVisibleRange(
+            in: textView,
+            livePreviewMode: .livePreview,
+            revealRange: textView.selectedRange(),
+            markerStyle: .obsidian
+        )
+
+        return foregroundColor(in: textView, text: source, marker: "  - child") != LivePreviewTheme.concealedColor
+            && foregroundColor(in: textView, text: source, marker: "    - grandchild") != LivePreviewTheme.concealedColor
+            && foregroundColor(in: textView, text: source, marker: "- parent") == LivePreviewTheme.concealedColor
+            && foregroundColor(in: textView, text: source, marker: "- sibling") == LivePreviewTheme.concealedColor
+            && textView.string == source
+    }
+
+    private static func probeNestedListMarkedTextSafety() -> Bool {
+        let source = "- parent\n  - child\n"
+        let textView = MarkdownEditorTextViewFactory.makeTextView()
+        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 500, height: 300))
+        scrollView.documentView = textView
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 500, height: 300),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: true
+        )
+        window.contentView = scrollView
+        window.makeFirstResponder(textView)
+        textView.string = source
+        guard let offset = utf16Offset(of: "child", in: source) else {
+            return false
+        }
+        textView.setSelectedRange(NSRange(location: offset, length: 0))
+        textView.setMarkedText(
+            "한글",
+            selectedRange: NSRange(location: 2, length: 0),
+            replacementRange: NSRange(location: NSNotFound, length: 0)
+        )
+        let composedSource = textView.string
+        let markedSelection = textView.selectedRange()
+        let result = MarkdownVisibleRangeDecorator.decorateVisibleRange(
+            in: textView,
+            livePreviewMode: .livePreview,
+            revealRange: markedSelection,
+            markerStyle: .obsidian
+        )
+        let preserved = textView.string == composedSource
+            && textView.hasMarkedText()
+            && NSEqualRanges(textView.selectedRange(), markedSelection)
+            && result.mode == "marked-text-deferred"
+        textView.unmarkText()
+        window.close()
+        return preserved
+    }
+
+    private static func probeNestedListSelectionAndUndoPreservation() -> Bool {
+        let source = "- parent\n  - child\n"
+        let textView = MarkdownEditorTextViewFactory.makeTextView()
+        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 500, height: 300))
+        scrollView.documentView = textView
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 500, height: 300),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: true
+        )
+        window.contentView = scrollView
+        window.makeFirstResponder(textView)
+        textView.string = source
+        guard let childOffset = utf16Offset(of: "child", in: source) else {
+            return false
+        }
+        let selection = NSRange(location: childOffset, length: "child".utf16.count)
+        textView.setSelectedRange(selection)
+        MarkdownVisibleRangeDecorator.decorateVisibleRange(
+            in: textView,
+            livePreviewMode: .livePreview,
+            revealRange: textView.selectedRange(),
+            markerStyle: .obsidian
+        )
+        let selectionPreserved = NSEqualRanges(textView.selectedRange(), selection)
+            && textView.string == source
+
+        let insertRange = NSRange(location: childOffset + "child".utf16.count, length: 0)
+        textView.insertText("!", replacementRange: insertRange)
+        let undoAvailableBeforeRender = textView.undoManager?.canUndo == true
+        MarkdownVisibleRangeDecorator.decorateVisibleRange(
+            in: textView,
+            livePreviewMode: .livePreview,
+            revealRange: textView.selectedRange(),
+            markerStyle: .obsidian
+        )
+        let undoAvailableAfterRender = textView.undoManager?.canUndo == true
+        textView.undoManager?.undo()
+        let undoRestored = textView.string == source
+        window.close()
+        return selectionPreserved
+            && undoAvailableBeforeRender
+            && undoAvailableAfterRender
+            && undoRestored
     }
 
     private static func probeOverlayStateLifecycle() -> (
@@ -1175,6 +1375,7 @@ enum MarkdownEditorBridgeProbe {
         undoRestoresToken: Bool,
         readOnlyPreservesBuffer: Bool,
         renderedHitTestResolvesToken: Bool,
+        renderedHitTestSurvivesScrollResize: Bool,
         renderedHitTestDisabledGuards: Bool,
         renderedToggleChangesOnlyToken: Bool,
         renderedToggleUndoRestoresToken: Bool
@@ -1194,7 +1395,7 @@ enum MarkdownEditorBridgeProbe {
         textView.string = text
         textView.setSelectedRange(NSRange(location: 0, length: 0))
         guard let offset = utf16Offset(of: "[ ]", in: text) else {
-            return (false, false, false, false, false, false, false)
+            return (false, false, false, false, false, false, false, false)
         }
 
         let toggled = (textView as? MarkdownInteractionTextView)?.toggleTaskCheckbox(at: offset + 1) == true
@@ -1238,6 +1439,32 @@ enum MarkdownEditorBridgeProbe {
         let renderedPoint = renderedGeometry.map { NSPoint(x: $0.rect.midX, y: $0.rect.midY) }
         let renderedOffset = renderedPoint.flatMap { renderedTextView.taskCheckboxToggleOffset(at: $0) }
         let renderedHitTestResolvesToken = renderedOffset == (utf16Offset(of: "[ ]", in: renderedText) ?? -10) + 1
+        let renderedHitTestSurvivesScrollResize = renderedPoint.map { point -> Bool in
+            renderedScrollView.contentView.scroll(to: NSPoint(x: 0, y: max(0, point.y - 12)))
+            renderedScrollView.reflectScrolledClipView(renderedScrollView.contentView)
+            renderedTextView.frame = NSRect(x: 0, y: 0, width: 640, height: 700)
+            renderedTextView.textContainer?.containerSize = NSSize(width: 640, height: CGFloat.greatestFiniteMagnitude)
+            renderedTextView.textContainer?.widthTracksTextView = true
+            let resizedGeometry = LivePreviewOverlayRenderer.markerGeometries(in: renderedTextView)
+                .first { $0.kind == .taskCheckbox }
+            guard let resizedPoint = resizedGeometry.map({ NSPoint(x: $0.rect.midX, y: $0.rect.midY) }) else {
+                return false
+            }
+            let windowPoint = renderedTextView.convert(resizedPoint, to: nil)
+            let event = NSEvent.mouseEvent(
+                with: .leftMouseDown,
+                location: windowPoint,
+                modifierFlags: [],
+                timestamp: 0,
+                windowNumber: renderedWindow.windowNumber,
+                context: nil,
+                eventNumber: 1,
+                clickCount: 1,
+                pressure: 1
+            )
+            return event.flatMap { renderedTextView.taskCheckboxToggleOffset(for: $0) }
+                == (utf16Offset(of: "[ ]", in: renderedText) ?? -10) + 1
+        } == true
 
         let renderedToggled = renderedOffset.map { renderedTextView.toggleTaskCheckbox(at: $0) } == true
         let renderedToggleChangesOnlyToken = renderedToggled && renderedTextView.string == "- [x] Task\n"
@@ -1277,6 +1504,7 @@ enum MarkdownEditorBridgeProbe {
             undoRestoresToken,
             readOnlyPreservesBuffer,
             renderedHitTestResolvesToken,
+            renderedHitTestSurvivesScrollResize,
             renderedHitTestDisabledGuards,
             renderedToggleChangesOnlyToken,
             renderedToggleUndoRestoresToken
