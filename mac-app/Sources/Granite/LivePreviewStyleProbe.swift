@@ -67,6 +67,7 @@ struct LivePreviewStyleProbeReport: Codable, Equatable {
     var nestedListTabsNormalizeToDepth: Bool
     var nestedListClusterBreakRespected: Bool
     var nestedListContextIncompleteHandled: Bool
+    var nestedListVisibleRangeDepthsResolved: Bool
     var nestedListDepthAwareIndentApplied: Bool
     var nestedListMarkerXIncreasesByDepth: Bool
     var nestedListTextXIncreasesByDepth: Bool
@@ -463,6 +464,7 @@ enum LivePreviewStyleProbe {
             nestedListTabsNormalizeToDepth: nestedListFields.tabsNormalizeToDepth,
             nestedListClusterBreakRespected: nestedListFields.clusterBreakRespected,
             nestedListContextIncompleteHandled: nestedListFields.contextIncompleteHandled,
+            nestedListVisibleRangeDepthsResolved: nestedListFields.visibleRangeDepthsResolved,
             nestedListDepthAwareIndentApplied: (nestedListParagraphStyle?.headIndent ?? 0) > (listParagraphStyle?.headIndent ?? 0),
             nestedListMarkerXIncreasesByDepth: nestedListFields.markerXIncreasesByDepth,
             nestedListTextXIncreasesByDepth: nestedListFields.textXIncreasesByDepth,
@@ -1060,6 +1062,7 @@ enum LivePreviewStyleProbe {
         tabsNormalizeToDepth: Bool,
         clusterBreakRespected: Bool,
         contextIncompleteHandled: Bool,
+        visibleRangeDepthsResolved: Bool,
         markerXIncreasesByDepth: Bool,
         textXIncreasesByDepth: Bool,
         orderedWidthTextStartNormalized: Bool,
@@ -1263,19 +1266,24 @@ enum LivePreviewStyleProbe {
             return abs(depthOneGuide.endY - grandchildLine.maxY) <= 1
         }()
 
-        let clippedWindow = utf16Offset(of: "bullet child", in: source).map {
+        let clippedWindow = context(containing: "bullet child").map(\.blockRange.location).map {
             LivePreviewSourceRange(location: $0, length: (source as NSString).length - $0)
         }
-        let clippedContextIncomplete = clippedWindow.map { window in
+        let clippedDepthResolved = clippedWindow.map { window in
             let clippedParsed = LivePreviewParser.parse(source, in: window)
             let clippedResolution = LivePreviewListMarkerResolver.resolve(
                 source: source,
                 blocks: clippedParsed.blocks,
                 parseWindow: window
             )
-            return clippedResolution.contextIncomplete
-                || clippedResolution.contextsByBlockRange.values.contains { $0.contextIncomplete }
+            return clippedResolution.contextsByBlockRange.values.first { context in
+                sourceText(
+                    for: LivePreviewSourceRange(location: context.blockRange.location, length: context.blockRange.length),
+                    in: source
+                )?.contains("bullet child") == true
+            }?.depth == 1
         } ?? false
+        let clippedContextHandled = clippedDepthResolved
 
         let checks: [(String, Bool)] = [
             ("nestedListUnorderedDepthsResolved", unorderedDepthsResolved),
@@ -1284,7 +1292,8 @@ enum LivePreviewStyleProbe {
             ("nestedListMixedDepthsResolved", mixedDepthsResolved),
             ("nestedListTabsNormalizeToDepth", tabsNormalizeToDepth),
             ("nestedListClusterBreakRespected", clusterBreakRespected),
-            ("nestedListContextIncompleteHandled", clippedContextIncomplete),
+            ("nestedListContextIncompleteHandled", clippedContextHandled),
+            ("nestedListVisibleRangeDepthsResolved", clippedDepthResolved),
             ("nestedListMarkerXIncreasesByDepth", markerXIncreasesByDepth),
             ("nestedListTextXIncreasesByDepth", textXIncreasesByDepth),
             ("nestedListOrderedWidthTextStartNormalized", orderedWidthTextStartNormalized),
@@ -1308,7 +1317,8 @@ enum LivePreviewStyleProbe {
             mixedDepthsResolved,
             tabsNormalizeToDepth,
             clusterBreakRespected,
-            clippedContextIncomplete,
+            clippedContextHandled,
+            clippedDepthResolved,
             markerXIncreasesByDepth,
             textXIncreasesByDepth,
             orderedWidthTextStartNormalized,

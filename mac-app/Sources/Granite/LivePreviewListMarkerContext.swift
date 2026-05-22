@@ -52,6 +52,12 @@ enum LivePreviewListMarkerResolver {
             return .empty
         }
 
+        let requestedBlockRanges = Set(blocks.map(\.sourceRange))
+        let workingBlocks = ancestorBlocks(
+            source: source,
+            parseWindow: parseWindow,
+            requestedBlocks: blocks
+        ) + blocks
         var contexts: [LivePreviewSourceRange: LivePreviewListMarkerContext] = [:]
         var indentStack: [Int] = []
         var currentClusterID = 0
@@ -60,7 +66,7 @@ enum LivePreviewListMarkerResolver {
         var scannedLineCount = 0
         var scannedUTF16Length = 0
 
-        for block in blocks.sorted(by: { $0.sourceRange.location < $1.sourceRange.location }) {
+        for block in workingBlocks.sorted(by: { $0.sourceRange.location < $1.sourceRange.location }) {
             scannedLineCount += 1
             scannedUTF16Length += block.sourceRange.length
             guard var context = context(for: block, source: source) else {
@@ -87,7 +93,9 @@ enum LivePreviewListMarkerResolver {
             }
             context.clusterID = currentClusterID
             previousBlockWasList = true
-            contexts[block.sourceRange] = context
+            if requestedBlockRanges.contains(block.sourceRange) {
+                contexts[block.sourceRange] = context
+            }
         }
 
         return LivePreviewListMarkerResolution(
@@ -96,6 +104,58 @@ enum LivePreviewListMarkerResolver {
             scannedUTF16Length: scannedUTF16Length,
             contextIncomplete: contextIncomplete
         )
+    }
+
+    private static func ancestorBlocks(
+        source: String,
+        parseWindow: LivePreviewSourceRange?,
+        requestedBlocks: [LivePreviewBlockSpan]
+    ) -> [LivePreviewBlockSpan] {
+        guard let parseWindow,
+              parseWindow.location > 0,
+              requestedBlocks.contains(where: {
+                context(for: $0, source: source)?.leadingColumn ?? 0 > 0
+              })
+        else {
+            return []
+        }
+
+        let start = ancestorWindowStart(source: source, before: parseWindow.location)
+        guard start < parseWindow.location else {
+            return []
+        }
+        let ancestorRange = LivePreviewSourceRange(
+            location: start,
+            length: parseWindow.location - start
+        )
+        let requestedRanges = Set(requestedBlocks.map(\.sourceRange))
+        return LivePreviewParser.parse(source, in: ancestorRange).blocks.filter {
+            !requestedRanges.contains($0.sourceRange)
+        }
+    }
+
+    private static func ancestorWindowStart(source: String, before location: Int) -> Int {
+        let text = source as NSString
+        var start = min(max(0, location), text.length)
+        var scannedLines = 0
+        var scannedUTF16 = 0
+
+        while start > 0,
+              scannedLines < maxAncestorContextLines,
+              scannedUTF16 < maxAncestorContextUTF16 {
+            let searchLength = max(0, start - 1)
+            let previousNewline = text.range(
+                of: "\n",
+                options: [.backwards],
+                range: NSRange(location: 0, length: searchLength)
+            )
+            let lineStart = previousNewline.location == NSNotFound ? 0 : previousNewline.location + 1
+            scannedUTF16 += start - lineStart
+            scannedLines += 1
+            start = lineStart
+        }
+
+        return start
     }
 
     static func context(for block: LivePreviewBlockSpan, source: String) -> LivePreviewListMarkerContext? {
