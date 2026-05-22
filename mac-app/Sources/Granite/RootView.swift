@@ -107,6 +107,7 @@ struct RootView: View {
         .focusedValue(\.workspaceTabAction, workspaceTabAction)
         .onAppear {
             AppLifecycleController.shared.appState = appState
+            restoreLastVaultOnLaunch()
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Workspace")
@@ -251,6 +252,17 @@ struct RootView: View {
 
     private func showVaultPicker() {
         presentedSheet = .vaultPicker
+    }
+
+    private func restoreLastVaultOnLaunch() {
+        do {
+            if try appState.restoreLastVaultOnLaunchIfNeeded() {
+                vaultSelectionError = nil
+                leftPanel = .files
+            }
+        } catch {
+            vaultSelectionError = error.localizedDescription
+        }
     }
 
     private func dismissPresentedSheet() {

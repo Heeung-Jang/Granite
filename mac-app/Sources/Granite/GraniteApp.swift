@@ -175,6 +175,12 @@ struct GraniteApp: App {
             print(WorkspaceTabsProbe.encodedReport(report))
             Foundation.exit(report.passed ? 0 : 2)
         }
+
+        if CommandLine.arguments.contains("--startup-vault-restore-probe") {
+            let report = StartupVaultRestoreProbe.run()
+            print(StartupVaultRestoreProbe.encodedReport(report))
+            Foundation.exit(report.passed ? 0 : 2)
+        }
     }
 
     var body: some Scene {

@@ -82,3 +82,21 @@ func userDefaultsWorkspaceTabSessionStoreKeepsPayloadRelative() throws {
     #expect(payload.contains("Codex"))
     #expect(!payload.contains(vaultURL.path))
 }
+
+@Test
+func userDefaultsStartupVaultRestoreStorageRoundTrips() throws {
+    let suiteName = "StartupVaultRestoreTests.\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suiteName))
+    defer {
+        defaults.removePersistentDomain(forName: suiteName)
+    }
+    let store = UserDefaultsStartupVaultRestoreStorage(defaults: defaults, key: "testSuppress")
+
+    #expect(!store.loadSuppressesLastVaultRestore())
+
+    store.saveSuppressesLastVaultRestore(true)
+    #expect(store.loadSuppressesLastVaultRestore())
+
+    store.saveSuppressesLastVaultRestore(false)
+    #expect(!store.loadSuppressesLastVaultRestore())
+}

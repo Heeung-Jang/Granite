@@ -140,10 +140,12 @@ public final class AppState: ObservableObject {
     private let indexDirectoryResolver: any IndexDirectoryResolving
     private let vaultAccessValidator: any VaultAccessValidating
     private let recentVaultStorage: any RecentVaultStoring
+    private let startupVaultRestoreStorage: any StartupVaultRestoreStoring
     private let workspaceTabSessionStore: any WorkspaceTabSessionStoring
     private let readClientFactory: ReadClientFactory
     private let maxRecentVaults: Int
     private var nextSearchRequestID: UInt64 = 0
+    private var didAttemptLastVaultAutoRestore = false
     private var dirtyEditorFiles: [String: FileTreeItem] = [:]
 
     public init(
@@ -152,6 +154,7 @@ public final class AppState: ObservableObject {
         indexDirectoryResolver: any IndexDirectoryResolving = AppOwnedIndexDirectoryResolver(),
         vaultAccessValidator: any VaultAccessValidating = FileSystemVaultAccessValidator(),
         recentVaultStorage: any RecentVaultStoring = UserDefaultsRecentVaultStorage(),
+        startupVaultRestoreStorage: any StartupVaultRestoreStoring = UserDefaultsStartupVaultRestoreStorage(),
         workspaceTabSessionStore: any WorkspaceTabSessionStoring = UserDefaultsWorkspaceTabSessionStore(),
         readClientFactory: @escaping ReadClientFactory = { metadataURL, tantivyURL in
             try EngineReadClient.open(metadataURL: metadataURL, tantivyURL: tantivyURL)
@@ -163,6 +166,7 @@ public final class AppState: ObservableObject {
         self.indexDirectoryResolver = indexDirectoryResolver
         self.vaultAccessValidator = vaultAccessValidator
         self.recentVaultStorage = recentVaultStorage
+        self.startupVaultRestoreStorage = startupVaultRestoreStorage
         self.workspaceTabSessionStore = workspaceTabSessionStore
         self.readClientFactory = readClientFactory
         self.maxRecentVaults = max(1, maxRecentVaults)
@@ -187,6 +191,7 @@ public final class AppState: ObservableObject {
             clearAllDirtyWarnings()
             vaultSelection = .unavailable(issue)
             rememberVault(vaultURL)
+            startupVaultRestoreStorage.saveSuppressesLastVaultRestore(false)
             return
         }
 
@@ -207,10 +212,26 @@ public final class AppState: ObservableObject {
         restoreWorkspaceTabSession(for: vaultURL)
         clearAllDirtyWarnings()
         rememberVault(vaultURL)
+        startupVaultRestoreStorage.saveSuppressesLastVaultRestore(false)
     }
 
     public func openRecentVault(_ recentVault: RecentVault) throws {
         try selectVault(recentVault.url)
+    }
+
+    @discardableResult
+    public func restoreLastVaultOnLaunchIfNeeded() throws -> Bool {
+        guard !didAttemptLastVaultAutoRestore,
+              vaultSelection.url == nil,
+              !startupVaultRestoreStorage.loadSuppressesLastVaultRestore(),
+              let recentVault = recentVaults.first
+        else {
+            return false
+        }
+
+        didAttemptLastVaultAutoRestore = true
+        try openRecentVault(recentVault)
+        return true
     }
 
     public func markStaleBookmark(for url: URL) {
@@ -221,6 +242,7 @@ public final class AppState: ObservableObject {
         let vaultURL = url.standardizedFileURL
         vaultSelection = .unavailable(.staleBookmark(vaultURL))
         rememberVault(vaultURL)
+        startupVaultRestoreStorage.saveSuppressesLastVaultRestore(false)
     }
 
     public func reconnectVault() throws {
@@ -244,11 +266,13 @@ public final class AppState: ObservableObject {
 
     public func removeRecentVault(at url: URL) {
         let key = RecentVault.storageKey(for: url)
+        let removedCurrentVault = vaultSelection.url.map(RecentVault.storageKey(for:)) == key
         recentVaults.removeAll { $0.id == key }
         persistRecentVaults()
         workspaceTabSessionStore.clearSession(forVaultAt: url)
 
-        if vaultSelection.url.map(RecentVault.storageKey(for:)) == key {
+        if removedCurrentVault {
+            startupVaultRestoreStorage.saveSuppressesLastVaultRestore(true)
             clearVault()
         }
     }
@@ -575,6 +599,7 @@ public final class AppState: ObservableObject {
             return false
         }
 
+        startupVaultRestoreStorage.saveSuppressesLastVaultRestore(true)
         clearVault()
         return true
     }
@@ -621,6 +646,7 @@ public final class AppState: ObservableObject {
             clearAllDirtyWarnings()
             persistWorkspaceTabSession()
         case .closeVault:
+            startupVaultRestoreStorage.saveSuppressesLastVaultRestore(true)
             clearVault()
         }
         return warning.action

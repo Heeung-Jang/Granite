@@ -30,6 +30,11 @@ public protocol RecentVaultStoring {
     func saveRecentVaultURLs(_ urls: [URL])
 }
 
+public protocol StartupVaultRestoreStoring {
+    func loadSuppressesLastVaultRestore() -> Bool
+    func saveSuppressesLastVaultRestore(_ value: Bool)
+}
+
 public struct UserDefaultsRecentVaultStorage: RecentVaultStoring {
     private let defaults: UserDefaults
     private let key: String
@@ -49,5 +54,26 @@ public struct UserDefaultsRecentVaultStorage: RecentVaultStoring {
 
     public func saveRecentVaultURLs(_ urls: [URL]) {
         defaults.set(urls.map { RecentVault.storageKey(for: $0) }, forKey: key)
+    }
+}
+
+public struct UserDefaultsStartupVaultRestoreStorage: StartupVaultRestoreStoring {
+    private let defaults: UserDefaults
+    private let key: String
+
+    public init(
+        defaults: UserDefaults = .standard,
+        key: String = "suppressLastVaultAutoRestore"
+    ) {
+        self.defaults = defaults
+        self.key = key
+    }
+
+    public func loadSuppressesLastVaultRestore() -> Bool {
+        defaults.bool(forKey: key)
+    }
+
+    public func saveSuppressesLastVaultRestore(_ value: Bool) {
+        defaults.set(value, forKey: key)
     }
 }

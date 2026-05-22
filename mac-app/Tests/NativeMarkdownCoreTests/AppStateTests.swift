@@ -799,12 +799,18 @@ func appStateCloseVaultIsNoOpWithoutVault() {
 func appStateClosesUnavailableVault() {
     let vaultURL = URL(fileURLWithPath: "/tmp/missing-vault", isDirectory: true)
     let issue = VaultAccessIssue.missing(vaultURL)
-    let state = AppState(vaultSelection: .unavailable(issue))
+    let startupStorage = MemoryStartupVaultRestoreStorage()
+    let state = AppState(
+        vaultSelection: .unavailable(issue),
+        startupVaultRestoreStorage: startupStorage
+    )
 
     #expect(state.requestCloseVault())
 
     #expect(state.vaultSelection == .noVault)
     #expect(state.dirtyEditorActionWarning == nil)
+    #expect(startupStorage.suppressesLastVaultRestore)
+    #expect(startupStorage.savedValues == [true])
 }
 
 @Test
@@ -1250,6 +1256,330 @@ func appStatePersistsDeduplicatedRecentVaults() throws {
 }
 
 @Test
+func appStateRestoresLastRecentVaultOnLaunch() throws {
+    let temporaryRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let vaultURL = temporaryRoot.appendingPathComponent("vault", isDirectory: true)
+    let supportRoot = temporaryRoot.appendingPathComponent("support", isDirectory: true)
+    try FileManager.default.createDirectory(at: vaultURL, withIntermediateDirectories: true)
+    defer {
+        try? FileManager.default.removeItem(at: temporaryRoot)
+    }
+
+    let recentStorage = MemoryRecentVaultStorage(urls: [vaultURL])
+    let startupStorage = MemoryStartupVaultRestoreStorage()
+    let factory = FakeReadClientFactory(clients: [FakeReadClient()])
+    let state = AppState(
+        engineHealth: EngineHealthStatus(state: .loaded, abiVersion: 1, message: "test"),
+        indexDirectoryResolver: AppOwnedIndexDirectoryResolver(applicationSupportRoot: supportRoot),
+        vaultAccessValidator: AllowingVaultAccessValidator(),
+        recentVaultStorage: recentStorage,
+        startupVaultRestoreStorage: startupStorage,
+        readClientFactory: factory.make
+    )
+
+    #expect(try state.restoreLastVaultOnLaunchIfNeeded())
+
+    #expect(state.vaultSelection == .selected(vaultURL))
+    #expect(state.recentVaults.map(\.url) == [vaultURL])
+    #expect(recentStorage.savedURLs == [vaultURL])
+    #expect(startupStorage.suppressesLastVaultRestore == false)
+    #expect(startupStorage.savedValues == [false])
+
+    #expect(try state.restoreLastVaultOnLaunchIfNeeded() == false)
+}
+
+@Test
+func appStateSkipsSuppressedLastVaultRestore() throws {
+    let vaultURL = URL(fileURLWithPath: "/tmp/suppressed-vault", isDirectory: true)
+    let startupStorage = MemoryStartupVaultRestoreStorage(suppresses: true)
+    let state = AppState(
+        recentVaultStorage: MemoryRecentVaultStorage(urls: [vaultURL]),
+        startupVaultRestoreStorage: startupStorage
+    )
+
+    #expect(try state.restoreLastVaultOnLaunchIfNeeded() == false)
+
+    #expect(state.vaultSelection == .noVault)
+    #expect(startupStorage.suppressesLastVaultRestore)
+    #expect(startupStorage.savedValues.isEmpty)
+}
+
+@Test
+func appStateSkipsLastVaultRestoreWhenVaultAlreadyOpen() throws {
+    let vaultURL = URL(fileURLWithPath: "/tmp/already-open-vault", isDirectory: true)
+    let recentURL = URL(fileURLWithPath: "/tmp/recent-vault", isDirectory: true)
+    let state = AppState(
+        vaultSelection: .selected(vaultURL),
+        recentVaultStorage: MemoryRecentVaultStorage(urls: [recentURL])
+    )
+
+    #expect(try state.restoreLastVaultOnLaunchIfNeeded() == false)
+
+    #expect(state.vaultSelection == .selected(vaultURL))
+}
+
+@Test
+func appStateRestoresWorkspaceTabsDuringLastVaultLaunch() throws {
+    let temporaryRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let vaultURL = temporaryRoot.appendingPathComponent("vault", isDirectory: true)
+    let supportRoot = temporaryRoot.appendingPathComponent("support", isDirectory: true)
+    try FileManager.default.createDirectory(at: vaultURL, withIntermediateDirectories: true)
+    try "a".write(to: vaultURL.appendingPathComponent("First.md"), atomically: true, encoding: .utf8)
+    try "b".write(to: vaultURL.appendingPathComponent("Second.md"), atomically: true, encoding: .utf8)
+    defer {
+        try? FileManager.default.removeItem(at: temporaryRoot)
+    }
+
+    let tabStore = MemoryWorkspaceTabSessionStore(sessions: [
+        RecentVault.storageKey(for: vaultURL): WorkspaceTabSession(
+            tabs: ["Missing.md", "First.md", "Second.md"],
+            activeRelativePath: "Second.md"
+        )
+    ])
+    let factory = FakeReadClientFactory(clients: [FakeReadClient()])
+    let state = AppState(
+        engineHealth: EngineHealthStatus(state: .loaded, abiVersion: 1, message: "test"),
+        indexDirectoryResolver: AppOwnedIndexDirectoryResolver(applicationSupportRoot: supportRoot),
+        vaultAccessValidator: AllowingVaultAccessValidator(),
+        recentVaultStorage: MemoryRecentVaultStorage(urls: [vaultURL]),
+        startupVaultRestoreStorage: MemoryStartupVaultRestoreStorage(),
+        workspaceTabSessionStore: tabStore,
+        readClientFactory: factory.make
+    )
+
+    #expect(try state.restoreLastVaultOnLaunchIfNeeded())
+
+    #expect(state.workspaceTabs.map(\.relativePathKey) == ["First.md", "Second.md"])
+    #expect(state.selectedFile == FileTreeItem(relativePath: "Second.md"))
+}
+
+@Test
+func appStateLastVaultRestoreReadErrorKeepsSelectedVault() throws {
+    let temporaryRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let vaultURL = temporaryRoot.appendingPathComponent("vault", isDirectory: true)
+    let supportRoot = temporaryRoot.appendingPathComponent("support", isDirectory: true)
+    try FileManager.default.createDirectory(at: vaultURL, withIntermediateDirectories: true)
+    defer {
+        try? FileManager.default.removeItem(at: temporaryRoot)
+    }
+
+    let startupStorage = MemoryStartupVaultRestoreStorage()
+    let factory = FakeReadClientFactory(error: FakeReadFactoryError.openFailed)
+    let state = AppState(
+        engineHealth: EngineHealthStatus(state: .loaded, abiVersion: 1, message: "test"),
+        indexDirectoryResolver: AppOwnedIndexDirectoryResolver(applicationSupportRoot: supportRoot),
+        vaultAccessValidator: AllowingVaultAccessValidator(),
+        recentVaultStorage: MemoryRecentVaultStorage(urls: [vaultURL]),
+        startupVaultRestoreStorage: startupStorage,
+        readClientFactory: factory.make
+    )
+
+    #expect(try state.restoreLastVaultOnLaunchIfNeeded())
+
+    #expect(state.vaultSelection == .selected(vaultURL))
+    #expect(state.readAvailability == .error("openFailed"))
+    #expect(!startupStorage.suppressesLastVaultRestore)
+}
+
+@Test
+func appStateLastVaultRestoreMissingVaultDoesNotCreateIndexDirectories() throws {
+    let temporaryRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let supportRoot = temporaryRoot.appendingPathComponent("support", isDirectory: true)
+    let missingVaultURL = temporaryRoot.appendingPathComponent("missing-vault", isDirectory: true)
+    let startupStorage = MemoryStartupVaultRestoreStorage()
+    let state = AppState(
+        engineHealth: EngineHealthStatus(state: .loaded, abiVersion: 1, message: "test"),
+        indexDirectoryResolver: AppOwnedIndexDirectoryResolver(applicationSupportRoot: supportRoot),
+        vaultAccessValidator: FileSystemVaultAccessValidator(),
+        recentVaultStorage: MemoryRecentVaultStorage(urls: [missingVaultURL]),
+        startupVaultRestoreStorage: startupStorage
+    )
+    defer {
+        try? FileManager.default.removeItem(at: temporaryRoot)
+    }
+
+    #expect(try state.restoreLastVaultOnLaunchIfNeeded())
+
+    #expect(state.vaultSelection == .unavailable(.missing(missingVaultURL)))
+    #expect(state.indexLocation == nil)
+    #expect(!FileManager.default.fileExists(atPath: supportRoot.path))
+    #expect(!startupStorage.suppressesLastVaultRestore)
+}
+
+@Test
+func appStateLastVaultRestoreDoesNotRetryAfterThrownOpen() throws {
+    let vaultURL = URL(fileURLWithPath: "/tmp/throwing-restore-vault", isDirectory: true)
+    let state = AppState(
+        indexDirectoryResolver: ThrowingIndexDirectoryResolver(),
+        vaultAccessValidator: AllowingVaultAccessValidator(),
+        recentVaultStorage: MemoryRecentVaultStorage(urls: [vaultURL]),
+        startupVaultRestoreStorage: MemoryStartupVaultRestoreStorage()
+    )
+
+    #expect(throws: ThrowingIndexDirectoryResolverError.failed) {
+        try state.restoreLastVaultOnLaunchIfNeeded()
+    }
+
+    #expect(try state.restoreLastVaultOnLaunchIfNeeded() == false)
+    #expect(state.vaultSelection == .noVault)
+}
+
+@Test
+func appStateVaultSelectionClearsStartupRestoreSuppression() throws {
+    let temporaryRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let supportRoot = temporaryRoot.appendingPathComponent("support", isDirectory: true)
+    let startupStorage = MemoryStartupVaultRestoreStorage(suppresses: true)
+    let factory = FakeReadClientFactory(clients: [FakeReadClient()])
+    let state = AppState(
+        engineHealth: EngineHealthStatus(state: .loaded, abiVersion: 1, message: "test"),
+        indexDirectoryResolver: AppOwnedIndexDirectoryResolver(applicationSupportRoot: supportRoot),
+        vaultAccessValidator: AllowingVaultAccessValidator(),
+        recentVaultStorage: MemoryRecentVaultStorage(),
+        startupVaultRestoreStorage: startupStorage,
+        readClientFactory: factory.make
+    )
+    defer {
+        try? FileManager.default.removeItem(at: temporaryRoot)
+    }
+
+    try state.selectVault(temporaryRoot.appendingPathComponent("selected-vault", isDirectory: true))
+
+    #expect(!startupStorage.suppressesLastVaultRestore)
+    #expect(startupStorage.savedValues == [false])
+}
+
+@Test
+func appStateUnavailableAndStaleVaultClearStartupRestoreSuppression() throws {
+    let vaultURL = URL(fileURLWithPath: "/tmp/unavailable-vault", isDirectory: true)
+    let startupStorage = MemoryStartupVaultRestoreStorage(suppresses: true)
+    let state = AppState(
+        vaultAccessValidator: FixedVaultAccessValidator(issue: .missing(vaultURL)),
+        recentVaultStorage: MemoryRecentVaultStorage(),
+        startupVaultRestoreStorage: startupStorage
+    )
+
+    try state.selectVault(vaultURL)
+    #expect(!startupStorage.suppressesLastVaultRestore)
+
+    startupStorage.suppressesLastVaultRestore = true
+    state.markStaleBookmark(for: vaultURL)
+    #expect(!startupStorage.suppressesLastVaultRestore)
+    #expect(startupStorage.savedValues == [false, false])
+}
+
+@Test
+func appStateCleanCloseVaultSuppressesStartupRestore() {
+    let vaultURL = URL(fileURLWithPath: "/tmp/clean-close-suppression-vault", isDirectory: true)
+    let startupStorage = MemoryStartupVaultRestoreStorage()
+    let state = AppState(
+        vaultSelection: .selected(vaultURL),
+        startupVaultRestoreStorage: startupStorage
+    )
+
+    #expect(state.requestCloseVault())
+
+    #expect(state.vaultSelection == .noVault)
+    #expect(startupStorage.suppressesLastVaultRestore)
+    #expect(startupStorage.savedValues == [true])
+}
+
+@Test
+func appStateNoVaultCloseDoesNotChangeStartupRestoreSuppression() {
+    let startupStorage = MemoryStartupVaultRestoreStorage(suppresses: true)
+    let state = AppState(startupVaultRestoreStorage: startupStorage)
+
+    #expect(state.requestCloseVault())
+
+    #expect(startupStorage.suppressesLastVaultRestore)
+    #expect(startupStorage.savedValues.isEmpty)
+}
+
+@Test
+func appStateDirtyBlockedCloseVaultSuppressesOnlyAfterConfirmation() {
+    let vaultURL = URL(fileURLWithPath: "/tmp/dirty-close-suppression-vault", isDirectory: true)
+    let startupStorage = MemoryStartupVaultRestoreStorage()
+    let state = AppState(
+        vaultSelection: .selected(vaultURL),
+        startupVaultRestoreStorage: startupStorage
+    )
+    let file = FileTreeItem(relativePath: "Dirty.md")
+
+    #expect(state.openFile(file))
+    state.updateEditorDirtyState(file: file, isDirty: true)
+
+    #expect(state.requestCloseVault() == false)
+    #expect(!startupStorage.suppressesLastVaultRestore)
+    #expect(startupStorage.savedValues.isEmpty)
+
+    #expect(state.discardDirtyChangesForEditorActionWarning() == .closeVault)
+    #expect(startupStorage.suppressesLastVaultRestore)
+    #expect(startupStorage.savedValues == [true])
+}
+
+@Test
+func appStateDirtyClearSelectionDoesNotSuppressStartupRestore() {
+    let vaultURL = URL(fileURLWithPath: "/tmp/dirty-clear-selection-vault", isDirectory: true)
+    let startupStorage = MemoryStartupVaultRestoreStorage()
+    let state = AppState(
+        vaultSelection: .selected(vaultURL),
+        startupVaultRestoreStorage: startupStorage
+    )
+    let file = FileTreeItem(relativePath: "Dirty.md")
+
+    #expect(state.openFile(file))
+    state.updateEditorDirtyState(file: file, isDirty: true)
+    #expect(state.requestClearSelectedFile() == false)
+
+    #expect(state.discardDirtyChangesForEditorActionWarning() == .clearSelection)
+
+    #expect(!startupStorage.suppressesLastVaultRestore)
+    #expect(startupStorage.savedValues.isEmpty)
+}
+
+@Test
+func appStateRemovingCurrentRecentVaultSuppressesStartupRestore() throws {
+    let current = URL(fileURLWithPath: "/tmp/current-recent-vault", isDirectory: true)
+    let older = URL(fileURLWithPath: "/tmp/older-recent-vault", isDirectory: true)
+    let startupStorage = MemoryStartupVaultRestoreStorage()
+    let state = AppState(
+        vaultSelection: .selected(current),
+        recentVaultStorage: MemoryRecentVaultStorage(urls: [current, older]),
+        startupVaultRestoreStorage: startupStorage
+    )
+
+    state.removeRecentVault(at: current)
+
+    #expect(state.vaultSelection == .noVault)
+    #expect(state.recentVaults.map(\.url) == [older])
+    #expect(startupStorage.suppressesLastVaultRestore)
+    #expect(try state.restoreLastVaultOnLaunchIfNeeded() == false)
+}
+
+@Test
+func appStateRemovingNonCurrentRecentVaultDoesNotSuppressStartupRestore() {
+    let current = URL(fileURLWithPath: "/tmp/current-recent-vault", isDirectory: true)
+    let older = URL(fileURLWithPath: "/tmp/older-recent-vault", isDirectory: true)
+    let startupStorage = MemoryStartupVaultRestoreStorage()
+    let state = AppState(
+        vaultSelection: .selected(current),
+        recentVaultStorage: MemoryRecentVaultStorage(urls: [current, older]),
+        startupVaultRestoreStorage: startupStorage
+    )
+
+    state.removeRecentVault(at: older)
+
+    #expect(state.vaultSelection == .selected(current))
+    #expect(state.recentVaults.map(\.url) == [current])
+    #expect(!startupStorage.suppressesLastVaultRestore)
+    #expect(startupStorage.savedValues.isEmpty)
+}
+
+@Test
 func appStateRemovingRecentVaultClearsStoredTabSession() {
     let vaultURL = URL(fileURLWithPath: "/tmp/session-forgotten-vault", isDirectory: true)
     let recentStorage = MemoryRecentVaultStorage(urls: [vaultURL])
@@ -1428,6 +1758,24 @@ private final class MemoryRecentVaultStorage: RecentVaultStoring {
     }
 }
 
+private final class MemoryStartupVaultRestoreStorage: StartupVaultRestoreStoring {
+    var suppressesLastVaultRestore: Bool
+    private(set) var savedValues: [Bool] = []
+
+    init(suppresses: Bool = false) {
+        self.suppressesLastVaultRestore = suppresses
+    }
+
+    func loadSuppressesLastVaultRestore() -> Bool {
+        suppressesLastVaultRestore
+    }
+
+    func saveSuppressesLastVaultRestore(_ value: Bool) {
+        suppressesLastVaultRestore = value
+        savedValues.append(value)
+    }
+}
+
 private final class MemoryWorkspaceTabSessionStore: WorkspaceTabSessionStoring {
     private(set) var savedSessions: [String: WorkspaceTabSession] = [:]
     private(set) var saveCount = 0
@@ -1449,5 +1797,15 @@ private final class MemoryWorkspaceTabSessionStore: WorkspaceTabSessionStoring {
     func clearSession(forVaultAt vaultURL: URL) {
         clearCount += 1
         savedSessions.removeValue(forKey: RecentVault.storageKey(for: vaultURL))
+    }
+}
+
+private enum ThrowingIndexDirectoryResolverError: Error {
+    case failed
+}
+
+private struct ThrowingIndexDirectoryResolver: IndexDirectoryResolving {
+    func prepareIndexLocation(forVaultAt vaultURL: URL) throws -> AppOwnedIndexLocation {
+        throw ThrowingIndexDirectoryResolverError.failed
     }
 }

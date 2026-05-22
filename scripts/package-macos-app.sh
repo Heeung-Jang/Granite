@@ -105,5 +105,6 @@ echo "Running packaged smoke tests..."
 "${MACOS_DIR}/${EXECUTABLE_NAME}" --telemetry-smoke-test
 "${MACOS_DIR}/${EXECUTABLE_NAME}" --live-preview-probe >/dev/null
 "${MACOS_DIR}/${EXECUTABLE_NAME}" --workspace-tabs-probe >/dev/null
+"${MACOS_DIR}/${EXECUTABLE_NAME}" --startup-vault-restore-probe >/dev/null
 
 echo "Packaged app: ${APP_DIR}"
