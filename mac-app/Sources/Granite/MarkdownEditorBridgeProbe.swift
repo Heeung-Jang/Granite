@@ -2215,6 +2215,8 @@ enum MarkdownEditorBridgeProbe {
             && livePreviewHelp.contains("properties")
             && livePreviewHelp.contains("embeds")
             && livePreviewHelp.contains("tables")
+            && livePreviewHelp.contains("row and column menus")
+            && livePreviewHelp.contains("plus controls")
             && livePreviewHelp.contains("checkboxes")
             && viewerHelp.contains("links")
             && viewerHelp.contains("tags")

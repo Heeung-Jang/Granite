@@ -337,7 +337,7 @@ enum MarkdownEditorAccessibility {
         switch mode {
         case .livePreview:
             isEditable
-                ? "Live Preview editor. Edit properties, embeds, and tables as source, command-click links and tags, click task checkboxes to toggle them."
+                ? "Live Preview editor. Edit properties, embeds, and tables as source, use table row and column menus or plus controls, command-click links and tags, click task checkboxes to toggle them."
                 : "Live Preview viewer. Review properties, embeds, and tables, click links and tags to open or search."
         case .source:
             "Source editor. Markdown syntax is shown as plain text."
