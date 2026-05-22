@@ -8,6 +8,10 @@
 
 Granite is a high-performance Markdown editor for macOS that keeps an Obsidian-like user experience while handling large local Markdown vaults. It opens, edits, searches, and renders your existing Markdown files directly, and provides a graph view for navigating relationships across notes.
 
+<p align="center">
+  <img src="assets/readme/granite-overview.png" alt="Granite running with a demo Markdown vault, file browser, Live Preview editor, and note inspector" width="900" />
+</p>
+
 ## Purpose
 
 Granite is built to provide a native macOS Markdown editing experience that feels familiar to Obsidian users while staying fast and stable on large vaults.
@@ -20,6 +24,13 @@ Granite is built to provide a native macOS Markdown editing experience that feel
 - Protect Markdown source during unsaved edits, external changes, conflicts, vault closing, and app quit flows.
 - Use a Rust-based indexing engine for large-vault search and graph workflows.
 
+## Why Granite
+
+- Familiar editing: keep an Obsidian-like Live Preview workflow without importing or converting existing Markdown.
+- Large-vault performance: use a Rust indexing engine to keep search and relationship navigation responsive.
+- Local-first privacy: process notes, indexes, graph data, and recovery state on the user's Mac.
+- Native workspace: combine files, tabs, search, backlinks, properties, attachments, and graph views in one macOS app.
+
 ## Features
 
 - Open local vaults and restore recent vaults.
@@ -31,6 +42,14 @@ Granite is built to provide a native macOS Markdown editing experience that feel
 - Current-note local graph and whole-vault graph.
 - Fallback source mode for large or pathological documents.
 - Dirty-state protection while quitting, closing vaults, closing tabs, or switching files.
+
+## Demo Workflow
+
+The example below uses a generated demo vault with mock notes only. It shows Granite browsing a vault, switching to search, and returning matching notes from the local index.
+
+<p align="center">
+  <img src="assets/readme/granite-workflow.gif" alt="Granite workflow showing a local demo vault, search panel, and local search results" width="900" />
+</p>
 
 ## Usage
 
