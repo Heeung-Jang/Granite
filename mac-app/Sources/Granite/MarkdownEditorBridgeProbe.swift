@@ -85,6 +85,23 @@ struct MarkdownEditorBridgeProbeReport: Codable, Equatable {
     var tableContextMenuHasRowColumnSubmenus: Bool
     var tableContextMenuOperationIDsStable: Bool
     var tableContextMenuOperationAppliesLocalEdit: Bool
+    var tableRowMenuInsertBeforeApplies: Bool
+    var tableRowMenuInsertAfterApplies: Bool
+    var tableRowMenuDuplicateApplies: Bool
+    var tableRowMenuRemoveApplies: Bool
+    var tableRowMenuMoveUpApplies: Bool
+    var tableRowMenuMoveDownApplies: Bool
+    var tableColumnMenuInsertBeforeApplies: Bool
+    var tableColumnMenuInsertAfterApplies: Bool
+    var tableColumnMenuDuplicateApplies: Bool
+    var tableColumnMenuRemoveApplies: Bool
+    var tableColumnMenuMoveLeftApplies: Bool
+    var tableColumnMenuMoveRightApplies: Bool
+    var tableColumnMenuAlignLeftApplies: Bool
+    var tableColumnMenuAlignCenterApplies: Bool
+    var tableColumnMenuAlignRightApplies: Bool
+    var tableColumnMenuSortAscendingApplies: Bool
+    var tableColumnMenuSortDescendingApplies: Bool
     var tableRenderedBodyCellHitTestResolvesCell: Bool
     var tableRenderedHeaderCellHitTestResolvesCell: Bool
     var tableRenderedHitTestRejectsSyntax: Bool
@@ -143,6 +160,7 @@ enum MarkdownEditorBridgeProbe {
         let selectionChangeProbe = probeSelectionChangeDecorationDoesNotReenter()
         let checkboxProbe = probeCheckboxToggle()
         let tableCellProbe = probeTableCellEdit()
+        let tableMenuOperationProbe = probeTableMenuOperations()
         let frontmatterBoundaryProbe = probeFrontmatterBoundaryDeleteUndo()
         let accessibilityProbe = probeEditorAccessibility()
 
@@ -228,6 +246,23 @@ enum MarkdownEditorBridgeProbe {
             tableContextMenuHasRowColumnSubmenus: tableCellProbe.contextMenuHasRowColumnSubmenus,
             tableContextMenuOperationIDsStable: tableCellProbe.contextMenuOperationIDsStable,
             tableContextMenuOperationAppliesLocalEdit: tableCellProbe.contextMenuOperationAppliesLocalEdit,
+            tableRowMenuInsertBeforeApplies: tableMenuOperationProbe.rowInsertBefore,
+            tableRowMenuInsertAfterApplies: tableMenuOperationProbe.rowInsertAfter,
+            tableRowMenuDuplicateApplies: tableMenuOperationProbe.rowDuplicate,
+            tableRowMenuRemoveApplies: tableMenuOperationProbe.rowRemove,
+            tableRowMenuMoveUpApplies: tableMenuOperationProbe.rowMoveUp,
+            tableRowMenuMoveDownApplies: tableMenuOperationProbe.rowMoveDown,
+            tableColumnMenuInsertBeforeApplies: tableMenuOperationProbe.columnInsertBefore,
+            tableColumnMenuInsertAfterApplies: tableMenuOperationProbe.columnInsertAfter,
+            tableColumnMenuDuplicateApplies: tableMenuOperationProbe.columnDuplicate,
+            tableColumnMenuRemoveApplies: tableMenuOperationProbe.columnRemove,
+            tableColumnMenuMoveLeftApplies: tableMenuOperationProbe.columnMoveLeft,
+            tableColumnMenuMoveRightApplies: tableMenuOperationProbe.columnMoveRight,
+            tableColumnMenuAlignLeftApplies: tableMenuOperationProbe.columnAlignLeft,
+            tableColumnMenuAlignCenterApplies: tableMenuOperationProbe.columnAlignCenter,
+            tableColumnMenuAlignRightApplies: tableMenuOperationProbe.columnAlignRight,
+            tableColumnMenuSortAscendingApplies: tableMenuOperationProbe.columnSortAscending,
+            tableColumnMenuSortDescendingApplies: tableMenuOperationProbe.columnSortDescending,
             tableRenderedBodyCellHitTestResolvesCell: tableCellProbe.renderedBodyCellHitTestResolvesCell,
             tableRenderedHeaderCellHitTestResolvesCell: tableCellProbe.renderedHeaderCellHitTestResolvesCell,
             tableRenderedHitTestRejectsSyntax: tableCellProbe.renderedHitTestRejectsSyntax,
@@ -1891,6 +1926,193 @@ enum MarkdownEditorBridgeProbe {
             changesOnlyCell,
             undoRestoresCell,
             failurePreservesBuffer
+        )
+    }
+
+    private static func probeTableMenuOperations() -> (
+        rowInsertBefore: Bool,
+        rowInsertAfter: Bool,
+        rowDuplicate: Bool,
+        rowRemove: Bool,
+        rowMoveUp: Bool,
+        rowMoveDown: Bool,
+        columnInsertBefore: Bool,
+        columnInsertAfter: Bool,
+        columnDuplicate: Bool,
+        columnRemove: Bool,
+        columnMoveLeft: Bool,
+        columnMoveRight: Bool,
+        columnAlignLeft: Bool,
+        columnAlignCenter: Bool,
+        columnAlignRight: Bool,
+        columnSortAscending: Bool,
+        columnSortDescending: Bool
+    ) {
+        func applying(
+            _ operation: LivePreviewTableOperation,
+            in source: String,
+            target: (LivePreviewTable) -> LivePreviewTableCell?
+        ) -> String? {
+            let textView = MarkdownEditorTextViewFactory.makeTextView() as! MarkdownInteractionTextView
+            textView.string = source
+            guard let table = LivePreviewTableParser.parse(source).first,
+                  let cell = target(table),
+                  textView.performTableMenuOperation(operation, for: cell)
+            else {
+                return nil
+            }
+            return textView.string
+        }
+
+        let rowSource = """
+        | Name | Status |
+        | --- | --- |
+        | Alpha | Draft |
+        | Beta | Done |
+        """
+        let rowInsertBefore = applying(.insertRowBefore, in: rowSource) { $0.bodyRows[1][0] } == """
+        | Name | Status |
+        | --- | --- |
+        | Alpha | Draft |
+        |  |  |
+        | Beta | Done |
+        """
+        let rowInsertAfter = applying(.insertRowAfter, in: rowSource) { $0.bodyRows[0][0] } == """
+        | Name | Status |
+        | --- | --- |
+        | Alpha | Draft |
+        |  |  |
+        | Beta | Done |
+        """
+        let rowDuplicate = applying(.duplicateRow, in: rowSource) { $0.bodyRows[0][0] } == """
+        | Name | Status |
+        | --- | --- |
+        | Alpha | Draft |
+        | Alpha | Draft |
+        | Beta | Done |
+        """
+        let rowRemove = applying(.removeRow, in: rowSource) { $0.bodyRows[0][0] } == """
+        | Name | Status |
+        | --- | --- |
+        | Beta | Done |
+        """
+        let rowMoveUp = applying(.moveRowUp, in: rowSource) { $0.bodyRows[1][0] } == """
+        | Name | Status |
+        | --- | --- |
+        | Beta | Done |
+        | Alpha | Draft |
+        """
+        let rowMoveDown = applying(.moveRowDown, in: rowSource) { $0.bodyRows[0][0] } == """
+        | Name | Status |
+        | --- | --- |
+        | Beta | Done |
+        | Alpha | Draft |
+        """
+
+        let columnSource = """
+        | A | B | C |
+        | --- | :---: | ---: |
+        | 1 | 2 | 3 |
+        | 4 | 5 | 6 |
+        """
+        let columnInsertBefore = applying(.insertColumnBefore, in: columnSource) { $0.header[1] } == """
+        | A |  | B | C |
+        | --- | --- | :---: | ---: |
+        | 1 |  | 2 | 3 |
+        | 4 |  | 5 | 6 |
+        """
+        let columnInsertAfter = applying(.insertColumnAfter, in: columnSource) { $0.header[1] } == """
+        | A | B |  | C |
+        | --- | :---: | --- | ---: |
+        | 1 | 2 |  | 3 |
+        | 4 | 5 |  | 6 |
+        """
+        let columnDuplicate = applying(.duplicateColumn, in: columnSource) { $0.header[1] } == """
+        | A | B | B | C |
+        | --- | :---: | :---: | ---: |
+        | 1 | 2 | 2 | 3 |
+        | 4 | 5 | 5 | 6 |
+        """
+        let columnRemove = applying(.removeColumn, in: columnSource) { $0.header[1] } == """
+        | A | C |
+        | --- | ---: |
+        | 1 | 3 |
+        | 4 | 6 |
+        """
+        let columnMoveLeft = applying(.moveColumnLeft, in: columnSource) { $0.header[1] } == """
+        | B | A | C |
+        | :---: | --- | ---: |
+        | 2 | 1 | 3 |
+        | 5 | 4 | 6 |
+        """
+        let columnMoveRight = applying(.moveColumnRight, in: columnSource) { $0.header[1] } == """
+        | A | C | B |
+        | --- | ---: | :---: |
+        | 1 | 3 | 2 |
+        | 4 | 6 | 5 |
+        """
+
+        let alignSource = """
+        | Name | Status |
+        | --- | --- |
+        | Alpha | Draft |
+        """
+        let columnAlignLeft = applying(.alignColumn(.left), in: alignSource) { $0.header[1] } == """
+        | Name | Status |
+        | --- | :--- |
+        | Alpha | Draft |
+        """
+        let columnAlignCenter = applying(.alignColumn(.center), in: alignSource) { $0.header[1] } == """
+        | Name | Status |
+        | --- | :---: |
+        | Alpha | Draft |
+        """
+        let columnAlignRight = applying(.alignColumn(.right), in: alignSource) { $0.header[1] } == """
+        | Name | Status |
+        | --- | ---: |
+        | Alpha | Draft |
+        """
+
+        let sortSource = """
+        | Name | Rank |
+        | --- | --- |
+        | Beta | 2 |
+        | Alpha | 10 |
+        | Gamma | 1 |
+        """
+        let columnSortAscending = applying(.sortColumnAscending, in: sortSource) { $0.header[1] } == """
+        | Name | Rank |
+        | --- | --- |
+        | Gamma | 1 |
+        | Beta | 2 |
+        | Alpha | 10 |
+        """
+        let columnSortDescending = applying(.sortColumnDescending, in: sortSource) { $0.header[0] } == """
+        | Name | Rank |
+        | --- | --- |
+        | Gamma | 1 |
+        | Beta | 2 |
+        | Alpha | 10 |
+        """
+
+        return (
+            rowInsertBefore,
+            rowInsertAfter,
+            rowDuplicate,
+            rowRemove,
+            rowMoveUp,
+            rowMoveDown,
+            columnInsertBefore,
+            columnInsertAfter,
+            columnDuplicate,
+            columnRemove,
+            columnMoveLeft,
+            columnMoveRight,
+            columnAlignLeft,
+            columnAlignCenter,
+            columnAlignRight,
+            columnSortAscending,
+            columnSortDescending
         )
     }
 
