@@ -576,7 +576,7 @@ enum LivePreviewOverlayRenderer {
         context: LivePreviewListMarkerContext,
         in textView: NSTextView
     ) -> LivePreviewMarkerGeometry? {
-        guard let lineRect = unionLineRect(for: block.sourceRange.nsRange, in: textView)
+        guard let lineRect = lineFragments(for: block.sourceRange.nsRange, in: textView).first?.lineRect
         else {
             return nil
         }
@@ -616,8 +616,13 @@ enum LivePreviewOverlayRenderer {
         path.lineWidth = 1
         for segment in visibleSegments {
             let x = floor(segment.x) + 0.5
-            path.move(to: NSPoint(x: x, y: segment.startY))
-            path.line(to: NSPoint(x: x, y: segment.endY))
+            let startY = max(min(segment.startY, segment.endY), Double(dirtyRect.minY))
+            let endY = min(max(segment.startY, segment.endY), Double(dirtyRect.maxY))
+            guard endY > startY else {
+                continue
+            }
+            path.move(to: NSPoint(x: x, y: startY))
+            path.line(to: NSPoint(x: x, y: endY))
         }
         LivePreviewTheme.listGuideLineColor.setStroke()
         path.stroke()

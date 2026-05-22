@@ -56,6 +56,7 @@ struct LivePreviewStyleProbeReport: Codable, Equatable {
     var nestedListProbeVersion: Int
     var nestedListFixtureID: String
     var nestedListFailureIDs: [String]
+    var nestedListCheckResults: [NestedListCheckProbeReport]
     var nestedListGeometryCases: [NestedListGeometryProbeCase]
     var nestedListGuideSegments: [NestedListGuideSegmentProbeReport]
     var nestedListPixelChecks: [NestedListPixelCheckProbeReport]
@@ -78,6 +79,9 @@ struct LivePreviewStyleProbeReport: Codable, Equatable {
     var nestedListGuideEndsAtDescendant: Bool
     var nestedListGuidePositivePixelsPresent: Bool
     var nestedListGuideNegativePixelsClear: Bool
+    var nestedListGuideDirtyRectClipped: Bool
+    var nestedListWrappedContinuationAligned: Bool
+    var nestedListEOFGeometryMeasured: Bool
     var nestedListRenderPreservesSource: Bool
     var listRenderPreservesSource: Bool
     var blockquoteParagraphIndentApplied: Bool
@@ -173,6 +177,15 @@ struct NestedListGuideSegmentProbeReport: Codable, Equatable {
     var x: Double
     var startY: Double
     var endY: Double
+}
+
+struct NestedListCheckProbeReport: Codable, Equatable {
+    var failureID: String
+    var caseID: String
+    var expected: String
+    var actual: String
+    var tolerance: Double?
+    var passed: Bool
 }
 
 struct NestedListPixelCheckProbeReport: Codable, Equatable {
@@ -465,6 +478,7 @@ enum LivePreviewStyleProbe {
             nestedListProbeVersion: nestedListFields.probeVersion,
             nestedListFixtureID: nestedListFields.fixtureID,
             nestedListFailureIDs: nestedListFields.failureIDs,
+            nestedListCheckResults: nestedListFields.checkResults,
             nestedListGeometryCases: nestedListFields.geometryCases,
             nestedListGuideSegments: nestedListFields.guideSegments,
             nestedListPixelChecks: nestedListFields.pixelChecks,
@@ -487,6 +501,9 @@ enum LivePreviewStyleProbe {
             nestedListGuideEndsAtDescendant: nestedListFields.guideEndsAtDescendant,
             nestedListGuidePositivePixelsPresent: nestedListFields.guidePositivePixelsPresent,
             nestedListGuideNegativePixelsClear: nestedListFields.guideNegativePixelsClear,
+            nestedListGuideDirtyRectClipped: nestedListFields.guideDirtyRectClipped,
+            nestedListWrappedContinuationAligned: nestedListFields.wrappedContinuationAligned,
+            nestedListEOFGeometryMeasured: nestedListFields.eofGeometryMeasured,
             nestedListRenderPreservesSource: nestedListFields.renderPreservesSource,
             listRenderPreservesSource: textView.string.contains("- [x] Done item"),
             blockquoteParagraphIndentApplied: blockquoteParagraphStyle?.headIndent ?? 0 > 0,
@@ -1066,6 +1083,7 @@ enum LivePreviewStyleProbe {
         probeVersion: Int,
         fixtureID: String,
         failureIDs: [String],
+        checkResults: [NestedListCheckProbeReport],
         geometryCases: [NestedListGeometryProbeCase],
         guideSegments: [NestedListGuideSegmentProbeReport],
         pixelChecks: [NestedListPixelCheckProbeReport],
@@ -1087,6 +1105,9 @@ enum LivePreviewStyleProbe {
         guideEndsAtDescendant: Bool,
         guidePositivePixelsPresent: Bool,
         guideNegativePixelsClear: Bool,
+        guideDirtyRectClipped: Bool,
+        wrappedContinuationAligned: Bool,
+        eofGeometryMeasured: Bool,
         renderPreservesSource: Bool
     ) {
         let source = """
@@ -1294,6 +1315,11 @@ enum LivePreviewStyleProbe {
         let guideNegativePixelsClear = pixelChecks
             .filter { !$0.expectedPainted }
             .allSatisfy(\.passed)
+        let guideDirtyRectClipped = nestedListGuideDirtyRectClipped(
+            textView: textView,
+            source: source,
+            depthOneGuide: depthOneGuide
+        )
 
         let clippedWindow = context(containing: "bullet child").map(\.blockRange.location).map {
             LivePreviewSourceRange(location: $0, length: (source as NSString).length - $0)
@@ -1313,31 +1339,164 @@ enum LivePreviewStyleProbe {
             }?.depth == 1
         } ?? false
         let clippedContextHandled = clippedDepthResolved
+        let wrappedContinuationAligned = probeWrappedNestedListGeometry()
+        let eofGeometryMeasured = probeEOFNestedListGeometry()
 
-        let checks: [(String, Bool)] = [
-            ("nestedListUnorderedDepthsResolved", unorderedDepthsResolved),
-            ("nestedListOrderedDepthsResolved", orderedDepthsResolved),
-            ("nestedListTaskDepthsResolved", taskDepthsResolved),
-            ("nestedListMixedDepthsResolved", mixedDepthsResolved),
-            ("nestedListTabsNormalizeToDepth", tabsNormalizeToDepth),
-            ("nestedListClusterBreakRespected", clusterBreakRespected),
-            ("nestedListContextIncompleteHandled", clippedContextHandled),
-            ("nestedListVisibleRangeDepthsResolved", clippedDepthResolved),
-            ("nestedListMarkerXIncreasesByDepth", markerXIncreasesByDepth),
-            ("nestedListTextXIncreasesByDepth", textXIncreasesByDepth),
-            ("nestedListOrderedWidthTextStartNormalized", orderedWidthTextStartNormalized),
-            ("nestedListGuideSegmentsReported", !guideSegments.isEmpty),
-            ("nestedListGuideStartsBelowParent", guideStartsBelowParent),
-            ("nestedListGuideEndsAtDescendant", guideEndsAtDescendant),
-            ("nestedListGuidePositivePixelsPresent", guidePositivePixelsPresent),
-            ("nestedListGuideNegativePixelsClear", guideNegativePixelsClear),
-            ("nestedListRenderPreservesSource", textView.string == source)
+        let checkResults: [NestedListCheckProbeReport] = [
+            checkResult(
+                failureID: "nestedListUnorderedDepthsResolved",
+                caseID: "unordered-depths",
+                expected: "[0, 1, 2]",
+                actual: String(describing: depths(unorderedLabels)),
+                passed: unorderedDepthsResolved
+            ),
+            checkResult(
+                failureID: "nestedListOrderedDepthsResolved",
+                caseID: "ordered-depths",
+                expected: "[0, 1, 2]",
+                actual: String(describing: depths(orderedLabels)),
+                passed: orderedDepthsResolved
+            ),
+            checkResult(
+                failureID: "nestedListTaskDepthsResolved",
+                caseID: "task-depths",
+                expected: "[0, 1, 2]",
+                actual: String(describing: depths(taskLabels)),
+                passed: taskDepthsResolved
+            ),
+            checkResult(
+                failureID: "nestedListMixedDepthsResolved",
+                caseID: "mixed-depths",
+                expected: "[0, 1, 2]",
+                actual: String(describing: depths(mixedLabels)),
+                passed: mixedDepthsResolved
+            ),
+            checkResult(
+                failureID: "nestedListTabsNormalizeToDepth",
+                caseID: "tab-vs-space-depth",
+                expected: "same depth and x-position within 1px",
+                actual: "tabDepth=\(tabCase?.depth ?? -1), spaceDepth=\(spaceCase?.depth ?? -1)",
+                tolerance: 1,
+                passed: tabsNormalizeToDepth
+            ),
+            checkResult(
+                failureID: "nestedListClusterBreakRespected",
+                caseID: "cluster-break",
+                expected: "depth 0 after paragraph break",
+                actual: "depth \(context(containing: "indented new cluster root")?.depth ?? -1)",
+                passed: clusterBreakRespected
+            ),
+            checkResult(
+                failureID: "nestedListContextIncompleteHandled",
+                caseID: "visible-context",
+                expected: "bounded ancestor context resolves child depth",
+                actual: "resolved=\(clippedDepthResolved)",
+                passed: clippedContextHandled
+            ),
+            checkResult(
+                failureID: "nestedListVisibleRangeDepthsResolved",
+                caseID: "visible-range-depth",
+                expected: "child depth 1",
+                actual: "resolved=\(clippedDepthResolved)",
+                passed: clippedDepthResolved
+            ),
+            checkResult(
+                failureID: "nestedListMarkerXIncreasesByDepth",
+                caseID: "marker-x-depth",
+                expected: "marker x strictly increases by depth",
+                actual: geometrySummary(geometryCases, keyPath: \.markerX),
+                tolerance: 1,
+                passed: markerXIncreasesByDepth
+            ),
+            checkResult(
+                failureID: "nestedListTextXIncreasesByDepth",
+                caseID: "text-x-depth",
+                expected: "text x strictly increases by depth",
+                actual: geometrySummary(geometryCases, keyPath: \.textX),
+                tolerance: 1,
+                passed: textXIncreasesByDepth
+            ),
+            checkResult(
+                failureID: "nestedListOrderedWidthTextStartNormalized",
+                caseID: "ordered-width-normalized",
+                expected: "same-depth ordered text starts within 1px",
+                actual: "one=\(widthOne?.textX ?? -1), ten=\(widthTen?.textX ?? -1)",
+                tolerance: 1,
+                passed: orderedWidthTextStartNormalized
+            ),
+            checkResult(
+                failureID: "nestedListGuideSegmentsReported",
+                caseID: "guide-segments",
+                expected: "at least one guide segment",
+                actual: "\(guideSegments.count)",
+                passed: !guideSegments.isEmpty
+            ),
+            checkResult(
+                failureID: "nestedListGuideStartsBelowParent",
+                caseID: "guide-start",
+                expected: "guide starts on first child line",
+                actual: "start=\(depthOneGuide?.startY ?? -1), child=\(childLine?.minY ?? -1)",
+                tolerance: 1,
+                passed: guideStartsBelowParent
+            ),
+            checkResult(
+                failureID: "nestedListGuideEndsAtDescendant",
+                caseID: "guide-end",
+                expected: "guide ends on final descendant line",
+                actual: "end=\(depthOneGuide?.endY ?? -1), descendant=\(grandchildLine?.maxY ?? -1)",
+                tolerance: 1,
+                passed: guideEndsAtDescendant
+            ),
+            checkResult(
+                failureID: "nestedListGuidePositivePixelsPresent",
+                caseID: "guide-positive-pixels",
+                expected: "positive guide samples painted",
+                actual: pixelChecksSummary(pixelChecks, expectedPainted: true),
+                passed: guidePositivePixelsPresent
+            ),
+            checkResult(
+                failureID: "nestedListGuideNegativePixelsClear",
+                caseID: "guide-negative-pixels",
+                expected: "negative guide samples clear",
+                actual: pixelChecksSummary(pixelChecks, expectedPainted: false),
+                passed: guideNegativePixelsClear
+            ),
+            checkResult(
+                failureID: "nestedListGuideDirtyRectClipped",
+                caseID: "guide-dirty-rect",
+                expected: "guide paint clipped to dirty rect",
+                actual: "clipped=\(guideDirtyRectClipped)",
+                passed: guideDirtyRectClipped
+            ),
+            checkResult(
+                failureID: "nestedListWrappedContinuationAligned",
+                caseID: "wrapped-list",
+                expected: "wrapped continuation aligns and marker uses first visual line",
+                actual: "aligned=\(wrappedContinuationAligned)",
+                tolerance: 1,
+                passed: wrappedContinuationAligned
+            ),
+            checkResult(
+                failureID: "nestedListEOFGeometryMeasured",
+                caseID: "eof-list",
+                expected: "final list item without newline has depth and geometry",
+                actual: "measured=\(eofGeometryMeasured)",
+                passed: eofGeometryMeasured
+            ),
+            checkResult(
+                failureID: "nestedListRenderPreservesSource",
+                caseID: "source-preservation",
+                expected: "render keeps backing source identical",
+                actual: "preserved=\(textView.string == source)",
+                passed: textView.string == source
+            )
         ]
 
         return (
             1,
             fixtureID,
-            checks.filter { !$0.1 }.map(\.0).sorted(),
+            checkResults.filter { !$0.passed }.map(\.failureID).sorted(),
+            checkResults,
             geometryCases,
             guideReports,
             pixelChecks,
@@ -1359,6 +1518,9 @@ enum LivePreviewStyleProbe {
             guideEndsAtDescendant,
             guidePositivePixelsPresent,
             guideNegativePixelsClear,
+            guideDirtyRectClipped,
+            wrappedContinuationAligned,
+            eofGeometryMeasured,
             textView.string == source
         )
     }
@@ -1409,9 +1571,128 @@ enum LivePreviewStyleProbe {
         return positives + negatives
     }
 
+    private static func nestedListGuideDirtyRectClipped(
+        textView: NSTextView,
+        source: String,
+        depthOneGuide: LivePreviewOverlayRenderer.ListGuideSegment?
+    ) -> Bool {
+        guard let interactionTextView = textView as? MarkdownInteractionTextView,
+              let depthOneGuide
+        else {
+            return false
+        }
+        let clipRect = NSRect(
+            x: CGFloat(depthOneGuide.x) - 2,
+            y: CGFloat(depthOneGuide.startY),
+            width: 4,
+            height: max(2, CGFloat(depthOneGuide.endY - depthOneGuide.startY) / 2)
+        )
+        guard let bitmap = renderedOverlayBitmap(
+            for: interactionTextView,
+            source: source,
+            dirtyRect: clipRect
+        ) else {
+            return false
+        }
+
+        let insidePoint = NSPoint(x: depthOneGuide.x, y: depthOneGuide.startY + 2)
+        let outsidePoint = NSPoint(x: depthOneGuide.x, y: min(depthOneGuide.endY - 2, Double(clipRect.maxY) + 4))
+        return pixelIsPainted(near: insidePoint, in: bitmap)
+            && !pixelIsPainted(near: outsidePoint, in: bitmap)
+    }
+
+    private static func probeWrappedNestedListGeometry() -> Bool {
+        let source = """
+        - parent
+          - child wraps with enough words to force a second visual fragment when the text container is narrow and the continuation line must align with the first rendered text column instead of falling back to raw source whitespace
+        """
+        let textView = configuredTextView(source: source, markerStyle: .obsidian)
+        textView.frame = NSRect(x: 0, y: 0, width: 220, height: 400)
+        textView.textContainer?.containerSize = NSSize(width: 220, height: CGFloat.greatestFiniteMagnitude)
+        textView.textContainer?.widthTracksTextView = true
+        textView.layoutManager?.ensureLayout(for: textView.textContainer!)
+
+        guard let childOffset = utf16Offset(of: "child wraps", in: source),
+              let context = LivePreviewListMarkerResolver.resolve(
+                source: source,
+                blocks: LivePreviewParser.parse(source).blocks
+              ).contextsByBlockRange.values.first(where: { NSLocationInRange(childOffset, $0.blockRange) }),
+              let markerGeometry = LivePreviewOverlayRenderer.markerGeometries(in: textView)
+                .first(where: { $0.sourceRange.location == context.markerRange.location }),
+              let childLineRect = lineRect(in: textView, source: source, marker: "child wraps")
+        else {
+            return false
+        }
+
+        let fragments = lineFragmentRects(in: textView, range: context.blockRange)
+        guard fragments.count >= 2 else {
+            return false
+        }
+        return abs(fragments[0].minX - fragments[1].minX) <= 1
+            && abs(markerGeometry.lineRect.minY - childLineRect.minY) <= 1
+            && markerGeometry.lineRect.height <= childLineRect.height + 1
+    }
+
+    private static func probeEOFNestedListGeometry() -> Bool {
+        let source = "- parent\n  - child without trailing newline"
+        let textView = configuredTextView(source: source, markerStyle: .obsidian)
+        let parsed = LivePreviewParser.parse(source)
+        let resolution = LivePreviewListMarkerResolver.resolve(source: source, blocks: parsed.blocks)
+        guard let childOffset = utf16Offset(of: "child without", in: source),
+              let childContext = resolution.contextsByBlockRange.values.first(where: {
+                NSLocationInRange(childOffset, $0.blockRange)
+              }),
+              childContext.depth == 1,
+              LivePreviewOverlayRenderer.markerGeometries(in: textView).contains(where: {
+                $0.sourceRange.location == childContext.markerRange.location
+            })
+        else {
+            return false
+        }
+        return textView.string == source
+    }
+
+    private static func checkResult(
+        failureID: String,
+        caseID: String,
+        expected: String,
+        actual: String,
+        tolerance: Double? = nil,
+        passed: Bool
+    ) -> NestedListCheckProbeReport {
+        NestedListCheckProbeReport(
+            failureID: failureID,
+            caseID: caseID,
+            expected: expected,
+            actual: actual,
+            tolerance: tolerance,
+            passed: passed
+        )
+    }
+
+    private static func geometrySummary(
+        _ cases: [NestedListGeometryProbeCase],
+        keyPath: KeyPath<NestedListGeometryProbeCase, Double>
+    ) -> String {
+        cases
+            .map { "\($0.caseID)=\($0[keyPath: keyPath].rounded(toPlaces: 2))" }
+            .joined(separator: ", ")
+    }
+
+    private static func pixelChecksSummary(
+        _ checks: [NestedListPixelCheckProbeReport],
+        expectedPainted: Bool
+    ) -> String {
+        checks
+            .filter { $0.expectedPainted == expectedPainted }
+            .map { "\($0.checkID)=\($0.actualPainted)" }
+            .joined(separator: ", ")
+    }
+
     private static func renderedOverlayBitmap(
         for textView: MarkdownInteractionTextView,
-        source: String
+        source: String,
+        dirtyRect: NSRect? = nil
     ) -> NSBitmapImageRep? {
         let bounds = textView.bounds
         guard bounds.width > 0, bounds.height > 0,
@@ -1438,7 +1719,7 @@ enum LivePreviewStyleProbe {
         bounds.fill()
         LivePreviewOverlayRenderer.drawForegrounds(
             in: textView,
-            dirtyRect: bounds,
+            dirtyRect: dirtyRect ?? bounds,
             state: LivePreviewOverlayState(
                 markerStyle: .obsidian,
                 revealRange: NSRange(location: (source as NSString).length, length: 0)
@@ -1774,6 +2055,36 @@ enum LivePreviewStyleProbe {
             .offsetBy(dx: origin.x, dy: origin.y)
     }
 
+    private static func lineFragmentRects(in textView: NSTextView, range: NSRange) -> [NSRect] {
+        guard let layoutManager = textView.layoutManager,
+              let textContainer = textView.textContainer
+        else {
+            return []
+        }
+
+        let stringLength = (textView.string as NSString).length
+        let textRange = NSIntersectionRange(range, NSRange(location: 0, length: stringLength))
+        guard textRange.length > 0 else {
+            return []
+        }
+
+        layoutManager.ensureLayout(for: textContainer)
+        let glyphRange = layoutManager.glyphRange(forCharacterRange: textRange, actualCharacterRange: nil)
+        guard glyphRange.length > 0 else {
+            return []
+        }
+
+        let origin = textView.textContainerOrigin
+        var rects: [NSRect] = []
+        layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) { _, usedRect, _, lineGlyphRange, _ in
+            guard NSIntersectionRange(lineGlyphRange, glyphRange).length > 0 else {
+                return
+            }
+            rects.append(usedRect.offsetBy(dx: origin.x, dy: origin.y))
+        }
+        return rects
+    }
+
     private static func propertyHeaderGeometrySeparated(
         title: NSRect?,
         section: NSRect?,
@@ -1800,5 +2111,12 @@ enum LivePreviewStyleProbe {
             return nil
         }
         return String(source[range])
+    }
+}
+
+private extension Double {
+    func rounded(toPlaces places: Int) -> Double {
+        let divisor = pow(10.0, Double(places))
+        return (self * divisor).rounded() / divisor
     }
 }
