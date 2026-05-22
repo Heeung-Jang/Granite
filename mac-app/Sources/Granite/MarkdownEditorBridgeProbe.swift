@@ -28,6 +28,12 @@ struct MarkdownEditorBridgeProbeReport: Codable, Equatable {
     var activeListLineMovementPreservesSource: Bool
     var activeTaskLineMovementPreservesSource: Bool
     var activeHorizontalRuleLineMovementPreservesSource: Bool
+    var nestedActiveRevealLocalized: Bool
+    var nestedActiveUnorderedMarkerRevealedInsideLine: Bool
+    var nestedActiveOrderedMarkerRevealedInsideLine: Bool
+    var nestedActiveTaskTokenRevealedInsideLine: Bool
+    var nestedSiblingMarkersRemainRendered: Bool
+    var nestedListRenderPreservesSource: Bool
     var caretRevealRestoresHiddenSyntaxColor: Bool
     var headingSelectionRevealsMarkdownSource: Bool
     var inlineConcealmentAppliesBeyondParagraph: Bool
@@ -117,6 +123,7 @@ enum MarkdownEditorBridgeProbe {
         let modeProbe = probeModeTransitions()
         let renderProbe = probeLivePreviewRendering()
         let sourcePreservationProbe = probeSourcePreservationGuards()
+        let nestedActiveRevealProbe = probeNestedListActiveReveal()
         let overlayStateProbe = probeOverlayStateLifecycle()
         let markerStyleProbe = probeMarkerStyleStorageCompatibility()
         let selectionChangeProbe = probeSelectionChangeDecorationDoesNotReenter()
@@ -150,6 +157,12 @@ enum MarkdownEditorBridgeProbe {
             activeListLineMovementPreservesSource: sourcePreservationProbe.activeListLineMovementPreservesSource,
             activeTaskLineMovementPreservesSource: sourcePreservationProbe.activeTaskLineMovementPreservesSource,
             activeHorizontalRuleLineMovementPreservesSource: sourcePreservationProbe.activeHorizontalRuleLineMovementPreservesSource,
+            nestedActiveRevealLocalized: nestedActiveRevealProbe.localized,
+            nestedActiveUnorderedMarkerRevealedInsideLine: nestedActiveRevealProbe.unorderedRevealed,
+            nestedActiveOrderedMarkerRevealedInsideLine: nestedActiveRevealProbe.orderedRevealed,
+            nestedActiveTaskTokenRevealedInsideLine: nestedActiveRevealProbe.taskRevealed,
+            nestedSiblingMarkersRemainRendered: nestedActiveRevealProbe.siblingMarkersRemainRendered,
+            nestedListRenderPreservesSource: nestedActiveRevealProbe.sourcePreserved,
             caretRevealRestoresHiddenSyntaxColor: renderProbe.caretRevealRestoresHiddenSyntaxColor,
             headingSelectionRevealsMarkdownSource: renderProbe.headingSelectionRevealsMarkdownSource,
             inlineConcealmentAppliesBeyondParagraph: renderProbe.inlineConcealmentAppliesBeyondParagraph,
@@ -289,6 +302,131 @@ enum MarkdownEditorBridgeProbe {
             moveSelection(to: "Bullet"),
             moveSelection(to: "Done"),
             moveSelection(to: "---")
+        )
+    }
+
+    private static func probeNestedListActiveReveal() -> (
+        localized: Bool,
+        unorderedRevealed: Bool,
+        orderedRevealed: Bool,
+        taskRevealed: Bool,
+        siblingMarkersRemainRendered: Bool,
+        sourcePreserved: Bool
+    ) {
+        let source = """
+        - bullet parent
+          - bullet child
+            - bullet grandchild
+        1. number parent
+           1. number child
+              1. number grandchild
+        - [ ] task parent
+          - [x] task child
+            - [ ] task grandchild
+        """
+
+        func decoratedTextView(activeText: String) -> NSTextView? {
+            guard let offset = utf16Offset(of: activeText, in: source) else {
+                return nil
+            }
+            let textView = MarkdownEditorTextViewFactory.makeTextView()
+            textView.string = source
+            textView.setSelectedRange(NSRange(location: offset, length: 0))
+            MarkdownVisibleRangeDecorator.decorateVisibleRange(
+                in: textView,
+                livePreviewMode: .livePreview,
+                revealRange: textView.selectedRange(),
+                markerStyle: .obsidian
+            )
+            return textView
+        }
+
+        let unorderedTextView = decoratedTextView(activeText: "bullet child")
+        let orderedTextView = decoratedTextView(activeText: "number child")
+        let taskTextView = decoratedTextView(activeText: "task child")
+
+        let unorderedRevealed = foregroundColor(
+            in: unorderedTextView ?? NSTextView(),
+            text: source,
+            marker: "  - bullet child"
+        ) != LivePreviewTheme.concealedColor
+        let unorderedParentConcealed = foregroundColor(
+            in: unorderedTextView ?? NSTextView(),
+            text: source,
+            marker: "- bullet parent"
+        ) == LivePreviewTheme.concealedColor
+        let unorderedGrandchildConcealed = foregroundColor(
+            in: unorderedTextView ?? NSTextView(),
+            text: source,
+            marker: "    - bullet grandchild"
+        ) == LivePreviewTheme.concealedColor
+
+        let orderedRevealed = foregroundColor(
+            in: orderedTextView ?? NSTextView(),
+            text: source,
+            marker: "   1. number child"
+        ) != LivePreviewTheme.concealedColor
+        let orderedParentConcealed = foregroundColor(
+            in: orderedTextView ?? NSTextView(),
+            text: source,
+            marker: "1. number parent"
+        ) == LivePreviewTheme.concealedColor
+
+        let taskRevealed = foregroundColor(
+            in: taskTextView ?? NSTextView(),
+            text: source,
+            marker: "  - [x] task child"
+        ) != LivePreviewTheme.concealedColor
+            && foregroundColor(
+                in: taskTextView ?? NSTextView(),
+                text: source,
+                marker: "[x] task child"
+            ) != LivePreviewTheme.concealedColor
+        let taskParentConcealed = foregroundColor(
+            in: taskTextView ?? NSTextView(),
+            text: source,
+            marker: "- [ ] task parent"
+        ) == LivePreviewTheme.concealedColor
+
+        let parentOverlayStillDraws = unorderedTextView.flatMap { textView -> Bool? in
+            guard let parentOffset = utf16Offset(of: "bullet parent", in: source),
+                  let parentBlock = LivePreviewParser.parse(source).blocks.first(where: {
+                    NSLocationInRange(parentOffset, $0.sourceRange.nsRange)
+                  }),
+                  let markerKind = LivePreviewOverlayRenderer.markerGeometries(in: textView)
+                    .first(where: { NSLocationInRange($0.sourceRange.location, parentBlock.sourceRange.nsRange) })?
+                    .kind
+            else {
+                return nil
+            }
+            return LivePreviewOverlayRenderer.shouldDrawMarkerOverlay(
+                for: parentBlock,
+                markerKind: markerKind,
+                state: LivePreviewOverlayState(
+                    markerStyle: .obsidian,
+                    revealRange: textView.selectedRange()
+                )
+            )
+        } ?? false
+
+        let localized = unorderedRevealed
+            && unorderedParentConcealed
+            && unorderedGrandchildConcealed
+            && orderedRevealed
+            && orderedParentConcealed
+            && taskRevealed
+            && taskParentConcealed
+        let sourcePreserved = unorderedTextView?.string == source
+            && orderedTextView?.string == source
+            && taskTextView?.string == source
+
+        return (
+            localized,
+            unorderedRevealed,
+            orderedRevealed,
+            taskRevealed,
+            unorderedParentConcealed && unorderedGrandchildConcealed && parentOverlayStillDraws,
+            sourcePreserved
         )
     }
 
