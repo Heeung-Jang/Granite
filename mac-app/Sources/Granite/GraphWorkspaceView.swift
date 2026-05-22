@@ -563,7 +563,19 @@ struct GraphWorkspaceView: View {
     }
 
     private func zoom(by multiplier: Double) {
-        viewport.zoomScale *= multiplier
+        viewport.zoom(
+            by: multiplier,
+            around: GraphPoint(x: 0, y: 0)
+        )
+    }
+
+    private func zoom(with event: GraphMagnificationEvent) {
+        guard let multiplier = event.zoomMultiplier,
+              let centeredPoint = event.centeredScreenPoint
+        else {
+            return
+        }
+        viewport.zoom(by: multiplier, around: centeredPoint)
     }
 
     private func toggleGraphSearch() {
@@ -649,6 +661,9 @@ struct GraphWorkspaceView: View {
                     commitDraggedNode(result)
                     break
                 }
+            },
+            magnifyCanvas: { event in
+                zoom(with: event)
             }
         )
     }

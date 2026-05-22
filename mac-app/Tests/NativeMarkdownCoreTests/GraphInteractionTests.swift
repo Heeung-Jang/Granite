@@ -312,6 +312,38 @@ func graphGestureDecisionConvertsScreenThresholdToGraphThreshold() {
 }
 
 @Test
+func graphGestureDecisionPointerGraphPointUsesZoomedViewportAndPan() {
+    let viewport = GraphViewport(
+        panOffset: GraphPoint(x: 20, y: -10),
+        zoomScale: 2
+    )
+
+    let point = GraphGestureDecision.pointerGraphPoint(
+        screenPoint: GraphPoint(x: 380, y: 90),
+        viewport: viewport,
+        canvasSize: GraphSize(width: 400, height: 200)
+    )
+
+    #expect(point == GraphPoint(x: 80, y: 0))
+}
+
+@Test
+func graphHitTestFindsNodeAfterZoomAndPan() {
+    let layout = interactionLayout()
+    let viewport = GraphViewport(
+        panOffset: GraphPoint(x: 20, y: -10),
+        zoomScale: 2
+    )
+    let hit = GraphHitTestIndex(layout: layout).nearestNode(
+        at: GraphPoint(x: 380, y: 90),
+        viewport: viewport,
+        canvasSize: GraphSize(width: 400, height: 200)
+    )
+
+    #expect(hit?.nodeID == "file:b")
+}
+
+@Test
 func graphGestureDecisionClassifiesTapAndNodeDragCompletion() {
     let tap = GraphNodeDragResult(
         nodeID: "file:a",

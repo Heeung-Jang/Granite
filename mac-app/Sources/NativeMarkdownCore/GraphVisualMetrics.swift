@@ -17,8 +17,10 @@ public enum GraphVisualMetrics {
 
     public static let defaultHitRadius = 8.0
     public static let hitRadiusPadding = 4.0
+    public static let labelCullingPadding = 160.0
     public static let fitPadding = 48.0
     public static let minimumZoomScale = 0.01
+    public static let maximumZoomScale = 10.0
     public static let maximumFitZoomScale = 2.5
 
     public static func nodeRadius(forDegree degree: Int) -> Double {

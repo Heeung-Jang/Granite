@@ -172,6 +172,13 @@ public struct GraphLayoutBounds: Equatable, Sendable {
         self.maxY = maxY
     }
 
+    public func contains(_ point: GraphPoint) -> Bool {
+        point.x >= minX
+            && point.x <= maxX
+            && point.y >= minY
+            && point.y <= maxY
+    }
+
     public static func enclosing(_ nodes: [GraphLayoutNode]) -> GraphLayoutBounds? {
         guard let first = nodes.first else {
             return nil
@@ -477,11 +484,85 @@ public struct GraphViewport: Equatable, Sendable {
         )
     }
 
+    public static func centeredScreenPoint(
+        forLocalPoint localPoint: GraphPoint,
+        canvasSize: GraphSize
+    ) -> GraphPoint? {
+        guard localPoint.x.isFinite,
+              localPoint.y.isFinite,
+              canvasSize.width.isFinite,
+              canvasSize.height.isFinite,
+              canvasSize.width > 0,
+              canvasSize.height > 0
+        else {
+            return nil
+        }
+        return GraphPoint(
+            x: localPoint.x - canvasSize.width / 2,
+            y: localPoint.y - canvasSize.height / 2
+        )
+    }
+
+    public mutating func zoom(by multiplier: Double, around centeredAnchor: GraphPoint) {
+        self = zoomed(by: multiplier, around: centeredAnchor)
+    }
+
+    public func zoomed(by multiplier: Double, around centeredAnchor: GraphPoint) -> GraphViewport {
+        guard multiplier.isFinite,
+              multiplier > 0,
+              centeredAnchor.x.isFinite,
+              centeredAnchor.y.isFinite
+        else {
+            return self
+        }
+        let graphAnchor = graphPoint(for: centeredAnchor)
+        let newZoomScale = Self.sanitizedZoomScale(zoomScale * multiplier)
+        return GraphViewport(
+            panOffset: GraphPoint(
+                x: centeredAnchor.x - graphAnchor.x * newZoomScale,
+                y: centeredAnchor.y - graphAnchor.y * newZoomScale
+            ),
+            zoomScale: newZoomScale
+        )
+    }
+
+    public func visibleGraphBounds(
+        canvasSize: GraphSize,
+        padding: Double = 0
+    ) -> GraphLayoutBounds? {
+        guard canvasSize.width.isFinite,
+              canvasSize.height.isFinite,
+              canvasSize.width > 0,
+              canvasSize.height > 0,
+              padding.isFinite
+        else {
+            return nil
+        }
+        let safePadding = max(0, padding)
+        let topLeft = graphPoint(for: GraphPoint(
+            x: -canvasSize.width / 2 - safePadding,
+            y: -canvasSize.height / 2 - safePadding
+        ))
+        let bottomRight = graphPoint(for: GraphPoint(
+            x: canvasSize.width / 2 + safePadding,
+            y: canvasSize.height / 2 + safePadding
+        ))
+        return GraphLayoutBounds(
+            minX: min(topLeft.x, bottomRight.x),
+            minY: min(topLeft.y, bottomRight.y),
+            maxX: max(topLeft.x, bottomRight.x),
+            maxY: max(topLeft.y, bottomRight.y)
+        )
+    }
+
     private static func sanitizedZoomScale(_ value: Double) -> Double {
         guard value.isFinite else {
             return 1
         }
-        return max(GraphVisualMetrics.minimumZoomScale, value)
+        return min(
+            GraphVisualMetrics.maximumZoomScale,
+            max(GraphVisualMetrics.minimumZoomScale, value)
+        )
     }
 }
 

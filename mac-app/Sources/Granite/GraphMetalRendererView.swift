@@ -130,6 +130,7 @@ struct GraphMetalRendererView: View {
                 ZStack(alignment: .topLeading) {
                     GraphMetalRepresentable(
                         input: renderInput,
+                        interactionCallbacks: interactionCallbacks,
                         callbacks: callbacks,
                         drawReportGate: drawReportGate,
                         onInitializationFailed: {
@@ -313,6 +314,7 @@ private enum GraphMetalDragMode {
 
 private struct GraphMetalRepresentable: NSViewRepresentable {
     let input: GraphRendererInput
+    var interactionCallbacks: GraphRendererInteractionCallbacks
     var callbacks: GraphRendererCallbacks
     let drawReportGate: GraphMetalDrawReportGate
     let onInitializationFailed: @MainActor () -> Void
@@ -329,12 +331,14 @@ private struct GraphMetalRepresentable: NSViewRepresentable {
         view.isPaused = true
         view.delegate = context.coordinator
         context.coordinator.attach(view)
+        context.coordinator.attachMagnification(to: view)
         return view
     }
 
     func updateNSView(_ view: MTKView, context: Context) {
         context.coordinator.update(
             input: input,
+            interactionCallbacks: interactionCallbacks,
             callbacks: callbacks,
             drawReportGate: drawReportGate
         )
@@ -343,13 +347,21 @@ private struct GraphMetalRepresentable: NSViewRepresentable {
         view.draw()
     }
 
-    final class Coordinator: NSObject, MTKViewDelegate {
+    static func dismantleNSView(_ view: MTKView, coordinator: Coordinator) {
+        coordinator.detachMagnification(from: view)
+    }
+
+    @MainActor
+    final class Coordinator: NSObject, MTKViewDelegate, NSGestureRecognizerDelegate {
         private let renderer = GraphRendererContract(rendererKind: .metal)
         private let onInitializationFailed: @MainActor () -> Void
         private var metalRenderer: GraphMetalRenderer?
         private var input: GraphRendererInput?
+        private var interactionCallbacks = GraphRendererInteractionCallbacks()
         private var callbacks = GraphRendererCallbacks()
         private var drawReportGate = GraphMetalDrawReportGate()
+        private weak var magnificationView: MTKView?
+        private var magnificationRecognizer: NSMagnificationGestureRecognizer?
 
         init(onInitializationFailed: @escaping @MainActor () -> Void) {
             self.onInitializationFailed = onInitializationFailed
@@ -371,10 +383,12 @@ private struct GraphMetalRepresentable: NSViewRepresentable {
         @MainActor
         func update(
             input: GraphRendererInput,
+            interactionCallbacks: GraphRendererInteractionCallbacks,
             callbacks: GraphRendererCallbacks,
             drawReportGate: GraphMetalDrawReportGate
         ) {
             self.input = input
+            self.interactionCallbacks = interactionCallbacks
             self.callbacks = callbacks
             self.drawReportGate = drawReportGate
 
@@ -390,6 +404,81 @@ private struct GraphMetalRepresentable: NSViewRepresentable {
             } catch {
                 callbacks.didFail(.edgeEndpointOutOfBounds)
             }
+        }
+
+        @MainActor
+        func attachMagnification(to view: MTKView) {
+            guard magnificationView !== view else {
+                magnificationRecognizer?.delegate = self
+                return
+            }
+            detachMagnification(from: magnificationView)
+            let recognizer = NSMagnificationGestureRecognizer(
+                target: self,
+                action: #selector(handleMagnification(_:))
+            )
+            recognizer.delegate = self
+            view.addGestureRecognizer(recognizer)
+            magnificationView = view
+            magnificationRecognizer = recognizer
+        }
+
+        @MainActor
+        func detachMagnification(from view: MTKView?) {
+            if let recognizer = magnificationRecognizer,
+               let view {
+                view.removeGestureRecognizer(recognizer)
+                recognizer.delegate = nil
+            }
+            magnificationRecognizer = nil
+            magnificationView = nil
+        }
+
+        @objc private func handleMagnification(_ recognizer: NSMagnificationGestureRecognizer) {
+            switch recognizer.state {
+            case .began, .changed:
+                emitMagnification(recognizer)
+                recognizer.magnification = 0
+            case .ended, .cancelled, .failed:
+                recognizer.magnification = 0
+            default:
+                break
+            }
+        }
+
+        private func emitMagnification(_ recognizer: NSMagnificationGestureRecognizer) {
+            guard let view = magnificationView,
+                  view.bounds.width > 0,
+                  view.bounds.height > 0,
+                  recognizer.magnification.isFinite,
+                  recognizer.magnification != 0
+            else {
+                return
+            }
+            let location = recognizer.location(in: view)
+            guard view.bounds.contains(location) else {
+                return
+            }
+            let localY = view.isFlipped ? location.y : view.bounds.height - location.y
+            interactionCallbacks.magnifyCanvas(GraphMagnificationEvent(
+                magnification: Double(recognizer.magnification),
+                localPoint: GraphPoint(
+                    x: Double(location.x),
+                    y: Double(localY)
+                ),
+                canvasSize: GraphSize(
+                    width: Double(view.bounds.width),
+                    height: Double(view.bounds.height)
+                )
+            ))
+        }
+
+        func gestureRecognizer(
+            _ gestureRecognizer: NSGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: NSGestureRecognizer
+        ) -> Bool {
+            gestureRecognizer === magnificationRecognizer
+                || otherGestureRecognizer === magnificationRecognizer
         }
 
         func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
@@ -422,6 +511,7 @@ private final class GraphMetalRenderer {
     private var nodeBuffer: (any MTLBuffer)?
     private var edgeVertexCount = 0
     private var nodeVertexCount = 0
+    private var edgePrimitiveType: MTLPrimitiveType = .line
 
     init(device: any MTLDevice) throws {
         self.device = device
@@ -489,10 +579,19 @@ private final class GraphMetalRenderer {
         geometryIdentity: String,
         styleIdentity: String
     ) {
+        let usesExpandedEdges = usesExpandedEdges(for: input)
         var edgeVertices: [GraphMetalVertex] = []
-        edgeVertices.reserveCapacity(input.layout.edges.count * (input.presentation.showArrows ? 9 : 6))
+        edgeVertices.reserveCapacity(input.layout.edges.count * edgeVertexSpan(
+            usesExpandedEdges: usesExpandedEdges,
+            showsArrows: input.presentation.showArrows
+        ))
         for edge in input.layout.edges {
-            appendEdgeVertices(edge: edge, input: input, vertices: &edgeVertices)
+            appendEdgeVertices(
+                edge: edge,
+                input: input,
+                usesExpandedEdges: usesExpandedEdges,
+                vertices: &edgeVertices
+            )
         }
 
         var nodeVertices: [GraphMetalVertex] = []
@@ -512,13 +611,17 @@ private final class GraphMetalRenderer {
         nodeBuffer = Self.makeBuffer(device: device, vertices: nodeVertices)
         edgeVertexCount = edgeVertices.count
         nodeVertexCount = nodeVertices.count
+        edgePrimitiveType = usesExpandedEdges ? .triangle : .line
         bufferState = GraphMetalBufferState(
             geometryIdentity: geometryIdentity,
             styleIdentity: styleIdentity,
             positionOverrides: input.positionOverrides,
             nodeIndexByID: nodeIndexByID(for: input.layout),
             incidentEdgeIndexesByNodeIndex: incidentEdgeIndexesByNodeIndex(for: input.layout),
-            edgeVertexSpan: input.presentation.showArrows ? 9 : 6
+            edgeVertexSpan: edgeVertexSpan(
+                usesExpandedEdges: usesExpandedEdges,
+                showsArrows: input.presentation.showArrows
+            )
         )
     }
 
@@ -584,7 +687,12 @@ private final class GraphMetalRenderer {
 
         var vertices: [GraphMetalVertex] = []
         vertices.reserveCapacity(bufferState.edgeVertexSpan)
-        appendEdgeVertices(edge: input.layout.edges[edgeIndex], input: input, vertices: &vertices)
+        appendEdgeVertices(
+            edge: input.layout.edges[edgeIndex],
+            input: input,
+            usesExpandedEdges: bufferState.edgeVertexSpan > 2,
+            vertices: &vertices
+        )
         write(vertices: vertices, to: edgeBuffer, at: edgeIndex * bufferState.edgeVertexSpan)
     }
 
@@ -658,7 +766,7 @@ private final class GraphMetalRenderer {
                 index: 1
             )
             encoder.drawPrimitives(
-                type: .triangle,
+                type: edgePrimitiveType,
                 vertexStart: 0,
                 vertexCount: edgeVertexCount
             )
@@ -841,6 +949,7 @@ private final class GraphMetalRenderer {
     private func appendEdgeVertices(
         edge: GraphLayoutEdge,
         input: GraphRendererInput,
+        usesExpandedEdges: Bool,
         vertices: inout [GraphMetalVertex]
     ) {
         guard input.layout.nodes.indices.contains(edge.sourceIndex),
@@ -853,6 +962,12 @@ private final class GraphMetalRenderer {
         let color = edgeColor(edge, input: input)
         let source = metalPoint(input.position(for: input.layout.nodes[edge.sourceIndex]))
         let target = metalPoint(input.position(for: input.layout.nodes[edge.targetIndex]))
+        guard usesExpandedEdges else {
+            vertices.append(GraphMetalVertex(position: source, color: color, radius: 1))
+            vertices.append(GraphMetalVertex(position: target, color: color, radius: 1))
+            return
+        }
+
         appendThickEdgeVertices(
             from: source,
             to: target,
@@ -871,6 +986,17 @@ private final class GraphMetalRenderer {
                 vertices: &vertices
             )
         }
+    }
+
+    private func usesExpandedEdges(for input: GraphRendererInput) -> Bool {
+        input.presentation.showArrows || input.presentation.linkThickness > 1.0
+    }
+
+    private func edgeVertexSpan(usesExpandedEdges: Bool, showsArrows: Bool) -> Int {
+        guard usesExpandedEdges else {
+            return 2
+        }
+        return showsArrows ? 9 : 6
     }
 
     private func appendArrowHeadVertices(
@@ -944,7 +1070,14 @@ private struct GraphMetalLabelsOverlay: View {
     var body: some View {
         if hasVisibleLabels {
             Canvas { context, size in
-                for node in input.layout.nodes where input.labelIsVisible(for: node) {
+                let visibleBounds = input.viewport.visibleGraphBounds(
+                    canvasSize: GraphSize(width: Double(size.width), height: Double(size.height)),
+                    padding: GraphVisualMetrics.labelCullingPadding
+                )
+                for node in input.layout.nodes where labelIsVisible(
+                    for: node,
+                    visibleBounds: visibleBounds
+                ) {
                     let point = canvasPoint(for: input.position(for: node), size: size)
                     let text = Text(node.label)
                         .font(.caption)
@@ -979,6 +1112,19 @@ private struct GraphMetalLabelsOverlay: View {
             x: size.width / 2 + CGFloat(point.x),
             y: size.height / 2 + CGFloat(point.y)
         )
+    }
+
+    private func labelIsVisible(
+        for node: GraphLayoutNode,
+        visibleBounds: GraphLayoutBounds?
+    ) -> Bool {
+        guard input.labelIsVisible(for: node) else {
+            return false
+        }
+        guard let visibleBounds else {
+            return true
+        }
+        return visibleBounds.contains(input.position(for: node))
     }
 }
 
@@ -1092,6 +1238,8 @@ private let graphMetalShaderSource = """
 #include <metal_stdlib>
 using namespace metal;
 
+constant float graphNodeMaxPointSize = 6.0;
+
 struct GraphMetalVertex {
     float2 position;
     float4 color;
@@ -1148,7 +1296,7 @@ vertex GraphMetalRasterOut graphNodeVertex(
     GraphMetalRasterOut out;
     out.position = graphClipPosition(item.position, uniforms);
     out.color = item.color;
-    out.pointSize = item.radius * uniforms.zoomScale * 2.0 * uniforms.pointScale;
+    out.pointSize = min(item.radius * uniforms.zoomScale * 2.0 * uniforms.pointScale, graphNodeMaxPointSize);
     return out;
 }
 
