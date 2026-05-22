@@ -47,6 +47,9 @@ struct LivePreviewStyleProbeReport: Codable, Equatable {
     var orderedDotMarkerDetected: Bool
     var orderedParenMarkerDetected: Bool
     var orderedMultiDigitMarkerDetected: Bool
+    var taskUncheckedMarkerDetected: Bool
+    var taskLowercaseCheckedMarkerDetected: Bool
+    var taskUppercaseCheckedMarkerDetected: Bool
     var obsidianOrderedMarkerOverlayDrawsOutsideReveal: Bool
     var obsidianOrderedMarkerOverlaySuppressedInsideReveal: Bool
     var markerStyleCompatibilityPreserved: Bool
@@ -67,6 +70,7 @@ struct LivePreviewStyleProbeReport: Codable, Equatable {
     var nestedListDepthAwareIndentApplied: Bool
     var nestedListMarkerXIncreasesByDepth: Bool
     var nestedListTextXIncreasesByDepth: Bool
+    var nestedListOrderedWidthTextStartNormalized: Bool
     var nestedListGuideSegmentsReported: Bool
     var nestedListGuideStartsBelowParent: Bool
     var nestedListGuideEndsAtDescendant: Bool
@@ -374,6 +378,7 @@ enum LivePreviewStyleProbe {
         let unorderedOverlayFields = probeUnorderedMarkerOverlayPolicy()
         let orderedMarkerFields = probeOrderedMarkerDetection()
         let orderedOverlayFields = probeOrderedMarkerOverlayPolicy()
+        let taskMarkerFields = probeTaskMarkerVariantDetection()
         let taskOverlayFields = probeTaskCheckboxOverlayPolicy()
         let tableActiveCellControls = probeTableActiveCellControls()
         let nestedListFields = probeNestedListHierarchy()
@@ -437,6 +442,9 @@ enum LivePreviewStyleProbe {
             orderedDotMarkerDetected: orderedMarkerFields.dotDetected,
             orderedParenMarkerDetected: orderedMarkerFields.parenDetected,
             orderedMultiDigitMarkerDetected: orderedMarkerFields.multiDigitDetected,
+            taskUncheckedMarkerDetected: taskMarkerFields.uncheckedDetected,
+            taskLowercaseCheckedMarkerDetected: taskMarkerFields.lowercaseCheckedDetected,
+            taskUppercaseCheckedMarkerDetected: taskMarkerFields.uppercaseCheckedDetected,
             obsidianOrderedMarkerOverlayDrawsOutsideReveal: orderedOverlayFields.drawsOutsideReveal,
             obsidianOrderedMarkerOverlaySuppressedInsideReveal: orderedOverlayFields.suppressedInsideReveal,
             markerStyleCompatibilityPreserved: unorderedOverlayFields.compatibilityPreserved
@@ -458,6 +466,7 @@ enum LivePreviewStyleProbe {
             nestedListDepthAwareIndentApplied: (nestedListParagraphStyle?.headIndent ?? 0) > (listParagraphStyle?.headIndent ?? 0),
             nestedListMarkerXIncreasesByDepth: nestedListFields.markerXIncreasesByDepth,
             nestedListTextXIncreasesByDepth: nestedListFields.textXIncreasesByDepth,
+            nestedListOrderedWidthTextStartNormalized: nestedListFields.orderedWidthTextStartNormalized,
             nestedListGuideSegmentsReported: nestedListFields.guideSegmentsReported,
             nestedListGuideStartsBelowParent: nestedListFields.guideStartsBelowParent,
             nestedListGuideEndsAtDescendant: nestedListFields.guideEndsAtDescendant,
@@ -976,6 +985,31 @@ enum LivePreviewStyleProbe {
         )
     }
 
+    private static func probeTaskMarkerVariantDetection() -> (
+        uncheckedDetected: Bool,
+        lowercaseCheckedDetected: Bool,
+        uppercaseCheckedDetected: Bool
+    ) {
+        let source = "- [ ] Unchecked\n- [x] Lowercase\n- [X] Uppercase\n"
+        let parsed = LivePreviewParser.parse(source)
+        let resolution = LivePreviewListMarkerResolver.resolve(source: source, blocks: parsed.blocks)
+        let prefixes = resolution.contextsByBlockRange.values.compactMap { context in
+            sourceText(
+                for: LivePreviewSourceRange(
+                    location: context.prefixRange.location,
+                    length: context.prefixRange.length
+                ),
+                in: source
+            )
+        }
+
+        return (
+            prefixes.contains { $0.contains("[ ]") },
+            prefixes.contains { $0.contains("[x]") },
+            prefixes.contains { $0.contains("[X]") }
+        )
+    }
+
     private static func probeTaskCheckboxOverlayPolicy() -> (
         drawsOutsideReveal: Bool,
         suppressedInsideReveal: Bool
@@ -1028,6 +1062,7 @@ enum LivePreviewStyleProbe {
         contextIncompleteHandled: Bool,
         markerXIncreasesByDepth: Bool,
         textXIncreasesByDepth: Bool,
+        orderedWidthTextStartNormalized: Bool,
         guideSegmentsReported: Bool,
         guideStartsBelowParent: Bool,
         guideEndsAtDescendant: Bool,
@@ -1049,7 +1084,7 @@ enum LivePreviewStyleProbe {
         - tab parent
         \t- tab child
           - space child
-        - width one
+        1. width one
         10. width ten
         - cluster parent
           - cluster child
@@ -1120,6 +1155,8 @@ enum LivePreviewStyleProbe {
             ("mixed-task-grandchild", "mixed task grandchild", "full"),
             ("tab-child", "tab child", "full"),
             ("space-child", "space child", "full"),
+            ("ordered-width-one", "width one", "full"),
+            ("ordered-width-ten", "width ten", "full"),
             ("indented-new-cluster-root", "indented new cluster root", "full")
         ]
 
@@ -1192,6 +1229,12 @@ enum LivePreviewStyleProbe {
             && strictlyIncreasing(xs(taskLabels, keyPath: \.textX))
             && strictlyIncreasing(xs(mixedLabels, keyPath: \.textX))
             && allLabels.allSatisfy { label in geometryCases.contains { $0.lineLabel == label } }
+        let widthOne = geometryCases.first { $0.lineLabel == "width one" }
+        let widthTen = geometryCases.first { $0.lineLabel == "width ten" }
+        let orderedWidthTextStartNormalized = widthOne?.kind == "ordered"
+            && widthTen?.kind == "ordered"
+            && widthOne?.depth == widthTen?.depth
+            && abs((widthOne?.textX ?? 0) - (widthTen?.textX ?? .infinity)) <= 1
 
         let guideSegments = LivePreviewOverlayRenderer.guideSegments(in: textView)
         let guideReports = guideSegments.map {
@@ -1244,6 +1287,7 @@ enum LivePreviewStyleProbe {
             ("nestedListContextIncompleteHandled", clippedContextIncomplete),
             ("nestedListMarkerXIncreasesByDepth", markerXIncreasesByDepth),
             ("nestedListTextXIncreasesByDepth", textXIncreasesByDepth),
+            ("nestedListOrderedWidthTextStartNormalized", orderedWidthTextStartNormalized),
             ("nestedListGuideSegmentsReported", !guideSegments.isEmpty),
             ("nestedListGuideStartsBelowParent", guideStartsBelowParent),
             ("nestedListGuideEndsAtDescendant", guideEndsAtDescendant),
@@ -1267,6 +1311,7 @@ enum LivePreviewStyleProbe {
             clippedContextIncomplete,
             markerXIncreasesByDepth,
             textXIncreasesByDepth,
+            orderedWidthTextStartNormalized,
             !guideSegments.isEmpty,
             guideStartsBelowParent,
             guideEndsAtDescendant,
