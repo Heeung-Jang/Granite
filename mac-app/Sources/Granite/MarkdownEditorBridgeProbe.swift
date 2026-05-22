@@ -82,6 +82,9 @@ struct MarkdownEditorBridgeProbeReport: Codable, Equatable {
     var renderedTaskCheckboxToggleUndoRestoresToken: Bool
     var tableCellContextMenuResolvesCell: Bool
     var tableCellContextMenuSkipsFallback: Bool
+    var tableContextMenuHasRowColumnSubmenus: Bool
+    var tableContextMenuOperationIDsStable: Bool
+    var tableContextMenuOperationAppliesLocalEdit: Bool
     var tableRenderedBodyCellHitTestResolvesCell: Bool
     var tableRenderedHeaderCellHitTestResolvesCell: Bool
     var tableRenderedHitTestRejectsSyntax: Bool
@@ -222,6 +225,9 @@ enum MarkdownEditorBridgeProbe {
             renderedTaskCheckboxToggleUndoRestoresToken: checkboxProbe.renderedToggleUndoRestoresToken,
             tableCellContextMenuResolvesCell: tableCellProbe.contextMenuResolvesCell,
             tableCellContextMenuSkipsFallback: tableCellProbe.contextMenuSkipsFallback,
+            tableContextMenuHasRowColumnSubmenus: tableCellProbe.contextMenuHasRowColumnSubmenus,
+            tableContextMenuOperationIDsStable: tableCellProbe.contextMenuOperationIDsStable,
+            tableContextMenuOperationAppliesLocalEdit: tableCellProbe.contextMenuOperationAppliesLocalEdit,
             tableRenderedBodyCellHitTestResolvesCell: tableCellProbe.renderedBodyCellHitTestResolvesCell,
             tableRenderedHeaderCellHitTestResolvesCell: tableCellProbe.renderedHeaderCellHitTestResolvesCell,
             tableRenderedHitTestRejectsSyntax: tableCellProbe.renderedHitTestRejectsSyntax,
@@ -1514,6 +1520,9 @@ enum MarkdownEditorBridgeProbe {
     private static func probeTableCellEdit() -> (
         contextMenuResolvesCell: Bool,
         contextMenuSkipsFallback: Bool,
+        contextMenuHasRowColumnSubmenus: Bool,
+        contextMenuOperationIDsStable: Bool,
+        contextMenuOperationAppliesLocalEdit: Bool,
         renderedBodyCellHitTestResolvesCell: Bool,
         renderedHeaderCellHitTestResolvesCell: Bool,
         renderedHitTestRejectsSyntax: Bool,
@@ -1560,7 +1569,7 @@ enum MarkdownEditorBridgeProbe {
             return (
                 false, false, false, false, false, false, false, false, false, false,
                 false, false, false, false, false, false, false, false, false, false,
-                false, false, false, false, false, false
+                false, false, false, false, false, false, false, false, false
             )
         }
         let cell = table.bodyRows[0][1]
@@ -1568,6 +1577,39 @@ enum MarkdownEditorBridgeProbe {
         let interactionTextView = textView as? MarkdownInteractionTextView
         let menuCell = interactionTextView?.tableCellForEditing(at: cellOffset)
         let contextMenuResolvesCell = menuCell == cell
+        let expectedOperationIDs = [
+            "row.insertBefore",
+            "row.insertAfter",
+            "row.moveUp",
+            "row.moveDown",
+            "row.duplicate",
+            "row.remove",
+            "column.insertBefore",
+            "column.insertAfter",
+            "column.moveLeft",
+            "column.moveRight",
+            "column.align.left",
+            "column.align.center",
+            "column.align.right",
+            "column.duplicate",
+            "column.remove",
+            "column.sortAscending",
+            "column.sortDescending"
+        ]
+        let operationIDs = interactionTextView?.tableContextMenuOperationIDs(for: cell) ?? []
+        let contextMenuHasRowColumnSubmenus = Set(operationIDs).isSuperset(of: expectedOperationIDs)
+        let contextMenuOperationIDsStable = operationIDs == expectedOperationIDs
+        let localEditTextView = MarkdownEditorTextViewFactory.makeTextView() as! MarkdownInteractionTextView
+        localEditTextView.string = "Before\n" + text + "\nAfter"
+        let localEditTable = LivePreviewTableParser.parse(localEditTextView.string).first
+        let localEditCell = localEditTable?.bodyRows.first?.first
+        let localEditApplied = localEditCell.map {
+            localEditTextView.performTableMenuOperation(.insertRowAfter, for: $0)
+        } == true
+        let contextMenuOperationAppliesLocalEdit = localEditApplied
+            && localEditTextView.string.hasPrefix("Before\n")
+            && localEditTextView.string.hasSuffix("\nAfter")
+            && localEditTextView.string.contains("| Alpha | Draft |\n|  |  |\n")
 
         let layout = LivePreviewTableLayout.make(for: table, in: textView)
         let bodyLayout = layout?.cells.first { !$0.isHeader && $0.tableCell.text == "Draft" }
@@ -1822,6 +1864,9 @@ enum MarkdownEditorBridgeProbe {
         return (
             contextMenuResolvesCell,
             contextMenuSkipsFallback,
+            contextMenuHasRowColumnSubmenus,
+            contextMenuOperationIDsStable,
+            contextMenuOperationAppliesLocalEdit,
             renderedBodyCellHitTestResolvesCell,
             renderedHeaderCellHitTestResolvesCell,
             renderedHitTestRejectsSyntax,

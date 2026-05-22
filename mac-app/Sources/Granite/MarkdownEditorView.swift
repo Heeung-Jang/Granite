@@ -414,17 +414,22 @@ final class MarkdownInteractionTextView: NSTextView, NSTextFieldDelegate {
         }
 
         tableCellMenuTarget = cell
-        let item = NSMenuItem(
-            title: "Edit Table Cell...",
-            action: #selector(editTableCellFromMenu(_:)),
-            keyEquivalent: ""
-        )
-        item.target = self
-        if !menu.items.isEmpty {
-            menu.insertItem(.separator(), at: 0)
+        return tableContextMenu(for: cell, baseMenu: menu)
+    }
+
+    override func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(editTableCellFromMenu(_:)) {
+            return currentTableMenuTarget() != nil
         }
-        menu.insertItem(item, at: 0)
-        return menu
+        if menuItem.action == #selector(performTableOperationFromMenu(_:)) {
+            guard let command = menuItem.representedObject as? TableMenuCommand,
+                  let cell = currentTableMenuTarget()
+            else {
+                return false
+            }
+            return LivePreviewTableEdit.applying(command.operation, to: cell, in: string) != nil
+        }
+        return super.validateMenuItem(menuItem)
     }
 
     override func paste(_ sender: Any?) {
@@ -505,12 +510,88 @@ final class MarkdownInteractionTextView: NSTextView, NSTextFieldDelegate {
             return false
         }
         if layout.rowAddControlRect(for: cell)?.contains(point) == true {
-            return applyTableControlEdit(LivePreviewTableRowInsert.insertingRow(after: layoutCell.tableCell, in: string))
+            return applyTableSourceEdit(LivePreviewTableEdit.applying(
+                .insertRowAfter,
+                to: layoutCell.tableCell,
+                in: string
+            ))
         }
         if layout.columnAddControlRect(for: cell)?.contains(point) == true {
-            return applyTableControlEdit(LivePreviewTableColumnInsert.insertingColumn(after: layoutCell.tableCell, in: string))
+            return applyTableSourceEdit(LivePreviewTableEdit.applying(
+                .insertColumnAfter,
+                to: layoutCell.tableCell,
+                in: string
+            ))
         }
         return false
+    }
+
+    func tableContextMenu(for cell: LivePreviewTableCell, baseMenu: NSMenu = NSMenu()) -> NSMenu {
+        let menu = baseMenu
+        let editItem = NSMenuItem(
+            title: "Edit Table Cell...",
+            action: #selector(editTableCellFromMenu(_:)),
+            keyEquivalent: ""
+        )
+        editItem.target = self
+
+        let rowItem = NSMenuItem(title: "Row", action: nil, keyEquivalent: "")
+        rowItem.submenu = operationSubmenu(
+            title: "Row",
+            operations: [
+                ("Insert Row Above", .insertRowBefore),
+                ("Insert Row Below", .insertRowAfter),
+                ("Move Row Up", .moveRowUp),
+                ("Move Row Down", .moveRowDown),
+                ("Duplicate Row", .duplicateRow),
+                ("Remove Row", .removeRow)
+            ]
+        )
+
+        let columnItem = NSMenuItem(title: "Column", action: nil, keyEquivalent: "")
+        columnItem.submenu = operationSubmenu(
+            title: "Column",
+            operations: [
+                ("Insert Column Left", .insertColumnBefore),
+                ("Insert Column Right", .insertColumnAfter),
+                ("Move Column Left", .moveColumnLeft),
+                ("Move Column Right", .moveColumnRight),
+                ("Align Left", .alignColumn(.left)),
+                ("Align Center", .alignColumn(.center)),
+                ("Align Right", .alignColumn(.right)),
+                ("Duplicate Column", .duplicateColumn),
+                ("Remove Column", .removeColumn),
+                ("Sort Ascending", .sortColumnAscending),
+                ("Sort Descending", .sortColumnDescending)
+            ]
+        )
+
+        if !menu.items.isEmpty {
+            menu.insertItem(.separator(), at: 0)
+        }
+        menu.insertItem(columnItem, at: 0)
+        menu.insertItem(rowItem, at: 0)
+        menu.insertItem(editItem, at: 0)
+        tableCellMenuTarget = cell
+        return menu
+    }
+
+    func tableContextMenuOperationIDs(for cell: LivePreviewTableCell) -> [String] {
+        tableContextMenu(for: cell).items.flatMap(operationIDs(in:))
+    }
+
+    @discardableResult
+    func performTableMenuOperation(
+        _ operation: LivePreviewTableOperation,
+        for cell: LivePreviewTableCell
+    ) -> Bool {
+        tableCellMenuTarget = cell
+        guard prepareForTableStructureOperation(),
+              let currentCell = currentTableMenuTarget()
+        else {
+            return false
+        }
+        return applyTableSourceEdit(LivePreviewTableEdit.applying(operation, to: currentCell, in: string))
     }
 
     func refreshLivePreviewOverlayState(revealRange: NSRange? = nil, syncEditor: Bool = true) {
@@ -578,10 +659,69 @@ final class MarkdownInteractionTextView: NSTextView, NSTextFieldDelegate {
     }
 
     @objc private func editTableCellFromMenu(_ sender: NSMenuItem) {
-        guard let cell = tableCellMenuTarget else {
+        guard let cell = currentTableMenuTarget() else {
             return
         }
         presentTableCellEditor(for: cell)
+    }
+
+    @objc private func performTableOperationFromMenu(_ sender: NSMenuItem) {
+        guard let command = sender.representedObject as? TableMenuCommand,
+              let cell = currentTableMenuTarget(),
+              performTableMenuOperation(command.operation, for: cell)
+        else {
+            NSSound.beep()
+            return
+        }
+    }
+
+    private func operationSubmenu(
+        title: String,
+        operations: [(String, LivePreviewTableOperation)]
+    ) -> NSMenu {
+        let menu = NSMenu(title: title)
+        for (title, operation) in operations {
+            let item = NSMenuItem(
+                title: title,
+                action: #selector(performTableOperationFromMenu(_:)),
+                keyEquivalent: ""
+            )
+            item.target = self
+            item.representedObject = TableMenuCommand(operation: operation)
+            menu.addItem(item)
+        }
+        return menu
+    }
+
+    private func operationIDs(in item: NSMenuItem) -> [String] {
+        if let command = item.representedObject as? TableMenuCommand {
+            return [command.operation.identifier]
+        }
+        return item.submenu?.items.flatMap(operationIDs(in:)) ?? []
+    }
+
+    private func currentTableMenuTarget() -> LivePreviewTableCell? {
+        guard let target = tableCellMenuTarget else {
+            return nil
+        }
+        let cells = LivePreviewTableParser.parse(string).flatMap { [$0.header] + $0.bodyRows }.flatMap { $0 }
+        if let current = cells.first(where: {
+            $0.sourceRange.location == target.sourceRange.location
+                && $0.columnIndex == target.columnIndex
+        }) {
+            return current
+        }
+        let fallbackOffset = min(target.contentRange.location, max(0, (string as NSString).length - 1))
+        return LivePreviewTableParser.cell(atUTF16Offset: fallbackOffset, in: string).flatMap {
+            $0.columnIndex == target.columnIndex ? $0 : nil
+        }
+    }
+
+    private func prepareForTableStructureOperation() -> Bool {
+        guard tableCellEditor != nil else {
+            return true
+        }
+        return commitActiveTableCellEditor()
     }
 
     private func replaceTaskCheckbox(_ range: NSRange, with replacement: String, registersUndo: Bool) {
@@ -606,16 +746,18 @@ final class MarkdownInteractionTextView: NSTextView, NSTextFieldDelegate {
         ))
     }
 
-    private func applyTableControlEdit(_ edited: String?) -> Bool {
-        guard let edited,
-              edited != string,
-              shouldChangeText(in: NSRange(location: 0, length: (string as NSString).length), replacementString: edited)
+    private func applyTableSourceEdit(_ edit: LivePreviewTableSourceEdit?) -> Bool {
+        guard let edit,
+              let range = LivePreviewRangeMapper.stringRange(for: edit.replacementRange, in: string),
+              String(string[range]) != edit.replacement,
+              shouldChangeText(in: edit.replacementRange.nsRange, replacementString: edit.replacement)
         else {
             return false
         }
         let selection = selectedRange()
-        replaceCharacters(in: NSRange(location: 0, length: (string as NSString).length), with: edited)
+        replaceCharacters(in: edit.replacementRange.nsRange, with: edit.replacement)
         didChangeText()
+        undoManager?.setActionName(edit.actionName)
         setSelectedRange(NSRange(
             location: min(selection.location, (string as NSString).length),
             length: min(selection.length, max(0, (string as NSString).length - min(selection.location, (string as NSString).length)))
@@ -796,6 +938,14 @@ final class MarkdownInteractionTextView: NSTextView, NSTextFieldDelegate {
         ))
     }
 
+}
+
+private final class TableMenuCommand: NSObject {
+    let operation: LivePreviewTableOperation
+
+    init(operation: LivePreviewTableOperation) {
+        self.operation = operation
+    }
 }
 
 @MainActor
