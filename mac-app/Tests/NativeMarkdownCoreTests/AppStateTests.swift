@@ -1036,7 +1036,7 @@ func indexDirectoryResolverCreatesOnlyAppOwnedDirectories() throws {
 func indexConfigurationDefaultsMatchSelectedReadBackend() {
     let configuration = IndexConfiguration()
 
-    #expect(configuration.schemaVersion == "metadata-v1")
+    #expect(configuration.schemaVersion == "metadata-v2")
     #expect(configuration.backendVersion == "sqlite+tantivy")
     #expect(configuration.tokenizerConfig == "tantivy")
 }
@@ -1091,6 +1091,33 @@ func indexDirectoryResolverUsesLegacyLocationWhenPreferredMetadataIsMissing() th
     #expect(location.rootDirectory.path == legacyLocation.rootDirectory.path)
     #expect(location.metadataStoreFile.path == legacyLocation.metadataStoreFile.path)
     #expect(!FileManager.default.fileExists(atPath: preferredRoot.path))
+}
+
+@Test
+func indexDirectoryResolverIgnoresLegacyMetadataFromPreviousSchemaVersion() throws {
+    let temporaryRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let vaultURL = temporaryRoot.appendingPathComponent("vault", isDirectory: true)
+    let preferredRoot = temporaryRoot.appendingPathComponent("Granite", isDirectory: true)
+    let legacyRoot = temporaryRoot.appendingPathComponent("NativeMarkdownMacApp", isDirectory: true)
+    try FileManager.default.createDirectory(at: vaultURL, withIntermediateDirectories: true)
+
+    let previousSchemaLocation = try AppOwnedIndexDirectoryResolver(
+        applicationSupportRoot: legacyRoot,
+        configuration: IndexConfiguration(schemaVersion: "metadata-v1")
+    ).prepareIndexLocation(forVaultAt: vaultURL)
+    try Data("legacy".utf8).write(to: previousSchemaLocation.metadataStoreFile)
+
+    let resolver = AppOwnedIndexDirectoryResolver(
+        applicationSupportRoot: preferredRoot,
+        legacyApplicationSupportRoots: [legacyRoot]
+    )
+
+    let location = try resolver.prepareIndexLocation(forVaultAt: vaultURL)
+
+    #expect(location.rootDirectory.path.hasPrefix(preferredRoot.path))
+    #expect(location.configuration.schemaVersion == "metadata-v2")
+    #expect(location.metadataStoreFile.path != previousSchemaLocation.metadataStoreFile.path)
 }
 
 @Test
