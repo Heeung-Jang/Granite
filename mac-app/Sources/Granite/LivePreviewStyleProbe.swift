@@ -112,6 +112,8 @@ struct LivePreviewStyleProbeReport: Codable, Equatable {
     var tableSyntaxConcealedOutsideReveal: Bool
     var tableSourceStaysConcealedInsideBlock: Bool
     var tableRenderPreservesSource: Bool
+    var tableCompactWidthApplied: Bool
+    var tableAlignmentApplied: Bool
     var horizontalRuleDashVariantRendered: Bool
     var horizontalRuleAsteriskVariantRendered: Bool
     var horizontalRuleUnderscoreVariantRendered: Bool
@@ -406,6 +408,7 @@ enum LivePreviewStyleProbe {
         let orderedOverlayFields = probeOrderedMarkerOverlayPolicy()
         let taskMarkerFields = probeTaskMarkerVariantDetection()
         let taskOverlayFields = probeTaskCheckboxOverlayPolicy()
+        let tableGeometryFields = probeTableGeometry()
         let tableActiveCellControls = probeTableActiveCellControls()
         let nestedListFields = probeNestedListHierarchy()
 
@@ -564,6 +567,8 @@ enum LivePreviewStyleProbe {
             tableRenderPreservesSource: textView.string.contains("| Name | Status |")
                 && textView.string.contains("| --- | --- |")
                 && textView.string.contains("| Alpha | Draft |"),
+            tableCompactWidthApplied: tableGeometryFields.compactWidthApplied,
+            tableAlignmentApplied: tableGeometryFields.alignmentApplied,
             horizontalRuleDashVariantRendered: horizontalRuleFields.dashVariantRendered,
             horizontalRuleAsteriskVariantRendered: horizontalRuleFields.asteriskVariantRendered,
             horizontalRuleUnderscoreVariantRendered: horizontalRuleFields.underscoreVariantRendered,
@@ -1805,6 +1810,41 @@ enum LivePreviewStyleProbe {
             LivePreviewOverlayRenderer.shouldDrawTableControls(state: textView.livePreviewOverlayState)
                 && layout.columnAddControlRect(for: cell.tableCell) != nil
         )
+    }
+
+    private static func probeTableGeometry() -> (
+        compactWidthApplied: Bool,
+        alignmentApplied: Bool
+    ) {
+        let source = """
+        | Name | Status |
+        | --- | --- |
+        | Alpha | Draft |
+
+        | Left | Center | Right |
+        | :--- | :---: | ---: |
+        | Alpha | Beta | Gamma |
+        """
+        let textView = MarkdownEditorTextViewFactory.makeTextView()
+        textView.string = source
+        guard LivePreviewTableParser.parse(source).count == 2,
+              let simpleTable = LivePreviewTableParser.parse(source).first,
+              let alignedTable = LivePreviewTableParser.parse(source).dropFirst().first,
+              let simpleLayout = LivePreviewTableLayout.make(for: simpleTable, in: textView),
+              let alignedLayout = LivePreviewTableLayout.make(for: alignedTable, in: textView)
+        else {
+            return (false, false)
+        }
+
+        let compactWidthApplied = simpleLayout.outerRect.width < 420
+            && simpleLayout.outerRect.width >= 120
+        let centerColumnApplied = alignedLayout.cells.contains {
+            $0.columnIndex == 1 && $0.alignment == .center
+        }
+        let rightColumnApplied = alignedLayout.cells.contains {
+            $0.columnIndex == 2 && $0.alignment == .right
+        }
+        return (compactWidthApplied, centerColumnApplied && rightColumnApplied)
     }
 
     private static func probeCollapsedHeadingMarkerMarkedText(source: String, markerRange: NSRange) -> Bool {

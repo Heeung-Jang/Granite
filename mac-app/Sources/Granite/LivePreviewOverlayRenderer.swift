@@ -327,10 +327,20 @@ enum LivePreviewOverlayRenderer {
 
         drawTableGrid(layout)
         for cell in layout.cells where shouldDrawTableCellText(cell.tableCell, state: state) {
-            markdownInlineString(
+            let text = NSMutableAttributedString(attributedString: markdownInlineString(
                 displayValue(cell.tableCell.text, key: nil),
                 isHeader: cell.isHeader
-            ).draw(with: cell.textRect, options: [.usesLineFragmentOrigin, .usesFontLeading])
+            ))
+            let paragraphStyle = NSMutableParagraphStyle()
+            paragraphStyle.alignment = cell.alignment.textAlignment
+            if text.length > 0 {
+                text.addAttribute(
+                    .paragraphStyle,
+                    value: paragraphStyle,
+                    range: NSRange(location: 0, length: text.length)
+                )
+            }
+            text.draw(with: cell.textRect, options: [.usesLineFragmentOrigin, .usesFontLeading])
         }
         drawTableControls(layout, state: state)
     }
@@ -1003,5 +1013,18 @@ private extension NSRange {
             return other.location >= location && other.location < location + length
         }
         return intersects(other)
+    }
+}
+
+private extension LivePreviewTableAlignment {
+    var textAlignment: NSTextAlignment {
+        switch self {
+        case .none, .left:
+            .left
+        case .center:
+            .center
+        case .right:
+            .right
+        }
     }
 }
