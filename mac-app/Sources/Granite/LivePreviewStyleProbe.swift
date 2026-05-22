@@ -58,6 +58,7 @@ struct LivePreviewStyleProbeReport: Codable, Equatable {
     var nestedListFailureIDs: [String]
     var nestedListGeometryCases: [NestedListGeometryProbeCase]
     var nestedListGuideSegments: [NestedListGuideSegmentProbeReport]
+    var nestedListPixelChecks: [NestedListPixelCheckProbeReport]
     var nestedListResolverScannedLineCount: Int
     var nestedListResolverScannedUTF16Length: Int
     var nestedListUnorderedDepthsResolved: Bool
@@ -75,6 +76,8 @@ struct LivePreviewStyleProbeReport: Codable, Equatable {
     var nestedListGuideSegmentsReported: Bool
     var nestedListGuideStartsBelowParent: Bool
     var nestedListGuideEndsAtDescendant: Bool
+    var nestedListGuidePositivePixelsPresent: Bool
+    var nestedListGuideNegativePixelsClear: Bool
     var nestedListRenderPreservesSource: Bool
     var listRenderPreservesSource: Bool
     var blockquoteParagraphIndentApplied: Bool
@@ -170,6 +173,15 @@ struct NestedListGuideSegmentProbeReport: Codable, Equatable {
     var x: Double
     var startY: Double
     var endY: Double
+}
+
+struct NestedListPixelCheckProbeReport: Codable, Equatable {
+    var checkID: String
+    var x: Double
+    var y: Double
+    var expectedPainted: Bool
+    var actualPainted: Bool
+    var passed: Bool
 }
 
 @MainActor
@@ -455,6 +467,7 @@ enum LivePreviewStyleProbe {
             nestedListFailureIDs: nestedListFields.failureIDs,
             nestedListGeometryCases: nestedListFields.geometryCases,
             nestedListGuideSegments: nestedListFields.guideSegments,
+            nestedListPixelChecks: nestedListFields.pixelChecks,
             nestedListResolverScannedLineCount: nestedListFields.scannedLineCount,
             nestedListResolverScannedUTF16Length: nestedListFields.scannedUTF16Length,
             nestedListUnorderedDepthsResolved: nestedListFields.unorderedDepthsResolved,
@@ -472,6 +485,8 @@ enum LivePreviewStyleProbe {
             nestedListGuideSegmentsReported: nestedListFields.guideSegmentsReported,
             nestedListGuideStartsBelowParent: nestedListFields.guideStartsBelowParent,
             nestedListGuideEndsAtDescendant: nestedListFields.guideEndsAtDescendant,
+            nestedListGuidePositivePixelsPresent: nestedListFields.guidePositivePixelsPresent,
+            nestedListGuideNegativePixelsClear: nestedListFields.guideNegativePixelsClear,
             nestedListRenderPreservesSource: nestedListFields.renderPreservesSource,
             listRenderPreservesSource: textView.string.contains("- [x] Done item"),
             blockquoteParagraphIndentApplied: blockquoteParagraphStyle?.headIndent ?? 0 > 0,
@@ -1053,6 +1068,7 @@ enum LivePreviewStyleProbe {
         failureIDs: [String],
         geometryCases: [NestedListGeometryProbeCase],
         guideSegments: [NestedListGuideSegmentProbeReport],
+        pixelChecks: [NestedListPixelCheckProbeReport],
         scannedLineCount: Int,
         scannedUTF16Length: Int,
         unorderedDepthsResolved: Bool,
@@ -1069,6 +1085,8 @@ enum LivePreviewStyleProbe {
         guideSegmentsReported: Bool,
         guideStartsBelowParent: Bool,
         guideEndsAtDescendant: Bool,
+        guidePositivePixelsPresent: Bool,
+        guideNegativePixelsClear: Bool,
         renderPreservesSource: Bool
     ) {
         let source = """
@@ -1265,6 +1283,17 @@ enum LivePreviewStyleProbe {
             }
             return abs(depthOneGuide.endY - grandchildLine.maxY) <= 1
         }()
+        let pixelChecks = nestedListGuidePixelChecks(
+            textView: textView,
+            source: source,
+            depthOneGuide: depthOneGuide
+        )
+        let guidePositivePixelsPresent = pixelChecks
+            .filter(\.expectedPainted)
+            .allSatisfy(\.passed)
+        let guideNegativePixelsClear = pixelChecks
+            .filter { !$0.expectedPainted }
+            .allSatisfy(\.passed)
 
         let clippedWindow = context(containing: "bullet child").map(\.blockRange.location).map {
             LivePreviewSourceRange(location: $0, length: (source as NSString).length - $0)
@@ -1300,6 +1329,8 @@ enum LivePreviewStyleProbe {
             ("nestedListGuideSegmentsReported", !guideSegments.isEmpty),
             ("nestedListGuideStartsBelowParent", guideStartsBelowParent),
             ("nestedListGuideEndsAtDescendant", guideEndsAtDescendant),
+            ("nestedListGuidePositivePixelsPresent", guidePositivePixelsPresent),
+            ("nestedListGuideNegativePixelsClear", guideNegativePixelsClear),
             ("nestedListRenderPreservesSource", textView.string == source)
         ]
 
@@ -1309,6 +1340,7 @@ enum LivePreviewStyleProbe {
             checks.filter { !$0.1 }.map(\.0).sorted(),
             geometryCases,
             guideReports,
+            pixelChecks,
             resolution.scannedLineCount,
             resolution.scannedUTF16Length,
             unorderedDepthsResolved,
@@ -1325,8 +1357,131 @@ enum LivePreviewStyleProbe {
             !guideSegments.isEmpty,
             guideStartsBelowParent,
             guideEndsAtDescendant,
+            guidePositivePixelsPresent,
+            guideNegativePixelsClear,
             textView.string == source
         )
+    }
+
+    private static func nestedListGuidePixelChecks(
+        textView: NSTextView,
+        source: String,
+        depthOneGuide: LivePreviewOverlayRenderer.ListGuideSegment?
+    ) -> [NestedListPixelCheckProbeReport] {
+        guard let interactionTextView = textView as? MarkdownInteractionTextView,
+              let depthOneGuide,
+              let bitmap = renderedOverlayBitmap(for: interactionTextView, source: source)
+        else {
+            return [
+                NestedListPixelCheckProbeReport(
+                    checkID: "guide-render-setup",
+                    x: 0,
+                    y: 0,
+                    expectedPainted: true,
+                    actualPainted: false,
+                    passed: false
+                )
+            ]
+        }
+
+        let positiveSamples: [(String, NSPoint)] = [
+            ("guide-positive-first-child", NSPoint(x: depthOneGuide.x, y: depthOneGuide.startY + 2)),
+            ("guide-positive-descendant", NSPoint(x: depthOneGuide.x, y: max(depthOneGuide.startY + 2, depthOneGuide.endY - 2)))
+        ]
+        let negativeSamples: [(String, NSPoint)] = [
+            ("guide-negative-parent-line", lineRect(in: textView, source: source, marker: "bullet parent").map {
+                NSPoint(x: depthOneGuide.x, y: $0.midY)
+            } ?? .zero),
+            ("guide-negative-blank-gap", lineRect(in: textView, source: source, marker: "paragraph break").map {
+                NSPoint(x: depthOneGuide.x, y: $0.midY)
+            } ?? .zero),
+            ("guide-negative-code-fence", lineRect(in: textView, source: source, marker: "code bullet").map {
+                NSPoint(x: depthOneGuide.x, y: $0.midY)
+            } ?? .zero)
+        ]
+
+        let positives = positiveSamples.map {
+            pixelCheck(id: $0.0, point: $0.1, expectedPainted: true, bitmap: bitmap)
+        }
+        let negatives = negativeSamples.map {
+            pixelCheck(id: $0.0, point: $0.1, expectedPainted: false, bitmap: bitmap)
+        }
+        return positives + negatives
+    }
+
+    private static func renderedOverlayBitmap(
+        for textView: MarkdownInteractionTextView,
+        source: String
+    ) -> NSBitmapImageRep? {
+        let bounds = textView.bounds
+        guard bounds.width > 0, bounds.height > 0,
+              let bitmap = NSBitmapImageRep(
+                bitmapDataPlanes: nil,
+                pixelsWide: Int(ceil(bounds.width)),
+                pixelsHigh: Int(ceil(bounds.height)),
+                bitsPerSample: 8,
+                samplesPerPixel: 4,
+                hasAlpha: true,
+                isPlanar: false,
+                colorSpaceName: .deviceRGB,
+                bytesPerRow: 0,
+                bitsPerPixel: 0
+              ),
+              let context = NSGraphicsContext(bitmapImageRep: bitmap)
+        else {
+            return nil
+        }
+
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = context
+        NSColor.clear.setFill()
+        bounds.fill()
+        LivePreviewOverlayRenderer.drawForegrounds(
+            in: textView,
+            dirtyRect: bounds,
+            state: LivePreviewOverlayState(
+                markerStyle: .obsidian,
+                revealRange: NSRange(location: (source as NSString).length, length: 0)
+            )
+        )
+        context.flushGraphics()
+        NSGraphicsContext.restoreGraphicsState()
+        return bitmap
+    }
+
+    private static func pixelCheck(
+        id: String,
+        point: NSPoint,
+        expectedPainted: Bool,
+        bitmap: NSBitmapImageRep
+    ) -> NestedListPixelCheckProbeReport {
+        let actualPainted = pixelIsPainted(near: point, in: bitmap)
+        return NestedListPixelCheckProbeReport(
+            checkID: id,
+            x: Double(point.x),
+            y: Double(point.y),
+            expectedPainted: expectedPainted,
+            actualPainted: actualPainted,
+            passed: actualPainted == expectedPainted
+        )
+    }
+
+    private static func pixelIsPainted(near point: NSPoint, in bitmap: NSBitmapImageRep) -> Bool {
+        let centerX = Int(point.x.rounded())
+        let centerY = bitmap.pixelsHigh - 1 - Int(point.y.rounded())
+        for y in (centerY - 1)...(centerY + 1) {
+            for x in (centerX - 1)...(centerX + 1) {
+                guard x >= 0, y >= 0, x < bitmap.pixelsWide, y < bitmap.pixelsHigh,
+                      let color = bitmap.colorAt(x: x, y: y)
+                else {
+                    continue
+                }
+                if color.alphaComponent > 0.05 {
+                    return true
+                }
+            }
+        }
+        return false
     }
 
     private static func probeTableActiveCellControls() -> (
