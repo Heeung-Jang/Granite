@@ -4,5 +4,7 @@
 .swiftpm/
 target/
 dist/
+docs/
+todos/
 docs/benchmarks/private/
 fixtures/generated/
