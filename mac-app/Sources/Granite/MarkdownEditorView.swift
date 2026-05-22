@@ -585,6 +585,9 @@ final class MarkdownInteractionTextView: NSTextView, NSTextFieldDelegate {
         _ operation: LivePreviewTableOperation,
         for cell: LivePreviewTableCell
     ) -> Bool {
+        guard isEditable, livePreviewMode == .livePreview else {
+            return false
+        }
         tableCellMenuTarget = cell
         guard prepareForTableStructureOperation(),
               let currentCell = currentTableMenuTarget()

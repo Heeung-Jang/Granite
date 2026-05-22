@@ -102,6 +102,9 @@ struct MarkdownEditorBridgeProbeReport: Codable, Equatable {
     var tableColumnMenuAlignRightApplies: Bool
     var tableColumnMenuSortAscendingApplies: Bool
     var tableColumnMenuSortDescendingApplies: Bool
+    var tableMenuOperationGuardsReadOnlyAndModes: Bool
+    var tableMenuOperationCommitsActiveEditor: Bool
+    var tableMenuOperationBlocksInvalidActiveEditor: Bool
     var tableRenderedBodyCellHitTestResolvesCell: Bool
     var tableRenderedHeaderCellHitTestResolvesCell: Bool
     var tableRenderedHitTestRejectsSyntax: Bool
@@ -161,6 +164,7 @@ enum MarkdownEditorBridgeProbe {
         let checkboxProbe = probeCheckboxToggle()
         let tableCellProbe = probeTableCellEdit()
         let tableMenuOperationProbe = probeTableMenuOperations()
+        let tableMenuSafetyProbe = probeTableMenuSafety()
         let frontmatterBoundaryProbe = probeFrontmatterBoundaryDeleteUndo()
         let accessibilityProbe = probeEditorAccessibility()
 
@@ -263,6 +267,9 @@ enum MarkdownEditorBridgeProbe {
             tableColumnMenuAlignRightApplies: tableMenuOperationProbe.columnAlignRight,
             tableColumnMenuSortAscendingApplies: tableMenuOperationProbe.columnSortAscending,
             tableColumnMenuSortDescendingApplies: tableMenuOperationProbe.columnSortDescending,
+            tableMenuOperationGuardsReadOnlyAndModes: tableMenuSafetyProbe.guardsReadOnlyAndModes,
+            tableMenuOperationCommitsActiveEditor: tableMenuSafetyProbe.commitsActiveEditor,
+            tableMenuOperationBlocksInvalidActiveEditor: tableMenuSafetyProbe.blocksInvalidActiveEditor,
             tableRenderedBodyCellHitTestResolvesCell: tableCellProbe.renderedBodyCellHitTestResolvesCell,
             tableRenderedHeaderCellHitTestResolvesCell: tableCellProbe.renderedHeaderCellHitTestResolvesCell,
             tableRenderedHitTestRejectsSyntax: tableCellProbe.renderedHitTestRejectsSyntax,
@@ -2113,6 +2120,83 @@ enum MarkdownEditorBridgeProbe {
             columnAlignRight,
             columnSortAscending,
             columnSortDescending
+        )
+    }
+
+    private static func probeTableMenuSafety() -> (
+        guardsReadOnlyAndModes: Bool,
+        commitsActiveEditor: Bool,
+        blocksInvalidActiveEditor: Bool
+    ) {
+        let source = """
+        | Name | Status |
+        | --- | --- |
+        | Alpha | Draft |
+        | Beta | Done |
+        """
+        guard let table = LivePreviewTableParser.parse(source).first else {
+            return (false, false, false)
+        }
+
+        let readOnlyTextView = MarkdownEditorTextViewFactory.makeTextView() as! MarkdownInteractionTextView
+        readOnlyTextView.string = source
+        readOnlyTextView.isEditable = false
+        let readOnlyBlocked = !readOnlyTextView.performTableMenuOperation(.insertRowAfter, for: table.bodyRows[0][0])
+            && readOnlyTextView.string == source
+
+        let sourceModeTextView = MarkdownEditorTextViewFactory.makeTextView() as! MarkdownInteractionTextView
+        sourceModeTextView.string = source
+        sourceModeTextView.livePreviewMode = .source
+        let sourceModeBlocked = !sourceModeTextView.performTableMenuOperation(.insertRowAfter, for: table.bodyRows[0][0])
+            && sourceModeTextView.string == source
+
+        let fallbackTextView = MarkdownEditorTextViewFactory.makeTextView() as! MarkdownInteractionTextView
+        fallbackTextView.string = source
+        fallbackTextView.livePreviewMode = .fallbackSource(reason: .tooManyTableCells)
+        let fallbackBlocked = !fallbackTextView.performTableMenuOperation(.insertRowAfter, for: table.bodyRows[0][0])
+            && fallbackTextView.string == source
+
+        func activeEditorTextView() -> (MarkdownInteractionTextView, LivePreviewTableCell)? {
+            let textView = MarkdownEditorTextViewFactory.makeTextView() as! MarkdownInteractionTextView
+            let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 900, height: 700))
+            scrollView.documentView = textView
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 900, height: 700),
+                styleMask: [.titled],
+                backing: .buffered,
+                defer: true
+            )
+            window.contentView = scrollView
+            window.makeFirstResponder(textView)
+            textView.string = source
+            guard let currentTable = LivePreviewTableParser.parse(source).first,
+                  let layout = LivePreviewTableLayout.make(for: currentTable, in: textView),
+                  let cell = layout.cells.first(where: { !$0.isHeader && $0.tableCell.text == "Draft" })
+            else {
+                return nil
+            }
+            _ = textView.setActiveTableCell(at: NSPoint(x: cell.textRect.midX, y: cell.textRect.midY))
+            return (textView, cell.tableCell)
+        }
+
+        let validEditorState = activeEditorTextView()
+        validEditorState?.0.tableCellEditor?.stringValue = "Queued"
+        let validCommitted = validEditorState.map { textView, cell in
+            textView.performTableMenuOperation(.insertRowAfter, for: cell)
+                && textView.string.contains("| Alpha | Queued |\n|  |  |\n")
+        } == true
+
+        let invalidEditorState = activeEditorTextView()
+        invalidEditorState?.0.tableCellEditor?.stringValue = "bad|value"
+        let invalidBlocked = invalidEditorState.map { textView, cell in
+            !textView.performTableMenuOperation(.insertRowAfter, for: cell)
+                && textView.string == source
+        } == true
+
+        return (
+            readOnlyBlocked && sourceModeBlocked && fallbackBlocked,
+            validCommitted,
+            invalidBlocked
         )
     }
 
