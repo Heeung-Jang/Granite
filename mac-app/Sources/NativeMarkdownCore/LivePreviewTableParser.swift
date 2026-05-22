@@ -299,11 +299,122 @@ public enum LivePreviewTableCellEdit {
     }
 }
 
-public enum LivePreviewTableRowInsert {
-    public static func insertingRow(
-        after target: LivePreviewTableCell,
+public enum LivePreviewTableOperation: Equatable, Sendable {
+    case insertRowBefore
+    case insertRowAfter
+    case duplicateRow
+    case removeRow
+    case moveRowUp
+    case moveRowDown
+    case insertColumnBefore
+    case insertColumnAfter
+    case duplicateColumn
+    case removeColumn
+    case moveColumnLeft
+    case moveColumnRight
+    case alignColumn(LivePreviewTableAlignment)
+    case sortColumnAscending
+    case sortColumnDescending
+
+    public var identifier: String {
+        switch self {
+        case .insertRowBefore:
+            "row.insertBefore"
+        case .insertRowAfter:
+            "row.insertAfter"
+        case .duplicateRow:
+            "row.duplicate"
+        case .removeRow:
+            "row.remove"
+        case .moveRowUp:
+            "row.moveUp"
+        case .moveRowDown:
+            "row.moveDown"
+        case .insertColumnBefore:
+            "column.insertBefore"
+        case .insertColumnAfter:
+            "column.insertAfter"
+        case .duplicateColumn:
+            "column.duplicate"
+        case .removeColumn:
+            "column.remove"
+        case .moveColumnLeft:
+            "column.moveLeft"
+        case .moveColumnRight:
+            "column.moveRight"
+        case .alignColumn(let alignment):
+            "column.align.\(alignment.identifier)"
+        case .sortColumnAscending:
+            "column.sortAscending"
+        case .sortColumnDescending:
+            "column.sortDescending"
+        }
+    }
+
+    public var actionName: String {
+        switch self {
+        case .insertRowBefore:
+            "Insert Row Before"
+        case .insertRowAfter:
+            "Insert Row After"
+        case .duplicateRow:
+            "Duplicate Row"
+        case .removeRow:
+            "Remove Row"
+        case .moveRowUp:
+            "Move Row Up"
+        case .moveRowDown:
+            "Move Row Down"
+        case .insertColumnBefore:
+            "Insert Column Before"
+        case .insertColumnAfter:
+            "Insert Column After"
+        case .duplicateColumn:
+            "Duplicate Column"
+        case .removeColumn:
+            "Remove Column"
+        case .moveColumnLeft:
+            "Move Column Left"
+        case .moveColumnRight:
+            "Move Column Right"
+        case .alignColumn:
+            "Align Column"
+        case .sortColumnAscending:
+            "Sort Column Ascending"
+        case .sortColumnDescending:
+            "Sort Column Descending"
+        }
+    }
+}
+
+public struct LivePreviewTableSourceEdit: Equatable, Sendable {
+    public var replacementRange: LivePreviewSourceRange
+    public var replacement: String
+    public var editedSource: String
+    public var operationID: String
+    public var actionName: String
+
+    public init(
+        replacementRange: LivePreviewSourceRange,
+        replacement: String,
+        editedSource: String,
+        operationID: String,
+        actionName: String
+    ) {
+        self.replacementRange = replacementRange
+        self.replacement = replacement
+        self.editedSource = editedSource
+        self.operationID = operationID
+        self.actionName = actionName
+    }
+}
+
+public enum LivePreviewTableEdit {
+    public static func applying(
+        _ operation: LivePreviewTableOperation,
+        to target: LivePreviewTableCell,
         in source: String
-    ) -> String? {
+    ) -> LivePreviewTableSourceEdit? {
         guard let table = editableTable(containing: target, in: source),
               let tableRange = LivePreviewRangeMapper.stringRange(for: table.sourceRange, in: source),
               let rowIndex = rowIndex(containing: target, in: table)
@@ -311,14 +422,36 @@ public enum LivePreviewTableRowInsert {
             return nil
         }
 
-        let lineEnding = preferredLineEnding(in: String(source[tableRange]))
-        var lines = tableLinesText(in: String(source[tableRange]), lineEnding: lineEnding)
-        let insertIndex = rowIndex == 0 ? 2 : rowIndex + 1
-        guard insertIndex <= lines.count else {
+        let tableText = String(source[tableRange])
+        guard var tableSource = EditableTableSource(tableText: tableText),
+              tableSource.columnCount == table.header.count,
+              tableSource.bodyRowCount == table.bodyRows.count
+        else {
             return nil
         }
-        lines.insert(blankRow(columnCount: table.header.count, like: lines[0]), at: insertIndex)
-        return replacingTable(in: source, range: tableRange, lines: lines, lineEnding: lineEnding)
+
+        guard tableSource.apply(
+            operation,
+            rowIndex: rowIndex,
+            columnIndex: target.columnIndex
+        ) else {
+            return nil
+        }
+
+        let replacement = tableSource.rendered()
+        guard replacement != tableText else {
+            return nil
+        }
+
+        var edited = source
+        edited.replaceSubrange(tableRange, with: replacement)
+        return LivePreviewTableSourceEdit(
+            replacementRange: table.sourceRange,
+            replacement: replacement,
+            editedSource: edited,
+            operationID: operation.identifier,
+            actionName: operation.actionName
+        )
     }
 
     private static func rowIndex(containing target: LivePreviewTableCell, in table: LivePreviewTable) -> Int? {
@@ -330,13 +463,14 @@ public enum LivePreviewTableRowInsert {
         }
         return bodyIndex + 2
     }
+}
 
-    private static func blankRow(columnCount: Int, like line: String) -> String {
-        let cells = Array(repeating: "  ", count: columnCount).joined(separator: "|")
-        if line.trimmingCharacters(in: .whitespaces).hasPrefix("|") {
-            return "|" + cells + "|"
-        }
-        return cells
+public enum LivePreviewTableRowInsert {
+    public static func insertingRow(
+        after target: LivePreviewTableCell,
+        in source: String
+    ) -> String? {
+        LivePreviewTableEdit.applying(.insertRowAfter, to: target, in: source)?.editedSource
     }
 }
 
@@ -345,42 +479,257 @@ public enum LivePreviewTableColumnInsert {
         after target: LivePreviewTableCell,
         in source: String
     ) -> String? {
-        guard let table = editableTable(containing: target, in: source),
-              let tableRange = LivePreviewRangeMapper.stringRange(for: table.sourceRange, in: source)
+        LivePreviewTableEdit.applying(.insertColumnAfter, to: target, in: source)?.editedSource
+    }
+}
+
+private struct EditableTableSource {
+    var lines: [EditableTableSourceLine]
+    var lineEnding: String
+    var preservesFinalLineEnding: Bool
+
+    init?(tableText: String) {
+        let lineEnding = preferredLineEnding(in: tableText)
+        let rawLines = tableLinesText(in: tableText, lineEnding: lineEnding)
+        let parsedLines = rawLines.compactMap(EditableTableSourceLine.init(line:))
+        guard rawLines.count == parsedLines.count,
+              parsedLines.count >= 2,
+              let columnCount = parsedLines.first?.cells.count,
+              columnCount >= 2,
+              parsedLines.allSatisfy({ $0.cells.count == columnCount })
         else {
             return nil
         }
-
-        let lineEnding = preferredLineEnding(in: String(source[tableRange]))
-        let lines = tableLinesText(in: String(source[tableRange]), lineEnding: lineEnding)
-        let editedLines = lines.enumerated().map { index, line in
-            insertingCell(
-                in: line,
-                afterColumn: target.columnIndex,
-                value: index == 1 ? "---" : ""
-            )
-        }
-        guard editedLines.allSatisfy({ $0 != nil }) else {
-            return nil
-        }
-        return replacingTable(in: source, range: tableRange, lines: editedLines.compactMap { $0 }, lineEnding: lineEnding)
+        lines = parsedLines
+        self.lineEnding = lineEnding
+        preservesFinalLineEnding = tableText.hasSuffix(lineEnding)
     }
 
-    private static func insertingCell(in line: String, afterColumn column: Int, value: String) -> String? {
-        let hasLeadingPipe = line.trimmingCharacters(in: .whitespaces).hasPrefix("|")
-        let hasTrailingPipe = line.trimmingCharacters(in: .whitespaces).hasSuffix("|")
-        var parts = line.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
-        if hasLeadingPipe, !parts.isEmpty {
-            parts.removeFirst()
+    var columnCount: Int {
+        lines.first?.cells.count ?? 0
+    }
+
+    var bodyRowCount: Int {
+        max(0, lines.count - 2)
+    }
+
+    mutating func apply(
+        _ operation: LivePreviewTableOperation,
+        rowIndex: Int,
+        columnIndex: Int
+    ) -> Bool {
+        switch operation {
+        case .insertRowBefore:
+            insertRow(relativeTo: rowIndex, before: true)
+        case .insertRowAfter:
+            insertRow(relativeTo: rowIndex, before: false)
+        case .duplicateRow:
+            duplicateRow(rowIndex)
+        case .removeRow:
+            removeRow(rowIndex)
+        case .moveRowUp:
+            moveRow(rowIndex, offset: -1)
+        case .moveRowDown:
+            moveRow(rowIndex, offset: 1)
+        case .insertColumnBefore:
+            insertColumn(relativeTo: columnIndex, before: true)
+        case .insertColumnAfter:
+            insertColumn(relativeTo: columnIndex, before: false)
+        case .duplicateColumn:
+            duplicateColumn(columnIndex)
+        case .removeColumn:
+            removeColumn(columnIndex)
+        case .moveColumnLeft:
+            moveColumn(columnIndex, offset: -1)
+        case .moveColumnRight:
+            moveColumn(columnIndex, offset: 1)
+        case .alignColumn(let alignment):
+            alignColumn(columnIndex, alignment: alignment)
+        case .sortColumnAscending:
+            sortColumn(columnIndex, ascending: true)
+        case .sortColumnDescending:
+            sortColumn(columnIndex, ascending: false)
         }
-        if hasTrailingPipe, !parts.isEmpty {
-            parts.removeLast()
+    }
+
+    func rendered() -> String {
+        var rendered = lines.map(\.rendered).joined(separator: lineEnding)
+        if preservesFinalLineEnding {
+            rendered += lineEnding
         }
-        guard parts.indices.contains(column) else {
+        return rendered
+    }
+
+    private mutating func insertRow(relativeTo rowIndex: Int, before: Bool) -> Bool {
+        guard lines.indices.contains(rowIndex) else {
+            return false
+        }
+        let insertIndex = rowIndex == 0 ? 2 : (before ? rowIndex : rowIndex + 1)
+        guard insertIndex <= lines.count else {
+            return false
+        }
+        lines.insert(EditableTableSourceLine.blank(columnCount: columnCount, like: lines[0]), at: insertIndex)
+        return true
+    }
+
+    private mutating func duplicateRow(_ rowIndex: Int) -> Bool {
+        guard isBodyRow(rowIndex), lines.indices.contains(rowIndex) else {
+            return false
+        }
+        lines.insert(lines[rowIndex], at: rowIndex + 1)
+        return true
+    }
+
+    private mutating func removeRow(_ rowIndex: Int) -> Bool {
+        guard isBodyRow(rowIndex), lines.indices.contains(rowIndex), bodyRowCount > 1 else {
+            return false
+        }
+        lines.remove(at: rowIndex)
+        return true
+    }
+
+    private mutating func moveRow(_ rowIndex: Int, offset: Int) -> Bool {
+        let destination = rowIndex + offset
+        guard isBodyRow(rowIndex),
+              isBodyRow(destination),
+              lines.indices.contains(rowIndex),
+              lines.indices.contains(destination)
+        else {
+            return false
+        }
+        lines.swapAt(rowIndex, destination)
+        return true
+    }
+
+    private mutating func insertColumn(relativeTo columnIndex: Int, before: Bool) -> Bool {
+        guard isColumn(columnIndex) else {
+            return false
+        }
+        let insertIndex = before ? columnIndex : columnIndex + 1
+        guard insertIndex <= columnCount else {
+            return false
+        }
+        for index in lines.indices {
+            lines[index].cells.insert(index == 1 ? " --- " : "  ", at: insertIndex)
+        }
+        return true
+    }
+
+    private mutating func duplicateColumn(_ columnIndex: Int) -> Bool {
+        guard isColumn(columnIndex) else {
+            return false
+        }
+        for index in lines.indices {
+            lines[index].cells.insert(lines[index].cells[columnIndex], at: columnIndex + 1)
+        }
+        return true
+    }
+
+    private mutating func removeColumn(_ columnIndex: Int) -> Bool {
+        guard isColumn(columnIndex), columnCount > 2 else {
+            return false
+        }
+        for index in lines.indices {
+            lines[index].cells.remove(at: columnIndex)
+        }
+        return true
+    }
+
+    private mutating func moveColumn(_ columnIndex: Int, offset: Int) -> Bool {
+        let destination = columnIndex + offset
+        guard isColumn(columnIndex), isColumn(destination) else {
+            return false
+        }
+        for index in lines.indices {
+            lines[index].cells.swapAt(columnIndex, destination)
+        }
+        return true
+    }
+
+    private mutating func alignColumn(
+        _ columnIndex: Int,
+        alignment: LivePreviewTableAlignment
+    ) -> Bool {
+        guard isColumn(columnIndex), lines.indices.contains(1) else {
+            return false
+        }
+        lines[1].cells[columnIndex] = " \(alignment.sourceMarker) "
+        return true
+    }
+
+    private mutating func sortColumn(_ columnIndex: Int, ascending: Bool) -> Bool {
+        guard isColumn(columnIndex), bodyRowCount > 1 else {
+            return false
+        }
+        let sortedBodyRows = lines[2..<lines.count].enumerated().sorted { lhs, rhs in
+            let lhsText = lhs.element.cells[columnIndex].trimmingCharacters(in: .whitespaces)
+            let rhsText = rhs.element.cells[columnIndex].trimmingCharacters(in: .whitespaces)
+            let comparison = lhsText.localizedStandardCompare(rhsText)
+            if comparison == .orderedSame {
+                return lhs.offset < rhs.offset
+            }
+            return ascending ? comparison == .orderedAscending : comparison == .orderedDescending
+        }.map(\.element)
+
+        lines.replaceSubrange(2..<lines.count, with: sortedBodyRows)
+        return true
+    }
+
+    private func isBodyRow(_ rowIndex: Int) -> Bool {
+        rowIndex >= 2
+    }
+
+    private func isColumn(_ columnIndex: Int) -> Bool {
+        columnIndex >= 0 && columnIndex < columnCount
+    }
+}
+
+private struct EditableTableSourceLine {
+    var leadingWhitespace: String
+    var trailingWhitespace: String
+    var hasLeadingPipe: Bool
+    var hasTrailingPipe: Bool
+    var cells: [String]
+
+    init?(line: String) {
+        guard let leadingEnd = line.firstIndex(where: { !$0.isWhitespace }),
+              let trailingContentEnd = line.lastIndex(where: { !$0.isWhitespace })
+        else {
             return nil
         }
-        parts.insert(" \(value) ", at: column + 1)
-        return (hasLeadingPipe ? "|" : "") + parts.joined(separator: "|") + (hasTrailingPipe ? "|" : "")
+        let trailingStart = line.index(after: trailingContentEnd)
+        leadingWhitespace = String(line[..<leadingEnd])
+        trailingWhitespace = trailingStart < line.endIndex ? String(line[trailingStart...]) : ""
+
+        let core = String(line[leadingEnd..<trailingStart])
+        hasLeadingPipe = core.hasPrefix("|")
+        hasTrailingPipe = core.hasSuffix("|")
+
+        var cellText = core
+        if hasLeadingPipe {
+            cellText.removeFirst()
+        }
+        if hasTrailingPipe, !cellText.isEmpty {
+            cellText.removeLast()
+        }
+        cells = cellText.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+        guard !cells.isEmpty else {
+            return nil
+        }
+    }
+
+    var rendered: String {
+        leadingWhitespace
+            + (hasLeadingPipe ? "|" : "")
+            + cells.joined(separator: "|")
+            + (hasTrailingPipe ? "|" : "")
+            + trailingWhitespace
+    }
+
+    static func blank(columnCount: Int, like line: EditableTableSourceLine) -> EditableTableSourceLine {
+        var blank = line
+        blank.cells = Array(repeating: "  ", count: columnCount)
+        return blank
     }
 }
 
@@ -403,26 +752,38 @@ private func tableLinesText(in tableText: String, lineEnding: String) -> [String
     return lines
 }
 
-private func replacingTable(
-    in source: String,
-    range: Range<String.Index>,
-    lines: [String],
-    lineEnding: String
-) -> String {
-    let original = String(source[range])
-    var replacement = lines.joined(separator: lineEnding)
-    if original.hasSuffix(lineEnding) {
-        replacement += lineEnding
-    }
-    var edited = source
-    edited.replaceSubrange(range, with: replacement)
-    return edited
-}
-
 private struct TableLine {
     var contentRange: Range<String.Index>
 }
 
 private func contains(_ range: LivePreviewSourceRange, offset: Int) -> Bool {
     offset >= range.location && offset < range.endLocation
+}
+
+private extension LivePreviewTableAlignment {
+    var identifier: String {
+        switch self {
+        case .none:
+            "none"
+        case .left:
+            "left"
+        case .center:
+            "center"
+        case .right:
+            "right"
+        }
+    }
+
+    var sourceMarker: String {
+        switch self {
+        case .none:
+            "---"
+        case .left:
+            ":---"
+        case .center:
+            ":---:"
+        case .right:
+            "---:"
+        }
+    }
 }

@@ -225,6 +225,227 @@ func livePreviewTableColumnInsertAddsBlankColumnAfterTarget() throws {
 }
 
 @Test
+func livePreviewTableSourceEditReturnsTableRangeReplacement() throws {
+    let source = """
+    Intro
+    | Name | Status |
+    | --- | --- |
+    | Alpha | Draft |
+    Outro
+    """
+    let table = try #require(LivePreviewTableParser.parse(source).first)
+    let edit = try #require(LivePreviewTableEdit.applying(
+        .insertRowAfter,
+        to: table.bodyRows[0][0],
+        in: source
+    ))
+
+    #expect(edit.replacementRange == table.sourceRange)
+    #expect(edit.operationID == "row.insertAfter")
+    #expect(edit.actionName == "Insert Row After")
+    #expect(edit.replacement == """
+    | Name | Status |
+    | --- | --- |
+    | Alpha | Draft |
+    |  |  |
+    """ + "\n")
+    #expect(edit.editedSource == """
+    Intro
+    | Name | Status |
+    | --- | --- |
+    | Alpha | Draft |
+    |  |  |
+    Outro
+    """)
+}
+
+@Test
+func livePreviewTableRowOperationsRewriteBodyRowsSafely() throws {
+    let source = """
+    | Name | Status |
+    | --- | --- |
+    | Alpha | Draft |
+    | Beta | Done |
+    """
+    let table = try #require(LivePreviewTableParser.parse(source).first)
+
+    #expect(LivePreviewTableEdit.applying(.insertRowBefore, to: table.header[0], in: source)?.editedSource == """
+    | Name | Status |
+    | --- | --- |
+    |  |  |
+    | Alpha | Draft |
+    | Beta | Done |
+    """)
+    #expect(LivePreviewTableEdit.applying(.insertRowBefore, to: table.bodyRows[1][0], in: source)?.editedSource == """
+    | Name | Status |
+    | --- | --- |
+    | Alpha | Draft |
+    |  |  |
+    | Beta | Done |
+    """)
+    #expect(LivePreviewTableEdit.applying(.duplicateRow, to: table.bodyRows[0][0], in: source)?.editedSource == """
+    | Name | Status |
+    | --- | --- |
+    | Alpha | Draft |
+    | Alpha | Draft |
+    | Beta | Done |
+    """)
+    #expect(LivePreviewTableEdit.applying(.removeRow, to: table.bodyRows[0][0], in: source)?.editedSource == """
+    | Name | Status |
+    | --- | --- |
+    | Beta | Done |
+    """)
+    #expect(LivePreviewTableEdit.applying(.moveRowUp, to: table.bodyRows[1][0], in: source)?.editedSource == """
+    | Name | Status |
+    | --- | --- |
+    | Beta | Done |
+    | Alpha | Draft |
+    """)
+    #expect(LivePreviewTableEdit.applying(.moveRowDown, to: table.bodyRows[0][0], in: source)?.editedSource == """
+    | Name | Status |
+    | --- | --- |
+    | Beta | Done |
+    | Alpha | Draft |
+    """)
+}
+
+@Test
+func livePreviewTableRowOperationsRejectUnsafeTargetsAndNoOps() throws {
+    let source = """
+    | Name | Status |
+    | --- | --- |
+    | Alpha | Draft |
+    """
+    let table = try #require(LivePreviewTableParser.parse(source).first)
+
+    #expect(LivePreviewTableEdit.applying(.duplicateRow, to: table.header[0], in: source) == nil)
+    #expect(LivePreviewTableEdit.applying(.removeRow, to: table.header[0], in: source) == nil)
+    #expect(LivePreviewTableEdit.applying(.removeRow, to: table.bodyRows[0][0], in: source) == nil)
+    #expect(LivePreviewTableEdit.applying(.moveRowUp, to: table.bodyRows[0][0], in: source) == nil)
+    #expect(LivePreviewTableEdit.applying(.moveRowDown, to: table.bodyRows[0][0], in: source) == nil)
+}
+
+@Test
+func livePreviewTableColumnOperationsRewriteEveryRow() throws {
+    let source = """
+    | A | B | C |
+    | --- | :---: | ---: |
+    | 1 | 2 | 3 |
+    | 4 | 5 | 6 |
+    """
+    let table = try #require(LivePreviewTableParser.parse(source).first)
+    let target = table.header[1]
+
+    #expect(LivePreviewTableEdit.applying(.insertColumnBefore, to: target, in: source)?.editedSource == """
+    | A |  | B | C |
+    | --- | --- | :---: | ---: |
+    | 1 |  | 2 | 3 |
+    | 4 |  | 5 | 6 |
+    """)
+    #expect(LivePreviewTableEdit.applying(.duplicateColumn, to: target, in: source)?.editedSource == """
+    | A | B | B | C |
+    | --- | :---: | :---: | ---: |
+    | 1 | 2 | 2 | 3 |
+    | 4 | 5 | 5 | 6 |
+    """)
+    #expect(LivePreviewTableEdit.applying(.removeColumn, to: target, in: source)?.editedSource == """
+    | A | C |
+    | --- | ---: |
+    | 1 | 3 |
+    | 4 | 6 |
+    """)
+    #expect(LivePreviewTableEdit.applying(.moveColumnLeft, to: target, in: source)?.editedSource == """
+    | B | A | C |
+    | :---: | --- | ---: |
+    | 2 | 1 | 3 |
+    | 5 | 4 | 6 |
+    """)
+    #expect(LivePreviewTableEdit.applying(.moveColumnRight, to: target, in: source)?.editedSource == """
+    | A | C | B |
+    | --- | ---: | :---: |
+    | 1 | 3 | 2 |
+    | 4 | 6 | 5 |
+    """)
+}
+
+@Test
+func livePreviewTableColumnAlignmentAndSortOperationsAreSourceOnly() throws {
+    let source = """
+    | Name | Rank |
+    | --- | --- |
+    | Beta | 2 |
+    | Alpha | 10 |
+    | Gamma | 1 |
+    """
+    let table = try #require(LivePreviewTableParser.parse(source).first)
+
+    #expect(LivePreviewTableEdit.applying(.alignColumn(.center), to: table.header[1], in: source)?.editedSource == """
+    | Name | Rank |
+    | --- | :---: |
+    | Beta | 2 |
+    | Alpha | 10 |
+    | Gamma | 1 |
+    """)
+    #expect(LivePreviewTableEdit.applying(.sortColumnAscending, to: table.header[1], in: source)?.editedSource == """
+    | Name | Rank |
+    | --- | --- |
+    | Gamma | 1 |
+    | Beta | 2 |
+    | Alpha | 10 |
+    """)
+    #expect(LivePreviewTableEdit.applying(.sortColumnDescending, to: table.header[0], in: source)?.editedSource == """
+    | Name | Rank |
+    | --- | --- |
+    | Gamma | 1 |
+    | Beta | 2 |
+    | Alpha | 10 |
+    """)
+}
+
+@Test
+func livePreviewTableOperationsRejectMalformedAndStaleTables() throws {
+    let malformed = """
+    | Name | Status |
+    | --- | --- |
+    | Alpha |
+    """
+    let malformedTable = try #require(LivePreviewTableParser.parse(malformed).first)
+    let operations: [LivePreviewTableOperation] = [
+        .insertRowBefore,
+        .insertRowAfter,
+        .duplicateRow,
+        .removeRow,
+        .moveRowUp,
+        .moveRowDown,
+        .insertColumnBefore,
+        .insertColumnAfter,
+        .duplicateColumn,
+        .removeColumn,
+        .moveColumnLeft,
+        .moveColumnRight,
+        .alignColumn(.right),
+        .sortColumnAscending,
+        .sortColumnDescending
+    ]
+    for operation in operations {
+        #expect(LivePreviewTableEdit.applying(operation, to: malformedTable.header[0], in: malformed) == nil)
+    }
+
+    let valid = """
+    | Name | Status |
+    | --- | --- |
+    | Alpha | Draft |
+    | Beta | Done |
+    """
+    let validTable = try #require(LivePreviewTableParser.parse(valid).first)
+    #expect(LivePreviewTableEdit.applying(
+        .insertRowAfter,
+        to: validTable.bodyRows[0][0],
+        in: "Prefix\n" + valid
+    ) == nil)
+}
+
+@Test
 func livePreviewTableColumnInsertRejectsMalformedOrStaleTargets() throws {
     let source = """
     | Name | Status |
