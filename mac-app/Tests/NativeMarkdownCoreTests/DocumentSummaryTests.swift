@@ -40,6 +40,23 @@ func summaryCacheIsVaultScopedAndBounded() async {
 }
 
 @Test
+func summaryCacheClearsByVault() async {
+    let cache = DocumentSummaryCache(maxEntries: 4, maxEstimatedBytes: 10_000)
+    let metadata = SummaryMetadata(sourceByteCount: 10, chunkCount: 1, elapsedMilliseconds: 1, language: .korean)
+    let summary = DocumentSummary(overview: "요약", keyPoints: [], actionItems: ["없음"], metadata: metadata)
+    let first = SummaryCacheKey(vaultID: "vault-a", fileID: "A.md", contentHash: "a", promptVersion: 1, summaryFormatVersion: 1, modelPolicyVersion: 1)
+    let second = SummaryCacheKey(vaultID: "vault-b", fileID: "A.md", contentHash: "a", promptVersion: 1, summaryFormatVersion: 1, modelPolicyVersion: 1)
+    let entry = SummaryCacheEntry(summary: summary, sourceByteCount: 10, chunkCount: 1, elapsedMilliseconds: 1)
+
+    await cache.insert(entry, for: first)
+    await cache.insert(entry, for: second)
+    await cache.clear(vaultID: "vault-a")
+
+    #expect(await cache.value(for: first) == nil)
+    #expect(await cache.value(for: second) != nil)
+}
+
+@Test
 func summaryChunkerSplitsHeadingsAndIgnoresFenceHeadings() throws {
     let source = """
     ---
