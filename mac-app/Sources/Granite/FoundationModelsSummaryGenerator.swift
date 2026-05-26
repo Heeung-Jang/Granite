@@ -47,7 +47,10 @@ struct FoundationModelsSummaryGenerator: DocumentSummaryGenerating {
     }
 
     func tokenCount(_ text: String) async throws -> Int {
-        try await SystemLanguageModel.default.tokenCount(for: text)
+        if #available(macOS 26.4, *) {
+            return try await SystemLanguageModel.default.tokenCount(for: text)
+        }
+        return max(1, text.count / 4)
     }
 
     func generate(prompt: String, maxTokens: Int) async throws -> String {

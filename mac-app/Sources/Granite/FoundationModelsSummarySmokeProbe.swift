@@ -153,8 +153,24 @@ enum FoundationModelsSummarySmokeProbe {
         report.noRawSourceInReport = !encoded.contains(shortSource)
             && !encoded.contains(longSource)
             && !encoded.contains(diskSource)
-        report.summary = ProbeCheckSummary.evaluate(report: report)
+        report.summary = evaluateAvailableReport(report)
         return report
+    }
+
+    private static func evaluateAvailableReport(_ report: FoundationModelsSummarySmokeProbeReport) -> ProbeCheckSummary {
+        var failures: [String] = []
+        if report.skipped { failures.append("skipped") }
+        if !report.modelAvailable { failures.append("modelAvailable") }
+        if !report.shortSummaryGenerated { failures.append("shortSummaryGenerated") }
+        if !report.longProgressObserved { failures.append("longProgressObserved") }
+        if !report.longSummaryGenerated { failures.append("longSummaryGenerated") }
+        if !report.diskUnchanged { failures.append("diskUnchanged") }
+        if !report.noRawSourceInReport { failures.append("noRawSourceInReport") }
+        return ProbeCheckSummary(
+            passed: failures.isEmpty,
+            unexpectedFailures: failures.sorted(),
+            expectedFailures: []
+        )
     }
 
     private static func summarize(
@@ -204,8 +220,8 @@ enum FoundationModelsSummarySmokeProbe {
             maxModelCalls: 16,
             maxReduceInputTokens: 1_600,
             fallbackInputCharacters: fallbackInputCharacters,
-            chunkOutputTokens: 96,
-            finalOutputTokens: 180
+            chunkOutputTokens: 220,
+            finalOutputTokens: 500
         )
     }
 

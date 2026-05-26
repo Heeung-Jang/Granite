@@ -183,29 +183,21 @@ struct GraniteApp: App {
         }
 
         if CommandLine.arguments.contains("--summary-panel-probe") {
-            let semaphore = DispatchSemaphore(value: 0)
-            var exitCode: Int32 = 2
             Task.detached {
                 let report = await SummaryPanelProbe.run()
                 print(SummaryPanelProbe.encodedReport(report))
-                exitCode = report.summary.passed ? 0 : 2
-                semaphore.signal()
+                Foundation.exit(report.summary.passed ? 0 : 2)
             }
-            semaphore.wait()
-            Foundation.exit(exitCode)
+            dispatchMain()
         }
 
         if CommandLine.arguments.contains("--foundation-models-smoke-probe") {
-            let semaphore = DispatchSemaphore(value: 0)
-            var exitCode: Int32 = 2
             Task.detached {
                 let report = await FoundationModelsSummarySmokeProbe.run()
                 print(FoundationModelsSummarySmokeProbe.encodedReport(report))
-                exitCode = report.summary.passed ? 0 : 2
-                semaphore.signal()
+                Foundation.exit(report.summary.passed ? 0 : 2)
             }
-            semaphore.wait()
-            Foundation.exit(exitCode)
+            dispatchMain()
         }
     }
 
