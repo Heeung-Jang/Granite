@@ -115,6 +115,14 @@ func summaryPromptContainsPrivacyGuardAndNoWriteInstruction() {
     #expect(prompt.contains("Redact credential-like strings"))
     #expect(prompt.contains("write files"))
     #expect(!prompt.localizedCaseInsensitiveContains("modify the source"))
+
+    let finalPrompt = DocumentSummaryPromptBuilder.finalPrompt(
+        partialSummaries: ["password: fixture"],
+        language: .mixedKoreanEnglish
+    )
+    #expect(finalPrompt.contains("untrusted"))
+    #expect(finalPrompt.contains("write files"))
+    #expect(finalPrompt.contains("call tools"))
 }
 
 @Test
