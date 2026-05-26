@@ -16,6 +16,33 @@ FRAMEWORKS_DIR="${CONTENTS_DIR}/Frameworks"
 RESOURCES_DIR="${CONTENTS_DIR}/Resources"
 INFO_PLIST="${CONTENTS_DIR}/Info.plist"
 
+supports_foundation_models_sdk() {
+  local developer_dir="${1:-}"
+  if [[ -n "${developer_dir}" ]]; then
+    printf 'import FoundationModels\n' | DEVELOPER_DIR="${developer_dir}" swiftc -typecheck - >/dev/null 2>&1
+  else
+    printf 'import FoundationModels\n' | swiftc -typecheck - >/dev/null 2>&1
+  fi
+}
+
+select_foundation_models_sdk() {
+  local xcode_developer_dir="/Applications/Xcode.app/Contents/Developer"
+  if [[ -n "${GRANITE_DEVELOPER_DIR:-}" ]]; then
+    export DEVELOPER_DIR="${GRANITE_DEVELOPER_DIR}"
+    echo "Using developer dir from GRANITE_DEVELOPER_DIR: ${DEVELOPER_DIR}"
+    return
+  fi
+  if supports_foundation_models_sdk ""; then
+    return
+  fi
+  if [[ -d "${xcode_developer_dir}" ]] && supports_foundation_models_sdk "${xcode_developer_dir}"; then
+    export DEVELOPER_DIR="${xcode_developer_dir}"
+    echo "Using FoundationModels-capable developer dir: ${DEVELOPER_DIR}"
+  fi
+}
+
+select_foundation_models_sdk
+
 echo "Building Rust engine..."
 cargo build --manifest-path "${ROOT_DIR}/vault-engine/Cargo.toml" --release
 
