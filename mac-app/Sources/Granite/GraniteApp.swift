@@ -182,6 +182,12 @@ struct GraniteApp: App {
             Foundation.exit(report.passed ? 0 : 2)
         }
 
+        if CommandLine.arguments.contains("--workspace-pane-layout-probe") {
+            let report = WorkspacePaneLayoutProbe.run()
+            print(WorkspacePaneLayoutProbe.encodedReport(report))
+            Foundation.exit(report.passed ? 0 : 2)
+        }
+
         if CommandLine.arguments.contains("--summary-panel-probe") {
             Task.detached {
                 let report = await SummaryPanelProbe.run()

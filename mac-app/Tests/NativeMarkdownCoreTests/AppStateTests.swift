@@ -1712,6 +1712,187 @@ func appStateRemovingRecentVaultClearsStoredTabSession() {
 }
 
 @Test
+func appStateStartsWithDefaultPaneLayout() {
+    let state = AppState()
+
+    #expect(state.workspacePaneLayout == .default)
+}
+
+@Test
+func appStateLoadsSavedPaneLayoutWhenSelectingValidVault() throws {
+    let temporaryRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let vaultURL = temporaryRoot.appendingPathComponent("vault", isDirectory: true)
+    let supportRoot = temporaryRoot.appendingPathComponent("support", isDirectory: true)
+    try FileManager.default.createDirectory(at: vaultURL, withIntermediateDirectories: true)
+    defer {
+        try? FileManager.default.removeItem(at: temporaryRoot)
+    }
+    let layout = WorkspacePaneLayout(leftSidebarWidth: 333, rightSidebarWidth: 444, isLeftSidebarCollapsed: true)
+    let paneStore = MemoryWorkspacePaneLayoutStore(layouts: [
+        RecentVault.storageKey(for: vaultURL): layout
+    ])
+    let state = AppState(
+        engineHealth: EngineHealthStatus(state: .loaded, abiVersion: 1, message: "test"),
+        indexDirectoryResolver: AppOwnedIndexDirectoryResolver(applicationSupportRoot: supportRoot),
+        vaultAccessValidator: AllowingVaultAccessValidator(),
+        recentVaultStorage: MemoryRecentVaultStorage(),
+        workspacePaneLayoutStore: paneStore,
+        readClientFactory: { _, _ in FakeReadClient() }
+    )
+
+    try state.selectVault(vaultURL)
+
+    #expect(state.workspacePaneLayout == layout)
+    #expect(paneStore.saveCount == 0)
+}
+
+@Test
+func appStateLoadsSavedPaneLayoutWhenSelectingUnavailableVault() throws {
+    let vaultURL = URL(fileURLWithPath: "/tmp/unavailable-pane-vault", isDirectory: true)
+    let layout = WorkspacePaneLayout(leftSidebarWidth: 301, rightSidebarWidth: 402, isRightSidebarCollapsed: true)
+    let paneStore = MemoryWorkspacePaneLayoutStore(layouts: [
+        RecentVault.storageKey(for: vaultURL): layout
+    ])
+    let state = AppState(
+        vaultAccessValidator: FixedVaultAccessValidator(issue: .missing(vaultURL)),
+        recentVaultStorage: MemoryRecentVaultStorage(),
+        workspacePaneLayoutStore: paneStore
+    )
+
+    try state.selectVault(vaultURL)
+
+    #expect(state.vaultSelection == .unavailable(.missing(vaultURL)))
+    #expect(state.workspacePaneLayout == layout)
+    #expect(paneStore.saveCount == 0)
+}
+
+@Test
+func appStateFallsBackToDefaultPaneLayoutForVaultWithoutSavedLayout() throws {
+    let temporaryRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let vaultURL = temporaryRoot.appendingPathComponent("vault", isDirectory: true)
+    let supportRoot = temporaryRoot.appendingPathComponent("support", isDirectory: true)
+    try FileManager.default.createDirectory(at: vaultURL, withIntermediateDirectories: true)
+    defer {
+        try? FileManager.default.removeItem(at: temporaryRoot)
+    }
+    let state = AppState(
+        engineHealth: EngineHealthStatus(state: .loaded, abiVersion: 1, message: "test"),
+        indexDirectoryResolver: AppOwnedIndexDirectoryResolver(applicationSupportRoot: supportRoot),
+        vaultAccessValidator: AllowingVaultAccessValidator(),
+        recentVaultStorage: MemoryRecentVaultStorage(),
+        workspacePaneLayoutStore: MemoryWorkspacePaneLayoutStore(),
+        readClientFactory: { _, _ in FakeReadClient() }
+    )
+
+    try state.selectVault(vaultURL)
+
+    #expect(state.workspacePaneLayout == .default)
+}
+
+@Test
+func appStateClearingVaultResetsPaneLayoutWithoutClearingSavedRecord() {
+    let vaultURL = URL(fileURLWithPath: "/tmp/clear-pane-vault", isDirectory: true)
+    let paneStore = MemoryWorkspacePaneLayoutStore()
+    let state = AppState(
+        vaultSelection: .selected(vaultURL),
+        workspacePaneLayoutStore: paneStore
+    )
+
+    state.setWorkspacePaneLayout(WorkspacePaneLayout(leftSidebarWidth: 350, rightSidebarWidth: 450))
+    state.clearVault()
+
+    #expect(state.workspacePaneLayout == .default)
+    #expect(paneStore.clearCount == 0)
+}
+
+@Test
+func appStatePersistsPaneWidthUpdatesOnlyWhenVaultExists() {
+    let vaultURL = URL(fileURLWithPath: "/tmp/resize-pane-vault", isDirectory: true)
+    let paneStore = MemoryWorkspacePaneLayoutStore()
+    let selectedState = AppState(
+        vaultSelection: .selected(vaultURL),
+        workspacePaneLayoutStore: paneStore
+    )
+
+    selectedState.setLeftSidebarWidth(100, availableWidth: 1_200)
+    selectedState.setRightSidebarWidth(900, availableWidth: 1_200)
+
+    #expect(selectedState.workspacePaneLayout.leftSidebarWidth == 200)
+    #expect(selectedState.workspacePaneLayout.rightSidebarWidth == 640)
+    #expect(paneStore.saveCount == 2)
+    #expect(paneStore.loadLayout(forVaultAt: vaultURL) == selectedState.workspacePaneLayout)
+
+    let noVaultStore = MemoryWorkspacePaneLayoutStore()
+    let noVaultState = AppState(workspacePaneLayoutStore: noVaultStore)
+    noVaultState.setLeftSidebarWidth(320, availableWidth: 1_200)
+    #expect(noVaultState.workspacePaneLayout.leftSidebarWidth == 320)
+    #expect(noVaultStore.saveCount == 0)
+}
+
+@Test
+func appStatePaneCollapseTogglesPreserveWidthsAndPersist() {
+    let vaultURL = URL(fileURLWithPath: "/tmp/collapse-pane-vault", isDirectory: true)
+    let paneStore = MemoryWorkspacePaneLayoutStore()
+    let state = AppState(
+        vaultSelection: .selected(vaultURL),
+        workspacePaneLayoutStore: paneStore
+    )
+
+    state.setWorkspacePaneLayout(WorkspacePaneLayout(leftSidebarWidth: 333, rightSidebarWidth: 444))
+    state.toggleLeftSidebarCollapsed()
+    state.toggleRightSidebarCollapsed()
+
+    #expect(state.workspacePaneLayout.leftSidebarWidth == 333)
+    #expect(state.workspacePaneLayout.rightSidebarWidth == 444)
+    #expect(state.workspacePaneLayout.isLeftSidebarCollapsed)
+    #expect(state.workspacePaneLayout.isRightSidebarCollapsed)
+    #expect(paneStore.loadLayout(forVaultAt: vaultURL) == state.workspacePaneLayout)
+}
+
+@Test
+func appStateOpeningGraphDoesNotMutateOrPersistRightPaneCollapse() {
+    let vaultURL = URL(fileURLWithPath: "/tmp/graph-pane-vault", isDirectory: true)
+    let paneStore = MemoryWorkspacePaneLayoutStore()
+    let state = AppState(
+        vaultSelection: .selected(vaultURL),
+        workspacePaneLayoutStore: paneStore
+    )
+    state.setWorkspacePaneLayout(WorkspacePaneLayout(leftSidebarWidth: 333, rightSidebarWidth: 444))
+    let savesBeforeGraph = paneStore.saveCount
+
+    state.openGraph(source: .ribbon)
+
+    #expect(state.workspaceSelection == .graph)
+    #expect(!state.workspacePaneLayout.isRightSidebarCollapsed)
+    #expect(state.workspacePaneLayout.rightSidebarWidth == 444)
+    #expect(paneStore.saveCount == savesBeforeGraph)
+}
+
+@Test
+func appStateRemovingRecentVaultClearsStoredPaneLayout() {
+    let vaultURL = URL(fileURLWithPath: "/tmp/pane-forgotten-vault", isDirectory: true)
+    let otherURL = URL(fileURLWithPath: "/tmp/pane-kept-vault", isDirectory: true)
+    let recentStorage = MemoryRecentVaultStorage(urls: [vaultURL, otherURL])
+    let paneStore = MemoryWorkspacePaneLayoutStore(layouts: [
+        RecentVault.storageKey(for: vaultURL): WorkspacePaneLayout(leftSidebarWidth: 333, rightSidebarWidth: 444),
+        RecentVault.storageKey(for: otherURL): WorkspacePaneLayout(leftSidebarWidth: 355, rightSidebarWidth: 466)
+    ])
+    let state = AppState(
+        recentVaultStorage: recentStorage,
+        workspacePaneLayoutStore: paneStore
+    )
+
+    state.removeRecentVault(at: vaultURL)
+
+    #expect(state.recentVaults.map(\.url) == [otherURL])
+    #expect(paneStore.loadLayout(forVaultAt: vaultURL) == nil)
+    #expect(paneStore.loadLayout(forVaultAt: otherURL) != nil)
+    #expect(paneStore.clearCount == 1)
+}
+
+@Test
 func openingUnavailableRecentVaultDoesNotCreateIndexAndCanRemoveIt() throws {
     let temporaryRoot = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -1906,6 +2087,30 @@ private final class MemoryWorkspaceTabSessionStore: WorkspaceTabSessionStoring {
     func clearSession(forVaultAt vaultURL: URL) {
         clearCount += 1
         savedSessions.removeValue(forKey: RecentVault.storageKey(for: vaultURL))
+    }
+}
+
+private final class MemoryWorkspacePaneLayoutStore: WorkspacePaneLayoutStoring {
+    private(set) var savedLayouts: [String: WorkspacePaneLayout] = [:]
+    private(set) var saveCount = 0
+    private(set) var clearCount = 0
+
+    init(layouts: [String: WorkspacePaneLayout] = [:]) {
+        self.savedLayouts = layouts
+    }
+
+    func loadLayout(forVaultAt vaultURL: URL) -> WorkspacePaneLayout? {
+        savedLayouts[RecentVault.storageKey(for: vaultURL)]
+    }
+
+    func saveLayout(_ layout: WorkspacePaneLayout, forVaultAt vaultURL: URL) {
+        saveCount += 1
+        savedLayouts[RecentVault.storageKey(for: vaultURL)] = layout
+    }
+
+    func clearLayout(forVaultAt vaultURL: URL) {
+        clearCount += 1
+        savedLayouts.removeValue(forKey: RecentVault.storageKey(for: vaultURL))
     }
 }
 

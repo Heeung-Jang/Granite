@@ -12,43 +12,68 @@ struct RootView: View {
     @State private var presentedSheet: RootSheet?
 
     var body: some View {
-        HStack(spacing: 0) {
-            ObsidianRibbonView(
-                selectedPanel: $leftPanel,
-                graphIsActive: appState.workspaceSelection == .graph,
-                openVault: openVaultPanel,
-                openGraph: openGraphFromRibbon,
-                showHelp: showHelp,
-                showSettings: showSettings
-            )
+        GeometryReader { geometry in
+            HStack(spacing: 0) {
+                ObsidianRibbonView(
+                    selectedPanel: $leftPanel,
+                    graphIsActive: appState.workspaceSelection == .graph,
+                    selectLeftPanel: selectLeftPanel,
+                    openVault: openVaultPanel,
+                    openGraph: openGraphFromRibbon,
+                    showHelp: showHelp,
+                    showSettings: showSettings
+                )
 
-            Divider()
-
-            ObsidianLeftSidebar(
-                selectedPanel: $leftPanel,
-                showVaultPicker: showVaultPicker,
-                revealVaultInFinder: revealVaultInFinder,
-                closeVault: closeVault,
-                vaultSelectionError: vaultSelectionError
-            )
-            .frame(width: ObsidianUI.leftSidebarWidth)
-
-            Divider()
-
-            ObsidianWorkspaceDetail(
-                closeTab: closeTab,
-                moveTab: appState.moveTab(from:to:),
-                newTab: newTab
-            )
-
-            if appState.workspaceSelection != .graph {
                 Divider()
 
-                ObsidianRightSidebar(selectedPanel: $selectedInspectorPanel)
-                    .frame(width: ObsidianUI.rightSidebarWidth)
+                if !appState.workspacePaneLayout.isLeftSidebarCollapsed {
+                    ObsidianLeftSidebar(
+                        selectedPanel: $leftPanel,
+                        showVaultPicker: showVaultPicker,
+                        revealVaultInFinder: revealVaultInFinder,
+                        closeVault: closeVault,
+                        collapseSidebar: appState.toggleLeftSidebarCollapsed,
+                        vaultSelectionError: vaultSelectionError
+                    )
+                    .frame(width: CGFloat(appState.workspacePaneLayout.leftSidebarWidth))
+
+                    ObsidianPaneSplitHandle(
+                        side: .left,
+                        currentWidth: appState.workspacePaneLayout.leftSidebarWidth
+                    ) { proposedWidth in
+                        appState.setLeftSidebarWidth(
+                            proposedWidth,
+                            availableWidth: workspaceAvailableWidth(in: geometry)
+                        )
+                    }
+                }
+
+                ObsidianWorkspaceDetail(
+                    closeTab: closeTab,
+                    moveTab: appState.moveTab(from:to:),
+                    newTab: newTab,
+                    showsRightSidebarToggle: appState.workspaceSelection != .graph,
+                    isRightSidebarCollapsed: appState.workspacePaneLayout.isRightSidebarCollapsed,
+                    toggleRightSidebar: appState.toggleRightSidebarCollapsed
+                )
+
+                if showsRightSidebar {
+                    ObsidianPaneSplitHandle(
+                        side: .right,
+                        currentWidth: appState.workspacePaneLayout.rightSidebarWidth
+                    ) { proposedWidth in
+                        appState.setRightSidebarWidth(
+                            proposedWidth,
+                            availableWidth: workspaceAvailableWidth(in: geometry)
+                        )
+                    }
+
+                    ObsidianRightSidebar(selectedPanel: $selectedInspectorPanel)
+                        .frame(width: CGFloat(appState.workspacePaneLayout.rightSidebarWidth))
+                }
             }
+            .background(ObsidianUI.editorBackground)
         }
-        .background(ObsidianUI.editorBackground)
         .alert("Unsaved Changes", isPresented: dirtyNavigationAlertBinding) {
             Button("Stay", role: .cancel) {
                 appState.dismissDirtyNavigationWarning()
@@ -111,6 +136,14 @@ struct RootView: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Workspace")
+    }
+
+    private var showsRightSidebar: Bool {
+        appState.workspaceSelection != .graph && !appState.workspacePaneLayout.isRightSidebarCollapsed
+    }
+
+    private func workspaceAvailableWidth(in geometry: GeometryProxy) -> Double {
+        max(0, Double(geometry.size.width - ObsidianUI.ribbonWidth))
     }
 
     private var dirtyNavigationAlertBinding: Binding<Bool> {
@@ -322,6 +355,13 @@ struct RootView: View {
     private func openGraphFromRibbon() {
         appState.openGraph(source: .ribbon)
     }
+
+    private func selectLeftPanel(_ panel: ObsidianLeftPanel) {
+        leftPanel = panel
+        if appState.workspacePaneLayout.isLeftSidebarCollapsed {
+            appState.toggleLeftSidebarCollapsed()
+        }
+    }
 }
 
 private enum ObsidianLeftPanel {
@@ -347,6 +387,7 @@ private enum RootSheet: Identifiable {
 private struct ObsidianRibbonView: View {
     @Binding var selectedPanel: ObsidianLeftPanel
     let graphIsActive: Bool
+    let selectLeftPanel: (ObsidianLeftPanel) -> Void
     let openVault: () -> Void
     let openGraph: () -> Void
     let showHelp: () -> Void
@@ -359,7 +400,7 @@ private struct ObsidianRibbonView: View {
                 accessibilityLabel: "Files",
                 isSelected: selectedPanel == .files
             ) {
-                selectedPanel = .files
+                selectLeftPanel(.files)
             }
 
             ObsidianIconButton(
@@ -367,7 +408,7 @@ private struct ObsidianRibbonView: View {
                 accessibilityLabel: "Search",
                 isSelected: selectedPanel == .search
             ) {
-                selectedPanel = .search
+                selectLeftPanel(.search)
             }
 
             ObsidianIconButton(
@@ -375,7 +416,7 @@ private struct ObsidianRibbonView: View {
                 accessibilityLabel: "Bookmarks",
                 isSelected: selectedPanel == .bookmarks
             ) {
-                selectedPanel = .bookmarks
+                selectLeftPanel(.bookmarks)
             }
 
             ObsidianIconButton(
@@ -418,11 +459,15 @@ private struct ObsidianLeftSidebar: View {
     let showVaultPicker: () -> Void
     let revealVaultInFinder: () -> Void
     let closeVault: () -> Void
+    let collapseSidebar: () -> Void
     let vaultSelectionError: String?
 
     var body: some View {
         VStack(spacing: 0) {
-            ObsidianSidebarToolbar(selectedPanel: selectedPanel)
+            ObsidianSidebarToolbar(
+                selectedPanel: selectedPanel,
+                collapseSidebar: collapseSidebar
+            )
 
             Divider()
 
@@ -454,6 +499,7 @@ private struct ObsidianLeftSidebar: View {
 
 private struct ObsidianSidebarToolbar: View {
     let selectedPanel: ObsidianLeftPanel
+    let collapseSidebar: () -> Void
 
     var body: some View {
         HStack(spacing: 8) {
@@ -473,6 +519,12 @@ private struct ObsidianSidebarToolbar: View {
                     .font(.headline)
                 Spacer()
             }
+
+            ObsidianIconButton(
+                systemName: "sidebar.left",
+                accessibilityLabel: "Collapse left sidebar",
+                action: collapseSidebar
+            )
         }
         .padding(.horizontal, 12)
         .frame(height: ObsidianUI.noteToolbarHeight)
@@ -575,6 +627,9 @@ private struct ObsidianWorkspaceDetail: View {
     let closeTab: (WorkspaceTab.ID) -> Void
     let moveTab: (Int, Int) -> Void
     let newTab: () -> Void
+    let showsRightSidebarToggle: Bool
+    let isRightSidebarCollapsed: Bool
+    let toggleRightSidebar: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -585,7 +640,10 @@ private struct ObsidianWorkspaceDetail: View {
                 activateTab: appState.activateTab(id:),
                 closeTab: closeTab,
                 moveTab: moveTab,
-                newTab: newTab
+                newTab: newTab,
+                showsRightSidebarToggle: showsRightSidebarToggle,
+                isRightSidebarCollapsed: isRightSidebarCollapsed,
+                toggleRightSidebar: toggleRightSidebar
             )
 
             Divider()
@@ -636,6 +694,9 @@ private struct ObsidianTabBar: View {
     let closeTab: (WorkspaceTab.ID) -> Void
     let moveTab: (Int, Int) -> Void
     let newTab: () -> Void
+    let showsRightSidebarToggle: Bool
+    let isRightSidebarCollapsed: Bool
+    let toggleRightSidebar: () -> Void
     @State private var draggedTabID: WorkspaceTab.ID?
 
     var body: some View {
@@ -692,6 +753,16 @@ private struct ObsidianTabBar: View {
             )
 
             Spacer()
+
+            if showsRightSidebarToggle {
+                ObsidianIconButton(
+                    systemName: "sidebar.right",
+                    accessibilityLabel: isRightSidebarCollapsed ? "Expand right inspector" : "Collapse right inspector",
+                    isSelected: !isRightSidebarCollapsed,
+                    action: toggleRightSidebar
+                )
+                .padding(.trailing, 4)
+            }
 
             Image(systemName: "chevron.down")
                 .foregroundStyle(.secondary)
