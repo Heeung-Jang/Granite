@@ -51,6 +51,26 @@ The example below uses a generated demo vault with mock notes only. It shows Gra
   <img src="assets/readme/granite-workflow.gif" alt="Granite workflow showing a local demo vault, search panel, and local search results" width="900" />
 </p>
 
+## Performance Benchmarks
+
+The numbers below come from committed, redacted benchmark artifacts rather than estimated claims. The large-vault runs use `64,306` Markdown files and `3,183MB` of Markdown on Apple M4 Pro / 24GB RAM / macOS 26.4.1. Obsidian comparison rows use Obsidian `1.12.7` and p95 latency.
+
+### Obsidian Comparison
+
+Lower latency is better. Speedup is `Obsidian p95 / Granite p95`; the bar chart is capped at `20x`.
+
+<p align="center">
+  <img src="assets/readme/benchmark-speedup.svg" alt="Granite p95 benchmark speedup over Obsidian: file-name search 6x, body search 14x, backlink lookup 18x, tag lookup 5x" width="900" />
+</p>
+
+### Large-Vault Granite Measurements
+
+These rows are published Granite measurements. On 2026-05-26, matching Obsidian 1.12.7 probes were attempted against the same local large vault. Obsidian did not produce a completed baseline: with a temporary profile, and even with `bases` / `sync` disabled to isolate nonessential core plugins, the renderer exited at about `42-43s` while opening the vault, so the large-vault render itself failed. The graph probe never reached a graph-view title. The chart therefore shows Granite timings and Obsidian render failure, not finite speedup claims.
+
+<p align="center">
+  <img src="assets/readme/large-vault-measurements.svg" alt="Large-vault Granite measurements completed while Obsidian 1.12.7 failed to render the large vault because the renderer exited at about 42 to 43 seconds" width="900" />
+</p>
+
 ## Usage
 
 1. Launch `dist/Granite.app`.

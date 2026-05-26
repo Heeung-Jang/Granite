@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="780" viewBox="0 0 1200 780" role="img" aria-labelledby="title desc">
+  <title id="title">64,306개 note real vault에서 Granite 완료 측정값과 Obsidian 1.12.7 렌더 실패 상태를 비교합니다.</title>
+  <desc id="desc">Granite 대형 vault 측정값은 완료됐고 Obsidian은 renderer 종료로 대형 vault 렌더링 자체가 실패했습니다.</desc>
+  <style>
+    .font { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; letter-spacing: 0; }
+    .title { fill: #202124; font-size: 34px; font-weight: 700; }
+    .subtitle { fill: #77777c; font-size: 17px; font-weight: 450; }
+    .header { fill: #8a8a90; font-size: 14px; font-weight: 650; text-transform: uppercase; }
+    .label { fill: #303033; font-size: 20px; font-weight: 650; }
+    .metric { fill: #818186; font-size: 14px; font-weight: 500; }
+    .value { fill: #1f1f22; font-size: 21px; font-weight: 700; }
+    .note { fill: #77777c; font-size: 13px; font-weight: 450; }
+  </style>
+  <rect width="1200" height="780" rx="14" fill="#fbfbfc"/>
+  <rect x="1" y="1" width="1198" height="778" rx="14" fill="none" stroke="#e6e6e8"/>
+  <g class="font">
+    <g transform="translate(82 104)">
+      <text x="0" y="0" class="title">대형 vault 측정값, Obsidian 렌더 실패</text>
+      <text x="0" y="34" class="subtitle">64,306-note real vault 기준. Obsidian 1.12.7은 대형 vault 렌더링 자체가 실패했습니다.</text>
+      <text x="0" y="58" class="subtitle">renderer가 약 42-43초에 종료되어 Granite 완료 시간과 Obsidian 실패 상태를 함께 표시합니다.</text>
+    </g>
+    <g transform="translate(82 208)">
+      <rect x="0" y="0" width="1036" height="1" fill="#e7e7ea"/>
+      <text x="0" y="34" class="header">작업</text>
+      <text x="430" y="34" class="header">Granite 결과</text>
+      <text x="715" y="34" class="header">Obsidian 1.12.7 렌더</text>
+      <rect x="0" y="52" width="1036" height="1" fill="#e7e7ea"/>
+      <g transform="translate(0 100)">
+        <text x="0" y="0" class="label">5MB note 로딩</text>
+        <text x="0" y="25" class="metric">TextKit load probe</text>
+        <rect x="430" y="-23" width="230" height="36" rx="6" fill="#eaf2ff"/>
+        <rect x="430" y="-23" width="6" height="36" rx="3" fill="#2f81f7"/>
+        <text x="450" y="1" class="value">2,199ms</text>
+        <rect x="715" y="-23" width="260" height="36" rx="6" fill="#f5efe6"/>
+        <text x="735" y="1" class="value" fill="#8a6437">렌더 실패</text>
+        <text x="735" y="25" class="metric">renderer 종료로 note-open 렌더 없음</text>
+      </g>
+      <rect x="0" y="144" width="1036" height="1" fill="#e7e7ea" opacity="0.75"/>
+      <g transform="translate(0 186)">
+        <text x="0" y="0" class="label">Live Preview 렌더 p95</text>
+        <text x="0" y="25" class="metric">1MB visible decoration</text>
+        <rect x="430" y="-23" width="230" height="36" rx="6" fill="#eaf2ff"/>
+        <rect x="430" y="-23" width="6" height="36" rx="3" fill="#2f81f7"/>
+        <text x="450" y="1" class="value">6ms</text>
+        <rect x="715" y="-23" width="260" height="36" rx="6" fill="#f5efe6"/>
+        <text x="735" y="1" class="value" fill="#8a6437">렌더 실패</text>
+        <text x="735" y="25" class="metric">vault open 중 renderer 종료</text>
+      </g>
+      <rect x="0" y="230" width="1036" height="1" fill="#e7e7ea" opacity="0.75"/>
+      <g transform="translate(0 272)">
+        <text x="0" y="0" class="label">Whole-vault graph snapshot</text>
+        <text x="0" y="25" class="metric">64,297 nodes / 129,299 edges</text>
+        <rect x="430" y="-23" width="230" height="36" rx="6" fill="#eaf2ff"/>
+        <rect x="430" y="-23" width="6" height="36" rx="3" fill="#2f81f7"/>
+        <text x="450" y="1" class="value">1,034ms</text>
+        <rect x="715" y="-23" width="260" height="36" rx="6" fill="#f5efe6"/>
+        <text x="735" y="1" class="value" fill="#8a6437">렌더 실패</text>
+        <text x="735" y="25" class="metric">Cmd-G 후 graph 렌더 관찰 전 종료</text>
+      </g>
+      <rect x="0" y="316" width="1036" height="1" fill="#e7e7ea" opacity="0.75"/>
+      <g transform="translate(0 358)">
+        <text x="0" y="0" class="label">Whole-vault graph first render</text>
+        <text x="0" y="25" class="metric">Metal visible-window renderer</text>
+        <rect x="430" y="-23" width="230" height="36" rx="6" fill="#eaf2ff"/>
+        <rect x="430" y="-23" width="6" height="36" rx="3" fill="#2f81f7"/>
+        <text x="450" y="1" class="value">493ms</text>
+        <rect x="715" y="-23" width="260" height="36" rx="6" fill="#f5efe6"/>
+        <text x="735" y="1" class="value" fill="#8a6437">렌더 실패</text>
+        <text x="735" y="25" class="metric">graph render baseline 없음</text>
+      </g>
+      <rect x="0" y="402" width="1036" height="1" fill="#e7e7ea" opacity="0.75"/>
+      <g transform="translate(0 444)">
+        <text x="0" y="0" class="label">Index usable</text>
+        <text x="0" y="25" class="metric">metadata + Tantivy usable</text>
+        <rect x="430" y="-23" width="230" height="36" rx="6" fill="#eaf2ff"/>
+        <rect x="430" y="-23" width="6" height="36" rx="3" fill="#2f81f7"/>
+        <text x="450" y="1" class="value">101s</text>
+        <rect x="715" y="-23" width="260" height="36" rx="6" fill="#f5efe6"/>
+        <text x="735" y="1" class="value" fill="#8a6437">렌더 실패</text>
+        <text x="735" y="25" class="metric">open probe 42s / 44s에 종료</text>
+      </g>
+    </g>
+    <g transform="translate(82 704)">
+      <rect x="0" y="-22" width="1036" height="1" fill="#e7e7ea"/>
+      <text x="0" y="8" class="note">출처: 커밋된 Granite artifact + 2026-05-26 Obsidian large-vault probe.</text>
+      <text x="1036" y="8" text-anchor="end" class="note">Obsidian 렌더 실패를 무한대 speedup으로 환산하지 않음.</text>
+    </g>
+  </g>
+</svg>

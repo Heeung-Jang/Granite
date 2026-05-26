@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720" role="img" aria-labelledby="title desc">
+  <title id="title">Obsidian 대비 Granite 벤치마크 속도 향상</title>
+  <desc id="desc">Granite 톤의 가로 막대 그래프. p95 기준 Granite가 Obsidian보다 파일명 검색 6배, 본문 검색 14배, 백링크 조회 18배, 태그 조회 5배 빠른 것을 보여준다.</desc>
+  <style>
+    .font { font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Noto Sans KR", "Segoe UI", sans-serif; letter-spacing: 0; }
+    .title { fill: #202124; font-size: 34px; font-weight: 700; }
+    .subtitle { fill: #77777c; font-size: 18px; font-weight: 450; }
+    .label { fill: #303033; font-size: 22px; font-weight: 650; }
+    .metric { fill: #818186; font-size: 15px; font-weight: 500; }
+    .value { fill: #1f1f22; font-size: 25px; font-weight: 700; }
+    .axis { fill: #9a9aa0; font-size: 14px; font-weight: 560; }
+    .note { fill: #77777c; font-size: 14px; font-weight: 450; }
+  </style>
+  <rect width="1200" height="720" rx="14" fill="#fbfbfc"/>
+  <rect x="1" y="1" width="1198" height="718" rx="14" fill="none" stroke="#e6e6e8"/>
+
+  <g class="font">
+    <g transform="translate(82 104)">
+      <text x="0" y="0" class="title">Obsidian 대비 p95 속도 향상</text>
+      <text x="0" y="34" class="subtitle">64,306개 노트 real vault에서 측정했습니다. 막대가 길수록 Granite 응답이 빠릅니다.</text>
+    </g>
+
+    <g transform="translate(82 202)">
+      <rect x="0" y="0" width="1036" height="1" fill="#e7e7ea"/>
+
+      <g transform="translate(302 34)">
+        <line x1="0" y1="0" x2="0" y2="330" stroke="#ececef"/>
+        <line x1="170" y1="0" x2="170" y2="330" stroke="#ececef"/>
+        <line x1="340" y1="0" x2="340" y2="330" stroke="#ececef"/>
+        <line x1="510" y1="0" x2="510" y2="330" stroke="#ececef"/>
+        <line x1="680" y1="0" x2="680" y2="330" stroke="#ececef"/>
+        <text x="0" y="-14" text-anchor="middle" class="axis">0배</text>
+        <text x="170" y="-14" text-anchor="middle" class="axis">5배</text>
+        <text x="340" y="-14" text-anchor="middle" class="axis">10배</text>
+        <text x="510" y="-14" text-anchor="middle" class="axis">15배</text>
+        <text x="680" y="-14" text-anchor="middle" class="axis">20배</text>
+      </g>
+
+      <g transform="translate(0 80)">
+        <text x="0" y="0" class="label">파일명 검색</text>
+        <text x="0" y="26" class="metric">637ms -> 103ms</text>
+        <rect x="302" y="-16" width="680" height="24" rx="5" fill="#f0f0f2"/>
+        <rect x="302" y="-16" width="209.44" height="24" rx="5" fill="#2f81f7"/>
+        <text x="532" y="6" class="value">6배</text>
+      </g>
+
+      <g transform="translate(0 158)">
+        <text x="0" y="0" class="label">본문 검색</text>
+        <text x="0" y="26" class="metric">805ms -> 57ms</text>
+        <rect x="302" y="-16" width="680" height="24" rx="5" fill="#f0f0f2"/>
+        <rect x="302" y="-16" width="480.76" height="24" rx="5" fill="#2f81f7"/>
+        <text x="804" y="6" class="value">14배</text>
+      </g>
+
+      <g transform="translate(0 236)">
+        <text x="0" y="0" class="label">백링크 조회</text>
+        <text x="0" y="26" class="metric">757ms -> 42ms</text>
+        <rect x="302" y="-16" width="680" height="24" rx="5" fill="#f0f0f2"/>
+        <rect x="302" y="-16" width="609.96" height="24" rx="5" fill="#2f81f7"/>
+        <text x="934" y="6" class="value">18배</text>
+      </g>
+
+      <g transform="translate(0 314)">
+        <text x="0" y="0" class="label">태그 조회</text>
+        <text x="0" y="26" class="metric">787ms -> 170ms</text>
+        <rect x="302" y="-16" width="680" height="24" rx="5" fill="#f0f0f2"/>
+        <rect x="302" y="-16" width="157.08" height="24" rx="5" fill="#2f81f7"/>
+        <text x="480" y="6" class="value">5배</text>
+      </g>
+    </g>
+
+    <g transform="translate(82 620)">
+      <rect x="0" y="-22" width="1036" height="1" fill="#e7e7ea"/>
+      <text x="0" y="8" class="note">출처: 커밋된 redacted benchmark artifacts. 속도 향상 = Obsidian p95 / Granite p95.</text>
+      <text x="1036" y="8" text-anchor="end" class="note">Obsidian 1.12.7 baseline</text>
+    </g>
+  </g>
+</svg>
