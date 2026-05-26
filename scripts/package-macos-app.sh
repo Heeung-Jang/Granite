@@ -5,6 +5,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_NAME="Granite"
 EXECUTABLE_NAME="Granite"
 BUNDLE_IDENTIFIER="com.codex.granite"
+APP_VERSION="0.2.0"
+APP_BUILD="2"
 ICON_NAME="GraniteAppIcon"
 ICON_SOURCE="${ROOT_DIR}/assets/${ICON_NAME}.png"
 DIST_DIR="${ROOT_DIR}/dist"
@@ -106,9 +108,9 @@ cat > "${INFO_PLIST}" <<PLIST
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.1.0</string>
+  <string>${APP_VERSION}</string>
   <key>CFBundleVersion</key>
-  <string>1</string>
+  <string>${APP_BUILD}</string>
   <key>LSMinimumSystemVersion</key>
   <string>15.0</string>
   <key>NSHighResolutionCapable</key>
