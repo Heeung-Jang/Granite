@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="780" viewBox="0 0 1200 780" role="img" aria-labelledby="title desc">
+  <title id="title">Granite completion timings and Obsidian 1.12.7 render failure on a 64,306-note real vault.</title>
+  <desc id="desc">Granite large vault measurements completed; Obsidian failed to render the large vault because the renderer exited.</desc>
+  <style>
+    .font { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; letter-spacing: 0; }
+    .title { fill: #202124; font-size: 34px; font-weight: 700; }
+    .subtitle { fill: #77777c; font-size: 17px; font-weight: 450; }
+    .header { fill: #8a8a90; font-size: 14px; font-weight: 650; text-transform: uppercase; }
+    .label { fill: #303033; font-size: 20px; font-weight: 650; }
+    .metric { fill: #818186; font-size: 14px; font-weight: 500; }
+    .value { fill: #1f1f22; font-size: 21px; font-weight: 700; }
+    .note { fill: #77777c; font-size: 13px; font-weight: 450; }
+  </style>
+  <rect width="1200" height="780" rx="14" fill="#fbfbfc"/>
+  <rect x="1" y="1" width="1198" height="778" rx="14" fill="none" stroke="#e6e6e8"/>
+  <g class="font">
+    <g transform="translate(82 104)">
+      <text x="0" y="0" class="title">Large-vault measurements, Obsidian render failed</text>
+      <text x="0" y="34" class="subtitle">Measured on a 64,306-note real vault. Obsidian 1.12.7 failed to render the large vault.</text>
+      <text x="0" y="58" class="subtitle">The renderer exited at about 42-43s, so this chart shows Granite timings and Obsidian failure state.</text>
+    </g>
+    <g transform="translate(82 208)">
+      <rect x="0" y="0" width="1036" height="1" fill="#e7e7ea"/>
+      <text x="0" y="34" class="header">Workflow</text>
+      <text x="430" y="34" class="header">Granite result</text>
+      <text x="715" y="34" class="header">Obsidian 1.12.7 render</text>
+      <rect x="0" y="52" width="1036" height="1" fill="#e7e7ea"/>
+      <g transform="translate(0 100)">
+        <text x="0" y="0" class="label">5MB note load</text>
+        <text x="0" y="25" class="metric">TextKit load probe</text>
+        <rect x="430" y="-23" width="230" height="36" rx="6" fill="#eaf2ff"/>
+        <rect x="430" y="-23" width="6" height="36" rx="3" fill="#2f81f7"/>
+        <text x="450" y="1" class="value">2,199ms</text>
+        <rect x="715" y="-23" width="260" height="36" rx="6" fill="#f5efe6"/>
+        <text x="735" y="1" class="value" fill="#8a6437">Render failed</text>
+        <text x="735" y="25" class="metric">renderer exited before note-open render</text>
+      </g>
+      <rect x="0" y="144" width="1036" height="1" fill="#e7e7ea" opacity="0.75"/>
+      <g transform="translate(0 186)">
+        <text x="0" y="0" class="label">Live Preview render p95</text>
+        <text x="0" y="25" class="metric">1MB visible decoration</text>
+        <rect x="430" y="-23" width="230" height="36" rx="6" fill="#eaf2ff"/>
+        <rect x="430" y="-23" width="6" height="36" rx="3" fill="#2f81f7"/>
+        <text x="450" y="1" class="value">6ms</text>
+        <rect x="715" y="-23" width="260" height="36" rx="6" fill="#f5efe6"/>
+        <text x="735" y="1" class="value" fill="#8a6437">Render failed</text>
+        <text x="735" y="25" class="metric">renderer exited while opening vault</text>
+      </g>
+      <rect x="0" y="230" width="1036" height="1" fill="#e7e7ea" opacity="0.75"/>
+      <g transform="translate(0 272)">
+        <text x="0" y="0" class="label">Whole-vault graph snapshot</text>
+        <text x="0" y="25" class="metric">64,297 nodes / 129,299 edges</text>
+        <rect x="430" y="-23" width="230" height="36" rx="6" fill="#eaf2ff"/>
+        <rect x="430" y="-23" width="6" height="36" rx="3" fill="#2f81f7"/>
+        <text x="450" y="1" class="value">1,034ms</text>
+        <rect x="715" y="-23" width="260" height="36" rx="6" fill="#f5efe6"/>
+        <text x="735" y="1" class="value" fill="#8a6437">Render failed</text>
+        <text x="735" y="25" class="metric">Cmd-G sent; graph render was never observed</text>
+      </g>
+      <rect x="0" y="316" width="1036" height="1" fill="#e7e7ea" opacity="0.75"/>
+      <g transform="translate(0 358)">
+        <text x="0" y="0" class="label">Whole-vault graph first render</text>
+        <text x="0" y="25" class="metric">Metal visible-window renderer</text>
+        <rect x="430" y="-23" width="230" height="36" rx="6" fill="#eaf2ff"/>
+        <rect x="430" y="-23" width="6" height="36" rx="3" fill="#2f81f7"/>
+        <text x="450" y="1" class="value">493ms</text>
+        <rect x="715" y="-23" width="260" height="36" rx="6" fill="#f5efe6"/>
+        <text x="735" y="1" class="value" fill="#8a6437">Render failed</text>
+        <text x="735" y="25" class="metric">no graph-render baseline after renderer exit</text>
+      </g>
+      <rect x="0" y="402" width="1036" height="1" fill="#e7e7ea" opacity="0.75"/>
+      <g transform="translate(0 444)">
+        <text x="0" y="0" class="label">Index usable</text>
+        <text x="0" y="25" class="metric">metadata + Tantivy usable</text>
+        <rect x="430" y="-23" width="230" height="36" rx="6" fill="#eaf2ff"/>
+        <rect x="430" y="-23" width="6" height="36" rx="3" fill="#2f81f7"/>
+        <text x="450" y="1" class="value">101s</text>
+        <rect x="715" y="-23" width="260" height="36" rx="6" fill="#f5efe6"/>
+        <text x="735" y="1" class="value" fill="#8a6437">Render failed</text>
+        <text x="735" y="25" class="metric">open probes exited at 42s / 44s</text>
+      </g>
+    </g>
+    <g transform="translate(82 704)">
+      <rect x="0" y="-22" width="1036" height="1" fill="#e7e7ea"/>
+      <text x="0" y="8" class="note">Source: committed Granite artifacts + 2026-05-26 Obsidian large-vault probes.</text>
+      <text x="1036" y="8" text-anchor="end" class="note">Obsidian render failure is not converted to infinite speedup.</text>
+    </g>
+  </g>
+</svg>
