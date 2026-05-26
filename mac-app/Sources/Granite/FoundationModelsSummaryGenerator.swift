@@ -5,6 +5,33 @@ import NativeMarkdownCore
 import FoundationModels
 
 @available(macOS 26.0, *)
+@Generable(description: "A concise three-section Markdown note summary.")
+private struct FoundationModelsStructuredSummary {
+    @Guide(description: "Three to five sentences that summarize the document.")
+    var overview: String
+
+    @Guide(description: "Five to eight concise key points from the document.")
+    var keyPoints: [String]
+
+    @Guide(description: "Actions or decisions from the document. Use one item with 없음 when none exist.")
+    var actionItems: [String]
+
+    var formattedFallbackText: String {
+        let points = keyPoints.map { "- \($0)" }.joined(separator: "\n")
+        let actions = actionItems.isEmpty ? "- 없음" : actionItems.map { "- \($0)" }.joined(separator: "\n")
+        return """
+        핵심 요약: \(overview)
+
+        주요 포인트:
+        \(points)
+
+        액션/결정 사항:
+        \(actions)
+        """
+    }
+}
+
+@available(macOS 26.0, *)
 struct FoundationModelsSummaryGenerator: DocumentSummaryGenerating {
     func availability() async -> SummaryModelAvailability {
         switch SystemLanguageModel.default.availability {
@@ -30,9 +57,11 @@ struct FoundationModelsSummaryGenerator: DocumentSummaryGenerating {
             """)
             let response = try await session.respond(
                 to: prompt,
+                generating: FoundationModelsStructuredSummary.self,
+                includeSchemaInPrompt: true,
                 options: GenerationOptions(maximumResponseTokens: maxTokens)
             )
-            return response.content
+            return response.content.formattedFallbackText
         } catch is CancellationError {
             throw SummaryGenerationError.cancelled
         } catch {
