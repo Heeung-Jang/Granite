@@ -181,6 +181,19 @@ struct GraniteApp: App {
             print(StartupVaultRestoreProbe.encodedReport(report))
             Foundation.exit(report.passed ? 0 : 2)
         }
+
+        if CommandLine.arguments.contains("--summary-panel-probe") {
+            let semaphore = DispatchSemaphore(value: 0)
+            var exitCode: Int32 = 2
+            Task.detached {
+                let report = await SummaryPanelProbe.run()
+                print(SummaryPanelProbe.encodedReport(report))
+                exitCode = report.summary.passed ? 0 : 2
+                semaphore.signal()
+            }
+            semaphore.wait()
+            Foundation.exit(exitCode)
+        }
     }
 
     var body: some Scene {

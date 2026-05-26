@@ -12,6 +12,9 @@ struct NoteInspectorView: View {
     @State private var outgoingState: InspectorPanelState<[OutgoingLinkItem]> = .idle
     @State private var tagsState: InspectorPanelState<TagsPropertiesPayload> = .idle
     @State private var attachmentsState: InspectorPanelState<[AttachmentReferenceItem]> = .idle
+    @State private var summaryState: SummaryPanelViewState = .ready
+    @State private var summaryCoordinator = SummaryCoordinator()
+    @State private var summaryTask: Task<Void, Never>?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -29,9 +32,15 @@ struct NoteInspectorView: View {
             await resetAndLoadDefaultPanel()
         }
         .onChange(of: selectedPanel) { _, panel in
+            if panel != .summary {
+                cancelSummary()
+            }
             Task {
                 await load(panel)
             }
+        }
+        .onDisappear {
+            cancelSummary()
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Inspector")
@@ -83,6 +92,12 @@ struct NoteInspectorView: View {
             tagsState.isLoading
         case .attachments:
             attachmentsState.isLoading
+        case .summary:
+            if case .loading = summaryState {
+                true
+            } else {
+                false
+            }
         }
     }
 
@@ -91,6 +106,8 @@ struct NoteInspectorView: View {
         outgoingState = .idle
         tagsState = .idle
         attachmentsState = .idle
+        summaryState = .ready
+        cancelSummary()
         await load(selectedPanel)
     }
 
@@ -104,6 +121,8 @@ struct NoteInspectorView: View {
             await loadTagsAndProperties()
         case .attachments:
             await loadAttachments()
+        case .summary:
+            break
         }
     }
 
@@ -276,6 +295,72 @@ struct NoteInspectorView: View {
             panelStateContent(attachmentsState, loadingText: "Attachments loading") { attachments in
                 attachmentsSection(attachments)
             }
+        case .summary:
+            SummaryInspectorPanelView(
+                state: summaryState,
+                generate: startSummary,
+                cancel: cancelSummary
+            )
+        }
+    }
+
+    private func startSummary() {
+        cancelSummary()
+        do {
+            let request = try summaryCoordinator.request(appState: appState, file: file)
+            summaryState = .loading(.analyzing)
+            summaryTask = Task {
+                do {
+                    let summary = try await summaryCoordinator.summarize(
+                        request: request,
+                        appState: appState
+                    ) { progress in
+                        summaryState = .loading(progress)
+                    }
+                    if Task.isCancelled {
+                        return
+                    }
+                    summaryState = .complete(summary)
+                } catch let error as SummaryGenerationError {
+                    if Task.isCancelled {
+                        return
+                    }
+                    summaryState = summaryState(for: error)
+                } catch {
+                    if Task.isCancelled {
+                        return
+                    }
+                    summaryState = .failed(.unknown)
+                }
+            }
+        } catch let error as SummaryGenerationError {
+            summaryState = summaryState(for: error)
+        } catch {
+            summaryState = .failed(.unknown)
+        }
+    }
+
+    private func cancelSummary() {
+        summaryTask?.cancel()
+        summaryTask = nil
+        summaryCoordinator.cancel()
+        if case .loading = summaryState {
+            summaryState = .ready
+        }
+    }
+
+    private func summaryState(for error: SummaryGenerationError) -> SummaryPanelViewState {
+        switch error {
+        case .editorNotReady, .staleRequest:
+            return .editorNotReady
+        case .unavailable(let reason):
+            return .unavailable(reason)
+        case .tooLarge(let sourceByteCount, let maxSourceBytes):
+            return .tooLarge(sourceByteCount: sourceByteCount, maxSourceBytes: maxSourceBytes)
+        case .cancelled:
+            return .ready
+        default:
+            return .failed(error.failureReason)
         }
     }
 
@@ -420,6 +505,7 @@ enum NoteInspectorPanel: CaseIterable {
     case outgoing
     case tags
     case attachments
+    case summary
 
     var systemImage: String {
         switch self {
@@ -431,6 +517,8 @@ enum NoteInspectorPanel: CaseIterable {
             return "tag"
         case .attachments:
             return "doc"
+        case .summary:
+            return "sparkles"
         }
     }
 
@@ -444,6 +532,8 @@ enum NoteInspectorPanel: CaseIterable {
             return "Tags and properties"
         case .attachments:
             return "Attachments"
+        case .summary:
+            return "Summary"
         }
     }
 }
@@ -458,7 +548,7 @@ private struct InspectorStateBanner: View {
     }
 }
 
-private struct InspectorSection<Content: View>: View {
+struct InspectorSection<Content: View>: View {
     let title: String
     var count: Int?
     @ViewBuilder let content: Content
@@ -686,7 +776,7 @@ private struct AttachmentImagePreview: View {
     }
 }
 
-private struct EmptyInlineText: View {
+struct EmptyInlineText: View {
     let text: String
 
     init(_ text: String) {

@@ -114,12 +114,17 @@ public enum AppTelemetry {
             "frontmatterValue",
             "groupQuery",
             "groupRule",
+            "chunkText",
+            "contentHash",
             "linkTarget",
+            "modelResponse",
             "noteText",
+            "promptText",
             "rawPath",
             "renderedSnippet",
             "searchQuery",
             "selectedText",
+            "summaryText",
             "tagName"
         ]
     )

@@ -172,6 +172,88 @@ func appStatePublishesRequestedSearches() {
 }
 
 @Test
+func appStateSnapshotsOnlyActiveOwnedEditorBuffer() throws {
+    let state = AppState()
+    let file = FileTreeItem(relativePath: "Folder/Note.md")
+    let owner = UUID()
+
+    #expect(state.openFile(file))
+    let tabID = try #require(state.activeTabID)
+    state.registerActiveEditorBufferProvider(
+        vaultID: "vault-a",
+        ownerID: owner,
+        tabID: tabID,
+        fileID: file.id,
+        revision: 1
+    ) {
+        "draft contents"
+    }
+
+    let snapshot = state.snapshotForActiveEditor(expectedOwnerID: owner, tabID: tabID, fileID: file.id)
+
+    #expect(snapshot?.contents == "draft contents")
+    #expect(snapshot?.revision == 1)
+    #expect(snapshot?.fileID == file.id)
+    #expect(state.snapshotForActiveEditor(expectedOwnerID: UUID(), tabID: tabID, fileID: file.id) == nil)
+}
+
+@Test
+func appStateRejectsStaleEditorBufferUpdatesAndClears() throws {
+    let state = AppState()
+    let first = FileTreeItem(relativePath: "First.md")
+    let second = FileTreeItem(relativePath: "Second.md")
+    let owner = UUID()
+    let staleOwner = UUID()
+
+    #expect(state.openFile(first))
+    let firstTabID = try #require(state.activeTabID)
+    state.registerActiveEditorBufferProvider(
+        vaultID: "vault",
+        ownerID: owner,
+        tabID: firstTabID,
+        fileID: first.id,
+        revision: 1
+    ) {
+        "first"
+    }
+
+    state.updateActiveEditorBufferRevision(
+        ownerID: staleOwner,
+        tabID: firstTabID,
+        fileID: first.id,
+        revision: 99
+    )
+    #expect(state.activeEditorBufferDescriptor?.revision == 1)
+
+    #expect(state.openFile(second, disposition: .newTab))
+    let secondTabID = try #require(state.activeTabID)
+    state.clearActiveEditorBufferProvider(ownerID: owner, tabID: firstTabID, fileID: first.id)
+    #expect(state.activeEditorBufferDescriptor == nil)
+
+    state.registerActiveEditorBufferProvider(
+        vaultID: "vault",
+        ownerID: owner,
+        tabID: firstTabID,
+        fileID: first.id,
+        revision: 2
+    ) {
+        "stale"
+    }
+    #expect(state.activeEditorBufferDescriptor == nil)
+
+    state.registerActiveEditorBufferProvider(
+        vaultID: "vault",
+        ownerID: owner,
+        tabID: secondTabID,
+        fileID: second.id,
+        revision: 1
+    ) {
+        "second"
+    }
+    #expect(state.snapshotForActiveEditor(expectedOwnerID: owner, tabID: secondTabID, fileID: second.id)?.contents == "second")
+}
+
+@Test
 func workspaceSelectionComparesNoteIdentity() {
     let first = FileTreeItem(relativePath: "Folder/Note.md")
     let same = FileTreeItem(relativePath: "Folder/Note.md")

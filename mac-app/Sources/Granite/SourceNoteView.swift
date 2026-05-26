@@ -2,6 +2,10 @@ import AppKit
 import NativeMarkdownCore
 import SwiftUI
 
+private final class SourceSummaryBufferBox {
+    var contents = ""
+}
+
 struct SourceNoteView: View {
     private static let conflictActionGeneration: UInt64 = 0
     private static let fallbackProfileMinimumByteDelta = 4_096
@@ -29,6 +33,9 @@ struct SourceNoteView: View {
     @State private var fallbackProfileTask: Task<Void, Never>?
     @State private var livePreviewMetadataTask: Task<Void, Never>?
     @State private var activityToken = WorkspaceEditorActivityToken()
+    @State private var summaryBuffer = SourceSummaryBufferBox()
+    @State private var summaryBufferOwnerID = UUID()
+    @State private var summaryBufferRevision: UInt64 = 0
     @AppStorage(LivePreviewMarkerStyle.storageKey) private var markerStyleRaw = LivePreviewMarkerStyle.defaultValue.rawValue
 
     init(
@@ -122,6 +129,7 @@ struct SourceNoteView: View {
                 return
             }
             saveSession?.updateContents(newValue)
+            updateSummaryBuffer(contents: newValue)
             clearLivePreviewMetadata()
             updateAutomaticFallbackAfterTextChange(for: newValue)
             scheduleRecoverySnapshot(contents: newValue)
@@ -129,8 +137,10 @@ struct SourceNoteView: View {
         .onChange(of: isActive) { _, newValue in
             if newValue {
                 activityToken = WorkspaceEditorActivityToken()
+                registerSummaryBufferIfActive(contents: text)
                 refreshLivePreviewMetadataIfNeeded(contents: text)
             } else {
+                clearSummaryBufferProvider()
                 cancelInactiveEditorWork()
             }
         }
@@ -144,6 +154,7 @@ struct SourceNoteView: View {
             recoveryTask?.cancel()
             fallbackProfileTask?.cancel()
             livePreviewMetadataTask?.cancel()
+            clearSummaryBufferProvider()
             if saveSession?.isDirty == true, appState.isEditorDirty(file: file) {
                 writeRecoverySnapshot(contents: text)
             } else {
@@ -326,6 +337,7 @@ struct SourceNoteView: View {
 
             text = document.contents
             saveSession = EditorSaveSession(file: file, contents: document.contents)
+            registerSummaryBufferIfActive(contents: document.contents)
             updateAutomaticFallback(for: document.contents)
             state = .loaded
             refreshLivePreviewMetadataIfNeeded(contents: document.contents)
@@ -442,6 +454,7 @@ struct SourceNoteView: View {
                     return
                 }
                 text = outcome.contents
+                updateSummaryBuffer(contents: outcome.contents)
                 session = saveSession ?? session
                 session.completeReload(outcome)
                 saveSession = session
@@ -645,6 +658,7 @@ struct SourceNoteView: View {
         }
         text = snapshot.contents
         saveSession?.updateContents(snapshot.contents)
+        updateSummaryBuffer(contents: snapshot.contents)
         appState.updateEditorDirtyState(file: file, isDirty: saveSession?.isDirty == true)
         pendingRecoverySnapshot = nil
         clearLivePreviewMetadata()
@@ -703,6 +717,55 @@ struct SourceNoteView: View {
             return nil
         }
         return EditorRecoveryStore(dataDirectory: dataDirectory)
+    }
+
+    private func registerSummaryBufferIfActive(contents: String) {
+        guard isActive,
+              let tabID = summaryTabID
+        else {
+            return
+        }
+        summaryBuffer.contents = contents
+        appState.registerActiveEditorBufferProvider(
+            vaultID: vaultURL.standardizedFileURL.path,
+            ownerID: summaryBufferOwnerID,
+            tabID: tabID,
+            fileID: file.id,
+            revision: summaryBufferRevision
+        ) { [summaryBuffer] in
+            summaryBuffer.contents
+        }
+    }
+
+    private func updateSummaryBuffer(contents: String) {
+        guard isActive,
+              let tabID = summaryTabID
+        else {
+            return
+        }
+        summaryBuffer.contents = contents
+        summaryBufferRevision &+= 1
+        appState.updateActiveEditorBufferRevision(
+            ownerID: summaryBufferOwnerID,
+            tabID: tabID,
+            fileID: file.id,
+            revision: summaryBufferRevision
+        )
+    }
+
+    private func clearSummaryBufferProvider() {
+        guard let tabID = summaryTabID else {
+            return
+        }
+        appState.clearActiveEditorBufferProvider(
+            ownerID: summaryBufferOwnerID,
+            tabID: tabID,
+            fileID: file.id
+        )
+    }
+
+    private var summaryTabID: WorkspaceTab.ID? {
+        focusRequestID ?? appState.activeTabID
     }
 
     private func clearLivePreviewMetadata() {

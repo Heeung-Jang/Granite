@@ -118,6 +118,28 @@ public enum GraphOpenSource: String, Equatable, Sendable {
     case keyboard
 }
 
+public struct ActiveEditorBufferDescriptor: Equatable, Sendable {
+    public let vaultID: String
+    public let fileID: String
+    public let tabID: WorkspaceTab.ID
+    public let ownerID: UUID
+    public let revision: UInt64
+
+    public init(
+        vaultID: String,
+        fileID: String,
+        tabID: WorkspaceTab.ID,
+        ownerID: UUID,
+        revision: UInt64
+    ) {
+        self.vaultID = vaultID
+        self.fileID = fileID
+        self.tabID = tabID
+        self.ownerID = ownerID
+        self.revision = revision
+    }
+}
+
 public final class AppState: ObservableObject {
     @Published public private(set) var vaultSelection: VaultSelectionState
     @Published public private(set) var engineHealth: EngineHealthStatus
@@ -147,6 +169,7 @@ public final class AppState: ObservableObject {
     private var nextSearchRequestID: UInt64 = 0
     private var didAttemptLastVaultAutoRestore = false
     private var dirtyEditorFiles: [String: FileTreeItem] = [:]
+    private var activeEditorBufferProvider: ActiveEditorBufferProvider?
 
     public init(
         vaultSelection: VaultSelectionState = .noVault,
@@ -279,6 +302,101 @@ public final class AppState: ObservableObject {
 
     public func refreshEngineHealth(using loader: EngineHealthLoading = EngineHealthClient()) {
         engineHealth = loader.load()
+    }
+
+    public var activeEditorBufferDescriptor: ActiveEditorBufferDescriptor? {
+        activeEditorBufferProvider.map(\.descriptor)
+    }
+
+    public func registerActiveEditorBufferProvider(
+        vaultID: String,
+        ownerID: UUID,
+        tabID: WorkspaceTab.ID,
+        fileID: String,
+        revision: UInt64,
+        provider: @escaping () -> String
+    ) {
+        guard activeTabID == tabID,
+              selectedFile?.id == fileID
+        else {
+            return
+        }
+        activeEditorBufferProvider = ActiveEditorBufferProvider(
+            descriptor: ActiveEditorBufferDescriptor(
+                vaultID: vaultID,
+                fileID: fileID,
+                tabID: tabID,
+                ownerID: ownerID,
+                revision: revision
+            ),
+            provider: provider
+        )
+    }
+
+    public func updateActiveEditorBufferRevision(
+        ownerID: UUID,
+        tabID: WorkspaceTab.ID,
+        fileID: String,
+        revision: UInt64
+    ) {
+        guard let current = activeEditorBufferProvider,
+              current.descriptor.ownerID == ownerID,
+              current.descriptor.tabID == tabID,
+              current.descriptor.fileID == fileID,
+              activeTabID == tabID,
+              selectedFile?.id == fileID
+        else {
+            return
+        }
+        activeEditorBufferProvider = ActiveEditorBufferProvider(
+            descriptor: ActiveEditorBufferDescriptor(
+                vaultID: current.descriptor.vaultID,
+                fileID: fileID,
+                tabID: tabID,
+                ownerID: ownerID,
+                revision: revision
+            ),
+            provider: current.provider
+        )
+    }
+
+    public func clearActiveEditorBufferProvider(
+        ownerID: UUID,
+        tabID: WorkspaceTab.ID,
+        fileID: String
+    ) {
+        guard let current = activeEditorBufferProvider,
+              current.descriptor.ownerID == ownerID,
+              current.descriptor.tabID == tabID,
+              current.descriptor.fileID == fileID
+        else {
+            return
+        }
+        activeEditorBufferProvider = nil
+    }
+
+    public func snapshotForActiveEditor(
+        expectedOwnerID ownerID: UUID,
+        tabID: WorkspaceTab.ID,
+        fileID: String
+    ) -> EditorBufferSnapshot? {
+        guard let current = activeEditorBufferProvider,
+              current.descriptor.ownerID == ownerID,
+              current.descriptor.tabID == tabID,
+              current.descriptor.fileID == fileID,
+              activeTabID == tabID,
+              selectedFile?.id == fileID
+        else {
+            return nil
+        }
+        return EditorBufferSnapshot(
+            vaultID: current.descriptor.vaultID,
+            fileID: fileID,
+            tabID: tabID,
+            ownerID: ownerID,
+            revision: current.descriptor.revision,
+            contents: current.provider()
+        )
     }
 
     @discardableResult
@@ -783,6 +901,7 @@ public final class AppState: ObservableObject {
         activeTabID = nil
         recentlyClosedTabs = []
         dirtyEditorFiles.removeAll()
+        activeEditorBufferProvider = nil
     }
 
     private func restoreWorkspaceTabSession(for vaultURL: URL) {
@@ -925,4 +1044,9 @@ public final class AppState: ObservableObject {
 
     private static let maxRecentlyClosedTabs = 25
     private static let maxRestoredTabs = 25
+}
+
+private struct ActiveEditorBufferProvider {
+    let descriptor: ActiveEditorBufferDescriptor
+    let provider: () -> String
 }
