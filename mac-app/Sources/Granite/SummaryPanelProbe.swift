@@ -5,6 +5,7 @@ struct SummaryPanelProbeReport: Codable, Equatable {
     var generatedSummary: Bool
     var cacheHit: Bool
     var cancelledStateRejected: Bool
+    var inactiveEditorOverwriteRejected: Bool
     var unavailableFallback: Bool
     var diskUnchanged: Bool
     var noRawSourceInReport: Bool
@@ -87,6 +88,7 @@ enum SummaryPanelProbe {
             generatedSummary: generatedSummary,
             cacheHit: cacheHit,
             cancelledStateRejected: cancelledStateRejected,
+            inactiveEditorOverwriteRejected: inactiveEditorOverwriteRejected(),
             unavailableFallback: unavailableFallback,
             diskUnchanged: diskContents == source,
             noRawSourceInReport: true,
@@ -130,6 +132,51 @@ enum SummaryPanelProbe {
         } catch {
             return false
         }
+    }
+
+    private static func inactiveEditorOverwriteRejected() -> Bool {
+        let appState = AppState()
+        let active = FileTreeItem(relativePath: "Active.md")
+        let inactive = FileTreeItem(relativePath: "Inactive.md")
+        let activeOwner = UUID()
+        let inactiveOwner = UUID()
+
+        guard appState.openFile(active),
+              let activeTabID = appState.activeTabID
+        else {
+            return false
+        }
+
+        appState.registerActiveEditorBufferProvider(
+            vaultID: "vault",
+            ownerID: activeOwner,
+            tabID: activeTabID,
+            fileID: active.id,
+            revision: 1
+        ) {
+            "active-buffer"
+        }
+
+        appState.registerActiveEditorBufferProvider(
+            vaultID: "vault",
+            ownerID: inactiveOwner,
+            tabID: UUID(),
+            fileID: inactive.id,
+            revision: 1
+        ) {
+            "inactive-buffer"
+        }
+        appState.clearActiveEditorBufferProvider(
+            ownerID: inactiveOwner,
+            tabID: UUID(),
+            fileID: inactive.id
+        )
+
+        return appState.snapshotForActiveEditor(
+            expectedOwnerID: activeOwner,
+            tabID: activeTabID,
+            fileID: active.id
+        )?.contents == "active-buffer"
     }
 
     private static var foundationModelsCompilePath: String {
