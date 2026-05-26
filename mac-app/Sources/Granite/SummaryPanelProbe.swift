@@ -8,9 +8,13 @@ struct SummaryPanelProbeReport: Codable, Equatable {
     var unavailableFallback: Bool
     var diskUnchanged: Bool
     var noRawSourceInReport: Bool
+    var artifactPrivacyScan: Bool
     var cacheEntryCount: Int
     var cacheEstimatedBytes: Int
+    var sourceByteCount: Int
+    var chunkCount: Int
     var rawSourceReleased: Bool
+    var foundationModelsCompilePath: String
     var summary: ProbeCheckSummary
 }
 
@@ -44,6 +48,8 @@ enum SummaryPanelProbe {
         var generatedSummary = false
         var cacheHit = false
         var cancelledStateRejected = false
+        var sourceByteCount = 0
+        var chunkCount = 0
 
         do {
             guard let snapshot = appState.snapshotForActiveEditor(
@@ -54,7 +60,9 @@ enum SummaryPanelProbe {
                 throw SummaryGenerationError.editorNotReady
             }
             let request = DocumentSummaryRequest(snapshot: snapshot)
-            _ = try await pipeline.summarize(request: request)
+            let firstSummary = try await pipeline.summarize(request: request)
+            sourceByteCount = firstSummary.metadata.sourceByteCount
+            chunkCount = firstSummary.metadata.chunkCount
             generatedSummary = await generator.generateCount == 1
             _ = try await pipeline.summarize(request: request)
             cacheHit = await generator.generateCount == 1
@@ -75,21 +83,28 @@ enum SummaryPanelProbe {
         }
 
         let diskContents = (try? String(contentsOf: noteURL, encoding: .utf8)) ?? ""
-        let report = SummaryPanelProbeReport(
+        var report = SummaryPanelProbeReport(
             generatedSummary: generatedSummary,
             cacheHit: cacheHit,
             cancelledStateRejected: cancelledStateRejected,
             unavailableFallback: unavailableFallback,
             diskUnchanged: diskContents == source,
             noRawSourceInReport: true,
+            artifactPrivacyScan: false,
             cacheEntryCount: await cache.entryCount,
             cacheEstimatedBytes: await cache.estimatedBytes,
+            sourceByteCount: sourceByteCount,
+            chunkCount: chunkCount,
             rawSourceReleased: true,
+            foundationModelsCompilePath: foundationModelsCompilePath,
             summary: .passed
         )
-        var evaluated = report
-        evaluated.summary = ProbeCheckSummary.evaluate(report: report)
-        return evaluated
+        let encoded = encodedReport(report)
+        report.artifactPrivacyScan = !encoded.contains(source)
+            && !encoded.contains("secret-token-should-not-leak")
+            && !encoded.contains("Probe summary")
+        report.summary = ProbeCheckSummary.evaluate(report: report)
+        return report
     }
 
     static func encodedReport(_ report: SummaryPanelProbeReport) -> String {
@@ -115,6 +130,14 @@ enum SummaryPanelProbe {
         } catch {
             return false
         }
+    }
+
+    private static var foundationModelsCompilePath: String {
+        #if canImport(FoundationModels)
+        "frameworkAvailable"
+        #else
+        "frameworkMissing"
+        #endif
     }
 }
 
