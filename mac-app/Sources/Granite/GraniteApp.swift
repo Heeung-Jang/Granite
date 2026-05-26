@@ -194,6 +194,19 @@ struct GraniteApp: App {
             semaphore.wait()
             Foundation.exit(exitCode)
         }
+
+        if CommandLine.arguments.contains("--foundation-models-smoke-probe") {
+            let semaphore = DispatchSemaphore(value: 0)
+            var exitCode: Int32 = 2
+            Task.detached {
+                let report = await FoundationModelsSummarySmokeProbe.run()
+                print(FoundationModelsSummarySmokeProbe.encodedReport(report))
+                exitCode = report.summary.passed ? 0 : 2
+                semaphore.signal()
+            }
+            semaphore.wait()
+            Foundation.exit(exitCode)
+        }
     }
 
     var body: some Scene {
