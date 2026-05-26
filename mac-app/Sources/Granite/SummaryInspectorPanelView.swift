@@ -9,6 +9,13 @@ enum SummaryPanelViewState: Equatable {
     case tooLarge(sourceByteCount: Int, maxSourceBytes: Int)
     case failed(SummaryFailureReason)
     case complete(DocumentSummary)
+
+    var isComplete: Bool {
+        if case .complete = self {
+            return true
+        }
+        return false
+    }
 }
 
 struct SummaryInspectorPanelView: View {
@@ -45,7 +52,7 @@ struct SummaryInspectorPanelView: View {
             generateButton
         case .complete(let summary):
             summaryView(summary)
-            generateButton
+            regenerateButton
         }
     }
 
@@ -57,14 +64,22 @@ struct SummaryInspectorPanelView: View {
     }
 
     private var generateButton: some View {
+        summaryButton(title: "요약 생성", accessibilityLabel: "Generate summary")
+    }
+
+    private var regenerateButton: some View {
+        summaryButton(title: "다시 생성", accessibilityLabel: "Regenerate summary")
+    }
+
+    private func summaryButton(title: String, accessibilityLabel: String) -> some View {
         Button {
             generate()
         } label: {
-            Label("요약 생성", systemImage: "sparkles")
+            Label(title, systemImage: "sparkles")
         }
         .buttonStyle(.bordered)
         .controlSize(.small)
-        .accessibilityLabel("Generate summary")
+        .accessibilityLabel(accessibilityLabel)
     }
 
     private func loadingView(_ progress: SummaryProgressState) -> some View {
@@ -88,7 +103,7 @@ struct SummaryInspectorPanelView: View {
     }
 
     private func summaryView(_ summary: DocumentSummary) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             summaryBlock(title: "핵심 요약", lines: [summary.overview])
             summaryBlock(title: "주요 포인트", lines: summary.keyPoints)
             summaryBlock(title: "액션/결정 사항", lines: summary.actionItems)
@@ -96,12 +111,13 @@ struct SummaryInspectorPanelView: View {
     }
 
     private func summaryBlock(title: String, lines: [String]) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 6) {
             Text(title)
-                .font(.caption.weight(.semibold))
+                .font(.callout.weight(.semibold))
             ForEach(lines.filter { !$0.isEmpty }, id: \.self) { line in
                 Text(line)
-                    .font(.caption)
+                    .font(.callout)
+                    .lineSpacing(2)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }

@@ -34,6 +34,7 @@ final class SummaryCoordinator: @unchecked Sendable {
     func summarize(
         request: DocumentSummaryRequest,
         appState: AppState,
+        useCache: Bool = true,
         progress: @escaping @MainActor (SummaryProgressState) -> Void
     ) async throws -> DocumentSummary {
         activeKey = request.key
@@ -44,6 +45,7 @@ final class SummaryCoordinator: @unchecked Sendable {
         )
         return try await pipeline.summarize(
             request: request,
+            useCache: useCache,
             progress: { state in
                 await MainActor.run {
                     progress(state)

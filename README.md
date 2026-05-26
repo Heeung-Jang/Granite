@@ -40,15 +40,16 @@ Granite is built to provide a native macOS Markdown editing experience that feel
 - File-name and full-text search.
 - Note inspector for backlinks, outgoing links, tags/properties, and attachments.
 - Current-note local graph and whole-vault graph.
+- Local document summaries powered by Apple Foundation Models when Apple Intelligence is available.
 - Fallback source mode for large or pathological documents.
 - Dirty-state protection while quitting, closing vaults, closing tabs, or switching files.
 
 ## Demo Workflow
 
-The example below uses a generated demo vault with mock notes only. It shows Granite browsing a vault, switching to search, and returning matching notes from the local index.
+The example below uses a generated demo vault with mock notes only. It shows Granite browsing a vault, switching to search, exploring the graph view, and summarizing the active note with the local Apple Foundation Models path.
 
 <p align="center">
-  <img src="assets/readme/granite-workflow.gif" alt="Granite workflow showing a local demo vault, search panel, and local search results" width="900" />
+  <img src="assets/readme/granite-workflow.gif" alt="Granite workflow showing a local demo vault, search, graph view, and local Apple Foundation Models summary" width="900" />
 </p>
 
 ## Performance Benchmarks
@@ -78,7 +79,8 @@ These rows are published Granite measurements. On 2026-05-26, matching Obsidian 
 3. Select a Markdown file from the left file browser.
 4. Read and edit the note in the central Live Preview editor.
 5. Use the right inspector for backlinks, outgoing links, tags/properties, and attachments.
-6. Open the whole-vault graph from the left ribbon graph icon or with `Command-G`.
+6. Use the summary inspector to summarize the active note locally with Apple Foundation Models when available.
+7. Open the whole-vault graph from the left ribbon graph icon or with `Command-G`.
 
 ## Build
 
@@ -140,6 +142,7 @@ swift run --package-path mac-app Granite --live-preview-style-probe
 swift run --package-path mac-app Granite --editor-bridge-probe
 swift run --package-path mac-app Granite --workspace-tabs-probe
 swift run --package-path mac-app Granite --startup-vault-restore-probe
+swift run --package-path mac-app Granite --foundation-models-smoke-probe
 ```
 
 Packaged app verification:
@@ -148,6 +151,7 @@ Packaged app verification:
 codesign --verify --deep --strict dist/Granite.app
 dist/Granite.app/Contents/MacOS/Granite --live-preview-style-probe
 dist/Granite.app/Contents/MacOS/Granite --editor-bridge-probe
+dist/Granite.app/Contents/MacOS/Granite --foundation-models-smoke-probe
 ```
 
 ## Technology Stack
@@ -161,6 +165,7 @@ dist/Granite.app/Contents/MacOS/Granite --editor-bridge-probe
 - Tantivy for full-text indexing/search
 - SQLite via `rusqlite` for engine-owned metadata
 - Serde/JSON for engine payload encoding
+- Apple Foundation Models for local document summaries on supported Apple Intelligence systems
 - macOS code signing and app bundle tooling
 
 ## License
@@ -170,6 +175,9 @@ Granite is licensed under the GNU Affero General Public License v3.0 only. See [
 ## Privacy And Local Processing
 
 - Granite does not send your Markdown files or vault data to external servers.
+- The summary feature uses Apple Foundation Models locally on your Mac when the system model is available; note contents are not sent to a Granite server or a third-party LLM API.
+- Generated summaries are shown in the right inspector and are not written back to your Markdown files automatically.
+- Your notes, vault structure, summaries, indexes, graph data, and recovery state remain under your ownership and control.
 - Search indexing, graph computation, and Live Preview rendering run locally on your machine.
 - Granite does not import or transform your Markdown source; it works directly with existing files.
 - App-generated index, graph, and recovery data are managed in local app-owned storage.

@@ -17,6 +17,7 @@ public struct DocumentSummaryPipeline: Sendable {
 
     public func summarize(
         request: DocumentSummaryRequest,
+        useCache: Bool = true,
         progress: ProgressHandler? = nil,
         isFresh: FreshnessCheck? = nil
     ) async throws -> DocumentSummary {
@@ -24,7 +25,7 @@ public struct DocumentSummaryPipeline: Sendable {
         try await ensureFresh(request.key, isFresh: isFresh)
         await progress?(.analyzing)
 
-        if let cached = await cache.value(for: request.cacheKey) {
+        if useCache, let cached = await cache.value(for: request.cacheKey) {
             await progress?(.complete)
             return cached.summary
         }

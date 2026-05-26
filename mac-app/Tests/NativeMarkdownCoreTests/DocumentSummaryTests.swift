@@ -148,6 +148,28 @@ func summaryPipelineUsesCacheAndDoesNotCallGeneratorTwice() async throws {
 }
 
 @Test
+func summaryPipelineCanBypassCacheForRegeneration() async throws {
+    let generator = FakeSummaryGenerator()
+    let cache = DocumentSummaryCache()
+    let pipeline = DocumentSummaryPipeline(generator: generator, cache: cache)
+    let snapshot = EditorBufferSnapshot(
+        vaultID: "vault",
+        fileID: "Note.md",
+        tabID: UUID(),
+        ownerID: UUID(),
+        revision: 1,
+        contents: "# Title\nBody"
+    )
+    let request = DocumentSummaryRequest(snapshot: snapshot)
+
+    _ = try await pipeline.summarize(request: request)
+    _ = try await pipeline.summarize(request: request, useCache: false)
+
+    #expect(await generator.generateCount == 2)
+    #expect(await cache.value(for: request.cacheKey) != nil)
+}
+
+@Test
 func summaryPipelineRejectsStaleRequestBeforeCacheWrite() async throws {
     let generator = FakeSummaryGenerator()
     let cache = DocumentSummaryCache()

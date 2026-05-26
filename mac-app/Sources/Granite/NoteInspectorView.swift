@@ -305,15 +305,17 @@ struct NoteInspectorView: View {
     }
 
     private func startSummary() {
+        let shouldRegenerate = summaryState.isComplete
         cancelSummary()
+        summaryState = .loading(.analyzing)
         do {
             let request = try summaryCoordinator.request(appState: appState, file: file)
-            summaryState = .loading(.analyzing)
             summaryTask = Task {
                 do {
                     let summary = try await summaryCoordinator.summarize(
                         request: request,
-                        appState: appState
+                        appState: appState,
+                        useCache: !shouldRegenerate
                     ) { progress in
                         summaryState = .loading(progress)
                     }
