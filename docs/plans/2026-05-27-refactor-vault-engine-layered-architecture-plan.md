@@ -815,7 +815,7 @@ Default stop conditions:
   - Build: move local graph read orchestration while keeping whole-vault graph construction owned by the graph use case if already extracted.
   - Verify: local graph FFI tests pass.
 
-- [ ] **RA05.03 Split live preview metadata use case**
+- [x] **RA05.03 Split live preview metadata use case**
   - Build: move current-buffer link/tag/attachment metadata resolution into `use_cases/live_preview_metadata.rs`.
   - Verify: `engine_read_live_preview_metadata_uses_buffer_without_vault_scan` still passes.
 
