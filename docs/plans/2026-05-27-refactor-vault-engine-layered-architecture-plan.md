@@ -688,7 +688,7 @@ Default stop conditions:
   - Build: add `adapters/sqlite/indexing_queue.rs` as a temporary re-export or shell around current `indexing_queue.rs`.
   - Verify: queue restart and lease tests pass.
 
-- [ ] **RA04.04a Move queue schema and row conversion helpers**
+- [x] **RA04.04a Move queue schema and row conversion helpers**
   - Build: move queue schema creation, row decoding, status/reason conversion, unix-ms conversion, and error truncation into the SQLite queue adapter.
   - Verify: queue lease, retry, cancel, and coalescing tests pass.
 
