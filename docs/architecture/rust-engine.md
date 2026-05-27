@@ -54,6 +54,14 @@ deferred until the module boundaries are stable.
 - Remove compatibility re-exports in a separate cleanup step after all callers
   migrate.
 
+## Intentional Cross-Layer DTO Exceptions
+
+`core::graph::WholeVaultGraphSnapshot` and its child graph DTOs are an
+intentional cross-layer graph contract. They may derive `serde::Serialize`
+because the whole-vault graph payload is the stable domain shape consumed by
+FFI and diagnostics. FFI still owns the JSON envelope, payload version,
+byte-cap validation, encoded-size measurement, and error-code mapping.
+
 ## Filesystem Resolution Boundary
 
 `core::paths` owns only path value types and pure string/path normalization.

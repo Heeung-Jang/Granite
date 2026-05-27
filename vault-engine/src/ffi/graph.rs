@@ -4,9 +4,10 @@ use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 
-use crate::adapters::sqlite::{IndexSchemaMetadata, MetadataStore, MetadataStoreError};
-use crate::graph::{WholeVaultGraphRequest, WholeVaultGraphSnapshot};
-use crate::use_cases::build_graph::build_whole_vault_graph_from_metadata;
+use crate::core::graph::{WholeVaultGraphRequest, WholeVaultGraphSnapshot};
+use crate::use_cases::build_graph::{
+    WholeVaultGraphSnapshotError, WholeVaultGraphSnapshotRequest, read_whole_vault_graph_snapshot,
+};
 
 use super::json::{FfiError, ffi_response, ffi_success_response_len, read_json};
 use super::strings::read_c_string;
@@ -66,13 +67,6 @@ fn graph_snapshot_payload(
     metadata_path: &Path,
     request: FfiWholeVaultGraphRequest,
 ) -> Result<FfiWholeVaultGraphPayload, FfiError> {
-    if !metadata_path.is_file() {
-        return Err(FfiError::missing_index());
-    }
-
-    let generation = graph_request_generation(metadata_path, request.generation)?;
-    let expected = IndexSchemaMetadata::new("sqlite+tantivy", "metadata-v2", "tantivy", generation);
-    let metadata = MetadataStore::open(metadata_path, &expected).map_err(graph_metadata_error)?;
     let graph_request = WholeVaultGraphRequest::with_request_id(
         request.request_id,
         request.max_nodes,
@@ -81,14 +75,18 @@ fn graph_snapshot_payload(
     .including_unresolved(request.include_unresolved)
     .including_orphans(request.include_orphans);
     let start = Instant::now();
-    let graph = build_whole_vault_graph_from_metadata(&metadata, generation, graph_request)
-        .map_err(graph_metadata_error)?;
+    let result = read_whole_vault_graph_snapshot(WholeVaultGraphSnapshotRequest {
+        metadata_path,
+        requested_generation: request.generation,
+        graph_request,
+    })
+    .map_err(graph_snapshot_error)?;
     let snapshot_duration_milliseconds = start.elapsed().as_secs_f64() * 1_000.0;
     let payload = FfiWholeVaultGraphPayload {
         payload_version: 1,
         request_id: request.request_id,
-        generation,
-        state: if graph.partial {
+        generation: result.generation,
+        state: if result.graph.partial {
             "partial".to_string()
         } else {
             "complete".to_string()
@@ -97,25 +95,10 @@ fn graph_snapshot_payload(
             snapshot_duration_milliseconds,
             encoded_payload_bytes: 0,
         },
-        snapshot: graph.snapshot,
+        snapshot: result.graph.snapshot,
     };
 
     finalize_graph_payload(payload, request.byte_cap_bytes)
-}
-
-fn graph_request_generation(
-    metadata_path: &Path,
-    requested_generation: u64,
-) -> Result<u64, FfiError> {
-    if requested_generation != 0 {
-        return Ok(requested_generation);
-    }
-
-    let metadata =
-        MetadataStore::stored_schema_metadata(metadata_path).map_err(graph_metadata_error)?;
-    metadata
-        .map(|metadata| metadata.generation)
-        .ok_or_else(FfiError::graph_index_error)
 }
 
 fn finalize_graph_payload(
@@ -141,11 +124,10 @@ fn finalize_graph_payload(
     Ok(payload)
 }
 
-fn graph_metadata_error(error: MetadataStoreError) -> FfiError {
+fn graph_snapshot_error(error: WholeVaultGraphSnapshotError) -> FfiError {
     match error {
-        MetadataStoreError::SchemaMismatch { .. } => FfiError::stale_schema(),
-        MetadataStoreError::Sqlite(_) | MetadataStoreError::InvalidStoredValue(_) => {
-            FfiError::graph_index_error()
-        }
+        WholeVaultGraphSnapshotError::MissingIndex => FfiError::missing_index(),
+        WholeVaultGraphSnapshotError::StaleSchema => FfiError::stale_schema(),
+        WholeVaultGraphSnapshotError::GraphIndex => FfiError::graph_index_error(),
     }
 }

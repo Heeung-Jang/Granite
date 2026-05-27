@@ -3,7 +3,7 @@ use std::path::Path;
 
 use crate::adapters::sqlite::{
     GraphFileRecord, GraphResolvedEdgeRecord, GraphTagRecord, GraphUnresolvedEdgeRecord,
-    MetadataStore, MetadataStoreError,
+    IndexSchemaMetadata, MetadataStore, MetadataStoreError,
 };
 use crate::core::graph::{
     WholeVaultGraphBuild, WholeVaultGraphEdge, WholeVaultGraphEdgeKind, WholeVaultGraphNode,
@@ -28,6 +28,26 @@ pub struct WholeVaultGraphInputs {
     pub unresolved_edges: Vec<GraphUnresolvedEdgeRecord>,
     pub orphan_files: Vec<GraphFileRecord>,
     pub tags: Vec<GraphTagRecord>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct WholeVaultGraphSnapshotRequest<'a> {
+    pub metadata_path: &'a Path,
+    pub requested_generation: u64,
+    pub graph_request: WholeVaultGraphRequest,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WholeVaultGraphSnapshotResult {
+    pub generation: u64,
+    pub graph: WholeVaultGraphBuild,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WholeVaultGraphSnapshotError {
+    MissingIndex,
+    StaleSchema,
+    GraphIndex,
 }
 
 impl WholeVaultGraphRequest {
@@ -303,6 +323,47 @@ pub fn build_whole_vault_graph_from_metadata(
             tags,
         },
     ))
+}
+
+pub(crate) fn read_whole_vault_graph_snapshot(
+    request: WholeVaultGraphSnapshotRequest<'_>,
+) -> Result<WholeVaultGraphSnapshotResult, WholeVaultGraphSnapshotError> {
+    if !request.metadata_path.is_file() {
+        return Err(WholeVaultGraphSnapshotError::MissingIndex);
+    }
+
+    let generation = graph_request_generation(request.metadata_path, request.requested_generation)?;
+    let expected = IndexSchemaMetadata::new("sqlite+tantivy", "metadata-v2", "tantivy", generation);
+    let metadata =
+        MetadataStore::open(request.metadata_path, &expected).map_err(graph_metadata_error)?;
+    let graph = build_whole_vault_graph_from_metadata(&metadata, generation, request.graph_request)
+        .map_err(graph_metadata_error)?;
+
+    Ok(WholeVaultGraphSnapshotResult { generation, graph })
+}
+
+fn graph_request_generation(
+    metadata_path: &Path,
+    requested_generation: u64,
+) -> Result<u64, WholeVaultGraphSnapshotError> {
+    if requested_generation != 0 {
+        return Ok(requested_generation);
+    }
+
+    let metadata =
+        MetadataStore::stored_schema_metadata(metadata_path).map_err(graph_metadata_error)?;
+    metadata
+        .map(|metadata| metadata.generation)
+        .ok_or(WholeVaultGraphSnapshotError::GraphIndex)
+}
+
+fn graph_metadata_error(error: MetadataStoreError) -> WholeVaultGraphSnapshotError {
+    match error {
+        MetadataStoreError::SchemaMismatch { .. } => WholeVaultGraphSnapshotError::StaleSchema,
+        MetadataStoreError::Sqlite(_) | MetadataStoreError::InvalidStoredValue(_) => {
+            WholeVaultGraphSnapshotError::GraphIndex
+        }
+    }
 }
 
 struct SnapshotBuilder<'a> {

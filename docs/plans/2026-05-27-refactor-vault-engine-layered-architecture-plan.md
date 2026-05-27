@@ -1032,7 +1032,7 @@ Default stop conditions:
     ```
   - Stop condition: more than one production implementation remains without a documented reason.
 
-- [ ] **RA05.09d1 Add graph snapshot use-case request/result types**
+- [x] **RA05.09d1 Add graph snapshot use-case request/result types**
   - Build: add a use-case-owned graph snapshot request/result pair near `use_cases/build_graph.rs` that contains only engine semantics: metadata path, requested generation, graph inclusion flags, node/edge limits, request id, generation, state, metrics inputs, and `WholeVaultGraphSnapshot`. Keep JSON payload versioning, byte-cap encoding, and `serde` DTOs in `ffi/graph.rs`.
   - Verify:
     ```sh
@@ -1041,7 +1041,7 @@ Default stop conditions:
     ```
   - Stop condition: use-case structs become FFI JSON DTOs, carry byte-cap encoding state, or expose `serde` as a use-case requirement.
 
-- [ ] **RA05.09d2 Move graph metadata open and generation lookup into use case**
+- [x] **RA05.09d2 Move graph metadata open and generation lookup into use case**
   - Build: move `graph_request_generation`, `IndexSchemaMetadata` construction, `MetadataStore::stored_schema_metadata`, and `MetadataStore::open` out of `ffi/graph.rs` into a graph use-case entry point such as `read_whole_vault_graph_snapshot`.
   - Verify:
     ```sh
@@ -1051,7 +1051,7 @@ Default stop conditions:
     ```
   - Stop condition: FFI still decides schema generation, opens SQLite metadata, or maps SQLite records directly.
 
-- [ ] **RA05.09d3 Map graph use-case errors at the FFI boundary**
+- [x] **RA05.09d3 Map graph use-case errors at the FFI boundary**
   - Build: introduce a small graph use-case error enum that distinguishes invalid/missing index, stale schema, graph index failure, and oversized-independent success. Map that enum to existing `FfiError` codes in `ffi/graph.rs` without exposing `MetadataStoreError` to FFI.
   - Verify:
     ```sh
@@ -1060,7 +1060,7 @@ Default stop conditions:
     ```
   - Stop condition: a SQLite adapter error type, graph SQL record, or legacy graph module is visible from `ffi/graph.rs`.
 
-- [ ] **RA05.09d4 Keep graph payload finalization in FFI and prove JSON stability**
+- [x] **RA05.09d4 Keep graph payload finalization in FFI and prove JSON stability**
   - Build: keep `FfiWholeVaultGraphRequest`, `FfiWholeVaultGraphPayload`, `FfiWholeVaultGraphMetrics`, byte-cap validation, and `finalize_graph_payload` in `ffi/graph.rs`; only swap the graph source to the use case.
   - Verify:
     ```sh
@@ -1069,7 +1069,7 @@ Default stop conditions:
     ```
   - Stop condition: JSON field names, graph state strings, encoded payload byte measurement, byte cap behavior, or request id propagation changes.
 
-- [ ] **RA05.09d5 Decide graph snapshot serialization ownership**
+- [x] **RA05.09d5 Decide graph snapshot serialization ownership**
   - Build: decide whether `core::graph::WholeVaultGraphSnapshot` and child graph types intentionally remain serializable domain DTOs or whether FFI should introduce explicit JSON DTO conversion. If serialization remains in `core`, document graph snapshot JSON as an intentional cross-layer graph contract in `docs/architecture/rust-engine.md`.
   - Verify:
     ```sh
