@@ -1,4 +1,7 @@
-use crate::{VaultIdentity, is_markdown_path, stable_hash};
+use crate::{
+    VaultIdentity, is_markdown_path, public_artifact_salt, redacted_vault_identity,
+    salted_private_hash, stable_hash,
+};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
@@ -94,10 +97,16 @@ pub fn generate_query_corpus(options: &QueryCorpusOptions) -> io::Result<QueryCo
 
 pub fn generate_query_corpus_bundle(options: &QueryCorpusOptions) -> io::Result<QueryCorpusBundle> {
     let vault_root = options.vault_root.canonicalize()?;
-    let collector = collect_candidates(&vault_root, options.seed, options.samples_per_class)?;
+    let artifact_salt = public_artifact_salt();
+    let collector = collect_candidates(
+        &vault_root,
+        options.seed,
+        options.samples_per_class,
+        &artifact_salt,
+    )?;
 
     Ok(QueryCorpusBundle {
-        corpus: build_query_corpus(options, &vault_root, &collector),
+        corpus: build_query_corpus(options, &collector, &artifact_salt),
         private_query_lines: private_query_lines_from_collector(
             &collector,
             options.samples_per_class,
@@ -111,8 +120,8 @@ pub fn generate_private_query_lines(options: &QueryCorpusOptions) -> io::Result<
 
 fn build_query_corpus(
     options: &QueryCorpusOptions,
-    vault_root: &Path,
     collector: &CorpusCollector,
+    artifact_salt: &str,
 ) -> QueryCorpus {
     let mut samples = Vec::new();
     let mut totals = BTreeMap::new();
@@ -123,31 +132,23 @@ fn build_query_corpus(
         totals.insert(query_class.to_string(), selected.len());
         coverage.insert(query_class.to_string(), coverage_for(&selected));
         samples.extend(
-            selected
-                .into_iter()
-                .enumerate()
-                .map(|(index, candidate)| sample_from_candidate(index + 1, candidate)),
+            selected.into_iter().enumerate().map(|(index, candidate)| {
+                sample_from_candidate(index + 1, candidate, artifact_salt)
+            }),
         );
     }
 
     QueryCorpus {
         schema_version: 1,
         generator_version: env!("CARGO_PKG_VERSION").to_string(),
-        vault: VaultIdentity {
-            root_name: vault_root
-                .file_name()
-                .and_then(OsStr::to_str)
-                .unwrap_or("vault")
-                .to_string(),
-            root_hash: stable_hash(vault_root.to_string_lossy().as_bytes()),
-        },
+        vault: redacted_vault_identity(),
         samples_per_class: options.samples_per_class,
         seed: options.seed,
         privacy: PrivacyPolicy {
             raw_queries_committed: false,
             raw_note_snippets_committed: false,
             path_values_committed: false,
-            query_material: "Samples contain only hashes, redacted labels, coverage metadata, and source-count hints.".to_string(),
+            query_material: "Samples contain only per-artifact salted hashes, redacted labels, coverage metadata, and source-count hints.".to_string(),
         },
         totals,
         coverage,
@@ -176,9 +177,10 @@ fn collect_candidates(
     vault_root: &Path,
     seed: u64,
     samples_per_class: usize,
+    artifact_salt: &str,
 ) -> io::Result<CorpusCollector> {
     let mut collector = CorpusCollector::default();
-    visit_vault(vault_root, vault_root, seed, &mut collector)?;
+    visit_vault(vault_root, vault_root, seed, artifact_salt, &mut collector)?;
 
     for query_class in QUERY_CLASSES {
         collector.ensure_zero_candidates(query_class, samples_per_class.max(10));
@@ -312,14 +314,16 @@ fn visit_vault(
     vault_root: &Path,
     dir: &Path,
     seed: u64,
+    artifact_salt: &str,
     collector: &mut CorpusCollector,
 ) -> io::Result<()> {
     let entries = match fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(_) if dir != vault_root => {
-            collector
-                .warnings
-                .push(format!("read_dir_failed:{}", path_hash(vault_root, dir)));
+            collector.warnings.push(format!(
+                "read_dir_failed:{}",
+                path_hash(vault_root, dir, artifact_salt)
+            ));
             return Ok(());
         }
         Err(error) => return Err(error),
@@ -339,9 +343,10 @@ fn visit_vault(
         let metadata = match fs::symlink_metadata(&path) {
             Ok(metadata) => metadata,
             Err(_) => {
-                collector
-                    .warnings
-                    .push(format!("metadata_failed:{}", path_hash(vault_root, &path)));
+                collector.warnings.push(format!(
+                    "metadata_failed:{}",
+                    path_hash(vault_root, &path, artifact_salt)
+                ));
                 continue;
             }
         };
@@ -355,7 +360,7 @@ fn visit_vault(
             if path.file_name().and_then(OsStr::to_str) == Some(".obsidian") {
                 continue;
             }
-            visit_vault(vault_root, &path, seed, collector)?;
+            visit_vault(vault_root, &path, seed, artifact_salt, collector)?;
             continue;
         }
 
@@ -363,7 +368,7 @@ fn visit_vault(
             continue;
         }
 
-        collect_markdown_file(vault_root, &path, seed, collector);
+        collect_markdown_file(vault_root, &path, seed, artifact_salt, collector);
     }
 
     Ok(())
@@ -373,9 +378,10 @@ fn collect_markdown_file(
     vault_root: &Path,
     path: &Path,
     seed: u64,
+    artifact_salt: &str,
     collector: &mut CorpusCollector,
 ) {
-    let source_hash = path_hash(vault_root, path);
+    let source_hash = path_hash(vault_root, path, artifact_salt);
     collect_file_name_candidates(path, &source_hash, collector);
 
     let Ok(bytes) = fs::read(path) else {
@@ -717,8 +723,8 @@ fn add_text_coverage(raw_query: &str, coverage: &mut BTreeSet<String>) {
     }
 }
 
-fn sample_from_candidate(index: usize, candidate: Candidate) -> QuerySample {
-    let query_hash = stable_hash(candidate.raw_query.as_bytes());
+fn sample_from_candidate(index: usize, candidate: Candidate, artifact_salt: &str) -> QuerySample {
+    let query_hash = salted_private_hash(artifact_salt, candidate.raw_query.as_bytes());
     let mut coverage: Vec<_> = candidate.coverage.into_iter().collect();
     coverage.sort();
     let expected_result_shape = expected_result_shape(candidate.source_count, &coverage);
@@ -770,9 +776,9 @@ fn normalize_query(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn path_hash(vault_root: &Path, path: &Path) -> String {
+fn path_hash(vault_root: &Path, path: &Path, artifact_salt: &str) -> String {
     let relative_path = path.strip_prefix(vault_root).unwrap_or(path);
-    stable_hash(relative_path.to_string_lossy().as_bytes())
+    salted_private_hash(artifact_salt, relative_path.to_string_lossy().as_bytes())
 }
 
 fn is_token_char(ch: char) -> bool {
@@ -800,7 +806,7 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn generates_deterministic_redacted_samples() {
+    fn generates_redacted_samples_with_salted_private_identifiers() {
         let dir = tempdir().expect("tempdir");
         fs::create_dir(dir.path().join("a")).expect("dir a");
         fs::create_dir(dir.path().join("b")).expect("dir b");
@@ -828,16 +834,33 @@ mod tests {
         let first = generate_query_corpus(&options).expect("first");
         let second = generate_query_corpus(&options).expect("second");
 
-        assert_eq!(
-            serde_json::to_string(&first).expect("json"),
-            serde_json::to_string(&second).expect("json")
-        );
         for query_class in QUERY_CLASSES {
             assert_eq!(first.totals.get(query_class), Some(&10));
+            assert_eq!(
+                first.totals.get(query_class),
+                second.totals.get(query_class)
+            );
         }
         assert!(first.coverage["file_name"].contains(&"duplicate_basename".to_string()));
         assert!(first.coverage["body"].contains(&"korean_cjk".to_string()));
         assert!(first.coverage["tag"].contains(&"zero_result".to_string()));
+        assert_eq!(first.vault.root_name, "redacted-vault");
+        assert_eq!(first.vault.root_hash, "redacted");
+        assert_ne!(first.samples[0].query_hash, second.samples[0].query_hash);
+        let first_source_sample = first
+            .samples
+            .iter()
+            .find(|sample| !sample.source_hashes.is_empty())
+            .expect("source sample");
+        let second_source_sample = second
+            .samples
+            .iter()
+            .find(|sample| sample.id == first_source_sample.id)
+            .expect("matching source sample");
+        assert_ne!(
+            first_source_sample.source_hashes,
+            second_source_sample.source_hashes
+        );
     }
 
     #[test]
@@ -862,6 +885,8 @@ mod tests {
         assert!(!json.contains("private-value"));
         assert!(!json.contains("Secret Target"));
         assert!(!json.contains("secret-tag"));
+        assert!(!json.contains(dir.path().to_string_lossy().as_ref()));
+        assert!(json.contains("\"root_name\":\"redacted-vault\""));
         assert!(json.contains("query_hash"));
     }
 

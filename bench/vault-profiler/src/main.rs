@@ -18,7 +18,9 @@ use vault_profiler::read_indexer::{ReadIndexMaterializeOptions, materialize_read
 use vault_profiler::synthetic::{
     SyntheticProfile, SyntheticVaultOptions, generate_synthetic_vault,
 };
-use vault_profiler::{ProfileOptions, is_output_inside_vault, profile_vault};
+use vault_profiler::{
+    ProfileOptions, is_output_inside_vault, profile_vault, redacted_private_value,
+};
 
 fn main() {
     if let Err(err) = run() {
@@ -1024,7 +1026,7 @@ fn run_tantivy_query_benchmark(
                 duration_ms: None,
                 result_count: None,
                 state: "error".to_string(),
-                notes: vec![error.to_string()],
+                notes: vec![tantivy_error_note(&error)],
             },
         };
         samples.push(sample);
@@ -1038,8 +1040,8 @@ fn run_tantivy_query_benchmark(
     let artifact = TantivyQueryBenchmarkArtifact {
         schema_version: 1,
         tool: "vault-profiler tantivy-query-benchmark".to_string(),
-        runbook_source: command.runbook_path.display().to_string(),
-        index_source: command.index_dir.display().to_string(),
+        runbook_source: redacted_private_value(),
+        index_source: redacted_private_value(),
         result_limit: command.result_limit,
         sample_count: samples.len(),
         measured_sample_count,
@@ -1061,6 +1063,17 @@ fn run_tantivy_query_benchmark(
     }
     fs::write(&command.output_path, json)?;
     Ok(())
+}
+
+fn tantivy_error_note(error: &TantivySearchError) -> String {
+    let class = match error {
+        TantivySearchError::Tantivy(_) => "search_backend",
+        TantivySearchError::QueryParser(_) => "query_parser",
+        TantivySearchError::Io(_) => "io",
+        TantivySearchError::Path(_) => "path",
+        TantivySearchError::EmptyQuery => "empty_query",
+    };
+    format!("error_class={class}")
 }
 
 fn tantivy_query_summaries(samples: &[TantivyQuerySample]) -> Vec<TantivyQueryClassSummary> {
@@ -1743,8 +1756,15 @@ mod tests {
         let artifact = fs::read_to_string(output_path).expect("artifact");
         assert!(artifact.contains("\"query_class\": \"file_name\""));
         assert!(artifact.contains("\"measured_sample_count\": 1"));
+        assert!(artifact.contains("\"runbook_source\": \"redacted\""));
+        assert!(artifact.contains("\"index_source\": \"redacted\""));
         assert!(!artifact.contains("\"raw_query\""));
         assert!(!artifact.contains("\"Alpha\""));
+        assert!(!artifact.contains(dir.path().to_string_lossy().as_ref()));
+        assert_eq!(
+            tantivy_error_note(&TantivySearchError::EmptyQuery),
+            "error_class=empty_query"
+        );
     }
 
     #[test]

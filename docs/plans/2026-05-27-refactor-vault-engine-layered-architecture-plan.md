@@ -1193,32 +1193,38 @@ Default stop conditions:
   - Evidence: remaining `vault_engine::benchmarks` references are only profiler compatibility imports in `bench/vault-profiler/src/main.rs` and `bench/vault-profiler/src/synthetic.rs`; no `crate::benchmarks` implementation import remains in `vault-engine/src`.
   - Stop condition: Phase 7 begins while profiler still requires the legacy benchmark path.
 
-- [ ] **RA06.02a Preserve aggregate-only privacy rules**
+- [x] **RA06.02a Preserve aggregate-only privacy rules**
   - Build: ensure moved benchmark code still redacts raw note text, snippets, tags, query strings, private paths, raw relative paths, stable per-file IDs, error strings, panic payloads, `Debug` output, CLI args, and SQLite/Tantivy error messages.
   - Verify: benchmark artifact tests pass and no committed artifact contains `/Users/`, vault names, `.md` relative paths, note snippets, query terms, tags/frontmatter keys, or stable per-file IDs.
+  - Evidence: `bench/vault-profiler` public artifacts now redact vault identities/path source fields and keep raw values only in explicit private outputs; `cargo test --manifest-path bench/vault-profiler/Cargo.toml` passed.
 
-- [ ] **RA06.02b Redact profiler error notes**
+- [x] **RA06.02b Redact profiler error notes**
   - Build: store error class/category only for committed benchmark/probe artifacts; do not persist raw `error.to_string()` values from read/search/indexing failures.
   - Verify: a fixture test injects `/Users/example/Private Vault/Secret.md`, query text, and SQLite/Tantivy path text into an error; serialized public artifacts contain none of those tokens.
+  - Evidence: `read_benchmark::tests::raw_error_notes_are_classified_before_serialization` injects private path/query/error text and verifies only `error_class=redacted` is serialized.
   - Stop condition: any artifact field can expose raw backend error text without an explicit private-output opt-in.
 
-- [ ] **RA06.02c Remove stable public per-file hashes**
+- [x] **RA06.02c Remove stable public per-file hashes**
   - Build: either omit per-sample input hashes from public artifacts or salt them per run with no committed salt-to-input mapping.
   - Verify: two public artifact generations for the same private path/query produce different hashes or no per-input hashes, and the mapping is not committed.
+  - Evidence: `read_benchmark::tests::private_input_hashes_do_not_repeat_across_public_samples` and `corpus::tests::generates_redacted_samples_with_salted_private_identifiers` verify repeated private inputs do not reuse public hashes.
   - Stop condition: committed artifacts contain stable identifiers that can track the same private note across runs.
 
-- [ ] **RA06.02d Treat vault root names as private**
+- [x] **RA06.02d Treat vault root names as private**
   - Build: replace public artifact root-name fields with caller-supplied aliases or fixed redacted values for real-vault runs.
   - Verify: artifact privacy tests assert private vault directory names are absent.
+  - Evidence: `profile_vault`, query corpus, and read benchmark artifacts now emit `redacted-vault`/`redacted`; tests assert private vault directory names are absent.
 
-- [ ] **RA06.02e Salt or omit stable private-input hashes**
+- [x] **RA06.02e Salt or omit stable private-input hashes**
   - Build: for public real-vault artifacts, salt per-run or omit `root_hash`, `metadata_path_hash`, `tantivy_path_hash`, `input_hash`, sample id hash prefixes, `source_hashes`, and stable query/path hashes. Keep deterministic hashes only for synthetic/fixture artifacts or ignored private outputs.
   - Verify: tests inject a private vault path, note relative path, query text, SQLite/Tantivy error text, and vault name; serialized public artifacts contain none of those tokens and do not contain a stable hash that repeats across two real-vault artifact generations.
+  - Evidence: `public_artifact_salt`/`salted_private_hash` cover `relative_path_hash`, `query_hash`, `source_hashes`, read benchmark `input_hash`, and warning path IDs; metadata/Tantivy/root hashes are fixed redacted values.
   - Stop condition: committed artifacts can correlate the same private note, query, metadata path, or vault root across runs.
 
-- [ ] **RA06.02f Classify profiler error notes**
+- [x] **RA06.02f Classify profiler error notes**
   - Build: convert read/search/index/materialization error notes in public artifacts to error classes and coarse categories. Raw backend `error.to_string()` values may be written only to explicit private outputs under ignored paths.
   - Verify: artifact tests inject path-like and query-like text into error strings; public artifacts contain only the class/category and count fields.
+  - Evidence: read benchmark notes use `error_class=*`, Tantivy query benchmark notes use `tantivy_error_note`, and materialize-read-index stores `io:<kind>` instead of raw path-bearing IO errors.
   - Stop condition: SQLite/Tantivy/path/parser error strings can reach committed public artifacts.
 
 - [ ] **RA06.03 Run fixture read/index benchmark smoke**

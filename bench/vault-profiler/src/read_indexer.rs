@@ -1,4 +1,4 @@
-use crate::stable_hash;
+use crate::{redacted_private_value, stable_hash};
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -113,7 +113,7 @@ pub fn materialize_read_index(
                         });
                     }
                     Err(error) => {
-                        file.mark_error(error.to_string());
+                        file.mark_error(format!("io:{:?}", error.kind()));
                         records.push(IndexedFileRecords {
                             file,
                             links: Vec::new(),
@@ -154,9 +154,9 @@ pub fn materialize_read_index(
     Ok(ReadIndexMaterializeArtifact {
         schema_version: 1,
         tool: "vault-profiler materialize-read-index".to_string(),
-        vault_root_hash: stable_hash(root.canonical_root().to_string_lossy().as_bytes()),
-        metadata_path_hash: stable_hash(options.metadata_path.to_string_lossy().as_bytes()),
-        tantivy_path_hash: stable_hash(options.tantivy_path.to_string_lossy().as_bytes()),
+        vault_root_hash: redacted_private_value(),
+        metadata_path_hash: redacted_private_value(),
+        tantivy_path_hash: redacted_private_value(),
         markdown_files: scan.markdown_files,
         attachment_files: scan.attachment_files,
         other_files: scan.other_files,
@@ -588,6 +588,9 @@ mod tests {
         assert_eq!(artifact.links, 2);
         assert_eq!(artifact.properties, 2);
         assert_eq!(artifact.attachments, 1);
+        assert_eq!(artifact.vault_root_hash, "redacted");
+        assert_eq!(artifact.metadata_path_hash, "redacted");
+        assert_eq!(artifact.tantivy_path_hash, "redacted");
 
         let api = open_vault_read_api(index.join("metadata.sqlite"), index.join("tantivy"))
             .expect("read api");
