@@ -1,11 +1,10 @@
 use std::collections::HashSet;
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_uchar};
-use std::panic::{self, AssertUnwindSafe, catch_unwind};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 use std::ptr::NonNull;
 use std::slice;
-use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -51,7 +50,9 @@ use crate::save::{
     keep_conflicted_buffer_as_new_note, overwrite_after_conflict, reload_after_conflict, safe_save,
 };
 
-static FFI_PANIC_HOOK_LOCK: Mutex<()> = Mutex::new(());
+mod panic;
+
+use self::panic::catch_ffi_unwind;
 
 pub fn abi_version() -> u32 {
     ENGINE_ABI_VERSION
@@ -1176,20 +1177,6 @@ where
     CString::new(json)
         .expect("serialized FFI response must not contain nul bytes")
         .into_raw()
-}
-
-fn catch_ffi_unwind<T, F>(call: F) -> std::thread::Result<T>
-where
-    F: FnOnce() -> T,
-{
-    let _guard = FFI_PANIC_HOOK_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let previous_hook = panic::take_hook();
-    panic::set_hook(Box::new(|_| {}));
-    let result = catch_unwind(AssertUnwindSafe(call));
-    panic::set_hook(previous_hook);
-    result
 }
 
 impl EngineReadHandle {

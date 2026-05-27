@@ -433,7 +433,7 @@ Stop at the end of any phase if a gate fails. Do not proceed by compensating in 
   - Build: move `vault-engine/src/ffi.rs` to `vault-engine/src/ffi/mod.rs`.
   - Verify: `cargo test --manifest-path vault-engine/Cargo.toml ffi::`.
 
-- [ ] **RA01.02 Extract FFI panic helpers**
+- [x] **RA01.02 Extract FFI panic helpers**
   - Build: move panic hook lock and unwind helper logic into `vault-engine/src/ffi/panic.rs`.
   - Verify: existing panic-boundary tests still pass, and no panic helper is duplicated in read/save/graph FFI modules.
 
