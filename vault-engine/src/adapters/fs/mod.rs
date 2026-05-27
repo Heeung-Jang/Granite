@@ -2,3 +2,4 @@ pub(crate) mod index_directory;
 pub(crate) mod note_writer;
 pub(crate) mod path_resolver;
 pub(crate) mod scanner;
+pub(crate) mod watcher;

@@ -736,7 +736,7 @@ Default stop conditions:
   - Build: move `scanner.rs` to `adapters/fs/scanner.rs`.
   - Verify: scanner fixture tests pass and core does not import scanner.
 
-- [ ] **RA04.07 Move file watcher adapter**
+- [x] **RA04.07 Move file watcher adapter**
   - Build: move `file_watcher.rs` to `adapters/fs/watcher.rs` or `adapters/fsevents/watcher.rs` depending on final naming.
   - Verify: watcher tests pass on macOS.
 
