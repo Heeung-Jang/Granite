@@ -595,7 +595,7 @@ Default stop conditions:
   - Build: move display/value methods that do not require rusqlite into `core/metadata.rs`.
   - Verify: property display tests still pass.
 
-- [ ] **RA03.04 Keep SQL row decoders in SQLite adapter**
+- [x] **RA03.04 Keep SQL row decoders in SQLite adapter**
   - Build: leave `row_to_*`, `*_to_storage`, and `*_from_storage` helpers in the storage layer until Phase 4.
   - Verify: no `rusqlite` imports appear in `core/metadata.rs`.
 
