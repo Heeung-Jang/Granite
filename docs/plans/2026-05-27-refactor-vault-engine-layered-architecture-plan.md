@@ -659,7 +659,7 @@ Default stop conditions:
   - Build: move `upsert_file`, `delete_child_records`, `insert_link`, `insert_tag`, `insert_property`, `insert_heading`, and `insert_attachment` into `adapters/sqlite/writes.rs`.
   - Verify: metadata insert/update/delete, bulk replace, and atomic batch tests pass.
 
-- [ ] **RA04.02e Move SQLite read query helpers by surface**
+- [x] **RA04.02e Move SQLite read query helpers by surface**
   - Build: move read helpers in this order: file lookup/file tree, backlinks/outgoing, tags/properties/headings/attachments, graph files/edges/tags, graph counts/plans.
   - Verify: after each surface move, run the narrow test for that surface before moving the next one.
   - Stop condition: query ordering, limit semantics, or partial-state behavior changes.

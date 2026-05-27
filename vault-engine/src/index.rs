@@ -1,16 +1,18 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use crate::adapters::sqlite::reads as sqlite_reads;
 use crate::adapters::sqlite::reads::{
     attachment_projections as read_attachment_projections, attachments as read_attachments,
     backlink_projections as read_backlink_projections, backlinks as read_backlinks,
     file_tree_projection as read_file_tree_projection, get_file as read_get_file,
     graph_files as read_graph_files, graph_orphan_files as read_graph_orphan_files,
+    graph_query_plan_summaries as read_graph_query_plan_summaries,
     graph_resolved_edges as read_graph_resolved_edges,
     graph_resolved_edges_compact as read_graph_resolved_edges_compact,
     graph_tags_for_files as read_graph_tags_for_files,
-    graph_unresolved_edges as read_graph_unresolved_edges, headings as read_headings,
+    graph_unresolved_edges as read_graph_unresolved_edges,
+    graph_visible_edge_count as read_graph_visible_edge_count,
+    graph_visible_node_count as read_graph_visible_node_count, headings as read_headings,
     list_files as read_list_files, list_markdown_files as read_list_markdown_files,
     lookup_file as read_lookup_file, outgoing_link_projections as read_outgoing_link_projections,
     outgoing_links as read_outgoing_links, properties as read_properties,
@@ -711,26 +713,12 @@ impl MetadataStore {
         include_unresolved: bool,
         include_orphans: bool,
     ) -> MetadataStoreResult<usize> {
-        let mut parts = vec![
-            GRAPH_RESOLVED_SOURCE_NODES_SQL,
-            GRAPH_RESOLVED_TARGET_NODES_SQL,
-        ];
-        if include_unresolved {
-            parts.push(GRAPH_UNRESOLVED_SOURCE_NODES_SQL);
-            parts.push(GRAPH_UNRESOLVED_TARGET_NODES_SQL);
-        }
-        if include_orphans {
-            parts.push(if include_unresolved {
-                GRAPH_ORPHAN_NODES_WITH_UNRESOLVED_SQL
-            } else {
-                GRAPH_ORPHAN_NODES_RESOLVED_ONLY_SQL
-            });
-        }
-        let sql = format!("SELECT COUNT(*) FROM ({})", parts.join(" UNION "));
-        self.connection
-            .query_row(&sql, params![generation as i64], |row| row.get::<_, i64>(0))
-            .map(|count| count as usize)
-            .map_err(Into::into)
+        read_graph_visible_node_count(
+            &self.connection,
+            generation,
+            include_unresolved,
+            include_orphans,
+        )
     }
 
     pub fn graph_visible_edge_count(
@@ -738,75 +726,14 @@ impl MetadataStore {
         generation: u64,
         include_unresolved: bool,
     ) -> MetadataStoreResult<usize> {
-        let sql = if include_unresolved {
-            format!(
-                "SELECT COUNT(*) FROM ({GRAPH_RESOLVED_EDGE_GROUPS_SQL} UNION ALL {GRAPH_UNRESOLVED_EDGE_GROUPS_SQL})"
-            )
-        } else {
-            format!("SELECT COUNT(*) FROM ({GRAPH_RESOLVED_EDGE_GROUPS_SQL})")
-        };
-        self.connection
-            .query_row(&sql, params![generation as i64], |row| row.get::<_, i64>(0))
-            .map(|count| count as usize)
-            .map_err(Into::into)
+        read_graph_visible_edge_count(&self.connection, generation, include_unresolved)
     }
 
     pub fn graph_query_plan_summaries(
         &self,
         generation: u64,
     ) -> MetadataStoreResult<Vec<GraphQueryPlanSummary>> {
-        let queries = [
-            (GraphQueryStage::Files, sqlite_reads::GRAPH_FILES_SQL),
-            (
-                GraphQueryStage::ResolvedEdges,
-                sqlite_reads::GRAPH_RESOLVED_EDGES_SQL,
-            ),
-            (
-                GraphQueryStage::ResolvedEdgesCompact,
-                sqlite_reads::GRAPH_RESOLVED_EDGES_COMPACT_SQL,
-            ),
-            (
-                GraphQueryStage::UnresolvedEdges,
-                sqlite_reads::GRAPH_UNRESOLVED_EDGES_SQL,
-            ),
-            (
-                GraphQueryStage::OrphansResolvedOnly,
-                sqlite_reads::GRAPH_ORPHANS_RESOLVED_ONLY_SQL,
-            ),
-            (
-                GraphQueryStage::OrphansWithUnresolved,
-                sqlite_reads::GRAPH_ORPHANS_WITH_UNRESOLVED_SQL,
-            ),
-            (GraphQueryStage::Tags, sqlite_reads::GRAPH_TAGS_PLAN_SQL),
-        ];
-        let mut summaries = Vec::new();
-        for (stage, sql) in queries {
-            let explain = format!("EXPLAIN QUERY PLAN {sql}");
-            let mut statement = self.connection.prepare(&explain)?;
-            if stage == GraphQueryStage::Tags {
-                let rows =
-                    statement.query_map(params!["graph-plan-placeholder", 1_i64], |row| {
-                        Ok(GraphQueryPlanSummary {
-                            stage,
-                            detail: row.get(3)?,
-                        })
-                    })?;
-                for row in rows {
-                    summaries.push(row?);
-                }
-            } else {
-                let rows = statement.query_map(params![generation as i64, 1_i64], |row| {
-                    Ok(GraphQueryPlanSummary {
-                        stage,
-                        detail: row.get(3)?,
-                    })
-                })?;
-                for row in rows {
-                    summaries.push(row?);
-                }
-            }
-        }
-        Ok(summaries)
+        read_graph_query_plan_summaries(&self.connection, generation)
     }
 
     pub fn tag_note_projections(
@@ -897,119 +824,6 @@ pub enum MetadataTable {
     Attachments,
 }
 
-const GRAPH_RESOLVED_SOURCE_NODES_SQL: &str = "
-    SELECT links.source_file_id AS node_id
-    FROM links INDEXED BY idx_links_resolved_pair
-    CROSS JOIN files AS source_files ON source_files.file_id = links.source_file_id
-    CROSS JOIN files AS target_files ON target_files.file_id = links.resolved_target_file_id
-    WHERE links.resolved_target_file_id IS NOT NULL
-      AND source_files.kind = 'markdown'
-      AND source_files.status IN ('parsed', 'search_indexed')
-      AND source_files.generation = ?1
-      AND target_files.kind = 'markdown'
-      AND target_files.status IN ('parsed', 'search_indexed')
-      AND target_files.generation = ?1";
-
-const GRAPH_RESOLVED_TARGET_NODES_SQL: &str = "
-    SELECT links.resolved_target_file_id AS node_id
-    FROM links INDEXED BY idx_links_resolved_pair
-    CROSS JOIN files AS source_files ON source_files.file_id = links.source_file_id
-    CROSS JOIN files AS target_files ON target_files.file_id = links.resolved_target_file_id
-    WHERE links.resolved_target_file_id IS NOT NULL
-      AND source_files.kind = 'markdown'
-      AND source_files.status IN ('parsed', 'search_indexed')
-      AND source_files.generation = ?1
-      AND target_files.kind = 'markdown'
-      AND target_files.status IN ('parsed', 'search_indexed')
-      AND target_files.generation = ?1";
-
-const GRAPH_UNRESOLVED_SOURCE_NODES_SQL: &str = "
-    SELECT links.source_file_id AS node_id
-    FROM links INDEXED BY idx_links_unresolved_source_target_key
-    CROSS JOIN files AS source_files ON source_files.file_id = links.source_file_id
-    WHERE links.resolved_target_file_id IS NULL
-      AND source_files.kind = 'markdown'
-      AND source_files.status IN ('parsed', 'search_indexed')
-      AND source_files.generation = ?1";
-
-const GRAPH_UNRESOLVED_TARGET_NODES_SQL: &str = "
-    SELECT 'unresolved:' || links.target_key AS node_id
-    FROM links INDEXED BY idx_links_unresolved_source_target_key
-    CROSS JOIN files AS source_files ON source_files.file_id = links.source_file_id
-    WHERE links.resolved_target_file_id IS NULL
-      AND source_files.kind = 'markdown'
-      AND source_files.status IN ('parsed', 'search_indexed')
-      AND source_files.generation = ?1";
-
-const GRAPH_RESOLVED_EDGE_GROUPS_SQL: &str = "
-    SELECT links.source_file_id, links.resolved_target_file_id
-    FROM links INDEXED BY idx_links_resolved_pair
-    CROSS JOIN files AS source_files ON source_files.file_id = links.source_file_id
-    CROSS JOIN files AS target_files ON target_files.file_id = links.resolved_target_file_id
-    WHERE links.resolved_target_file_id IS NOT NULL
-      AND source_files.kind = 'markdown'
-      AND source_files.status IN ('parsed', 'search_indexed')
-      AND source_files.generation = ?1
-      AND target_files.kind = 'markdown'
-      AND target_files.status IN ('parsed', 'search_indexed')
-      AND target_files.generation = ?1
-    GROUP BY links.source_file_id, links.resolved_target_file_id";
-
-const GRAPH_UNRESOLVED_EDGE_GROUPS_SQL: &str = "
-    SELECT links.source_file_id, links.target_key
-    FROM links INDEXED BY idx_links_unresolved_source_target_key
-    CROSS JOIN files AS source_files ON source_files.file_id = links.source_file_id
-    WHERE links.resolved_target_file_id IS NULL
-      AND source_files.kind = 'markdown'
-      AND source_files.status IN ('parsed', 'search_indexed')
-      AND source_files.generation = ?1
-    GROUP BY links.source_file_id, links.target_key";
-
-const GRAPH_ORPHAN_NODES_RESOLVED_ONLY_SQL: &str = "
-    SELECT files.file_id AS node_id
-    FROM files
-    WHERE files.kind = 'markdown'
-      AND files.status IN ('parsed', 'search_indexed')
-      AND files.generation = ?1
-      AND NOT EXISTS (
-        SELECT 1 FROM links
-        JOIN files AS source_files ON source_files.file_id = links.source_file_id
-        JOIN files AS target_files ON target_files.file_id = links.resolved_target_file_id
-        WHERE links.resolved_target_file_id IS NOT NULL
-          AND source_files.kind = 'markdown'
-          AND source_files.status IN ('parsed', 'search_indexed')
-          AND source_files.generation = ?1
-          AND target_files.kind = 'markdown'
-          AND target_files.status IN ('parsed', 'search_indexed')
-          AND target_files.generation = ?1
-          AND (links.source_file_id = files.file_id OR links.resolved_target_file_id = files.file_id)
-      )";
-
-const GRAPH_ORPHAN_NODES_WITH_UNRESOLVED_SQL: &str = "
-    SELECT files.file_id AS node_id
-    FROM files
-    WHERE files.kind = 'markdown'
-      AND files.status IN ('parsed', 'search_indexed')
-      AND files.generation = ?1
-      AND NOT EXISTS (
-        SELECT 1 FROM links
-        JOIN files AS source_files ON source_files.file_id = links.source_file_id
-        JOIN files AS target_files ON target_files.file_id = links.resolved_target_file_id
-        WHERE links.resolved_target_file_id IS NOT NULL
-          AND source_files.kind = 'markdown'
-          AND source_files.status IN ('parsed', 'search_indexed')
-          AND source_files.generation = ?1
-          AND target_files.kind = 'markdown'
-          AND target_files.status IN ('parsed', 'search_indexed')
-          AND target_files.generation = ?1
-          AND (links.source_file_id = files.file_id OR links.resolved_target_file_id = files.file_id)
-      )
-      AND NOT EXISTS (
-        SELECT 1 FROM links
-        WHERE links.resolved_target_file_id IS NULL
-          AND links.source_file_id = files.file_id
-      )";
-
 pub fn slugify_heading(title: &str) -> String {
     title
         .trim()
@@ -1051,6 +865,7 @@ impl From<rusqlite::Error> for MetadataStoreError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapters::sqlite::reads as sqlite_reads;
     use crate::attachments::{
         AttachmentReferenceSource, AttachmentRejectReason, AttachmentResolutionState,
     };
@@ -1537,7 +1352,9 @@ mod tests {
                 .all(|detail| !detail.contains("USE TEMP B-TREE FOR GROUP BY"))
         );
         let edge_count_plan_sql = format!(
-            "EXPLAIN QUERY PLAN SELECT COUNT(*) FROM ({GRAPH_RESOLVED_EDGE_GROUPS_SQL} UNION ALL {GRAPH_UNRESOLVED_EDGE_GROUPS_SQL})"
+            "EXPLAIN QUERY PLAN SELECT COUNT(*) FROM ({} UNION ALL {})",
+            sqlite_reads::GRAPH_RESOLVED_EDGE_GROUPS_SQL,
+            sqlite_reads::GRAPH_UNRESOLVED_EDGE_GROUPS_SQL
         );
         let mut statement = store
             .connection
