@@ -692,7 +692,7 @@ Default stop conditions:
   - Build: move queue schema creation, row decoding, status/reason conversion, unix-ms conversion, and error truncation into the SQLite queue adapter.
   - Verify: queue lease, retry, cancel, and coalescing tests pass.
 
-- [ ] **RA04.04b Move `IndexingQueue` store shell**
+- [x] **RA04.04b Move `IndexingQueue` store shell**
   - Build: move `IndexingQueue`, `IndexingQueueItem`, summary/error types, and methods into `adapters/sqlite/indexing_queue.rs`.
   - Verify: queue tests and indexing pipeline queue-batch tests pass.
 
