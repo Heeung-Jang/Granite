@@ -3,7 +3,7 @@ title: "refactor: Introduce Layered Rust Engine Architecture"
 type: refactor
 date: 2026-05-27
 deepened_on: 2026-05-27
-deepened_passes: 5
+deepened_passes: 6
 brainstorm: docs/brainstorms/2026-05-27-rust-engine-architecture-brainstorm.md
 ---
 
@@ -27,7 +27,7 @@ This plan intentionally keeps one Rust crate for the first architecture cleanup.
 
 ## Deepening Summary
 
-This deepening adds five specialist review passes and tightens the original plan around architecture, simplicity, performance, security risks, and implementation granularity:
+This deepening adds six specialist review passes and tightens the original plan around architecture, simplicity, performance, security risks, and implementation granularity:
 
 - Separate **mechanical moves** from **semantic extraction**. A task should either move code without changing behavior or extract a boundary with new verification, not both.
 - Add explicit **import boundary checks** so the new `core`, `ffi`, `adapters`, and `use_cases` names cannot drift immediately after the refactor.
@@ -35,6 +35,7 @@ This deepening adds five specialist review passes and tightens the original plan
 - Keep **rollback points** at phase boundaries. If a phase fails, the next phase should not start until the current phase is green.
 - Keep **adapter traits deferred**. The architecture should be enforced by modules first, not by speculative traits.
 - Add a fifth pass focused on **implementation micro-units**. Large moves such as SQLite metadata storage and `VaultReadApi` extraction are now broken into helper groups, method groups, and explicit verification gates.
+- Add a sixth pass focused on **post-adapter performance gates, FFI retargeting, unsafe allowlists, path safety, SQL construction, and diagnostics privacy**.
 
 ### Section Manifest
 
@@ -46,6 +47,7 @@ This deepening adds five specialist review passes and tightens the original plan
 | Risks | Add rollback, circular dependency, and accidental public API risks. |
 | Acceptance Criteria | Add measurable layer purity and compatibility criteria. |
 | Implementation Micro-Units | Split high-risk storage/use-case moves into small, independently verifiable tasks. |
+| Pass 6 Corrections | Add explicit FFI retarget tasks, performance gates, unsafe/path/SQL/privacy allowlists, and stale next-step correction. |
 
 ## Problem Statement
 
@@ -234,25 +236,36 @@ Additional dependency rules:
 - Final-state use cases must not import `rusqlite`, `tantivy`, `libc`, FSEvents, or `std::fs` directly.
 - Diagnostics may depend inward on use cases/adapters/core; no production module may import diagnostics.
 - `core` should not derive or own serialization DTOs just because FFI or benchmark JSON needs them. FFI JSON DTOs stay in `ffi`; benchmark artifact DTOs stay in `diagnostics`.
+- Final-state FFI must not call legacy orchestration modules such as `read_api`, `save`, `graph`, `indexing_pipeline`, `index_rebuild`, `startup_reconciliation`, or `watcher_burst`. FFI decodes inputs, calls use cases, and encodes responses.
+- Parser ownership must be explicit before Phase 5 closes: either pure Markdown parsing remains documented as a domain module or parser functions/types move under `core/document.rs` or `core/parser.rs`.
 
 Recommended import checks after each phase:
 
 ```sh
 rg -n "rusqlite|tantivy|libc|std::fs|fsevent|FSEvent" vault-engine/src/core
-rg -n "CStr|CString|c_char|c_uchar|no_mangle|extern \"C\"" vault-engine/src/core vault-engine/src/use_cases vault-engine/src/adapters
+rg -n "std::fs|OpenOptions|rename|remove_dir_all|canonicalize|symlink_metadata|MetadataExt|rusqlite|tantivy|libc|FSEvent" vault-engine/src/use_cases
+rg -n "unsafe|extern \"C\"|CStr|CString::from_raw|Vec::from_raw_parts|slice::from_raw_parts|no_mangle" vault-engine/src -g '!ffi/**' -g '!adapters/fsevents/watcher.rs' -g '!diagnostics/**'
 rg -n "crate::ffi" vault-engine/src/core vault-engine/src/use_cases vault-engine/src/adapters
+rg -n "crate::(read_api|save|graph|indexing_pipeline|index_rebuild|startup_reconciliation|watcher_burst|scanner|paths|parser|attachments|graph_key)" vault-engine/src/use_cases vault-engine/src/ffi vault-engine/src/adapters
+rg -n "crate::adapters::(tantivy|fs|fsevents)" vault-engine/src/adapters/sqlite
+rg -n "crate::adapters::(sqlite|fs|fsevents)" vault-engine/src/adapters/tantivy
+rg -n "crate::adapters::(sqlite|tantivy)" vault-engine/src/adapters/fs vault-engine/src/adapters/fsevents
 ```
 
 Expected result: no matches except explicit documented exceptions in `docs/architecture/rust-engine.md`.
 
 ### Safety Invariants
 
-- FFI unsafe boundary: `#[unsafe(no_mangle)]`, `extern "C"`, raw pointer decoding, `CString::from_raw`, `Vec::from_raw_parts`, `CStr::from_ptr`, and `slice::from_raw_parts` stay confined to `ffi`, `ffi/read_rows`, the FSEvents adapter, or diagnostics-only libc code. No raw pointer or FFI buffer type reaches `core` or `use_cases`.
+- FFI unsafe boundary: `#[unsafe(no_mangle)]`, `extern "C"`, raw pointer decoding, `CString::from_raw`, `Vec::from_raw_parts`, `CStr::from_ptr`, and `slice::from_raw_parts` stay confined to `ffi/**`, `adapters/fsevents/watcher.rs`, or diagnostics-only libc code. No raw pointer or FFI buffer type reaches `core` or `use_cases`.
+- Unsafe discipline: every unsafe block must have a local safety comment. FSEvents callback code must prove callback context ownership, stream invalidation before context drop, no unwind across the C callback, and no use-after-free across stop/restart/drop.
 - ABI layout: all `#[repr(C)]` read/result/save structs, row-kind constants, state codes, error codes, JSON envelope keys, field order, `size_of`, `align_of`, and field offsets are frozen unless the refactor explicitly declares an ABI migration.
 - FFI ownership: Rust allocates returned strings/buffers and only the matching Rust free function releases them. Null free/close remains a no-op. Invalid null/UTF-8/byte inputs return structured errors. Panics never cross FFI.
-- Path safety: write/delete/rename/link/rebuild operations only use `VaultRoot` plus normalized relative paths or validated `IndexRebuildPaths`. All destructive operations revalidate canonical parent/target immediately before mutation and reject absolute paths, traversal, URL schemes, tilde, NUL, symlink escapes, non-regular files, and vault/index overlap.
+- Path safety: write/delete/rename/link/rebuild operations only use `VaultRoot` plus normalized relative paths or validated `IndexRebuildPaths`. All containment checks must compare canonical `Path` components with `Path::starts_with`, never string prefixes. All destructive operations revalidate canonical parent/target immediately before mutation and reject absolute paths, traversal, URL schemes, tilde, NUL, symlink escapes, non-regular files, and vault/index overlap.
+- Hardlink policy: if hardlinks are not explicitly supported, save/index/read filesystem adapters must reject regular files with link count `> 1` so content hardlinked from outside the vault is not silently indexed or exposed.
+- Destructive operation safety: `remove_dir_all`, swaps, abort cleanup, and reset operations must require an engine-owned marker file inside the target index directory in addition to canonical containment.
+- Database trust boundary: metadata DB contents are not trusted for filesystem mutation. Paths read from SQLite or JSON must be re-normalized as vault-relative values at the mutation boundary.
 - Core purity: `core` may contain path value types, but not filesystem resolution, `FileIdentity::from_metadata`, canonicalization, `MetadataExt`, SQLite, Tantivy, FSEvents, or libc.
-- Privacy: committed diagnostics/probe/benchmark artifacts remain aggregate-only. No note body, snippets, tags, frontmatter values, query strings, file IDs, raw relative paths, or full private paths. Private payloads must require an explicit private output path under an ignored directory.
+- Privacy: committed diagnostics/probe/benchmark artifacts remain aggregate-only. No note body, snippets, tags, frontmatter values, query strings, file IDs, raw relative paths, or full private paths. Redaction applies to normal fields, error strings, panic payloads, `Debug` output, benchmark/probe CLI args, and SQLite/Tantivy error messages. Private payloads must require an explicit private output path under an ignored directory.
 
 ### Performance Guardrails
 
@@ -284,6 +297,15 @@ No-allocation rules for hot paths:
 - Full rebuild must keep streaming into Tantivy. Do not introduce a full-corpus `Vec<SearchDocument>`.
 - Queue processing may keep bounded batch vectors only. Do not turn lease-limited processing into whole-vault materialization.
 - Adapters must not reopen SQLite/Tantivy per read page or search call.
+
+Hot-path diff gate:
+
+```sh
+git diff --unified=0 -- vault-engine/src |
+  rg -n '^\+.*(collect::<Vec|\.collect\(\)|\.clone\(\)|to_string\(\)|format!\(|serde_json::|Box<dyn|Arc<dyn|read_to_string|std::fs::read|Index::open_in_dir|reader\(\)|writer\(|commit\(|reload\()'
+```
+
+Expected: zero new matches in read/search/indexing/FFI graph hot paths, or a documented exception with benchmark evidence.
 
 ### Refactor Discipline
 
@@ -519,6 +541,10 @@ Default stop conditions:
   - Build: cover null C strings for every entry point, invalid UTF-8, null bytes pointer with `len > 0`, null bytes pointer with `len == 0`, null read handle for each read function, null `engine_string_free`, null `engine_read_close`, null `engine_read_result_free`, and panic conversion for save JSON, read buffer, and local graph dual-buffer paths.
   - Verify: invalid inputs return structured errors or no-op frees; no test aborts the process.
 
+- [ ] **RA01.12 Audit unsafe allowlist**
+  - Build: no behavior change; verify every unsafe block has a local safety comment, FFI entry points keep panic containment around fallible work, and unsafe operations remain inside the approved FFI/FSEvents/diagnostics allowlist.
+  - Verify: unsafe grep returns only `ffi/**`, `adapters/fsevents/watcher.rs`, or diagnostics-only matches; FSEvents stop/restart/drop tests do not unwind or use freed callback context.
+
 ### Phase 2: Move Read ABI Rows Under FFI
 
 - [x] **RA02.01 Move read row layout code**
@@ -661,8 +687,8 @@ Default stop conditions:
 
 - [x] **RA04.02e Move SQLite read query helpers by surface**
   - Build: move read helpers in this order: file lookup/file tree, backlinks/outgoing, tags/properties/headings/attachments, graph files/edges/tags, graph counts/plans.
-  - Verify: after each surface move, run the narrow test for that surface before moving the next one.
-  - Stop condition: query ordering, limit semantics, or partial-state behavior changes.
+  - Verify: after each surface move, run the narrow test for that surface before moving the next one; inspect query count/query plan for file tree, backlinks/outgoing, properties, headings, attachments, and graph queries.
+  - Stop condition: query ordering, limit semantics, partial-state behavior changes, new N+1 `get_file` calls, removed `LIMIT/OFFSET`, or indexed lookups becoming full scans.
 
 - [x] **RA04.02f Move `MetadataStore` shell last**
   - Build: move `MetadataStore`, `IndexedFileRecords`, `MetadataStoreError`, and constructor/open methods to `adapters/sqlite/metadata_store.rs` after helpers are already under the SQLite adapter.
@@ -730,7 +756,7 @@ Default stop conditions:
 
 - [x] **RA04.05g Keep Tantivy lifecycle stable**
   - Build: no code change after RA04.05f.
-  - Verify: confirm searcher/writer/index directory lifetimes are unchanged and no adapter code reopens Tantivy per read/search call.
+  - Verify: confirm searcher/writer/index directory lifetimes are unchanged and no adapter code reopens Tantivy per read/search call. Scan FFI and read use cases for `Index::open_*`, `reader()`, `writer(`, `commit(`, and `reload(`; only handle-open/rebuild code may match.
 
 - [x] **RA04.06 Move filesystem scanner**
   - Build: move `scanner.rs` to `adapters/fs/scanner.rs`.
@@ -750,8 +776,12 @@ Default stop conditions:
   - Result: `core` denylist scan is clean. Adapter scan has two pre-Phase-5 transitional exceptions: `adapters/fs/index_directory.rs` still uses `index_rebuild` path/result types, and `adapters/fs/note_writer.rs` still uses `save` baseline/error types. `SnippetStorageMode` was moved to core to remove the Tantivy-to-pipeline reverse dependency.
 
 - [x] **RA04.10 Add rebuild adversarial path tests**
-  - Build: cover `index_root` inside vault, `data_directory`/`rebuild_directory` outside index root, `data == rebuild`, symlinked data/rebuild/previous-data paths pointing into the vault, and failed commit/abort/reset paths.
+  - Build: cover `index_root` inside vault, `data_directory`/`rebuild_directory` outside index root, `data == rebuild`, symlinked data/rebuild/previous-data paths pointing into the vault, validation-then-symlink-swap before destructive mutation, missing engine-owned marker files, and failed commit/abort/reset paths.
   - Verify: a sentinel vault note remains unchanged after each rejected destructive operation.
+
+- [ ] **RA04.11 Post-adapter performance gate**
+  - Build: no refactor code changes. Run release fixture `backend-benchmark`, `materialize-read-index`, `read-api-benchmark`, and Swift read UI probe after adapter moves are complete; if private inputs are available, also run real-vault backend and UI probes with ignored/private output paths.
+  - Verify: block on `> 5%` peak RSS regression, `> 10%` SQLite/Tantivy stage regression, `> 20%` read/search p95/p99 regression, or benchmark artifacts losing `peak_rss_bytes`, `time_to_usable_samples`, stage timings, pipeline config, writer memory budget, or privacy flags.
 
 ### Phase 5: Extract Use Cases
 
@@ -819,6 +849,14 @@ Default stop conditions:
   - Build: move current-buffer link/tag/attachment metadata resolution into `use_cases/live_preview_metadata.rs`.
   - Verify: `engine_read_live_preview_metadata_uses_buffer_without_vault_scan` still passes.
 
+- [ ] **RA05.03a Retarget read FFI to use cases**
+  - Build: migrate `ffi/read.rs` away from `crate::read_api`, `crate::indexing_pipeline`, `crate::index_rebuild`, and `crate::paths`; FFI should call read-vault and rebuild use-case entry points only.
+  - Verify: read FFI tests, rebuild FFI tests, and Swift engine smoke pass; FFI direct-adapter scan shows only documented handle-construction exceptions.
+
+- [ ] **RA05.03b Classify parser ownership**
+  - Build: either move pure Markdown parser functions/types under `core/document.rs` or `core/parser.rs`, or document `parser` as an intentional pure-domain module in `docs/architecture/rust-engine.md`.
+  - Verify: `use_cases` and `ffi` do not import legacy `crate::parser` unless the exception is documented and scheduled for cleanup.
+
 - [ ] **RA05.04 Move save use case**
   - Build: create `use_cases/save_note.rs` and move only `SaveRequest`, `SaveOutcome`, conflict choice DTOs, and public orchestration entry points.
   - Verify: save safety and FFI conflict choice tests pass.
@@ -839,9 +877,13 @@ Default stop conditions:
   - Build: no behavior change; ensure mutation-time path revalidation remains next to filesystem write primitives.
   - Verify: adversarial save path tests still pass and `use_cases/save_note.rs` does not import `std::fs`.
 
-- [ ] **RA05.05 Move index rebuild use case**
-  - Build: move rebuild start/open/commit/abort orchestration into `use_cases/index_rebuild.rs`.
-  - Verify: rebuild path safety and recovery tests pass.
+- [ ] **RA05.04e Retarget save FFI to use cases**
+  - Build: migrate `ffi/save.rs` so it decodes FFI input, calls `use_cases::save_note`, and encodes the response. It must not open `IndexingQueue`, open `VaultRoot`, or call `crate::save::*_impl` directly after this step.
+  - Verify: save FFI unit tests, conflict payload JSON tests, and FFI direct-adapter scan pass.
+
+- [ ] **RA05.05 Create index rebuild use-case shell**
+  - Build: create `use_cases/index_rebuild.rs` and move rebuild DTO ownership and non-pipeline entry-point shell only. Do not finalize FFI wiring until full rebuild pipeline orchestration moves in RA05.06c through RA05.06e.
+  - Verify: rebuild path safety and recovery tests pass without changing full rebuild pipeline behavior.
 
 - [ ] **RA05.06 Move indexing queue processing use case**
   - Build: move queue lease/result DTOs and `process_indexing_queue_batch` shell into `use_cases/process_indexing_queue.rs`.
@@ -849,7 +891,7 @@ Default stop conditions:
 
 - [ ] **RA05.06a Move queue item source resolution**
   - Build: move `source_for_queue_item` and queue item path/source mapping, keeping filesystem reads in adapters.
-  - Verify: queue adapter lease and missing-file queue tests pass.
+  - Verify: queue adapter lease and missing-file queue tests pass. Add adversarial queued-path coverage for absolute paths, `..`, NUL, URL-like prefixes, symlinked parents, symlinked note files, and DB-tampered paths; reject or treat as missing before any filesystem read.
 
 - [ ] **RA05.06b Move queue failure recording flow**
   - Build: move queue failure recording and truncation orchestration without changing retry/cancel semantics.
@@ -857,7 +899,7 @@ Default stop conditions:
 
 - [ ] **RA05.06c Move full rebuild read/parse orchestration**
   - Build: move `run_read_parse_pipeline`, read/parse progress types, and metadata count aggregation into a use-case module while preserving worker cap and channel capacity.
-  - Verify: read/parse pipeline tests and memory guard assumptions pass.
+  - Verify: read/parse pipeline tests pass and artifact fields preserve `read_parse_workers <= 4`, `channel_capacity == 32`, `metadata_batch_size == 256`, `writer_memory_budget_bytes == 50000000`, and `peak_in_flight_items <= workers + channel_capacity`.
 
 - [ ] **RA05.06d Move Tantivy rebuild orchestration**
   - Build: move `run_tantivy_rebuild_pipeline` and stage metrics merge logic without changing writer memory or commit timing.
@@ -866,6 +908,14 @@ Default stop conditions:
 - [ ] **RA05.06e Move full rebuild commit orchestration**
   - Build: move `run_full_rebuild_pipeline` and `run_full_rebuild_pipeline_and_commit` after read/parse and Tantivy rebuild pieces are green.
   - Verify: full rebuild tests and rebuild path safety tests pass.
+
+- [ ] **RA05.06f Streaming rebuild memory gate**
+  - Build: no code change after RA05.06e. Rerun backend benchmark and inspect the pipeline artifact.
+  - Verify: bounded in-flight counts, unchanged pipeline config, no full-corpus `Vec<SearchDocument>`, preserved `time_to_usable_samples`, and no regression beyond the backend performance gate.
+
+- [ ] **RA05.06g Retarget rebuild FFI and finalize rebuild use case**
+  - Build: after full rebuild orchestration is under use cases, migrate rebuild FFI wiring away from legacy `index_rebuild` and `indexing_pipeline` entry points.
+  - Verify: rebuild FFI tests, Swift engine smoke, and FFI direct-adapter scan pass.
 
 - [ ] **RA05.07 Move startup reconciliation use case**
   - Build: move startup reconciliation orchestration into `use_cases/reconcile_startup.rs`.
@@ -879,9 +929,17 @@ Default stop conditions:
   - Build: keep pure graph model in core and move snapshot construction/orchestration into `use_cases/build_graph.rs`.
   - Verify: local graph, whole-vault graph, and graph benchmark fixture tests pass.
 
+- [ ] **RA05.09a Retarget graph FFI to use cases**
+  - Build: migrate `ffi/graph.rs` so it calls `use_cases::build_graph`; it must not import `MetadataStore`, graph SQL records, or `crate::graph` after this step.
+  - Verify: whole-vault graph FFI tests and FFI direct-adapter scan pass.
+
+- [ ] **RA05.09b Graph snapshot memory gate**
+  - Build: no behavior change after graph use-case movement. Run `vault-profiler graph-snapshot-benchmark` on the fixture, and on the real vault only after privacy-safe output is configured.
+  - Verify: enforce graph-view budgets from `docs/architecture/graph-view.md`, especially Rust snapshot RSS delta `<= 250 MB` and encoded payload `<= 64 MiB`.
+
 - [ ] **RA05.10 Run use-case boundary scan**
   - Build: no code change after RA05.09.
-  - Verify: use cases do not import `libc`, `CStr`, `CString`, `no_mangle`, or read result buffer row structs.
+  - Verify: use cases do not import `libc`, `CStr`, `CString`, `no_mangle`, read result buffer row structs, direct storage/platform crates, or filesystem APIs. Read surfaces must not import fs adapters or call `read_to_string`, `canonicalize`, `resolve_existing_relative`, or `scan_vault`.
 
 - [ ] **RA05.11 Re-run save path safety through moved use case**
   - Build: no behavior change after save use-case move.
@@ -894,7 +952,7 @@ Default stop conditions:
   - Verify: benchmark tests and any benchmark CLI/probe imports compile.
 
 - [ ] **RA06.02 Preserve aggregate-only privacy rules**
-  - Build: ensure moved benchmark code still redacts raw note text, snippets, tags, query strings, and private paths.
+  - Build: ensure moved benchmark code still redacts raw note text, snippets, tags, query strings, private paths, raw relative paths, stable per-file IDs, error strings, panic payloads, `Debug` output, CLI args, and SQLite/Tantivy error messages.
   - Verify: benchmark artifact tests pass.
 
 - [ ] **RA06.03 Run fixture read/index benchmark smoke**
@@ -907,7 +965,7 @@ Default stop conditions:
 
 - [ ] **RA06.05 Add privacy scan gate**
   - Build: after generated benchmark/probe artifacts, scan only new or modified artifacts for private-path and content tokens before commit.
-  - Verify: private payload outputs are ignored and opt-in; committed artifacts remain aggregate-only.
+  - Verify: private payload outputs are ignored and opt-in; committed artifacts remain aggregate-only. Scan for `/Users/`, vault names, `.md` relative paths, note snippets, query terms, tags/frontmatter keys, and stable per-file IDs. Hashed IDs must use per-run salt and no committed mapping.
 
 - [ ] **RA06.06 Migrate `bench/vault-profiler` imports**
   - Build: update profiler imports away from old public modules such as `benchmarks`, `tantivy_search`, `sqlite_fts`, `attachments`, `index`, `parser`, `paths`, `scanner`, and `read_api`.
@@ -915,7 +973,11 @@ Default stop conditions:
 
 - [ ] **RA06.07 Decide SQLite FTS ownership**
   - Build: document and implement whether SQLite FTS remains a production adapter under `adapters/sqlite/fts_index.rs` or becomes diagnostics-only under `diagnostics/sqlite_fts.rs`.
-  - Verify: profiler and search benchmark tests pass after the decision.
+  - Verify: profiler and search benchmark tests pass after the decision. If SQLite FTS remains production or benchmark-facing, add tests for quotes, `OR`, `NEAR`, `*`, `:`, column selectors, parentheses, and malformed MATCH expressions.
+
+- [ ] **RA06.08 Profiler artifact compatibility gate**
+  - Build: no code change after diagnostics/profiler import migration. Rerun profiler parse tests plus one fixture benchmark.
+  - Verify: artifacts still include `peak_rss_bytes`, `time_to_usable_samples`, stage timings, pipeline config, writer memory budget, and privacy flags.
 
 ### Phase 7: Reduce Public Surface
 
@@ -933,7 +995,7 @@ Default stop conditions:
 
 - [ ] **RA07.03 Remove transitional re-exports**
   - Build: delete compatibility modules added only for incremental migration.
-  - Verify: `rg "read_ffi|crate::index::MetadataStore|crate::tantivy_search|crate::indexing_queue" vault-engine/src` returns only intentional references or none.
+  - Verify: `rg "read_ffi|crate::index::MetadataStore|crate::tantivy_search|crate::indexing_queue|crate::paths|crate::scanner|crate::parser|crate::attachments|crate::graph|crate::graph_key|crate::save|crate::read_api|crate::index_rebuild|crate::indexing_pipeline|crate::startup_reconciliation|crate::watcher_burst" vault-engine/src` returns only intentional references or none.
 
 - [ ] **RA07.04 Add architecture placement checklist**
   - Build: add a short checklist to `docs/architecture/rust-engine.md` explaining where new parser, storage, FFI, and use-case code should go.
@@ -942,6 +1004,10 @@ Default stop conditions:
 - [ ] **RA07.05 Run public API grep**
   - Build: no code change after RA07.04.
   - Verify: inspect remaining `pub mod` and `pub use` entries in `vault-engine/src/lib.rs`; each has a documented reason.
+
+- [ ] **RA07.06 Classify `errors.rs`**
+  - Build: either reduce `errors.rs` to a deliberate cross-layer contract or move layer-specific errors into their owning modules before public-surface cleanup is accepted.
+  - Verify: no layer imports a global error solely to avoid owning its local error mapping.
 
 ## Verification Plan
 
@@ -1038,9 +1104,10 @@ Expected:
 
 ### Backend Performance Gate
 
-Run after Phase 4 and Phase 5:
+Run at RA04.11 after Phase 4 and again after Phase 5:
 
 - Fixture `backend-benchmark`.
+- Fixture `materialize-read-index`.
 - Fixture or real `read-api-benchmark`.
 - Real-vault read UI probe after fixture gates pass.
 
@@ -1061,12 +1128,28 @@ Run after Phases 3, 4, 5, 6, and 7:
 
 ```sh
 rg -n "std::fs|canonicalize|symlink_metadata|MetadataExt|OpenOptions|rename|remove_dir_all|rusqlite|tantivy|libc|FSEvent|extern \"C\"|unsafe|CStr|CString|no_mangle" vault-engine/src/core
-rg -n "CStr|CString|c_char|c_uchar|no_mangle|extern \"C\"" vault-engine/src/use_cases vault-engine/src/adapters
+rg -n "std::fs|OpenOptions|rename|remove_dir_all|canonicalize|symlink_metadata|MetadataExt|rusqlite|tantivy|libc|FSEvent" vault-engine/src/use_cases
+rg -n "unsafe|extern \"C\"|CStr|CString::from_raw|Vec::from_raw_parts|slice::from_raw_parts|no_mangle" vault-engine/src -g '!ffi/**' -g '!adapters/fsevents/watcher.rs' -g '!diagnostics/**'
 rg -n "crate::ffi" vault-engine/src/core vault-engine/src/use_cases vault-engine/src/adapters
 rg -n "crate::diagnostics" vault-engine/src/core vault-engine/src/use_cases vault-engine/src/adapters vault-engine/src/ffi
+rg -n "crate::(read_api|save|graph|indexing_pipeline|index_rebuild|startup_reconciliation|watcher_burst|scanner|paths|parser|attachments|graph_key)" vault-engine/src/use_cases vault-engine/src/ffi vault-engine/src/adapters
+rg -n "crate::adapters::|MetadataStore|IndexingQueue|TantivySearchIndex|IndexRebuildPaths|run_full_rebuild|load_search_document_sources" vault-engine/src/ffi
+rg -n "crate::adapters::(tantivy|fs|fsevents)" vault-engine/src/adapters/sqlite
+rg -n "crate::adapters::(sqlite|fs|fsevents)" vault-engine/src/adapters/tantivy
+rg -n "crate::adapters::(sqlite|tantivy)" vault-engine/src/adapters/fs vault-engine/src/adapters/fsevents
 ```
 
 Any match must be either removed or documented as an explicit exception in `docs/architecture/rust-engine.md`.
+
+### SQL Construction Gate
+
+Run after SQLite adapter moves and before public-surface cleanup:
+
+```sh
+rg -n "format!|push_str|execute\\(|prepare\\(|query_map\\(|query_row\\(" vault-engine/src/adapters/sqlite
+```
+
+Expected: dynamic SQL is limited to closed enum/static fragment selection. User/vault values, paths, tags, properties, search terms, limits, and offsets must be bound parameters with clamps. Each string-building match near SQL execution must be static-only or documented.
 
 ### Rollback Gate
 
@@ -1097,6 +1180,7 @@ At the end of each phase:
 - [ ] Architecture doc maps every current module, including `attachments`, `parser`, `paths`, `sqlite_fts`, `graph_key`, `errors`, and `bench/vault-profiler` imports.
 - [ ] Import guard proves no reverse dependencies: core has no adapters/use_cases/ffi/diagnostics; adapters have no ffi/use_cases/diagnostics; use cases have no ffi/diagnostics/direct storage/platform crates.
 - [ ] Final `ffi` imports no `MetadataStore`, `IndexingQueue`, `TantivySearchIndex`, `IndexRebuildPaths`, scanner, parser, or SQL/Tantivy types except through approved handle wiring.
+- [ ] Final read/save/graph/rebuild FFI paths call use cases rather than legacy orchestration modules.
 - [ ] Import boundary scans pass or documented exceptions are explicit and narrow.
 - [ ] Mechanical moves and semantic extractions are separated in the implementation history.
 - [ ] Unsafe/FFI grep output matches the approved allowlist; no unsafe FFI helpers drift into `core` or `use_cases`.
@@ -1129,6 +1213,9 @@ At the end of each phase:
 - [ ] Destructive path tests prove failed save/rebuild operations do not mutate vault sentinel files.
 - [ ] New or modified diagnostics artifacts pass the privacy scan.
 - [ ] SQLite/Tantivy/search adapter moves do not introduce string-built SQL from user input; query sanitization tests still pass.
+- [ ] Paths from SQLite/JSON are revalidated at mutation boundaries and are never trusted as already safe.
+- [ ] Diagnostics privacy covers error strings, panic payloads, `Debug` output, CLI args, and backend error messages.
+- [ ] Post-adapter, streaming rebuild, and graph snapshot performance gates pass or the refactor stops for redesign.
 - [ ] Hot-path no-allocation rules are preserved or exceptions are benchmarked and documented.
 - [ ] Graph refactor preserves graph snapshot privacy and bridge gates from `docs/architecture/graph-view.md`, not only unit tests.
 
@@ -1154,6 +1241,11 @@ At the end of each phase:
 | Path validation moves away from mutation sites | Save/rebuild can mutate outside allowed roots | Re-run adversarial path and sentinel tests after use-case moves |
 | Public surface cleanup breaks `bench/vault-profiler` | Benchmarks no longer compile after internal modules become private | Migrate profiler imports in Phase 6 before reducing exports in Phase 7 |
 | DTOs move to the wrong layer | FFI/diagnostics serialization leaks into core | Keep FFI JSON DTOs in `ffi` and benchmark artifact DTOs in `diagnostics` |
+| FFI keeps calling legacy modules after use-case extraction | Boundaries look clean by filename but behavior still bypasses use cases | Add explicit read/save/graph/rebuild FFI retarget tasks and direct-adapter scans |
+| SQLite or JSON paths are trusted after DB tampering | Files outside the vault could be read, indexed, or mutated | Re-normalize all storage/JSON paths at filesystem mutation/read boundaries |
+| Destructive index cleanup targets the wrong directory | Vault or unrelated app data can be deleted | Require engine-owned marker files plus canonical containment before destructive directory operations |
+| Privacy leaks through error/debug output | Aggregate artifacts still expose note paths or content through failures | Redact error strings, panic payloads, `Debug`, CLI args, and backend error messages before artifacts are staged |
+| Phase-level performance checks run too late | A regression source becomes hard to isolate | Add RA04.11, RA05.06f, RA05.09b, and RA06.08 gates at the exact risk points |
 
 ## Migration Order Rationale
 
@@ -1174,9 +1266,14 @@ Use this checklist for each PR or worktree batch:
 - [ ] Did any `#[repr(C)]` struct change? If yes, stop unless explicitly planned.
 - [ ] Did any C symbol name change? If yes, stop unless explicitly planned.
 - [ ] Did any SQLite schema/index/query text change? If yes, split it out of this refactor.
+- [ ] Did any SQL construction use string interpolation for user/vault values? If yes, replace with bound parameters before continuing.
 - [ ] Did any Tantivy schema/tokenizer/writer option change? If yes, split it out.
 - [ ] Did `core` gain a storage, FFI, or filesystem import?
+- [ ] Did `use_cases` gain direct filesystem, SQLite, Tantivy, libc, or FSEvents imports?
+- [ ] Did FFI call a legacy orchestration module instead of a use case?
 - [ ] Did production code start importing `diagnostics`?
+- [ ] Did a destructive operation accept a path from SQLite/JSON without re-normalizing it?
+- [ ] Did a diagnostics artifact include raw paths, note text, snippets, query terms, tags, frontmatter keys, or stable file IDs?
 - [ ] Are tests moved with their owning module, or intentionally kept as integration tests?
 - [ ] Is any new trait justified by an immediate test seam?
 
@@ -1208,4 +1305,10 @@ Use this checklist for each PR or worktree batch:
 
 ## Next Step
 
-If Phase 0 and RA01.01 through RA01.06a are already green on the active branch, continue with RA01.07 only. Do not start Phase 3+ until FFI split, ABI symbol comparison, and read row layout verification are green.
+On the active `codex/refactor-vault-engine-layered-architecture` branch, Phase 0 through Phase 4 and RA05.01 through RA05.03 are already green. Before continuing the save move, run or explicitly resolve the newly added guard tasks that sit before RA05.04:
+
+1. RA01.12 unsafe allowlist audit if it was not already covered by existing FFI/FSEvents tests.
+2. RA04.11 post-adapter performance gate, or document why it is deferred and keep it as a merge blocker.
+3. RA05.03a read FFI retargeting and RA05.03b parser ownership classification.
+
+Then continue with RA05.04 save use-case extraction. Do not start Phase 6 or Phase 7 until Phase 5 boundary scans and FFI retargeting are green.
