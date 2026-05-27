@@ -1,7 +1,4 @@
-pub use crate::adapters::sqlite::fts_index::{
-    SqliteFtsError, SqliteFtsIndex, SqliteFtsResult, safe_match_query,
-};
-pub use crate::core::search::{SearchDocument, SearchMeasurement, SearchResult};
+pub use crate::adapters::sqlite::fts_index::safe_match_query;
 
 #[cfg(test)]
 mod tests {

@@ -9,13 +9,17 @@ use tantivy::schema::{Field, TantivyDocument, Value};
 use tantivy::snippet::SnippetGenerator;
 use tantivy::{Index, IndexReader, TantivyError, Term, doc};
 
+#[cfg(test)]
+use super::first_query_term;
 use super::{
-    TantivyFields, directory_size, duration_micros_nonzero, first_query_term, percentile_duration,
+    TantivyFields, directory_size, duration_micros_nonzero, percentile_duration,
     safe_tantivy_query, search_schema, search_schema_for_snippet_mode,
 };
 use crate::core::search::SnippetStorageMode;
 use crate::core::search::{SearchDocument, SearchMeasurement, SearchResult};
-use crate::paths::{FileIdentity, PathError, VaultRoot};
+use crate::paths::PathError;
+#[cfg(test)]
+use crate::paths::{FileIdentity, VaultRoot};
 
 pub const DEFAULT_TANTIVY_WRITER_MEMORY_BUDGET_BYTES: usize = 50_000_000;
 
@@ -388,6 +392,7 @@ impl TantivySearchIndex {
     }
 }
 
+#[cfg(test)]
 pub fn generate_lazy_source_snippet(
     root: &VaultRoot,
     relative_path: &str,
@@ -450,6 +455,7 @@ impl From<PathError> for TantivySearchError {
     }
 }
 
+#[cfg(test)]
 fn snippet_around(body: &str, byte_index: usize, max_chars: usize) -> String {
     let mut char_positions = body
         .char_indices()

@@ -1,10 +1,13 @@
 use std::fmt;
 use std::path::Path;
+#[cfg(test)]
 use std::time::{Duration, Instant};
 
 use rusqlite::{Connection, params};
 
-pub use crate::core::search::{SearchDocument, SearchMeasurement, SearchResult};
+#[cfg(test)]
+pub use crate::core::search::SearchMeasurement;
+pub use crate::core::search::{SearchDocument, SearchResult};
 
 pub struct SqliteFtsIndex {
     connection: Connection,
@@ -23,6 +26,7 @@ impl SqliteFtsIndex {
         Self::from_connection(Connection::open(path)?)
     }
 
+    #[cfg(test)]
     pub fn open_in_memory() -> SqliteFtsResult<Self> {
         Self::from_connection(Connection::open_in_memory()?)
     }
@@ -126,6 +130,7 @@ impl SqliteFtsIndex {
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
+    #[cfg(test)]
     pub fn measure_queries(
         &self,
         queries: &[String],
@@ -156,6 +161,7 @@ impl SqliteFtsIndex {
         Ok((page_count * page_size) as u64)
     }
 
+    #[cfg(test)]
     pub fn document_count(&self) -> SqliteFtsResult<usize> {
         self.connection
             .query_row("SELECT COUNT(*) FROM search_documents", [], |row| {
@@ -195,6 +201,7 @@ pub fn safe_match_query(input: &str) -> Option<String> {
     (!terms.is_empty()).then(|| terms.join(" AND "))
 }
 
+#[cfg(test)]
 fn percentile_duration(values: &[Duration], percentile: usize) -> Duration {
     if values.is_empty() {
         return Duration::ZERO;

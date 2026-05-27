@@ -1,7 +1,4 @@
-pub use crate::adapters::sqlite::{
-    IndexingQueue, IndexingQueueError, IndexingQueueItem, IndexingQueueReason, IndexingQueueResult,
-    IndexingQueueStatus, IndexingQueueSummary,
-};
+pub use crate::adapters::sqlite::{IndexingQueue, IndexingQueueReason, IndexingQueueStatus};
 
 #[cfg(test)]
 mod tests {

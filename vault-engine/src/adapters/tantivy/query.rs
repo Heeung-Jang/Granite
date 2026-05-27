@@ -10,6 +10,7 @@ pub(crate) fn safe_tantivy_query(input: &str) -> Option<String> {
     (!terms.is_empty()).then(|| terms.join(" "))
 }
 
+#[cfg(test)]
 pub(crate) fn first_query_term(input: &str) -> Option<String> {
     input
         .split(|ch: char| !ch.is_alphanumeric())

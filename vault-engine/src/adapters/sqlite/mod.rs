@@ -10,5 +10,5 @@ pub(crate) mod writes;
 
 pub(crate) use fts_index::{SqliteFtsError, SqliteFtsIndex};
 pub use indexing_queue::*;
-pub use metadata_store::{MetadataStore, MetadataStoreError, MetadataStoreResult, MetadataTable};
+pub use metadata_store::{MetadataStore, MetadataStoreError, MetadataTable};
 pub use types::*;

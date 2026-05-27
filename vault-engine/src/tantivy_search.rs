@@ -1,6 +1,6 @@
 pub use crate::adapters::tantivy::{
-    DEFAULT_TANTIVY_WRITER_MEMORY_BUDGET_BYTES, TantivyIndexingStageMetrics, TantivySearchError,
-    TantivySearchIndex, TantivySearchResult, TantivyWriterOptions, generate_lazy_source_snippet,
+    DEFAULT_TANTIVY_WRITER_MEMORY_BUDGET_BYTES, TantivySearchError, TantivySearchIndex,
+    TantivyWriterOptions, generate_lazy_source_snippet,
 };
 
 #[cfg(test)]

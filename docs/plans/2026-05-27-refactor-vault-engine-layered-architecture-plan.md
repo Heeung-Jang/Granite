@@ -1429,7 +1429,7 @@ Default stop conditions:
   - Evidence: type-only consumers now import `core::attachments` directly, and diagnostics profiler re-exports attachment DTOs from `core::attachments`; the `crate::attachments` / `vault_engine::attachments` scan returned no matches. The module remains public until the unused resolver is either re-owned or removed without dead-code warnings.
   - Stop condition: making `attachments` private creates dead-code warnings or requires changing attachment parsing behavior in the same commit.
 
-- [ ] **RA07.01b2 Make storage/search compatibility modules private**
+- [x] **RA07.01b2 Make storage/search compatibility modules private**
   - Build: change only `index`, `indexing_queue`, `sqlite_fts`, and `tantivy_search` legacy modules after diagnostics/profiler imports use intentional facades.
   - Verify:
     ```sh
@@ -1441,6 +1441,7 @@ Default stop conditions:
     cargo test --manifest-path vault-engine/Cargo.toml
     cargo test --manifest-path bench/vault-profiler/Cargo.toml
     ```
+  - Evidence: `index`, `indexing_queue`, `sqlite_fts`, and `tantivy_search` are now test-only compatibility modules in `lib.rs`; profiler imports storage/search DTOs through diagnostics and adapter/core facades rather than legacy module paths. The profiler legacy import scan returned no matches, all listed target tests passed, and full `vault-engine` plus `vault-profiler` tests passed without warnings.
   - Stop condition: public visibility is still needed only because diagnostics APIs are incomplete.
 
 - [ ] **RA07.01b3 Make save/rebuild/indexing compatibility modules private**

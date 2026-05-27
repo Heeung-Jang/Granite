@@ -8,18 +8,22 @@ pub mod ffi;
 pub mod file_watcher;
 pub mod graph;
 pub(crate) mod graph_key;
-pub mod index;
+#[cfg(test)]
+pub(crate) mod index;
 pub mod index_rebuild;
 pub mod indexing_pipeline;
-pub mod indexing_queue;
+#[cfg(test)]
+pub(crate) mod indexing_queue;
 pub(crate) mod parser;
 pub(crate) mod paths;
 pub mod read_api;
 pub mod save;
 pub(crate) mod scanner;
-pub mod sqlite_fts;
+#[cfg(test)]
+pub(crate) mod sqlite_fts;
 pub mod startup_reconciliation;
-pub mod tantivy_search;
+#[cfg(test)]
+pub(crate) mod tantivy_search;
 pub(crate) mod use_cases;
 pub mod watcher_burst;
 
