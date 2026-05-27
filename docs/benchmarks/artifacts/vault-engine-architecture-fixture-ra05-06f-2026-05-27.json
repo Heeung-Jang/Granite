@@ -1,0 +1,143 @@
+{
+  "schema_version": 7,
+  "generated_at_unix_seconds": 1779889244,
+  "corpus_id": "compatibility-fixture-vault-engine-architecture-ra05-06f",
+  "run_metadata": {
+    "build_mode": "release",
+    "run_condition": "streaming_vault",
+    "sample_count": 2,
+    "git_commit_hash": null,
+    "redaction_enabled": true
+  },
+  "pipeline_config": {
+    "read_parse_workers": 4,
+    "channel_capacity": 32,
+    "writer_memory_budget_bytes": 50000000,
+    "writer_thread_count": null,
+    "metadata_batch_size": 256,
+    "snippet_storage_mode": "stored_body"
+  },
+  "corpus_stages": {
+    "scan_micros": 781,
+    "source_collection_micros": 751
+  },
+  "document_count": 6,
+  "query_count": 2,
+  "total_document_bytes": 1280,
+  "time_to_usable_micros": 150279,
+  "time_to_usable_samples": [
+    150279,
+    176517,
+    184853
+  ],
+  "metadata_store": {
+    "sqlite_metadata_write_micros": 299,
+    "table_counts": {
+      "files": 6,
+      "links": 17,
+      "tags": 10,
+      "properties": 12,
+      "headings": 7,
+      "attachments": 5
+    }
+  },
+  "backends": [
+    {
+      "backend": "sqlite_fts",
+      "initial_index_micros": 1467,
+      "docs_per_second": 4089.6310811962176,
+      "mb_per_second": 0.8320375734855585,
+      "fts_ingest_per_second": 4089.6310811962176,
+      "query_p95_micros": 175,
+      "query_p99_micros": 175,
+      "query_result_count": 7,
+      "skipped_query_count": 0,
+      "snippet_result_count": 7,
+      "incremental_update_micros": 423,
+      "index_size_bytes": 28672,
+      "peak_rss_bytes": 33292288,
+      "stages": {
+        "read_parse": {
+          "sample_count": 6,
+          "total_bytes": 1149,
+          "peak_in_flight_items": 5,
+          "read": {
+            "sample_count": 6,
+            "p50_micros": 68,
+            "p95_micros": 103,
+            "p99_micros": 103,
+            "max_micros": 103
+          },
+          "parse": {
+            "sample_count": 6,
+            "p50_micros": 19,
+            "p95_micros": 23,
+            "p99_micros": 23,
+            "max_micros": 23
+          },
+          "combined": {
+            "sample_count": 6,
+            "p50_micros": 91,
+            "p95_micros": 126,
+            "p99_micros": 126,
+            "max_micros": 126
+          }
+        },
+        "sqlite_upsert_micros": 724,
+        "sqlite_rebuild_micros": 388,
+        "sqlite_integrity_check_micros": 133,
+        "sqlite_optimize_micros": 7
+      }
+    },
+    {
+      "backend": "tantivy",
+      "initial_index_micros": 148448,
+      "docs_per_second": 40.41802340708781,
+      "mb_per_second": 0.008223067913225872,
+      "fts_ingest_per_second": 40.41802340708781,
+      "query_p95_micros": 612,
+      "query_p99_micros": 612,
+      "query_result_count": 7,
+      "skipped_query_count": 0,
+      "snippet_result_count": 7,
+      "incremental_update_micros": 81277,
+      "index_size_bytes": 8738,
+      "peak_rss_bytes": 33292288,
+      "stages": {
+        "read_parse": {
+          "sample_count": 6,
+          "total_bytes": 1149,
+          "peak_in_flight_items": 6,
+          "read": {
+            "sample_count": 6,
+            "p50_micros": 26,
+            "p95_micros": 74,
+            "p99_micros": 74,
+            "max_micros": 74
+          },
+          "parse": {
+            "sample_count": 6,
+            "p50_micros": 9,
+            "p95_micros": 12,
+            "p99_micros": 12,
+            "max_micros": 12
+          },
+          "combined": {
+            "sample_count": 6,
+            "p50_micros": 37,
+            "p95_micros": 84,
+            "p99_micros": 84,
+            "max_micros": 84
+          }
+        },
+        "tantivy_add_micros": 11,
+        "tantivy_commit_micros": 145230,
+        "tantivy_reader_reload_micros": 1916,
+        "added_document_count": 6,
+        "deleted_document_count": 0,
+        "skipped_document_count": 0,
+        "failed_document_count": 0
+      }
+    }
+  ]
+}
