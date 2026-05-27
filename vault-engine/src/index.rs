@@ -6,7 +6,6 @@ use crate::attachments::{AttachmentReferenceSource, AttachmentResolutionState};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 
 use crate::graph_key::unresolved_target_key;
-use crate::parser::PropertyValue;
 use crate::paths::{FileIdentity, lookup_key};
 use crate::scanner::{ScanEntry, ScanEntryKind};
 
@@ -148,16 +147,6 @@ impl IndexSchemaMetadata {
     }
 }
 
-impl IndexPropertyValue {
-    pub fn display_value(&self) -> String {
-        match self {
-            Self::String(value) => value.clone(),
-            Self::Bool(value) => value.to_string(),
-            Self::List(values) => values.join(", "),
-        }
-    }
-}
-
 impl FileRecord {
     pub fn from_scan_entry(entry: &ScanEntry, generation: u64) -> Self {
         Self {
@@ -205,26 +194,6 @@ impl FileRecord {
     pub fn mark_error(&mut self, error: impl AsRef<str>) {
         self.status = FileIndexStatus::Error;
         self.last_error = Some(truncate_index_error(error.as_ref()));
-    }
-}
-
-impl PropertyRecord {
-    pub fn from_property_value(
-        file_id: impl Into<String>,
-        key: impl Into<String>,
-        value: &PropertyValue,
-    ) -> Self {
-        let value = match value {
-            PropertyValue::String(value) => IndexPropertyValue::String(value.clone()),
-            PropertyValue::Bool(value) => IndexPropertyValue::Bool(*value),
-            PropertyValue::List(values) => IndexPropertyValue::List(values.clone()),
-        };
-
-        Self {
-            file_id: file_id.into(),
-            key: key.into(),
-            value,
-        }
     }
 }
 

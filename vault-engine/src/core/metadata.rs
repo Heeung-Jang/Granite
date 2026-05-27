@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 
 use super::attachments::{AttachmentReferenceSource, AttachmentResolutionState};
+use super::document::PropertyValue;
 use super::files::FileIdentity;
 use super::scan::ScanEntryKind;
 
@@ -102,3 +103,33 @@ pub struct IndexedFileRecords {
 }
 
 pub type FileMetadataRecords = IndexedFileRecords;
+
+impl IndexPropertyValue {
+    pub fn display_value(&self) -> String {
+        match self {
+            Self::String(value) => value.clone(),
+            Self::Bool(value) => value.to_string(),
+            Self::List(values) => values.join(", "),
+        }
+    }
+}
+
+impl PropertyRecord {
+    pub fn from_property_value(
+        file_id: impl Into<String>,
+        key: impl Into<String>,
+        value: &PropertyValue,
+    ) -> Self {
+        let value = match value {
+            PropertyValue::String(value) => IndexPropertyValue::String(value.clone()),
+            PropertyValue::Bool(value) => IndexPropertyValue::Bool(*value),
+            PropertyValue::List(values) => IndexPropertyValue::List(values.clone()),
+        };
+
+        Self {
+            file_id: file_id.into(),
+            key: key.into(),
+            value,
+        }
+    }
+}

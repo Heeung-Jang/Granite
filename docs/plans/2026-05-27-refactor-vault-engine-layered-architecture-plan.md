@@ -591,7 +591,7 @@ Default stop conditions:
   - Build: for each projection type moved to `core`, record whether it is domain-facing or storage-facing in `docs/architecture/rust-engine.md`.
   - Verify: SQL row decoding remains outside `core`.
 
-- [ ] **RA03.03 Move metadata value conversion that is domain-only**
+- [x] **RA03.03 Move metadata value conversion that is domain-only**
   - Build: move display/value methods that do not require rusqlite into `core/metadata.rs`.
   - Verify: property display tests still pass.
 
