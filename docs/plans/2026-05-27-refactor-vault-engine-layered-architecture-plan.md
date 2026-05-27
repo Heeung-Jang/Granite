@@ -3,7 +3,7 @@ title: "refactor: Introduce Layered Rust Engine Architecture"
 type: refactor
 date: 2026-05-27
 deepened_on: 2026-05-27
-deepened_passes: 6
+deepened_passes: 7
 brainstorm: docs/brainstorms/2026-05-27-rust-engine-architecture-brainstorm.md
 ---
 
@@ -27,7 +27,7 @@ This plan intentionally keeps one Rust crate for the first architecture cleanup.
 
 ## Deepening Summary
 
-This deepening adds six specialist review passes and tightens the original plan around architecture, simplicity, performance, security risks, and implementation granularity:
+This deepening adds seven specialist review passes and tightens the original plan around architecture, simplicity, performance, security risks, and implementation granularity:
 
 - Separate **mechanical moves** from **semantic extraction**. A task should either move code without changing behavior or extract a boundary with new verification, not both.
 - Add explicit **import boundary checks** so the new `core`, `ffi`, `adapters`, and `use_cases` names cannot drift immediately after the refactor.
@@ -36,6 +36,7 @@ This deepening adds six specialist review passes and tightens the original plan 
 - Keep **adapter traits deferred**. The architecture should be enforced by modules first, not by speculative traits.
 - Add a fifth pass focused on **implementation micro-units**. Large moves such as SQLite metadata storage and `VaultReadApi` extraction are now broken into helper groups, method groups, and explicit verification gates.
 - Add a sixth pass focused on **post-adapter performance gates, FFI retargeting, unsafe allowlists, path safety, SQL construction, and diagnostics privacy**.
+- Add a seventh pass focused on **remaining-phase micro-units**. Startup reconciliation, watcher burst recovery, graph use-case extraction, diagnostics/profiler migration, and public-surface cleanup now have smaller, independently verifiable tasks.
 
 ### Section Manifest
 
@@ -48,6 +49,7 @@ This deepening adds six specialist review passes and tightens the original plan 
 | Acceptance Criteria | Add measurable layer purity and compatibility criteria. |
 | Implementation Micro-Units | Split high-risk storage/use-case moves into small, independently verifiable tasks. |
 | Pass 6 Corrections | Add explicit FFI retarget tasks, performance gates, unsafe/path/SQL/privacy allowlists, and stale next-step correction. |
+| Pass 7 Remaining Phases | Split RA05.07-RA07 into concrete move, retarget, facade, privacy, and cleanup gates. |
 
 ## Problem Statement
 
@@ -102,6 +104,12 @@ The result is slower feature work, higher regression risk, and unclear ownership
 - Nushell uses `nu-protocol` to avoid recursive dependencies between many crates.
 - Tantivy separates index, schema, writer, searcher, directory, tokenizer, and query roles.
 - Rust API Guidelines emphasize intentional public API, meaningful errors, private fields, and future-proofing.
+
+### Pass 7 References
+
+- Rust Reference visibility rules support using private modules plus `pub(crate)`/re-exports to keep internal facades available in-crate while reducing external API exposure: [Visibility and privacy](https://doc.rust-lang.org/reference/visibility-and-privacy.html).
+- Rustonomicon FFI guidance reinforces keeping raw pointers, C ABI declarations, and safety invariants at the FFI boundary instead of leaking them into safe use cases: [Foreign Function Interface](https://doc.rust-lang.org/nomicon/ffi.html).
+- Rust API Guidelines reinforce that public error types and public surfaces should be deliberate contracts, not accidental exposure from refactoring convenience: [Interoperability](https://rust-lang.github.io/api-guidelines/interoperability.html).
 
 ## Proposed Architecture
 
@@ -545,6 +553,14 @@ Default stop conditions:
   - Build: no behavior change; verify every unsafe block has a local safety comment, FFI entry points keep panic containment around fallible work, and unsafe operations remain inside the approved FFI/FSEvents/diagnostics allowlist.
   - Verify: unsafe grep returns only `ffi/**`, `adapters/fsevents/watcher.rs`, or diagnostics-only matches; FSEvents stop/restart/drop tests do not unwind or use freed callback context.
 
+- [ ] **RA01.12a Enforce unsafe lint gate**
+  - Build: no behavior change; run a lint-only gate after unsafe comments and allowlist ownership are checked.
+  - Verify:
+    ```sh
+    cargo clippy --manifest-path vault-engine/Cargo.toml -- -D clippy::undocumented_unsafe_blocks -D unsafe_op_in_unsafe_fn
+    ```
+  - Stop condition: any unsafe block lacks a local safety comment, or any unsafe operation appears outside `ffi/**`, `adapters/fsevents/watcher.rs`, or diagnostics-only code.
+
 ### Phase 2: Move Read ABI Rows Under FFI
 
 - [x] **RA02.01 Move read row layout code**
@@ -779,6 +795,16 @@ Default stop conditions:
   - Build: cover `index_root` inside vault, `data_directory`/`rebuild_directory` outside index root, `data == rebuild`, symlinked data/rebuild/previous-data paths pointing into the vault, validation-then-symlink-swap before destructive mutation, missing engine-owned marker files, and failed commit/abort/reset paths.
   - Verify: a sentinel vault note remains unchanged after each rejected destructive operation.
 
+- [ ] **RA04.10b Enforce marker files before destructive index deletion**
+  - Build: require an engine-owned marker file before `reset_directory`, `reset_rebuild_directory`, `abort_index_rebuild`, previous-data cleanup, and commit cleanup can remove directories.
+  - Verify: tests create unmarked `data`, `rebuild`, and `previous-data` directories plus a sentinel vault note; every destructive operation rejects unmarked targets and leaves the sentinel unchanged.
+  - Stop condition: any destructive operation relies only on path containment without proving the target is engine-owned.
+
+- [ ] **RA04.10c Decide and test hardlink policy**
+  - Build: document whether hardlinked markdown files are supported. If unsupported, reject or skip regular files with link count `> 1` in scanner/read/save/indexing filesystem boundaries.
+  - Verify: Unix-only tests create a hardlinked note from outside the vault; scan, save baseline capture, markdown read, and queue indexing handle it consistently without exposing or mutating outside-vault content.
+  - Stop condition: scanner/read/save/indexing boundaries disagree on hardlink behavior.
+
 - [ ] **RA04.11 Post-adapter performance gate**
   - Build: no refactor code changes. Run release fixture `backend-benchmark`, `materialize-read-index`, `read-api-benchmark`, and Swift read UI probe after adapter moves are complete; if private inputs are available, also run real-vault backend and UI probes with ignored/private output paths.
   - Verify: block on `> 5%` peak RSS regression, `> 10%` SQLite/Tantivy stage regression, `> 20%` read/search p95/p99 regression, or benchmark artifacts losing `peak_rss_bytes`, `time_to_usable_samples`, stage timings, pipeline config, writer memory budget, or privacy flags.
@@ -918,46 +944,170 @@ Default stop conditions:
   - Build: after full rebuild orchestration is under use cases, migrate rebuild FFI wiring away from legacy `index_rebuild` and `indexing_pipeline` entry points.
   - Verify: rebuild FFI tests, Swift engine smoke, and FFI direct-adapter scan pass.
 
-- [ ] **RA05.07 Move startup reconciliation use case**
-  - Build: move startup reconciliation orchestration into `use_cases/reconcile_startup.rs`.
-  - Verify: startup reconciliation tests pass.
+- [ ] **RA05.07a Add startup reconciliation use-case module**
+  - Build: add `use_cases/reconcile_startup.rs` and `pub(crate) mod reconcile_startup;` without moving logic yet.
+  - Verify: `cargo test --manifest-path vault-engine/Cargo.toml startup_reconciliation::`.
+  - Stop condition: adding the module changes public exports or test behavior.
 
-- [ ] **RA05.08 Move watcher burst recovery use case**
-  - Build: move watcher burst coalescing/recovery into `use_cases/watcher_burst.rs`.
-  - Verify: watcher burst tests pass.
+- [ ] **RA05.07b Move startup reconciliation production code**
+  - Build: mechanically move `StartupReconciliationSummary`, `StartupReconciliationError`, `StartupReconciliationResult`, `reconcile_startup`, and private helpers into `use_cases/reconcile_startup.rs`.
+  - Verify:
+    ```sh
+    cargo fmt --manifest-path vault-engine/Cargo.toml --check
+    cargo test --manifest-path vault-engine/Cargo.toml startup_reconciliation::
+    ```
+  - Stop condition: startup reconciliation test expectations, enqueue counts, or rename/delete/create semantics change.
 
-- [ ] **RA05.09 Move whole-vault/local graph use case**
-  - Build: keep pure graph model in core and move snapshot construction/orchestration into `use_cases/build_graph.rs`.
-  - Verify: local graph, whole-vault graph, and graph benchmark fixture tests pass.
+- [ ] **RA05.07c Retarget startup reconciliation callers**
+  - Build: update internal callers such as watcher burst recovery to import `crate::use_cases::reconcile_startup`; keep `startup_reconciliation.rs` as a temporary compatibility re-export only.
+  - Verify:
+    ```sh
+    rg -n "crate::startup_reconciliation" vault-engine/src
+    cargo test --manifest-path vault-engine/Cargo.toml startup_reconciliation::
+    cargo test --manifest-path vault-engine/Cargo.toml watcher_burst::
+    ```
+  - Stop condition: any production caller except the compatibility module still depends on the legacy root module.
 
-- [ ] **RA05.09a Retarget graph FFI to use cases**
-  - Build: migrate `ffi/graph.rs` so it calls `use_cases::build_graph`; it must not import `MetadataStore`, graph SQL records, or `crate::graph` after this step.
-  - Verify: whole-vault graph FFI tests and FFI direct-adapter scan pass.
+- [ ] **RA05.08a Add watcher burst use-case module**
+  - Build: add `use_cases/watcher_burst.rs` and `pub(crate) mod watcher_burst;` without moving logic yet.
+  - Verify: `cargo test --manifest-path vault-engine/Cargo.toml watcher_burst::`.
 
-- [ ] **RA05.09b Graph snapshot memory gate**
-  - Build: no behavior change after graph use-case movement. Run `vault-profiler graph-snapshot-benchmark` on the fixture, and on the real vault only after privacy-safe output is configured.
-  - Verify: enforce graph-view budgets from `docs/architecture/graph-view.md`, especially Rust snapshot RSS delta `<= 250 MB` and encoded payload `<= 64 MiB`.
+- [ ] **RA05.08b Move watcher burst coalescing logic**
+  - Build: mechanically move `WatcherBurstPlan`, `WatcherBurstState`, `coalesce_watcher_burst`, `event_requires_root_rescan`, and `parent_directory` into `use_cases/watcher_burst.rs`.
+  - Verify: watcher coalescing tests pass, including duplicate paths, ambiguous events, root rescan events, and dropped events without paths.
+  - Stop condition: sorted path output, rescan-directory output, or state classification changes.
 
-- [ ] **RA05.10 Run use-case boundary scan**
-  - Build: no code change after RA05.09.
-  - Verify: use cases do not import `libc`, `CStr`, `CString`, `no_mangle`, read result buffer row structs, direct storage/platform crates, or filesystem APIs. Read surfaces must not import fs adapters or call `read_to_string`, `canonicalize`, `resolve_existing_relative`, or `scan_vault`.
+- [ ] **RA05.08c Move watcher burst recovery orchestration**
+  - Build: move `WatcherBurstRecovery`, `WatcherBurstError`, `WatcherBurstResult`, and `recover_watcher_burst` after RA05.08b is green.
+  - Verify:
+    ```sh
+    cargo test --manifest-path vault-engine/Cargo.toml watcher_burst::
+    rg -n "crate::startup_reconciliation|crate::watcher_burst" vault-engine/src/use_cases vault-engine/src/ffi vault-engine/src/adapters
+    ```
+  - Stop condition: recovery starts bypassing `use_cases::reconcile_startup` or queue summary state semantics change.
+
+- [ ] **RA05.08d Keep watcher compatibility temporary**
+  - Build: leave `watcher_burst.rs` as a compatibility re-export only until Phase 7 removes transitional modules.
+  - Verify: `rg -n "pub use crate::use_cases::watcher_burst" vault-engine/src/watcher_burst.rs` matches and no production logic remains in the compatibility file.
+
+- [ ] **RA05.09a Move pure whole-vault graph builder**
+  - Build: move graph builder constants, `WholeVaultGraphInputs`, `build_whole_vault_graph_snapshot`, candidate node/edge builders, and pure graph helper functions into `use_cases/build_graph.rs` while leaving DTOs in `core::graph`.
+  - Verify: `cargo test --manifest-path vault-engine/Cargo.toml graph::`.
+  - Stop condition: node IDs, unresolved target IDs, graph limits, partial reasons, labels, tags, or edge weights change.
+
+- [ ] **RA05.09b Move whole-vault graph storage orchestration**
+  - Build: move metadata fetch orchestration for whole-vault graph snapshots into one use-case entry point, for example `build_whole_vault_graph_from_metadata`.
+  - Verify:
+    ```sh
+    cargo test --manifest-path vault-engine/Cargo.toml graph::
+    cargo test --manifest-path vault-engine/Cargo.toml read_api::tests::whole_vault_graph
+    ```
+  - Stop condition: graph storage query limits, tag-fetch decision, partial graph state, or generation handling changes.
+
+- [ ] **RA05.09c Deduplicate graph candidate helpers**
+  - Build: consolidate duplicate candidate-file helpers currently owned by graph FFI/read graph surfaces into the graph use-case layer.
+  - Verify:
+    ```sh
+    rg -n "fn graph_candidate_files|push_graph_candidate_file" vault-engine/src
+    cargo test --manifest-path vault-engine/Cargo.toml read_api::tests::whole_vault_graph
+    ```
+  - Stop condition: more than one production implementation remains without a documented reason.
+
+- [ ] **RA05.09d Retarget graph FFI to use cases**
+  - Build: keep FFI JSON request/response DTOs in `ffi/graph.rs`, but call `use_cases::build_graph`; remove direct FFI imports of `MetadataStore`, graph SQL records, and legacy `crate::graph` orchestration.
+  - Verify:
+    ```sh
+    cargo test --manifest-path vault-engine/Cargo.toml ffi::tests::engine_graph_snapshot_returns_payload_and_errors
+    rg -n "MetadataStore|GraphFileRecord|GraphResolvedEdgeRecord|GraphUnresolvedEdgeRecord|crate::graph" vault-engine/src/ffi/graph.rs
+    ```
+  - Stop condition: graph FFI owns graph membership, SQL-record conversion, or metadata query decisions.
+
+- [ ] **RA05.09e Run graph FFI ABI and smoke gate**
+  - Build: no code change after RA05.09d.
+  - Verify:
+    ```sh
+    cargo build --manifest-path vault-engine/Cargo.toml --release
+    nm -gU vault-engine/target/release/libvault_engine.dylib | awk '{print $3}' | grep '^_engine_' | sort
+    swift run --package-path mac-app Granite --engine-smoke-test
+    ```
+  - Stop condition: exported `engine_*` symbols change or Swift fails to load the dylib.
+
+- [ ] **RA05.09f Graph snapshot memory gate**
+  - Build: no behavior change after graph use-case movement. Run `vault-profiler graph-snapshot-benchmark` on a fixture first, and on the real vault only after privacy-safe output is configured.
+  - Verify: enforce graph-view budgets from `docs/architecture/graph-view.md`, especially Rust snapshot duration `<= 2.5s`, Rust snapshot RSS delta `<= 250 MB`, and encoded payload `<= 64 MiB`.
+  - Stop condition: graph artifact includes private note paths/content or exceeds the graph-view memory/bridge budget.
+
+- [ ] **RA05.10a Run focused use-case boundary scan**
+  - Build: no code change after RA05.09f.
+  - Verify:
+    ```sh
+    rg -n "std::fs|OpenOptions|rename|remove_dir_all|canonicalize|symlink_metadata|MetadataExt|rusqlite|tantivy|libc|FSEvent" vault-engine/src/use_cases
+    rg -n "unsafe|extern \"C\"|CStr|CString::from_raw|Vec::from_raw_parts|slice::from_raw_parts|no_mangle" vault-engine/src -g '!ffi/**' -g '!adapters/fsevents/watcher.rs' -g '!diagnostics/**'
+    rg -n "crate::ffi" vault-engine/src/core vault-engine/src/use_cases vault-engine/src/adapters
+    rg -n "crate::(startup_reconciliation|watcher_burst|graph)" vault-engine/src/use_cases vault-engine/src/ffi vault-engine/src/adapters
+    ```
+  - Stop condition: new matches are not documented as transitional exceptions. Existing legacy parser/scanner/path/indexing exceptions should be handled in their own cleanup tasks, not hidden inside RA05.10a.
+
+- [ ] **RA05.10b Record hot-path allocation baseline**
+  - Build: no behavior change; record currently allowed allocation sites before graph/diagnostics movement so later diffs can distinguish existing allocations from new regressions.
+  - Verify:
+    ```sh
+    git diff --unified=0 -- vault-engine/src |
+      rg -n '^\+.*(collect::<Vec|\.collect\(\)|\.clone\(\)|to_string\(\)|format!\(|serde_json::|Box<dyn|Arc<dyn|read_to_string|std::fs::read|Index::open_in_dir|reader\(\)|writer\(|commit\(|reload\()'
+    ```
+  - Stop condition: a new allocation/materialization appears in read/search/graph/indexing hot paths without benchmark evidence.
 
 - [ ] **RA05.11 Re-run save path safety through moved use case**
   - Build: no behavior change after save use-case move.
-  - Verify: preserve tests for external delete/edit/replace, symlink swap, new-note symlink parent, non-regular files, read-only targets, unsafe relative paths, and FFI conflict choices.
+  - Verify:
+    ```sh
+    cargo test --manifest-path vault-engine/Cargo.toml save::
+    cargo test --manifest-path vault-engine/Cargo.toml save_note::
+    cargo test --manifest-path vault-engine/Cargo.toml ffi::tests::save_ffi
+    cargo test --manifest-path vault-engine/Cargo.toml ffi::tests::engine_save
+    ```
+  - Stop condition: external delete/edit/replace, symlink swap, new-note symlink parent, non-regular files, read-only targets, unsafe relative paths, or FFI conflict choices regress.
 
 ### Phase 6: Diagnostics, Benchmarks, And Profiler Boundary
 
-- [ ] **RA06.01 Move benchmark code under diagnostics**
-  - Build: move `benchmarks.rs` to `diagnostics/benchmarks.rs`.
-  - Verify: benchmark tests and any benchmark CLI/probe imports compile.
+- [ ] **RA06.01a Move benchmark module mechanically**
+  - Build: move `benchmarks.rs` to `diagnostics/benchmarks.rs`; add `pub mod benchmarks;` under `diagnostics`.
+  - Verify:
+    ```sh
+    cargo test --manifest-path vault-engine/Cargo.toml benchmarks::
+    cargo test --manifest-path bench/vault-profiler/Cargo.toml
+    ```
+  - Stop condition: benchmark artifact schema, stage metrics, or profiler imports require behavior changes during the file move.
 
-- [ ] **RA06.02 Preserve aggregate-only privacy rules**
+- [ ] **RA06.01b Keep temporary benchmark compatibility facade**
+  - Build: keep `vault_engine::benchmarks` as a temporary re-export or compatibility module until `bench/vault-profiler` imports move to `vault_engine::diagnostics::benchmarks`.
+  - Verify:
+    ```sh
+    rg -n "crate::benchmarks|vault_engine::benchmarks" vault-engine/src bench/vault-profiler/src
+    cargo test --manifest-path bench/vault-profiler/Cargo.toml
+    ```
+  - Stop condition: Phase 7 begins while profiler still requires the legacy benchmark path.
+
+- [ ] **RA06.02a Preserve aggregate-only privacy rules**
   - Build: ensure moved benchmark code still redacts raw note text, snippets, tags, query strings, private paths, raw relative paths, stable per-file IDs, error strings, panic payloads, `Debug` output, CLI args, and SQLite/Tantivy error messages.
-  - Verify: benchmark artifact tests pass.
+  - Verify: benchmark artifact tests pass and no committed artifact contains `/Users/`, vault names, `.md` relative paths, note snippets, query terms, tags/frontmatter keys, or stable per-file IDs.
+
+- [ ] **RA06.02b Redact profiler error notes**
+  - Build: store error class/category only for committed benchmark/probe artifacts; do not persist raw `error.to_string()` values from read/search/indexing failures.
+  - Verify: a fixture test injects `/Users/example/Private Vault/Secret.md`, query text, and SQLite/Tantivy path text into an error; serialized public artifacts contain none of those tokens.
+  - Stop condition: any artifact field can expose raw backend error text without an explicit private-output opt-in.
+
+- [ ] **RA06.02c Remove stable public per-file hashes**
+  - Build: either omit per-sample input hashes from public artifacts or salt them per run with no committed salt-to-input mapping.
+  - Verify: two public artifact generations for the same private path/query produce different hashes or no per-input hashes, and the mapping is not committed.
+  - Stop condition: committed artifacts contain stable identifiers that can track the same private note across runs.
+
+- [ ] **RA06.02d Treat vault root names as private**
+  - Build: replace public artifact root-name fields with caller-supplied aliases or fixed redacted values for real-vault runs.
+  - Verify: artifact privacy tests assert private vault directory names are absent.
 
 - [ ] **RA06.03 Run fixture read/index benchmark smoke**
-  - Build: run existing fixture benchmark or profiler command if available in the repo.
+  - Build: run existing fixture benchmark or profiler command after diagnostics movement.
   - Verify: produced artifact remains aggregate-only and no private vault content is committed.
 
 - [ ] **RA06.04 Keep diagnostics out of production use cases**
@@ -966,21 +1116,68 @@ Default stop conditions:
 
 - [ ] **RA06.05 Add privacy scan gate**
   - Build: after generated benchmark/probe artifacts, scan only new or modified artifacts for private-path and content tokens before commit.
-  - Verify: private payload outputs are ignored and opt-in; committed artifacts remain aggregate-only. Scan for `/Users/`, vault names, `.md` relative paths, note snippets, query terms, tags/frontmatter keys, and stable per-file IDs. Hashed IDs must use per-run salt and no committed mapping.
+  - Verify:
+    ```sh
+    rg -n "/Users/|\\.md\"|raw_query|relative_path\"|snippet|frontmatter|tags|file_id" docs/benchmarks/artifacts
+    ```
+  - Stop condition: any matched token is not an aggregate field, redacted alias, or documented fixture-only value.
 
-- [ ] **RA06.06 Migrate `bench/vault-profiler` imports**
-  - Build: update profiler imports away from old public modules such as `benchmarks`, `tantivy_search`, `sqlite_fts`, `attachments`, `index`, `parser`, `paths`, `scanner`, and `read_api`.
-  - Verify: `cargo test --manifest-path bench/vault-profiler/Cargo.toml`.
+- [ ] **RA06.06a Inventory profiler legacy imports**
+  - Build: no code change; list every `bench/vault-profiler` import from old public modules before changing visibility.
+  - Verify:
+    ```sh
+    rg -n "vault_engine::(attachments|index|parser|paths|scanner|sqlite_fts|tantivy_search|benchmarks|read_api)" bench/vault-profiler/src
+    ```
+  - Stop condition: a legacy public module is made private before its profiler import is migrated.
 
-- [ ] **RA06.07 Decide SQLite FTS ownership**
+- [ ] **RA06.06b Create profiler-facing diagnostics facade**
+  - Build: expose intentional profiler APIs through `vault_engine::diagnostics`, including benchmark types, SQLite FTS benchmark support if retained, and any read-indexer helpers that otherwise force public access to internal modules.
+  - Verify:
+    ```sh
+    cargo test --manifest-path bench/vault-profiler/Cargo.toml
+    rg -n "vault_engine::(attachments|index|parser|paths|scanner|sqlite_fts|tantivy_search|benchmarks|read_api)" bench/vault-profiler/src
+    ```
+  - Stop condition: `bench/vault-profiler` still imports legacy internals directly after the facade migration.
+
+- [ ] **RA06.06c Migrate `bench/vault-profiler` imports**
+  - Build: update profiler imports one group at a time: benchmarks, SQLite FTS/search DTOs, read indexer, parser/path/scanner helpers, and read API surfaces.
+  - Verify: after each import group, run `cargo test --manifest-path bench/vault-profiler/Cargo.toml`.
+
+- [ ] **RA06.07a Retarget SQLite FTS DTO imports**
+  - Build: move consumers of `sqlite_fts::SearchDocument` and `sqlite_fts::SearchResult` to `core::search` or an intentional diagnostics facade before moving SQLite FTS ownership.
+  - Verify:
+    ```sh
+    rg -n "crate::sqlite_fts|vault_engine::sqlite_fts" vault-engine/src bench/vault-profiler/src
+    cargo test --manifest-path vault-engine/Cargo.toml sqlite_fts::
+    cargo test --manifest-path bench/vault-profiler/Cargo.toml
+    ```
+
+- [ ] **RA06.07b Decide SQLite FTS ownership**
   - Build: document and implement whether SQLite FTS remains a production adapter under `adapters/sqlite/fts_index.rs` or becomes diagnostics-only under `diagnostics/sqlite_fts.rs`.
-  - Verify: profiler and search benchmark tests pass after the decision. If SQLite FTS remains production or benchmark-facing, add tests for quotes, `OR`, `NEAR`, `*`, `:`, column selectors, parentheses, and malformed MATCH expressions.
+  - Verify: profiler and search benchmark tests pass after the decision.
+
+- [ ] **RA06.07c Add SQLite FTS MATCH sanitization coverage**
+  - Build: add tests for quotes, `OR`, `NEAR`, `*`, `:`, column selectors, parentheses, and malformed MATCH expressions.
+  - Verify:
+    ```sh
+    cargo test --manifest-path vault-engine/Cargo.toml sqlite_fts::tests::safe_match_query
+    ```
+  - Stop condition: any malformed query reaches SQLite MATCH unsanitized or user input is interpolated into SQL.
 
 - [ ] **RA06.08 Profiler artifact compatibility gate**
   - Build: no code change after diagnostics/profiler import migration. Rerun profiler parse tests plus one fixture benchmark.
   - Verify: artifacts still include `peak_rss_bytes`, `time_to_usable_samples`, stage timings, pipeline config, writer memory budget, and privacy flags.
 
 ### Phase 7: Reduce Public Surface
+
+- [ ] **RA07.00 Preflight external Rust consumers**
+  - Build: no code change; confirm `bench/vault-profiler` no longer imports legacy public modules directly before changing `lib.rs` visibility.
+  - Verify:
+    ```sh
+    rg -n "vault_engine::(attachments|index|parser|paths|scanner|sqlite_fts|tantivy_search|benchmarks|read_api|save|graph|index_rebuild|indexing_pipeline|startup_reconciliation|watcher_burst)" bench/vault-profiler/src
+    cargo test --manifest-path bench/vault-profiler/Cargo.toml
+    ```
+  - Stop condition: any external Rust consumer still needs an old public path that lacks a diagnostics or intentional facade replacement.
 
 - [ ] **RA07.01 Rewrite `lib.rs` module exports**
   - Build: expose `pub mod ffi` and intentional public facades only; make internals `pub(crate)` where possible.
@@ -990,6 +1187,20 @@ Default stop conditions:
   - Build: first change `pub mod` to `pub(crate) mod` only for modules with no external Rust consumers. Then remove transitional modules in a separate step.
   - Verify: each pass compiles independently.
 
+- [ ] **RA07.01b Make one legacy module group private at a time**
+  - Build: group visibility changes by dependency family: path/scanner/parser, storage/search compatibility, save/rebuild/indexing compatibility, graph/watcher compatibility, then diagnostics/profiler facades.
+  - Verify before each group:
+    ```sh
+    rg -n "vault_engine::<module>|crate::<module>" bench/vault-profiler/src vault-engine/src
+    cargo test --manifest-path vault-engine/Cargo.toml
+    cargo test --manifest-path bench/vault-profiler/Cargo.toml
+    ```
+  - Stop condition: a visibility change requires deleting a compatibility module or rewriting logic in the same commit.
+
+- [ ] **RA07.01c Keep diagnostics public by design if profiler still needs it**
+  - Build: if `bench/vault-profiler` remains a separate crate, expose only deliberate `diagnostics` facades and document why they are public.
+  - Verify: `lib.rs` public modules are `ffi`, `diagnostics`, and any explicitly documented stable facade only.
+
 - [ ] **RA07.02 Update health check module list**
   - Build: update `health_check()` to report architecture-level modules or intentional engine capabilities, not every internal file.
   - Verify: health check unit test and Swift engine smoke pass.
@@ -997,6 +1208,11 @@ Default stop conditions:
 - [ ] **RA07.03 Remove transitional re-exports**
   - Build: delete compatibility modules added only for incremental migration.
   - Verify: `rg "read_ffi|crate::index::MetadataStore|crate::tantivy_search|crate::indexing_queue|crate::paths|crate::scanner|crate::parser|crate::attachments|crate::graph|crate::graph_key|crate::save|crate::read_api|crate::index_rebuild|crate::indexing_pipeline|crate::startup_reconciliation|crate::watcher_burst" vault-engine/src` returns only intentional references or none.
+
+- [ ] **RA07.03a Remove one compatibility module per commit**
+  - Build: delete compatibility modules one at a time after the matching grep is clean.
+  - Verify: run the narrow test for that module plus full Rust tests after each deletion.
+  - Stop condition: deleting one shim requires changing unrelated behavior or public facade policy.
 
 - [ ] **RA07.04 Add architecture placement checklist**
   - Build: add a short checklist to `docs/architecture/rust-engine.md` explaining where new parser, storage, FFI, and use-case code should go.
@@ -1187,6 +1403,7 @@ At the end of each phase:
 - [ ] Unsafe/FFI grep output matches the approved allowlist; no unsafe FFI helpers drift into `core` or `use_cases`.
 - [ ] `core` denylist gate passes.
 - [ ] `lib.rs` exposes only intentional public facades, including a deliberate diagnostics/profiler facade if `bench/vault-profiler` remains a separate crate.
+- [ ] `bench/vault-profiler` imports only intentional diagnostics/public facades, not legacy internal module paths.
 
 ### Compatibility
 
@@ -1219,6 +1436,7 @@ At the end of each phase:
 - [ ] Post-adapter, streaming rebuild, and graph snapshot performance gates pass or the refactor stops for redesign.
 - [ ] Hot-path no-allocation rules are preserved or exceptions are benchmarked and documented.
 - [ ] Graph refactor preserves graph snapshot privacy and bridge gates from `docs/architecture/graph-view.md`, not only unit tests.
+- [ ] Public benchmark/probe artifacts do not contain raw backend error strings, stable private-file identifiers, private vault root names, or unsalted per-input hashes.
 
 ## Dependencies And Risks
 
@@ -1246,7 +1464,9 @@ At the end of each phase:
 | SQLite or JSON paths are trusted after DB tampering | Files outside the vault could be read, indexed, or mutated | Re-normalize all storage/JSON paths at filesystem mutation/read boundaries |
 | Destructive index cleanup targets the wrong directory | Vault or unrelated app data can be deleted | Require engine-owned marker files plus canonical containment before destructive directory operations |
 | Privacy leaks through error/debug output | Aggregate artifacts still expose note paths or content through failures | Redact error strings, panic payloads, `Debug`, CLI args, and backend error messages before artifacts are staged |
-| Phase-level performance checks run too late | A regression source becomes hard to isolate | Add RA04.11, RA05.06f, RA05.09b, and RA06.08 gates at the exact risk points |
+| Phase-level performance checks run too late | A regression source becomes hard to isolate | Add RA04.11, RA05.06f, RA05.09f, and RA06.08 gates at the exact risk points |
+| Profiler remains an accidental public API consumer | Phase 7 cannot reduce `lib.rs` without breaking benchmark tooling | Move profiler dependencies behind `diagnostics` facades before changing module visibility |
+| Stable artifact hashes identify private notes across runs | Public benchmark artifacts can leak longitudinal identity even without raw paths | Use per-run salts or omit per-input hashes from committed artifacts |
 
 ## Migration Order Rationale
 
@@ -1309,7 +1529,8 @@ Use this checklist for each PR or worktree batch:
 On the active `codex/refactor-vault-engine-layered-architecture` branch, Phase 0 through Phase 4 and RA05.01 through RA05.06g are green. Remaining follow-up gates and next work:
 
 1. RA01.12 unsafe allowlist audit if it was not already covered by existing FFI/FSEvents tests.
-2. RA04.11 post-adapter performance gate, or document why it is deferred and keep it as a merge blocker.
-3. Continue RA05.07 startup reconciliation use case.
+2. RA04.10b/RA04.10c destructive-index marker and hardlink policy follow-up gates.
+3. RA04.11 post-adapter performance gate, or document why it is deferred and keep it as a merge blocker.
+4. Continue RA05.07a startup reconciliation use-case module setup.
 
 Do not start Phase 6 or Phase 7 until Phase 5 boundary scans and FFI retargeting are green.
