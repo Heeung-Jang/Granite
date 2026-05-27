@@ -43,13 +43,14 @@ enum SummaryPanelViewState: Equatable {
 }
 
 struct SummaryInspectorPanelView: View {
+    @Environment(\.appContentZoomScale) private var appContentZoomScale
     let state: SummaryPanelViewState
     let generate: () -> Void
     let cancel: () -> Void
 
     var body: some View {
         InspectorSection(title: "Summary") {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: ObsidianUI.scaled(10, scale: appContentZoomScale)) {
                 privacyNote
                 content
             }
@@ -98,7 +99,7 @@ struct SummaryInspectorPanelView: View {
 
     private var privacyNote: some View {
         Text("현재 에디터 내용과 저장되지 않은 편집을 로컬 Apple 모델로 요약합니다. 원본 문서에는 저장하지 않습니다.")
-            .font(.caption)
+            .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale)))
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
     }
@@ -116,6 +117,7 @@ struct SummaryInspectorPanelView: View {
             cancel()
         } label: {
             Label("취소", systemImage: "xmark")
+                .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale)))
         }
         .buttonStyle(.bordered)
         .controlSize(.small)
@@ -127,6 +129,7 @@ struct SummaryInspectorPanelView: View {
             generate()
         } label: {
             Label(title, systemImage: "sparkles")
+                .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale)))
         }
         .buttonStyle(.bordered)
         .controlSize(.small)
@@ -134,12 +137,12 @@ struct SummaryInspectorPanelView: View {
     }
 
     private func loadingView(_ progress: SummaryProgressState) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: ObsidianUI.scaled(8, scale: appContentZoomScale)) {
+            HStack(spacing: ObsidianUI.scaled(6, scale: appContentZoomScale)) {
                 ProgressView()
                     .controlSize(.small)
                 Text(progressText(progress))
-                    .font(.caption)
+                    .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale)))
                     .foregroundStyle(.secondary)
             }
             cancelButton
@@ -147,13 +150,13 @@ struct SummaryInspectorPanelView: View {
     }
 
     private func stagedStatus(_ title: String, isLoading: Bool) -> some View {
-        HStack(spacing: 6) {
+        HStack(spacing: ObsidianUI.scaled(6, scale: appContentZoomScale)) {
             if isLoading {
                 ProgressView()
                     .controlSize(.small)
             }
             Text(title)
-                .font(.caption.weight(.semibold))
+                .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale), weight: .semibold))
                 .foregroundStyle(.secondary)
         }
         .accessibilityLabel(title)
@@ -161,8 +164,8 @@ struct SummaryInspectorPanelView: View {
 
     private func streamingView(_ snapshot: String) -> some View {
         Text(snapshot.isEmpty ? "요약을 준비하는 중입니다." : snapshot)
-            .font(.callout)
-            .lineSpacing(2)
+            .font(.system(size: ObsidianUI.fontSize(13, scale: appContentZoomScale)))
+            .lineSpacing(ObsidianUI.scaled(2, scale: appContentZoomScale))
             .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -170,7 +173,7 @@ struct SummaryInspectorPanelView: View {
     }
 
     private func summaryView(_ summary: DocumentSummary) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: ObsidianUI.scaled(14, scale: appContentZoomScale)) {
             summaryBlock(title: "핵심 요약", lines: [summary.overview])
             summaryBlock(title: "주요 포인트", lines: summary.keyPoints)
             summaryBlock(title: "액션/결정 사항", lines: summary.actionItems)
@@ -180,13 +183,13 @@ struct SummaryInspectorPanelView: View {
     }
 
     private func summaryBlock(title: String, lines: [String]) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: ObsidianUI.scaled(6, scale: appContentZoomScale)) {
             Text(title)
-                .font(.callout.weight(.semibold))
+                .font(.system(size: ObsidianUI.fontSize(13, scale: appContentZoomScale), weight: .semibold))
             ForEach(lines.filter { !$0.isEmpty }, id: \.self) { line in
                 Text(line)
-                    .font(.callout)
-                    .lineSpacing(2)
+                    .font(.system(size: ObsidianUI.fontSize(13, scale: appContentZoomScale)))
+                    .lineSpacing(ObsidianUI.scaled(2, scale: appContentZoomScale))
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
