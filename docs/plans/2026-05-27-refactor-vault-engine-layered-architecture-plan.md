@@ -603,7 +603,7 @@ Default stop conditions:
   - Build: move graph request/node/edge/snapshot domain structs from `graph.rs` into `core/graph.rs` if they have no storage dependency.
   - Verify: graph unit tests still pass.
 
-- [ ] **RA03.06 Move parsed document domain types**
+- [x] **RA03.06 Move parsed document domain types**
   - Build: move parser output structs/enums that are pure domain types into `core/document.rs`, while leaving parsing implementation in place until a later phase.
   - Verify: parser fixture tests pass.
 
