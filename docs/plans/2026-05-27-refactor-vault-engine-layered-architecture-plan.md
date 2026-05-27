@@ -583,11 +583,11 @@ Default stop conditions:
   - Build: move only pure record types already used outside `index.rs` into `core/metadata.rs`: schema metadata, file records, link records, tag records, property records, heading records, and attachment records.
   - Verify: metadata store tests still pass.
 
-- [ ] **RA03.02a Defer projection moves unless needed**
+- [x] **RA03.02a Defer projection moves unless needed**
   - Build: keep SQL/projection types in the SQLite adapter until a non-SQL caller needs them outside storage.
   - Verify: no projection type is moved merely to satisfy the target tree.
 
-- [ ] **RA03.02b Keep SQL-facing projection decision explicit**
+- [x] **RA03.02b Keep SQL-facing projection decision explicit**
   - Build: for each projection type moved to `core`, record whether it is domain-facing or storage-facing in `docs/architecture/rust-engine.md`.
   - Verify: SQL row decoding remains outside `core`.
 

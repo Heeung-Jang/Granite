@@ -67,6 +67,22 @@ responsibilities:
 - `FileIdentity::from_metadata`
 - platform metadata extension usage such as `MetadataExt`
 
+## Metadata Projection Boundary
+
+RA03.02 moved domain-facing metadata records into `core::metadata`.
+SQL-facing read projections remain outside `core` until a non-storage caller
+needs them as domain records:
+
+- `FileLookupProjection`
+- `FileTreeProjection`
+- `LinkProjection`
+- `TagNoteProjection`
+- `PropertyProjection`
+- `AttachmentProjection`
+
+No SQL row decoder, SQL storage converter, or projection-only type is currently
+owned by `core`.
+
 ## Current Module Inventory
 
 | Current Module Or Consumer | Target Placement | Notes |
