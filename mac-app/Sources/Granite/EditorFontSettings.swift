@@ -50,18 +50,20 @@ final class EditorFontSettings: ObservableObject {
     }
 
     func setTextFontFamily(_ familyName: String?) {
-        store.saveTextFamilyName(familyName)
+        let normalizedFamilyName = normalizedFamilyName(familyName)
+        store.saveTextFamilyName(normalizedFamilyName)
         preferences = EditorFontPreferences(
-            textFamilyName: familyName,
+            textFamilyName: normalizedFamilyName,
             monospaceFamilyName: preferences.monospaceFamilyName
         )
     }
 
     func setMonospaceFontFamily(_ familyName: String?) {
-        store.saveMonospaceFamilyName(familyName)
+        let normalizedFamilyName = normalizedFamilyName(familyName)
+        store.saveMonospaceFamilyName(normalizedFamilyName)
         preferences = EditorFontPreferences(
             textFamilyName: preferences.textFamilyName,
-            monospaceFamilyName: familyName
+            monospaceFamilyName: normalizedFamilyName
         )
     }
 
