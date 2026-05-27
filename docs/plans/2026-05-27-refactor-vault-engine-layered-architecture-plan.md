@@ -811,7 +811,7 @@ Default stop conditions:
   - Build: move `LocalGraphRequest`, depth enum, graph node/edge DTOs, and candidate helper functions that do not query storage.
   - Verify: local graph unit tests pass.
 
-- [ ] **RA05.02m Move local graph read method**
+- [x] **RA05.02m Move local graph read method**
   - Build: move local graph read orchestration while keeping whole-vault graph construction owned by the graph use case if already extracted.
   - Verify: local graph FFI tests pass.
 
