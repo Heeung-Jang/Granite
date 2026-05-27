@@ -575,7 +575,7 @@ Default stop conditions:
   - Build: move `graph_key::unresolved_target_key` into `core/links.rs` before graph/read/sqlite users are moved.
   - Verify: graph and link resolution tests pass.
 
-- [ ] **RA03.01h Move shared search DTOs**
+- [x] **RA03.01h Move shared search DTOs**
   - Build: move stable search document/result DTOs out of `sqlite_fts.rs`; `tantivy_search` must not depend on the SQLite FTS module.
   - Verify: SQLite FTS and Tantivy search tests both pass.
 

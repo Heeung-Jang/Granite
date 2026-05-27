@@ -9,9 +9,9 @@ use tantivy::schema::{Field, STORED, STRING, Schema, TEXT, TantivyDocument, Valu
 use tantivy::snippet::SnippetGenerator;
 use tantivy::{Index, IndexReader, TantivyError, Term, doc};
 
+use crate::core::search::{SearchDocument, SearchMeasurement, SearchResult};
 use crate::indexing_pipeline::SnippetStorageMode;
 use crate::paths::{FileIdentity, PathError, VaultRoot};
-use crate::sqlite_fts::{SearchDocument, SearchMeasurement, SearchResult};
 
 pub const DEFAULT_TANTIVY_WRITER_MEMORY_BUDGET_BYTES: usize = 50_000_000;
 
@@ -552,8 +552,8 @@ fn directory_size(path: &Path) -> TantivySearchResult<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::search::SearchDocument;
     use crate::paths::VaultRoot;
-    use crate::sqlite_fts::SearchDocument;
     #[cfg(unix)]
     use std::os::unix::fs::symlink;
 

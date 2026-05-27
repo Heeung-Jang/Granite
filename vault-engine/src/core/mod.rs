@@ -4,3 +4,4 @@ pub(crate) mod files;
 pub(crate) mod links;
 pub(crate) mod paths;
 pub(crate) mod scan;
+pub(crate) mod search;
