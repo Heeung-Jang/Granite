@@ -641,7 +641,7 @@ Default stop conditions:
   - Build: add `adapters/sqlite/mod.rs` that temporarily re-exports current metadata-store symbols from `crate::index`.
   - Verify: `cargo test --manifest-path vault-engine/Cargo.toml index::tests::metadata_schema_has_projection_indexes`.
 
-- [ ] **RA04.02a Move SQLite schema helpers mechanically**
+- [x] **RA04.02a Move SQLite schema helpers mechanically**
   - Build: move only schema metadata, `create_schema`, projection-index creation/drop helpers, and schema metadata read/write helpers into `adapters/sqlite/schema.rs`.
   - Verify: metadata schema tests pass without changing SQL strings, table names, index names, or expected schema version.
   - Stop condition: any SQL literal diff other than path/import changes.
