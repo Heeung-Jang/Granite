@@ -1143,13 +1143,14 @@ Default stop conditions:
   - Evidence: `use_cases` direct filesystem/SQL/Tantivy/FSEvents scan returned no matches, `crate::ffi` scan returned no matches, and the unsafe scan found only legacy `benchmarks.rs` RSS measurement plus test-name/string false positives outside `use_cases`. The `crate::graph` scan matched only `graph_key` imports, which are not the legacy `crate::graph` compatibility module and will be handled by the Phase 7 public-surface cleanup.
   - Stop condition: new matches are not documented as transitional exceptions. Existing legacy parser/scanner/path/indexing exceptions should be handled in their own cleanup tasks, not hidden inside RA05.10a. Avoid broad text scans for words like `tantivy` or `rename` because type names and helper names create false positives.
 
-- [ ] **RA05.10b Record hot-path allocation baseline**
+- [x] **RA05.10b Record hot-path allocation baseline**
   - Build: no behavior change; run immediately after graph FFI retargeting and before graph memory benchmarks. Record currently allowed allocation sites before graph/diagnostics movement so later diffs can distinguish existing allocations from new regressions.
   - Verify:
     ```sh
     git diff --unified=0 -- vault-engine/src |
       rg -n '^\+.*(collect::<Vec|\.collect\(\)|\.clone\(\)|to_string\(\)|format!\(|serde_json::|Box<dyn|Arc<dyn|read_to_string|std::fs::read|Index::open_in_dir|reader\(\)|writer\(|commit\(|reload\()'
     ```
+  - Evidence: after RA05.09f commits, the exact current-worktree diff scan returned no matches. The committed graph retargeting allocation candidates are already documented in RA05.09f3, and the graph benchmark count rows added in RA05.09f5 are diagnostics-only.
   - Stop condition: a new allocation/materialization appears in read/search/graph/indexing hot paths without benchmark evidence.
 
 - [ ] **RA05.10c Add read API query-count sentinel**
