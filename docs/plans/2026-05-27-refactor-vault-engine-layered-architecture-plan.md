@@ -646,7 +646,7 @@ Default stop conditions:
   - Verify: metadata schema tests pass without changing SQL strings, table names, index names, or expected schema version.
   - Stop condition: any SQL literal diff other than path/import changes.
 
-- [ ] **RA04.02b Move SQLite storage value converters**
+- [x] **RA04.02b Move SQLite storage value converters**
   - Build: move pure SQLite conversion helpers such as property value storage, attachment state/source storage, file status, tag source, scan kind, bool/int, path string, and unix-ms conversion into `adapters/sqlite/storage_values.rs`.
   - Verify: metadata insert/update tests and projection tests pass.
 
