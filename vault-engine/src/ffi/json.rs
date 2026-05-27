@@ -1,4 +1,5 @@
 use std::ffi::CString;
+use std::io::{self, Write};
 use std::os::raw::c_char;
 
 use serde::{Deserialize, Serialize};
@@ -187,7 +188,24 @@ pub(super) fn ffi_success_response_len<T: Serialize>(value: &T) -> Result<usize,
         value: Some(value),
         error: None,
     };
-    serde_json::to_vec(&response)
-        .map(|bytes| bytes.len())
+    let mut writer = CountingWriter::default();
+    serde_json::to_writer(&mut writer, &response)
+        .map(|_| writer.bytes)
         .map_err(|_| FfiError::graph_index_error())
+}
+
+#[derive(Default)]
+struct CountingWriter {
+    bytes: usize,
+}
+
+impl Write for CountingWriter {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        self.bytes = self.bytes.saturating_add(buffer.len());
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }

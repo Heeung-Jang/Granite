@@ -1157,6 +1157,32 @@ mod tests {
                 >= 3
         );
 
+        let oversized_request = CString::new(
+            json!({
+                "payload_version": 1,
+                "request_id": 603,
+                "generation": 0,
+                "include_unresolved": true,
+                "include_orphans": true,
+                "max_nodes": 10,
+                "max_edges": 10,
+                "byte_cap_bytes": 1
+            })
+            .to_string(),
+        )
+        .expect("oversized request");
+        let oversized_response = unsafe {
+            take_response(engine_graph_snapshot(
+                metadata.as_ptr(),
+                oversized_request.as_ptr(),
+            ))
+        };
+        let oversized: Value =
+            serde_json::from_str(&oversized_response).expect("oversized graph error");
+
+        assert_eq!(oversized["ok"], false);
+        assert_eq!(oversized["error"]["code"], "oversized_response");
+
         let invalid_request = CString::new(
             json!({
                 "payload_version": 1,

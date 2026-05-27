@@ -1115,13 +1115,14 @@ Default stop conditions:
   - Evidence: checked the committed graph retargeting diff with `git diff --unified=0 857ca0a..111dbd3 -- vault-engine/src/ffi/graph.rs vault-engine/src/use_cases/build_graph.rs`. The only matches are owned candidate-file IDs (`file_id.to_string()`), the tag lookup ID list (`file.file_id.clone().collect::<Vec<_>>()`) used only when group rules need tags, and no FFI-side `serde_json` round trip or duplicate full graph collection.
   - Stop condition: a new materialization appears in graph FFI/use-case code without a benchmark note and an explicit reason.
 
-- [ ] **RA05.09f4 Add graph byte-cap serialization memory gate**
+- [x] **RA05.09f4 Add graph byte-cap serialization memory gate**
   - Build: no behavior change unless required by the gate. Check whether graph payload byte counting allocates a full JSON response before enforcing the cap; either switch to counting serialization or document benchmark evidence for the extra allocation.
   - Verify:
     ```sh
     rg -n "serde_json::to_vec|ffi_success_response_len" vault-engine/src/ffi vault-engine/src/use_cases
     cargo test --manifest-path vault-engine/Cargo.toml ffi::tests::engine_graph_snapshot_returns_payload_and_errors
     ```
+  - Evidence: `ffi_success_response_len` now measures the success envelope with a counting writer instead of `serde_json::to_vec`, so oversized graph responses fail before allocating the full success JSON buffer. The graph FFI test covers the `oversized_response` byte-cap path.
   - Stop condition: oversized graph responses allocate a large final response buffer before failing, or the extra sizing allocation is not covered by a graph memory benchmark.
 
 - [ ] **RA05.09f5 Add graph SQLite query-plan/count gate**
