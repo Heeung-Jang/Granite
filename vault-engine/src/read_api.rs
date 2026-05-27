@@ -52,10 +52,10 @@ mod tests {
     };
     use crate::adapters::tantivy::TantivySearchIndex;
     use crate::attachments::{AttachmentReferenceSource, AttachmentResolutionState};
+    use crate::core::search::SearchDocument;
     use crate::parser::PropertyValue;
     use crate::paths::{VaultRoot, lookup_key};
     use crate::scanner::{ScanEntry, ScanEntryKind, scan_vault};
-    use crate::sqlite_fts::SearchDocument;
     use crate::use_cases::read_graph::{graph_file_node_id, graph_unresolved_node_id};
     use rusqlite::trace::{TraceEvent, TraceEventCodes};
     use tempfile::tempdir;

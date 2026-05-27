@@ -4,10 +4,10 @@ use std::sync::mpsc::sync_channel;
 use std::thread;
 
 use crate::adapters::tantivy::{TantivyIndexingStageMetrics, TantivySearchIndex};
+use crate::core::search::SearchDocument;
 use crate::indexing_pipeline::{
     IndexingPipelineError, IndexingPipelineOptions, IndexingPipelineResult, SearchDocumentSource,
 };
-use crate::sqlite_fts::SearchDocument;
 use crate::use_cases::read_parse_documents::{
     PipelineCorpusStats, TimedSearchDocument, read_parse_source_at,
 };

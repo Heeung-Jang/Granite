@@ -11,9 +11,11 @@ use crate::adapters::sqlite::{
     FileRecord, GraphQueryStage, IndexSchemaMetadata, LinkEdgeRecord, MetadataStore,
     MetadataStoreError, MetadataTable, TagRecord, TagSource,
 };
+use crate::adapters::sqlite::{SqliteFtsError, SqliteFtsIndex};
 use crate::adapters::tantivy::{
     TantivyIndexingStageMetrics, TantivySearchError, TantivySearchIndex,
 };
+use crate::core::search::{SearchDocument, SearchResult};
 use crate::graph::{WholeVaultGraphRequest, WholeVaultGraphSnapshot};
 use crate::index_rebuild::IndexRebuildPaths;
 #[cfg(test)]
@@ -31,7 +33,6 @@ use crate::parser::parse_markdown;
 use crate::paths::FileIdentity;
 use crate::paths::{PathError, VaultRoot, lookup_key};
 use crate::scanner::{ScanEntryKind, ScanError, scan_vault};
-use crate::sqlite_fts::{SearchDocument, SearchResult, SqliteFtsError, SqliteFtsIndex};
 use crate::use_cases::build_graph::build_whole_vault_graph_from_metadata;
 
 pub const BACKEND_BENCHMARK_ARTIFACT_SCHEMA_VERSION: u32 = 7;

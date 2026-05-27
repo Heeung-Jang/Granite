@@ -348,6 +348,7 @@ mod tests {
     };
     use crate::core::files::FileIdentity;
     use crate::core::paths::lookup_key;
+    use crate::core::search::SearchDocument;
     use crate::ffi::read_rows::{
         ENGINE_READ_NO_NEXT_OFFSET, ENGINE_READ_ROW_KIND_ATTACHMENT, ENGINE_READ_ROW_KIND_BACKLINK,
         ENGINE_READ_ROW_KIND_FILE_TREE, ENGINE_READ_ROW_KIND_GRAPH_EDGE,
@@ -360,7 +361,6 @@ mod tests {
     };
     use crate::parser::PropertyValue;
     use crate::scanner::{ScanEntry, ScanEntryKind};
-    use crate::sqlite_fts::SearchDocument;
     use crate::use_cases::read_types::{
         ENGINE_READ_INSPECTOR_PANEL_ATTACHMENTS, ENGINE_READ_INSPECTOR_PANEL_BACKLINKS,
         ENGINE_READ_INSPECTOR_PANEL_OUTGOING, ENGINE_READ_INSPECTOR_PANEL_PROPERTIES,

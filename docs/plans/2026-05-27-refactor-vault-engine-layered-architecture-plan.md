@@ -1315,7 +1315,7 @@ Default stop conditions:
   - Evidence: closure scan returned no matches; `cargo test --manifest-path bench/vault-profiler/Cargo.toml` passed.
   - Stop condition: any profiler import still points at a legacy internal module before Phase 7 starts.
 
-- [ ] **RA06.07a Retarget SQLite FTS DTO imports**
+- [x] **RA06.07a Retarget SQLite FTS DTO imports**
   - Build: move consumers of `sqlite_fts::SearchDocument` and `sqlite_fts::SearchResult` to `core::search` or an intentional diagnostics facade before moving SQLite FTS ownership.
   - Verify:
     ```sh
@@ -1323,17 +1323,20 @@ Default stop conditions:
     cargo test --manifest-path vault-engine/Cargo.toml sqlite_fts::
     cargo test --manifest-path bench/vault-profiler/Cargo.toml
     ```
+  - Evidence: DTO consumers now import `core::search` or `diagnostics::profiler`; `crate::sqlite_fts`/`vault_engine::sqlite_fts` scan returned no matches and profiler tests passed.
 
-- [ ] **RA06.07b Decide SQLite FTS ownership**
+- [x] **RA06.07b Decide SQLite FTS ownership**
   - Build: document and implement whether SQLite FTS remains a production adapter under `adapters/sqlite/fts_index.rs` or becomes diagnostics-only under `diagnostics/sqlite_fts.rs`.
   - Verify: profiler and search benchmark tests pass after the decision.
+  - Evidence: SQLite FTS remains a production SQLite adapter and moved to `adapters/sqlite/fts_index.rs`; `sqlite_fts` now acts as a compatibility facade until public surface reduction.
 
-- [ ] **RA06.07c Add SQLite FTS MATCH sanitization coverage**
+- [x] **RA06.07c Add SQLite FTS MATCH sanitization coverage**
   - Build: add tests for quotes, `OR`, `NEAR`, `*`, `:`, column selectors, parentheses, and malformed MATCH expressions.
   - Verify:
     ```sh
     cargo test --manifest-path vault-engine/Cargo.toml sqlite_fts::tests::safe_match_query
     ```
+  - Evidence: added facade-level sanitizer coverage for quotes, `OR`, `NEAR`, `*`, column selectors, parentheses, and malformed operator-only input; the targeted test passed.
   - Stop condition: any malformed query reaches SQLite MATCH unsanitized or user input is interpolated into SQL.
 
 - [ ] **RA06.08 Profiler artifact compatibility gate**

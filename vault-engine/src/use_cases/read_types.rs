@@ -2,7 +2,7 @@ use std::fmt;
 
 use crate::adapters::sqlite::{FileRecord, MetadataStoreError};
 use crate::adapters::tantivy::TantivySearchError;
-use crate::sqlite_fts::SearchResult;
+use crate::core::search::SearchResult;
 
 pub const ENGINE_READ_STATE_COMPLETE: u32 = 0;
 pub const ENGINE_READ_STATE_PARTIAL: u32 = 1;

@@ -11,13 +11,13 @@ use crate::adapters::sqlite::{
     LinkEdgeRecord, PropertyRecord, TagRecord, TagSource, slugify_heading,
 };
 use crate::attachments::{AttachmentReferenceSource, AttachmentResolutionState};
+use crate::core::search::SearchDocument;
 use crate::indexing_pipeline::{
     IndexingPipelineError, IndexingPipelineOptions, IndexingPipelineResult, SearchDocumentSource,
 };
 use crate::parser::{ParsedMarkdown, PropertyValue, parse_markdown};
 use crate::paths::FileIdentity;
 use crate::scanner::ScanEntryKind;
-use crate::sqlite_fts::SearchDocument;
 
 pub struct TimedSearchDocument {
     pub document: SearchDocument,
