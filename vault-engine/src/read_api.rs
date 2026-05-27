@@ -2,8 +2,8 @@ use std::{collections::HashSet, fmt, path::Path};
 
 use crate::adapters::sqlite::{
     AttachmentProjection, AttachmentRecord, FileLookupProjection, FileRecord, GraphFileRecord,
-    GraphResolvedEdgeRecord, GraphUnresolvedEdgeRecord, HeadingRecord, LinkEdgeRecord,
-    LinkProjection, MetadataStoreError, PropertyProjection, PropertyRecord, TagRecord,
+    GraphResolvedEdgeRecord, GraphUnresolvedEdgeRecord, HeadingRecord, MetadataStoreError,
+    PropertyProjection, PropertyRecord, TagRecord,
 };
 use crate::adapters::tantivy::TantivySearchError;
 use crate::graph::{
@@ -190,35 +190,6 @@ impl LocalGraphRequest {
 }
 
 impl VaultReadApi {
-    pub fn backlinks_for_path(
-        &self,
-        relative_path: &str,
-        page: PageRequest,
-    ) -> ReadApiResult<ReadPage<LinkProjection>> {
-        let file = self.require_file(relative_path)?;
-        Ok(self.page_from_overfetch(
-            self.metadata
-                .backlink_projections(&file.file_id, page.offset, page.fetch_limit())?,
-            page,
-        ))
-    }
-
-    pub fn outgoing_links_for_path(
-        &self,
-        relative_path: &str,
-        page: PageRequest,
-    ) -> ReadApiResult<ReadPage<LinkProjection>> {
-        let file = self.require_file(relative_path)?;
-        Ok(self.page_from_overfetch(
-            self.metadata.outgoing_link_projections(
-                &file.file_id,
-                page.offset,
-                page.fetch_limit(),
-            )?,
-            page,
-        ))
-    }
-
     pub fn tags_for_path(
         &self,
         relative_path: &str,
@@ -250,30 +221,6 @@ impl VaultReadApi {
         Ok(self.page_from_overfetch(
             self.metadata
                 .attachment_projections(&file.file_id, page.offset, page.fetch_limit())?,
-            page,
-        ))
-    }
-
-    pub fn backlinks(
-        &self,
-        file_id: &str,
-        page: PageRequest,
-    ) -> ReadApiResult<ReadPage<LinkEdgeRecord>> {
-        Ok(self.page_from_overfetch(
-            self.metadata
-                .backlinks(file_id, page.offset, page.fetch_limit())?,
-            page,
-        ))
-    }
-
-    pub fn outgoing_links(
-        &self,
-        file_id: &str,
-        page: PageRequest,
-    ) -> ReadApiResult<ReadPage<LinkEdgeRecord>> {
-        Ok(self.page_from_overfetch(
-            self.metadata
-                .outgoing_links(file_id, page.offset, page.fetch_limit())?,
             page,
         ))
     }
@@ -500,15 +447,6 @@ impl VaultReadApi {
                 ReadState::Complete
             },
         })
-    }
-
-    fn require_file(&self, relative_path: &str) -> ReadApiResult<FileLookupProjection> {
-        if relative_path.trim().is_empty() {
-            return Err(ReadApiError::InvalidInput("relative_path"));
-        }
-        self.metadata
-            .lookup_file(relative_path)?
-            .ok_or(ReadApiError::NotFound("relative_path"))
     }
 
     fn live_wiki_link_item(&self, link: &WikiLink) -> ReadApiResult<LivePreviewMetadataItem> {

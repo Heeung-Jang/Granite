@@ -795,7 +795,7 @@ Default stop conditions:
   - Build: move the mode selection wrapper after filename and body search methods are already green.
   - Verify: combined search-mode read FFI tests pass.
 
-- [ ] **RA05.02i Move backlinks and outgoing-link panel methods**
+- [x] **RA05.02i Move backlinks and outgoing-link panel methods**
   - Build: move only backlink/outgoing panel orchestration.
   - Verify: inspector link-panel tests pass.
 

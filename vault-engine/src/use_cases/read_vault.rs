@@ -1,6 +1,9 @@
 use std::path::Path;
 
-use crate::adapters::sqlite::{FileRecord, FileTreeProjection, IndexSchemaMetadata, MetadataStore};
+use crate::adapters::sqlite::{
+    FileLookupProjection, FileRecord, FileTreeProjection, IndexSchemaMetadata, LinkEdgeRecord,
+    LinkProjection, MetadataStore,
+};
 use crate::adapters::tantivy::{TantivySearchError, TantivySearchIndex};
 use crate::read_api::{
     ENGINE_READ_SEARCH_MODE_BODY, ENGINE_READ_SEARCH_MODE_FILE_NAME, FileOpenMetadata,
@@ -113,6 +116,59 @@ impl VaultReadApi {
         }
     }
 
+    pub fn backlinks_for_path(
+        &self,
+        relative_path: &str,
+        page: PageRequest,
+    ) -> ReadApiResult<ReadPage<LinkProjection>> {
+        let file = self.require_file(relative_path)?;
+        Ok(self.page_from_overfetch(
+            self.metadata
+                .backlink_projections(&file.file_id, page.offset, page.fetch_limit())?,
+            page,
+        ))
+    }
+
+    pub fn outgoing_links_for_path(
+        &self,
+        relative_path: &str,
+        page: PageRequest,
+    ) -> ReadApiResult<ReadPage<LinkProjection>> {
+        let file = self.require_file(relative_path)?;
+        Ok(self.page_from_overfetch(
+            self.metadata.outgoing_link_projections(
+                &file.file_id,
+                page.offset,
+                page.fetch_limit(),
+            )?,
+            page,
+        ))
+    }
+
+    pub fn backlinks(
+        &self,
+        file_id: &str,
+        page: PageRequest,
+    ) -> ReadApiResult<ReadPage<LinkEdgeRecord>> {
+        Ok(self.page_from_overfetch(
+            self.metadata
+                .backlinks(file_id, page.offset, page.fetch_limit())?,
+            page,
+        ))
+    }
+
+    pub fn outgoing_links(
+        &self,
+        file_id: &str,
+        page: PageRequest,
+    ) -> ReadApiResult<ReadPage<LinkEdgeRecord>> {
+        Ok(self.page_from_overfetch(
+            self.metadata
+                .outgoing_links(file_id, page.offset, page.fetch_limit())?,
+            page,
+        ))
+    }
+
     fn search(&self, query: &str, page: PageRequest) -> ReadApiResult<ReadPage<SearchHit>> {
         let results = match self
             .search
@@ -131,6 +187,15 @@ impl VaultReadApi {
             Err(error) => return Err(error.into()),
         };
         Ok(self.page_from_overfetch(results.into_iter().map(SearchHit::from).collect(), page))
+    }
+
+    pub(crate) fn require_file(&self, relative_path: &str) -> ReadApiResult<FileLookupProjection> {
+        if relative_path.trim().is_empty() {
+            return Err(ReadApiError::InvalidInput("relative_path"));
+        }
+        self.metadata
+            .lookup_file(relative_path)?
+            .ok_or(ReadApiError::NotFound("relative_path"))
     }
 
     pub(crate) fn page_from_overfetch<T>(&self, items: Vec<T>, page: PageRequest) -> ReadPage<T> {
