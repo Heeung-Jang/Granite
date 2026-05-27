@@ -3,7 +3,7 @@ title: "refactor: Introduce Layered Rust Engine Architecture"
 type: refactor
 date: 2026-05-27
 deepened_on: 2026-05-27
-deepened_passes: 4
+deepened_passes: 5
 brainstorm: docs/brainstorms/2026-05-27-rust-engine-architecture-brainstorm.md
 ---
 
@@ -27,13 +27,14 @@ This plan intentionally keeps one Rust crate for the first architecture cleanup.
 
 ## Deepening Summary
 
-This deepening adds four specialist review passes and tightens the original plan around architecture, simplicity, performance, and security risks:
+This deepening adds five specialist review passes and tightens the original plan around architecture, simplicity, performance, security risks, and implementation granularity:
 
 - Separate **mechanical moves** from **semantic extraction**. A task should either move code without changing behavior or extract a boundary with new verification, not both.
 - Add explicit **import boundary checks** so the new `core`, `ffi`, `adapters`, and `use_cases` names cannot drift immediately after the refactor.
 - Add an **ABI symbol gate** before and after the FFI split, because Swift loads C symbols at runtime.
 - Keep **rollback points** at phase boundaries. If a phase fails, the next phase should not start until the current phase is green.
 - Keep **adapter traits deferred**. The architecture should be enforced by modules first, not by speculative traits.
+- Add a fifth pass focused on **implementation micro-units**. Large moves such as SQLite metadata storage and `VaultReadApi` extraction are now broken into helper groups, method groups, and explicit verification gates.
 
 ### Section Manifest
 
@@ -44,6 +45,7 @@ This deepening adds four specialist review passes and tightens the original plan
 | Verification Plan | Add ABI symbol comparison, architecture import scans, and privacy/performance gates. |
 | Risks | Add rollback, circular dependency, and accidental public API risks. |
 | Acceptance Criteria | Add measurable layer purity and compatibility criteria. |
+| Implementation Micro-Units | Split high-risk storage/use-case moves into small, independently verifiable tasks. |
 
 ## Problem Statement
 
@@ -371,6 +373,34 @@ If implementation uncovers a conflict between target naming and existing Rust mo
 
 Stop at the end of any phase if a gate fails. Do not proceed by compensating in a later phase.
 
+## Implementation Unit Contract
+
+Every RA task should be small enough to review and revert alone:
+
+- One task should change one cohesive helper group, one public module declaration group, or one method group.
+- One task should normally touch `<= 3` production files, excluding moved tests and docs.
+- A task that moves more than roughly `250` lines must be mechanical only: move code, fix imports, run tests, and stop.
+- A task that changes behavior must not also move files.
+- A task that changes visibility must not also rewrite logic.
+- A task that changes FFI, row layouts, SQL text, Tantivy config, path validation, or benchmark output privacy must get its own gate task.
+- If implementation needs a temporary re-export, add it in one task and remove it in a later cleanup task after all callers are migrated.
+
+Each RA task must include:
+
+```txt
+Build: the exact file/module move or extraction.
+Verify: the narrowest test or scan that proves the move did not change behavior.
+Stop condition: the first signal that means the next RA task must not start.
+```
+
+Default stop conditions:
+
+- `cargo test` or Swift smoke fails.
+- ABI symbol/layout output differs outside an explicitly planned migration.
+- `core` gains storage, platform, or FFI imports.
+- SQL/Tantivy config text changes during a move-only task.
+- A private-vault path or content token appears in a committed artifact.
+
 ## Implementation Phases
 
 ### Phase 0: Baseline And Architecture Guardrails
@@ -607,37 +637,100 @@ Stop at the end of any phase if a gate fails. Do not proceed by compensating in 
   - Build: move rebuild directory validation, swap, abort cleanup, and destructive directory operations into `adapters/fs/index_directory.rs`.
   - Verify: rebuild path safety and sentinel vault note tests pass.
 
-- [ ] **RA04.02 Move SQLite metadata store mechanically**
-  - Build: move the current `index.rs` storage implementation to `adapters/sqlite/metadata_store.rs` with minimal import fixes.
-  - Verify: metadata store tests pass.
+- [ ] **RA04.02 Add SQLite adapter facade without moving storage**
+  - Build: add `adapters/sqlite/mod.rs` that temporarily re-exports current metadata-store symbols from `crate::index`.
+  - Verify: `cargo test --manifest-path vault-engine/Cargo.toml index::tests::metadata_schema_has_projection_indexes`.
 
-- [ ] **RA04.02a Keep SQLite schema diff empty**
-  - Build: move SQL strings without editing schema text or index names.
-  - Verify: metadata schema tests pass without expected value changes.
+- [ ] **RA04.02a Move SQLite schema helpers mechanically**
+  - Build: move only schema metadata, `create_schema`, projection-index creation/drop helpers, and schema metadata read/write helpers into `adapters/sqlite/schema.rs`.
+  - Verify: metadata schema tests pass without changing SQL strings, table names, index names, or expected schema version.
+  - Stop condition: any SQL literal diff other than path/import changes.
 
-- [ ] **RA04.02b Split SQLite schema helpers only after mechanical move**
-  - Build: if needed, split schema creation/index creation helpers inside the SQLite adapter after RA04.02 is green.
-  - Verify: schema and projection index tests pass.
+- [ ] **RA04.02b Move SQLite storage value converters**
+  - Build: move pure SQLite conversion helpers such as property value storage, attachment state/source storage, file status, tag source, scan kind, bool/int, path string, and unix-ms conversion into `adapters/sqlite/storage_values.rs`.
+  - Verify: metadata insert/update tests and projection tests pass.
 
-- [ ] **RA04.02c Split SQLite query groups only after schema helpers**
-  - Build: if needed, group file tree, graph, links, properties, headings, and attachments queries inside the SQLite adapter without changing SQL text.
-  - Verify: projection, graph query, and bounded query tests pass.
+- [ ] **RA04.02c Move SQLite row decoders**
+  - Build: move `row_to_*` decoders for file, file lookup, link, tag, graph, property, heading, and attachment records into `adapters/sqlite/rows.rs`.
+  - Verify: metadata projection, graph bulk-record, and attachment tests pass.
+  - Stop condition: any row decoder starts returning an FFI/read-row type instead of a domain/storage projection.
+
+- [ ] **RA04.02d Move SQLite write helpers**
+  - Build: move `upsert_file`, `delete_child_records`, `insert_link`, `insert_tag`, `insert_property`, `insert_heading`, and `insert_attachment` into `adapters/sqlite/writes.rs`.
+  - Verify: metadata insert/update/delete, bulk replace, and atomic batch tests pass.
+
+- [ ] **RA04.02e Move SQLite read query helpers by surface**
+  - Build: move read helpers in this order: file lookup/file tree, backlinks/outgoing, tags/properties/headings/attachments, graph files/edges/tags, graph counts/plans.
+  - Verify: after each surface move, run the narrow test for that surface before moving the next one.
+  - Stop condition: query ordering, limit semantics, or partial-state behavior changes.
+
+- [ ] **RA04.02f Move `MetadataStore` shell last**
+  - Build: move `MetadataStore`, `IndexedFileRecords`, `MetadataStoreError`, and constructor/open methods to `adapters/sqlite/metadata_store.rs` after helpers are already under the SQLite adapter.
+  - Verify: full `index::tests` filter or new `adapters::sqlite` test filter passes.
+
+- [ ] **RA04.02g Keep old `crate::index` compatibility path**
+  - Build: turn `index.rs` into a temporary compatibility module that re-exports `adapters::sqlite` symbols still used by unmigrated callers.
+  - Verify: `cargo test --manifest-path vault-engine/Cargo.toml` passes and `rg "crate::index::" vault-engine/src` shows only expected temporary callers.
+
+- [ ] **RA04.02h Update callers from `crate::index` to `crate::adapters::sqlite`**
+  - Build: migrate callers one group at a time: read API, save/index queue, graph, indexing pipeline, diagnostics/profiler.
+  - Verify: after each caller group, run that group's narrow test filter.
+
+- [ ] **RA04.02i Remove `crate::index` compatibility module**
+  - Build: delete the temporary compatibility module after `rg "crate::index" vault-engine/src bench` returns no production callers.
+  - Verify: full Rust tests pass.
 
 - [ ] **RA04.03 Keep metadata facade for use cases**
-  - Build: expose a crate-internal `MetadataStore` path from `adapters::sqlite` and update imports.
-  - Verify: `rg "crate::index::MetadataStore" vault-engine/src` trends to zero.
+  - Build: expose only the crate-internal `MetadataStore` facade and intentionally shared record/projection types from `adapters::sqlite`.
+  - Verify: `rg "crate::adapters::sqlite::.*row_to_|crate::adapters::sqlite::.*Connection" vault-engine/src/use_cases vault-engine/src/ffi` returns no matches.
 
-- [ ] **RA04.04 Move indexing queue store**
-  - Build: move `indexing_queue.rs` to `adapters/sqlite/indexing_queue.rs`.
-  - Verify: queue restart, lease, retry, cancel, and coalescing tests pass.
+- [ ] **RA04.04 Add SQLite queue facade without moving logic**
+  - Build: add `adapters/sqlite/indexing_queue.rs` as a temporary re-export or shell around current `indexing_queue.rs`.
+  - Verify: queue restart and lease tests pass.
 
-- [ ] **RA04.05 Move Tantivy search adapter**
-  - Build: move `tantivy_search.rs` to `adapters/tantivy/search_index.rs`.
-  - Verify: search query sanitization and indexing/search tests pass.
+- [ ] **RA04.04a Move queue schema and row conversion helpers**
+  - Build: move queue schema creation, row decoding, status/reason conversion, unix-ms conversion, and error truncation into the SQLite queue adapter.
+  - Verify: queue lease, retry, cancel, and coalescing tests pass.
 
-- [ ] **RA04.05a Keep Tantivy config stable**
-  - Build: preserve tokenizer config, schema fields, writer options, snippet mode behavior, and error mapping.
+- [ ] **RA04.04b Move `IndexingQueue` store shell**
+  - Build: move `IndexingQueue`, `IndexingQueueItem`, summary/error types, and methods into `adapters/sqlite/indexing_queue.rs`.
+  - Verify: queue tests and indexing pipeline queue-batch tests pass.
+
+- [ ] **RA04.04c Remove old queue compatibility module**
+  - Build: update all callers away from `crate::indexing_queue`, then delete or narrow the old module path.
+  - Verify: `rg "crate::indexing_queue" vault-engine/src` returns no production callers.
+
+- [ ] **RA04.05 Add Tantivy adapter facade without changing config**
+  - Build: add `adapters/tantivy/mod.rs` that temporarily re-exports current `tantivy_search` symbols.
+  - Verify: `cargo test --manifest-path vault-engine/Cargo.toml tantivy_search::tests::safe_tantivy_query_bounds_and_quotes_user_input`.
+
+- [ ] **RA04.05a Move Tantivy schema and field helpers**
+  - Build: move schema construction, stored-text extraction, and field lookup helpers into `adapters/tantivy/schema.rs` without changing field names, storage flags, tokenizer, or snippet mode.
   - Verify: search tests pass without changing expected snippets, scores, or error states.
+
+- [ ] **RA04.05b Move Tantivy query sanitization helpers**
+  - Build: move `safe_tantivy_query`, first-term extraction, and snippet helpers into `adapters/tantivy/query.rs`.
+  - Verify: query sanitization and snippet tests pass.
+
+- [ ] **RA04.05c Move Tantivy metrics helpers**
+  - Build: move percentile/duration/directory-size helpers and indexing-stage metrics types only after search behavior is green.
+  - Verify: indexing/search metrics tests pass.
+
+- [ ] **RA04.05d Move `TantivySearchIndex` shell**
+  - Build: move the search index type, open/rebuild/add/commit/search methods, writer options, and error type into `adapters/tantivy/search_index.rs`.
+  - Verify: Tantivy search tests and indexing pipeline tests pass.
+
+- [ ] **RA04.05e Update callers from `crate::tantivy_search`**
+  - Build: migrate read API, indexing pipeline, diagnostics, and profiler imports one group at a time.
+  - Verify: after each caller group, run the matching narrow test.
+
+- [ ] **RA04.05f Remove old Tantivy compatibility module**
+  - Build: delete or reduce `tantivy_search.rs` after all callers use `adapters::tantivy`.
+  - Verify: `rg "crate::tantivy_search" vault-engine/src bench` returns no production callers.
+
+- [ ] **RA04.05g Keep Tantivy lifecycle stable**
+  - Build: no code change after RA04.05f.
+  - Verify: confirm searcher/writer/index directory lifetimes are unchanged and no adapter code reopens Tantivy per read/search call.
 
 - [ ] **RA04.06 Move filesystem scanner**
   - Build: move `scanner.rs` to `adapters/fs/scanner.rs`.
@@ -673,16 +766,52 @@ Stop at the end of any phase if a gate fails. Do not proceed by compensating in 
   - Build: preserve `complete`, `partial`, `stale`, `cancelled`, `error`, and `index_unavailable` mapping.
   - Verify: read FFI tests and Swift read UI probe still interpret states correctly.
 
-- [ ] **RA05.02b Move file tree and search read methods**
-  - Build: move file tree, file-open metadata, file-name search, body search, and search mode dispatch into `use_cases/read_vault.rs`.
-  - Verify: file tree and search FFI tests pass.
+- [ ] **RA05.02b Move read DTOs before read behavior**
+  - Build: move `PageRequest`, `ReadPage`, `ReadValue`, `ReadState`, and read open errors into `use_cases/read_vault.rs` or `use_cases/read_types.rs`.
+  - Verify: read state ABI constants and read open error-code tests pass.
 
-- [ ] **RA05.02c Move inspector panel read methods**
-  - Build: move backlinks, outgoing links, tags, properties, headings, and attachments read methods.
-  - Verify: inspector panel FFI tests pass.
+- [ ] **RA05.02c Move file tree read method**
+  - Build: move only the file tree page method and page-limit handling.
+  - Verify: file tree large-page and read FFI file tree tests pass.
 
-- [ ] **RA05.02d Move local graph read methods**
-  - Build: move local graph read orchestration while keeping graph construction owned by the graph use case if already extracted.
+- [ ] **RA05.02d Move file tree projection read method**
+  - Build: move only display-ready file tree projection logic.
+  - Verify: metadata projection tests and read FFI projection tests pass.
+
+- [ ] **RA05.02e Move file-open metadata read method**
+  - Build: move only the method that returns metadata for opening a selected file.
+  - Verify: read API metadata-open tests pass.
+
+- [ ] **RA05.02f Move file-name search method**
+  - Build: move filename search without moving Tantivy body search or search-mode dispatch.
+  - Verify: search state tests pass for filename search.
+
+- [ ] **RA05.02g Move body search method**
+  - Build: move Tantivy-backed body search and result conversion without changing query sanitization or snippets.
+  - Verify: Tantivy search tests and read API body-search tests pass.
+
+- [ ] **RA05.02h Move search mode dispatch**
+  - Build: move the mode selection wrapper after filename and body search methods are already green.
+  - Verify: combined search-mode read FFI tests pass.
+
+- [ ] **RA05.02i Move backlinks and outgoing-link panel methods**
+  - Build: move only backlink/outgoing panel orchestration.
+  - Verify: inspector link-panel tests pass.
+
+- [ ] **RA05.02j Move tags and properties panel methods**
+  - Build: move tag/property panel orchestration and display-value conversion if it is domain-only.
+  - Verify: inspector tag/property tests pass.
+
+- [ ] **RA05.02k Move headings and attachments panel methods**
+  - Build: move heading/attachment panel orchestration while attachment resolution remains in its current owner until explicitly moved.
+  - Verify: inspector heading/attachment tests pass.
+
+- [ ] **RA05.02l Move local graph DTOs and candidate helpers**
+  - Build: move `LocalGraphRequest`, depth enum, graph node/edge DTOs, and candidate helper functions that do not query storage.
+  - Verify: local graph unit tests pass.
+
+- [ ] **RA05.02m Move local graph read method**
+  - Build: move local graph read orchestration while keeping whole-vault graph construction owned by the graph use case if already extracted.
   - Verify: local graph FFI tests pass.
 
 - [ ] **RA05.03 Split live preview metadata use case**
@@ -690,16 +819,52 @@ Stop at the end of any phase if a gate fails. Do not proceed by compensating in 
   - Verify: `engine_read_live_preview_metadata_uses_buffer_without_vault_scan` still passes.
 
 - [ ] **RA05.04 Move save use case**
-  - Build: move safe save orchestration from `save.rs` to `use_cases/save_note.rs`, keeping file write primitives in adapter/core as appropriate.
-  - Verify: save safety and conflict choice tests pass.
+  - Build: create `use_cases/save_note.rs` and move only `SaveRequest`, `SaveOutcome`, conflict choice DTOs, and public orchestration entry points.
+  - Verify: save safety and FFI conflict choice tests pass.
+
+- [ ] **RA05.04a Move save baseline/capture orchestration**
+  - Build: move baseline capture orchestration while keeping file snapshot reads in the filesystem adapter or existing save module until RA04 filesystem moves are green.
+  - Verify: baseline capture FFI and safe-save baseline tests pass.
+
+- [ ] **RA05.04b Move save write orchestration**
+  - Build: move save write decision flow, conflict detection, and queue enqueue call sites without moving temp write primitives.
+  - Verify: external edit/delete/replace and queue enqueue tests pass.
+
+- [ ] **RA05.04c Move save conflict choice orchestration**
+  - Build: move reload, keep-as-new, and overwrite choice flow after write orchestration is green.
+  - Verify: conflict reload, keep-new, overwrite, and deleted-conflict tests pass.
+
+- [ ] **RA05.04d Keep save path mutation at adapter boundary**
+  - Build: no behavior change; ensure mutation-time path revalidation remains next to filesystem write primitives.
+  - Verify: adversarial save path tests still pass and `use_cases/save_note.rs` does not import `std::fs`.
 
 - [ ] **RA05.05 Move index rebuild use case**
   - Build: move rebuild start/open/commit/abort orchestration into `use_cases/index_rebuild.rs`.
   - Verify: rebuild path safety and recovery tests pass.
 
 - [ ] **RA05.06 Move indexing queue processing use case**
-  - Build: move `process_indexing_queue_batch`, rebuild pipeline orchestration, and progress types into `use_cases/process_indexing_queue.rs`.
-  - Verify: queue batch and full rebuild tests pass.
+  - Build: move queue lease/result DTOs and `process_indexing_queue_batch` shell into `use_cases/process_indexing_queue.rs`.
+  - Verify: queue batch tests pass.
+
+- [ ] **RA05.06a Move queue item source resolution**
+  - Build: move `source_for_queue_item` and queue item path/source mapping, keeping filesystem reads in adapters.
+  - Verify: queue adapter lease and missing-file queue tests pass.
+
+- [ ] **RA05.06b Move queue failure recording flow**
+  - Build: move queue failure recording and truncation orchestration without changing retry/cancel semantics.
+  - Verify: retry, cancel, and failure-truncation tests pass.
+
+- [ ] **RA05.06c Move full rebuild read/parse orchestration**
+  - Build: move `run_read_parse_pipeline`, read/parse progress types, and metadata count aggregation into a use-case module while preserving worker cap and channel capacity.
+  - Verify: read/parse pipeline tests and memory guard assumptions pass.
+
+- [ ] **RA05.06d Move Tantivy rebuild orchestration**
+  - Build: move `run_tantivy_rebuild_pipeline` and stage metrics merge logic without changing writer memory or commit timing.
+  - Verify: Tantivy rebuild pipeline tests pass.
+
+- [ ] **RA05.06e Move full rebuild commit orchestration**
+  - Build: move `run_full_rebuild_pipeline` and `run_full_rebuild_pipeline_and_commit` after read/parse and Tantivy rebuild pieces are green.
+  - Verify: full rebuild tests and rebuild path safety tests pass.
 
 - [ ] **RA05.07 Move startup reconciliation use case**
   - Build: move startup reconciliation orchestration into `use_cases/reconcile_startup.rs`.
@@ -791,6 +956,28 @@ If a task changes formatting or module paths:
 
 ```sh
 cargo fmt --manifest-path vault-engine/Cargo.toml --check
+```
+
+Prefer narrow filters before the full suite:
+
+| Area | Narrow Verification |
+| --- | --- |
+| FFI health/lifecycle/read/save/graph split | `cargo test --manifest-path vault-engine/Cargo.toml ffi::` |
+| Save use case or filesystem save boundary | `cargo test --manifest-path vault-engine/Cargo.toml save::` and `cargo test --manifest-path vault-engine/Cargo.toml ffi::tests::save_ffi` |
+| Read API use-case move | `cargo test --manifest-path vault-engine/Cargo.toml read_api::` and `cargo test --manifest-path vault-engine/Cargo.toml ffi::tests::engine_read` |
+| Metadata SQLite adapter move | `cargo test --manifest-path vault-engine/Cargo.toml index::tests::metadata_` |
+| Queue SQLite adapter move | `cargo test --manifest-path vault-engine/Cargo.toml indexing_queue::` and `cargo test --manifest-path vault-engine/Cargo.toml indexing_pipeline::tests::queue_` |
+| Tantivy adapter move | `cargo test --manifest-path vault-engine/Cargo.toml tantivy_search::` |
+| Scanner/path adapter move | `cargo test --manifest-path vault-engine/Cargo.toml scanner::` and `cargo test --manifest-path vault-engine/Cargo.toml paths::` |
+| Graph domain/use-case move | `cargo test --manifest-path vault-engine/Cargo.toml graph::` and `cargo test --manifest-path vault-engine/Cargo.toml read_api::tests::read_api_returns_paginated_metadata_and_search_states` |
+| Diagnostics/profiler move | `cargo test --manifest-path vault-engine/Cargo.toml diagnostics::` and `cargo test --manifest-path bench/vault-profiler/Cargo.toml` |
+
+If a narrow filter does not match because tests moved with the module, use the new module path filter and record the replacement command in `docs/architecture/rust-engine.md`.
+
+Before marking any phase complete, run the full Rust suite:
+
+```sh
+cargo test --manifest-path vault-engine/Cargo.toml
 ```
 
 ### FFI Gate
@@ -980,6 +1167,8 @@ At the end of each phase:
 Use this checklist for each PR or worktree batch:
 
 - [ ] Does this batch contain only one phase or a clearly contiguous subset of a phase?
+- [ ] Is each commit a single RA task, or is the reason for grouping documented?
+- [ ] Did the task fit the implementation unit contract, especially the move-only rule for large line-count changes?
 - [ ] Are file moves separated from semantic edits?
 - [ ] Did any `#[repr(C)]` struct change? If yes, stop unless explicitly planned.
 - [ ] Did any C symbol name change? If yes, stop unless explicitly planned.
@@ -1001,7 +1190,7 @@ Use this checklist for each PR or worktree batch:
 - Read API integration benchmark: `docs/benchmarks/read-api-ui-integration.md`
 - Indexing performance benchmark: `docs/benchmarks/vault-indexing-performance.md`
 - Current Rust crate root: `vault-engine/src/lib.rs`
-- Current FFI module: `vault-engine/src/ffi.rs`
+- Current FFI module: `vault-engine/src/ffi/mod.rs`
 - Current read row layout: `vault-engine/src/read_ffi.rs`
 - Current metadata store: `vault-engine/src/index.rs`
 - Current indexing pipeline: `vault-engine/src/indexing_pipeline.rs`
@@ -1018,4 +1207,4 @@ Use this checklist for each PR or worktree batch:
 
 ## Next Step
 
-Start implementation with Phase 0 and Phase 1 only. Do not start Phase 3+ until FFI split, ABI symbol comparison, and read row layout verification are green.
+If Phase 0 and RA01.01 through RA01.06a are already green on the active branch, continue with RA01.07 only. Do not start Phase 3+ until FFI split, ABI symbol comparison, and read row layout verification are green.
