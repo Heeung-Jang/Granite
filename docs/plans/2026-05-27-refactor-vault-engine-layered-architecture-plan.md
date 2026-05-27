@@ -740,7 +740,7 @@ Default stop conditions:
   - Build: move `file_watcher.rs` to `adapters/fs/watcher.rs` or `adapters/fsevents/watcher.rs` depending on final naming.
   - Verify: watcher tests pass on macOS.
 
-- [ ] **RA04.08 Move path resolution that touches disk**
+- [x] **RA04.08 Move path resolution that touches disk**
   - Build: keep disk-canonicalization and vault root opening in an adapter path if it imports filesystem APIs.
   - Verify: save path safety and scanner tests pass.
 
