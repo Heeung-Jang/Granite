@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::attachments::{AttachmentReferenceSource, AttachmentResolutionState};
+use crate::core::attachments::{AttachmentReferenceSource, AttachmentResolutionState};
 
 use crate::paths::lookup_key;
 use crate::scanner::ScanEntry;

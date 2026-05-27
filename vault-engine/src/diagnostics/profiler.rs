@@ -1,4 +1,4 @@
-pub use crate::attachments::{
+pub use crate::core::attachments::{
     AttachmentReferenceSource, AttachmentRejectReason, AttachmentResolutionState,
 };
 pub use crate::core::search::SearchDocument;

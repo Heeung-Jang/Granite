@@ -343,7 +343,7 @@ mod tests {
         MetadataStore, PropertyRecord, TagRecord, TagSource, slugify_heading,
     };
     use crate::adapters::tantivy::TantivySearchIndex;
-    use crate::attachments::{
+    use crate::core::attachments::{
         AttachmentReferenceSource, AttachmentRejectReason, AttachmentResolutionState,
     };
     use crate::core::files::FileIdentity;

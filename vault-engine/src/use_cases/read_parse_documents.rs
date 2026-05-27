@@ -10,7 +10,7 @@ use crate::adapters::sqlite::{
     AttachmentRecord, FileIndexStatus, FileMetadataRecords, FileRecord, HeadingRecord,
     LinkEdgeRecord, PropertyRecord, TagRecord, TagSource, slugify_heading,
 };
-use crate::attachments::{AttachmentReferenceSource, AttachmentResolutionState};
+use crate::core::attachments::{AttachmentReferenceSource, AttachmentResolutionState};
 use crate::core::search::SearchDocument;
 use crate::indexing_pipeline::{
     IndexingPipelineError, IndexingPipelineOptions, IndexingPipelineResult, SearchDocumentSource,

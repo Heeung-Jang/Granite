@@ -51,7 +51,7 @@ mod tests {
         PropertyRecord, TagRecord, TagSource, slugify_heading,
     };
     use crate::adapters::tantivy::TantivySearchIndex;
-    use crate::attachments::{AttachmentReferenceSource, AttachmentResolutionState};
+    use crate::core::attachments::{AttachmentReferenceSource, AttachmentResolutionState};
     use crate::core::search::SearchDocument;
     use crate::parser::PropertyValue;
     use crate::paths::{VaultRoot, lookup_key};

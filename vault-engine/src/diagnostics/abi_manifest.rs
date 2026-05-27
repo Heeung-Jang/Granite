@@ -5,7 +5,7 @@ use serde::Serialize;
 
 use crate::ENGINE_ABI_VERSION;
 use crate::adapters::sqlite::{FileIndexStatus, IndexPropertyValue, TagSource};
-use crate::attachments::{
+use crate::core::attachments::{
     AttachmentReferenceSource, AttachmentRejectReason, AttachmentResolutionState,
 };
 use crate::ffi::read_rows::{

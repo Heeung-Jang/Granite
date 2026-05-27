@@ -8,7 +8,7 @@ use crate::adapters::sqlite::{
     AttachmentProjection, AttachmentRecord, FileIndexStatus, FileRecord, FileTreeProjection,
     IndexPropertyValue, LinkProjection, PropertyProjection, PropertyRecord, TagRecord,
 };
-use crate::attachments::{AttachmentReferenceSource, AttachmentResolutionState};
+use crate::core::attachments::{AttachmentReferenceSource, AttachmentResolutionState};
 use crate::scanner::ScanEntryKind;
 use crate::use_cases::read_graph::{
     LocalGraphEdge, LocalGraphEdgeDirection, LocalGraphNode, LocalGraphNodeKind,
@@ -662,7 +662,7 @@ pub(crate) fn live_preview_source_code(source: LivePreviewMetadataSource) -> u32
 mod tests {
     use super::*;
     use crate::adapters::sqlite::{IndexPropertyValue, PropertyRecord, TagSource};
-    use crate::attachments::AttachmentResolutionState;
+    use crate::core::attachments::AttachmentResolutionState;
     use crate::scanner::{ScanEntry, ScanEntryKind};
     use crate::use_cases::read_graph::LocalGraphEdgeDirection;
     use crate::use_cases::read_types::{ENGINE_READ_STATE_COMPLETE, ENGINE_READ_STATE_ERROR};

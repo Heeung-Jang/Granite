@@ -5,7 +5,7 @@ mod tests {
     use super::*;
     use crate::adapters::sqlite::reads as sqlite_reads;
     use crate::adapters::sqlite::schema::{create_schema, write_schema_metadata};
-    use crate::attachments::{
+    use crate::core::attachments::{
         AttachmentReferenceSource, AttachmentRejectReason, AttachmentResolutionState,
     };
     use crate::parser::PropertyValue;
