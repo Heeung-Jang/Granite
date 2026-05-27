@@ -11,13 +11,14 @@ use crate::ffi::read_rows::{
     EngineReadLinkRow, EngineReadLivePreviewMetadataRow, EngineReadPropertyRow,
     EngineReadResultBuffer, EngineReadSearchHitRow, EngineReadTagRow,
 };
-use crate::read_api::{
+use crate::use_cases::read_graph::{LocalGraphDepth, LocalGraphRequest};
+use crate::use_cases::read_types::{
     ENGINE_READ_INSPECTOR_PANEL_ATTACHMENTS, ENGINE_READ_INSPECTOR_PANEL_BACKLINKS,
     ENGINE_READ_INSPECTOR_PANEL_OUTGOING, ENGINE_READ_INSPECTOR_PANEL_PROPERTIES,
     ENGINE_READ_INSPECTOR_PANEL_TAGS, ENGINE_READ_LOCAL_GRAPH_DEPTH_ONE_HOP,
-    ENGINE_READ_LOCAL_GRAPH_DEPTH_TWO_HOP, LocalGraphDepth, LocalGraphRequest, ReadApiError,
-    ReadOpenError, VaultReadApi,
+    ENGINE_READ_LOCAL_GRAPH_DEPTH_TWO_HOP, PageRequest, ReadApiError, ReadOpenError,
 };
+use crate::use_cases::read_vault::VaultReadApi;
 
 mod graph;
 mod health;
@@ -108,11 +109,7 @@ pub unsafe extern "C" fn engine_read_file_tree(
         handle,
         ENGINE_READ_ROW_KIND_FILE_TREE,
         request_id,
-        |api| {
-            api.file_tree_projection(crate::read_api::PageRequest::with_request_id(
-                request_id, offset, limit,
-            ))
-        },
+        |api| api.file_tree_projection(PageRequest::with_request_id(request_id, offset, limit)),
         EngineReadFileTreeRow::from_projection,
     )
 }
@@ -140,7 +137,7 @@ pub unsafe extern "C" fn engine_read_search(
             api.search_with_mode(
                 mode,
                 &query,
-                crate::read_api::PageRequest::with_request_id(request_id, offset, limit),
+                PageRequest::with_request_id(request_id, offset, limit),
             )
         },
         EngineReadSearchHitRow::from_hit,
@@ -168,7 +165,7 @@ pub unsafe extern "C" fn engine_read_inspector_panel(
             |api| {
                 api.backlinks_for_path(
                     &relative_path,
-                    crate::read_api::PageRequest::with_request_id(request_id, offset, limit),
+                    PageRequest::with_request_id(request_id, offset, limit),
                 )
             },
             EngineReadLinkRow::from_projection,
@@ -180,7 +177,7 @@ pub unsafe extern "C" fn engine_read_inspector_panel(
             |api| {
                 api.outgoing_links_for_path(
                     &relative_path,
-                    crate::read_api::PageRequest::with_request_id(request_id, offset, limit),
+                    PageRequest::with_request_id(request_id, offset, limit),
                 )
             },
             EngineReadLinkRow::from_projection,
@@ -192,7 +189,7 @@ pub unsafe extern "C" fn engine_read_inspector_panel(
             |api| {
                 api.tags_for_path(
                     &relative_path,
-                    crate::read_api::PageRequest::with_request_id(request_id, offset, limit),
+                    PageRequest::with_request_id(request_id, offset, limit),
                 )
             },
             EngineReadTagRow::from_record,
@@ -204,7 +201,7 @@ pub unsafe extern "C" fn engine_read_inspector_panel(
             |api| {
                 api.properties_for_path(
                     &relative_path,
-                    crate::read_api::PageRequest::with_request_id(request_id, offset, limit),
+                    PageRequest::with_request_id(request_id, offset, limit),
                 )
             },
             EngineReadPropertyRow::from_projection,
@@ -216,7 +213,7 @@ pub unsafe extern "C" fn engine_read_inspector_panel(
             |api| {
                 api.attachments_for_path(
                     &relative_path,
-                    crate::read_api::PageRequest::with_request_id(request_id, offset, limit),
+                    PageRequest::with_request_id(request_id, offset, limit),
                 )
             },
             EngineReadAttachmentRow::from_projection,
@@ -349,6 +346,8 @@ mod tests {
     use crate::attachments::{
         AttachmentReferenceSource, AttachmentRejectReason, AttachmentResolutionState,
     };
+    use crate::core::files::FileIdentity;
+    use crate::core::paths::lookup_key;
     use crate::ffi::read_rows::{
         ENGINE_READ_NO_NEXT_OFFSET, ENGINE_READ_ROW_KIND_ATTACHMENT, ENGINE_READ_ROW_KIND_BACKLINK,
         ENGINE_READ_ROW_KIND_FILE_TREE, ENGINE_READ_ROW_KIND_GRAPH_EDGE,
@@ -360,8 +359,9 @@ mod tests {
         EngineReadTagRow, decode_header_for_test, string_for_test,
     };
     use crate::parser::PropertyValue;
-    use crate::paths::{FileIdentity, lookup_key};
-    use crate::read_api::{
+    use crate::scanner::{ScanEntry, ScanEntryKind};
+    use crate::sqlite_fts::SearchDocument;
+    use crate::use_cases::read_types::{
         ENGINE_READ_INSPECTOR_PANEL_ATTACHMENTS, ENGINE_READ_INSPECTOR_PANEL_BACKLINKS,
         ENGINE_READ_INSPECTOR_PANEL_OUTGOING, ENGINE_READ_INSPECTOR_PANEL_PROPERTIES,
         ENGINE_READ_INSPECTOR_PANEL_TAGS, ENGINE_READ_LOCAL_GRAPH_DEPTH_ONE_HOP,
@@ -371,8 +371,6 @@ mod tests {
         ENGINE_READ_STATE_STALE, READ_BACKEND_NAME, READ_BACKEND_VERSION, READ_TOKENIZER_CONFIG,
         ReadState,
     };
-    use crate::scanner::{ScanEntry, ScanEntryKind};
-    use crate::sqlite_fts::SearchDocument;
     use serde_json::{Value, json};
     use std::{ffi::CString, fs, path::PathBuf, time::UNIX_EPOCH};
     use tempfile::{TempDir, tempdir};
@@ -417,7 +415,7 @@ mod tests {
         let (header, error_code) = unsafe { take_open_error(response.result) };
 
         assert!(response.handle.is_null());
-        assert_eq!(header.state, crate::read_api::ENGINE_READ_STATE_ERROR);
+        assert_eq!(header.state, ENGINE_READ_STATE_ERROR);
         assert_eq!(error_code, "invalid_input");
     }
 

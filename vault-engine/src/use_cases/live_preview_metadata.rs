@@ -2,13 +2,13 @@ use std::path::Path;
 
 use crate::adapters::sqlite::FileLookupProjection;
 use crate::parser::{MarkdownLink, PropertyValue, WikiLink, parse_markdown};
-use crate::read_api::{
-    LivePreviewMetadataItem, LivePreviewMetadataItemKind, LivePreviewMetadataSource,
-    LivePreviewMetadataState, ReadApiError, ReadApiResult, VaultReadApi,
-};
 use crate::scanner::{ScanEntryKind, classify_file};
 
-use super::read_types::{MAX_PAGE_LIMIT, ReadPage, ReadState};
+use super::read_types::{
+    LivePreviewMetadataItem, LivePreviewMetadataItemKind, LivePreviewMetadataSource,
+    LivePreviewMetadataState, MAX_PAGE_LIMIT, ReadApiError, ReadApiResult, ReadPage, ReadState,
+};
+use super::read_vault::VaultReadApi;
 
 impl VaultReadApi {
     pub fn live_preview_metadata(

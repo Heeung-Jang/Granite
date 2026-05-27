@@ -9,12 +9,14 @@ use crate::adapters::sqlite::{
     IndexPropertyValue, LinkProjection, PropertyProjection, PropertyRecord, TagRecord,
 };
 use crate::attachments::{AttachmentReferenceSource, AttachmentResolutionState};
-use crate::read_api::{
-    LivePreviewMetadataItem, LivePreviewMetadataItemKind, LivePreviewMetadataSource,
-    LivePreviewMetadataState, LocalGraphEdge, LocalGraphEdgeDirection, LocalGraphNode,
-    LocalGraphNodeKind, ReadOpenError, SearchHit,
-};
 use crate::scanner::ScanEntryKind;
+use crate::use_cases::read_graph::{
+    LocalGraphEdge, LocalGraphEdgeDirection, LocalGraphNode, LocalGraphNodeKind,
+};
+use crate::use_cases::read_types::{
+    LivePreviewMetadataItem, LivePreviewMetadataItemKind, LivePreviewMetadataSource,
+    LivePreviewMetadataState, ReadOpenError, SearchHit,
+};
 
 pub const ENGINE_READ_NO_NEXT_OFFSET: u64 = u64::MAX;
 pub const ENGINE_READ_ROW_KIND_OPEN_STATUS: u32 = 1;
@@ -661,10 +663,9 @@ mod tests {
     use super::*;
     use crate::adapters::sqlite::{IndexPropertyValue, PropertyRecord, TagSource};
     use crate::attachments::AttachmentResolutionState;
-    use crate::read_api::{
-        ENGINE_READ_STATE_COMPLETE, ENGINE_READ_STATE_ERROR, LocalGraphEdgeDirection,
-    };
     use crate::scanner::{ScanEntry, ScanEntryKind};
+    use crate::use_cases::read_graph::LocalGraphEdgeDirection;
+    use crate::use_cases::read_types::{ENGINE_READ_STATE_COMPLETE, ENGINE_READ_STATE_ERROR};
     use serde_json::Value;
     use std::time::UNIX_EPOCH;
 
@@ -769,7 +770,7 @@ mod tests {
             kind: ScanEntryKind::Markdown,
             size_bytes: 12,
             modified: Some(UNIX_EPOCH),
-            file_identity: crate::paths::FileIdentity {
+            file_identity: crate::core::files::FileIdentity {
                 device: 1,
                 inode: 2,
             },

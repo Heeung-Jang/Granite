@@ -2,7 +2,7 @@ use std::ffi::CStr;
 use std::os::raw::{c_char, c_uchar};
 use std::slice;
 
-use crate::read_api::ReadApiError;
+use crate::use_cases::read_types::ReadApiError;
 
 use super::json::FfiError;
 use super::read::ReadRebuildFfiError;

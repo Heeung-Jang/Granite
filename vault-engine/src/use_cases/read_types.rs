@@ -1,6 +1,8 @@
 use std::fmt;
 
-use crate::adapters::sqlite::MetadataStoreError;
+use crate::adapters::sqlite::{FileRecord, MetadataStoreError};
+use crate::adapters::tantivy::TantivySearchError;
+use crate::sqlite_fts::SearchResult;
 
 pub const ENGINE_READ_STATE_COMPLETE: u32 = 0;
 pub const ENGINE_READ_STATE_PARTIAL: u32 = 1;
@@ -8,6 +10,18 @@ pub const ENGINE_READ_STATE_STALE: u32 = 2;
 pub const ENGINE_READ_STATE_CANCELLED: u32 = 3;
 pub const ENGINE_READ_STATE_ERROR: u32 = 4;
 pub const ENGINE_READ_STATE_INDEX_UNAVAILABLE: u32 = 5;
+pub const READ_BACKEND_NAME: &str = "sqlite+tantivy";
+pub const READ_BACKEND_VERSION: &str = "metadata-v2";
+pub const READ_TOKENIZER_CONFIG: &str = "tantivy";
+pub const ENGINE_READ_SEARCH_MODE_FILE_NAME: u32 = 1;
+pub const ENGINE_READ_SEARCH_MODE_BODY: u32 = 2;
+pub const ENGINE_READ_INSPECTOR_PANEL_BACKLINKS: u32 = 1;
+pub const ENGINE_READ_INSPECTOR_PANEL_OUTGOING: u32 = 2;
+pub const ENGINE_READ_INSPECTOR_PANEL_TAGS: u32 = 3;
+pub const ENGINE_READ_INSPECTOR_PANEL_PROPERTIES: u32 = 4;
+pub const ENGINE_READ_INSPECTOR_PANEL_ATTACHMENTS: u32 = 5;
+pub const ENGINE_READ_LOCAL_GRAPH_DEPTH_ONE_HOP: u32 = 1;
+pub const ENGINE_READ_LOCAL_GRAPH_DEPTH_TWO_HOP: u32 = 2;
 pub(crate) const MAX_PAGE_LIMIT: usize = 100;
 pub(crate) const MAX_FILE_TREE_PAGE_LIMIT: usize = 100_000;
 
@@ -43,6 +57,71 @@ pub enum ReadState {
     Cancelled,
     Error,
 }
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SearchHit {
+    pub file_id: String,
+    pub path: String,
+    pub title: String,
+    pub rank: f64,
+    pub snippet: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileOpenMetadata {
+    pub file: FileRecord,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LivePreviewMetadataItem {
+    pub kind: LivePreviewMetadataItemKind,
+    pub key: String,
+    pub value: String,
+    pub resolved_file_id: Option<String>,
+    pub resolved_relative_path: Option<String>,
+    pub heading: Option<String>,
+    pub alias: Option<String>,
+    pub state: LivePreviewMetadataState,
+    pub source: LivePreviewMetadataSource,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LivePreviewMetadataItemKind {
+    Property,
+    Tag,
+    Link,
+    Attachment,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LivePreviewMetadataState {
+    None,
+    Resolved,
+    Missing,
+    Remote,
+    Rejected,
+    Unsupported,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LivePreviewMetadataSource {
+    None,
+    Inline,
+    WikiLink,
+    MarkdownLink,
+    WikiEmbed,
+    MarkdownImage,
+}
+
+#[derive(Debug)]
+pub enum ReadApiError {
+    Metadata(MetadataStoreError),
+    Search(TantivySearchError),
+    InvalidInput(&'static str),
+    NotFound(&'static str),
+}
+
+pub type ReadApiResult<T> = Result<T, ReadApiError>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReadOpenError {
@@ -198,3 +277,40 @@ impl fmt::Display for ReadOpenError {
 }
 
 impl std::error::Error for ReadOpenError {}
+
+impl fmt::Display for ReadApiError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Metadata(error) => write!(formatter, "read api metadata error: {error}"),
+            Self::Search(error) => write!(formatter, "read api search error: {error}"),
+            Self::InvalidInput(field) => write!(formatter, "invalid read api input: {field}"),
+            Self::NotFound(field) => write!(formatter, "read api target not found: {field}"),
+        }
+    }
+}
+
+impl std::error::Error for ReadApiError {}
+
+impl From<MetadataStoreError> for ReadApiError {
+    fn from(error: MetadataStoreError) -> Self {
+        Self::Metadata(error)
+    }
+}
+
+impl From<TantivySearchError> for ReadApiError {
+    fn from(error: TantivySearchError) -> Self {
+        Self::Search(error)
+    }
+}
+
+impl From<SearchResult> for SearchHit {
+    fn from(result: SearchResult) -> Self {
+        Self {
+            file_id: result.file_id,
+            path: result.path,
+            title: result.title,
+            rank: result.rank,
+            snippet: result.snippet,
+        }
+    }
+}

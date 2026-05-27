@@ -1,104 +1,28 @@
-use std::fmt;
-
-use crate::adapters::sqlite::{FileRecord, MetadataStoreError};
-use crate::adapters::tantivy::TantivySearchError;
 use crate::graph::{
     WholeVaultGraphInputs, WholeVaultGraphRequest, WholeVaultGraphSnapshot,
     build_whole_vault_graph_snapshot, whole_vault_graph_needs_tags,
 };
-use crate::sqlite_fts::SearchResult;
 use crate::use_cases::read_graph::graph_candidate_files;
 pub use crate::use_cases::read_graph::{
     LocalGraph, LocalGraphDepth, LocalGraphEdge, LocalGraphEdgeDirection, LocalGraphNode,
     LocalGraphNodeKind, LocalGraphRequest,
 };
 pub use crate::use_cases::read_types::{
-    ENGINE_READ_STATE_CANCELLED, ENGINE_READ_STATE_COMPLETE, ENGINE_READ_STATE_ERROR,
-    ENGINE_READ_STATE_INDEX_UNAVAILABLE, ENGINE_READ_STATE_PARTIAL, ENGINE_READ_STATE_STALE,
-    PageRequest, ReadOpenError, ReadOpenResult, ReadPage, ReadState, ReadValue,
+    ENGINE_READ_INSPECTOR_PANEL_ATTACHMENTS, ENGINE_READ_INSPECTOR_PANEL_BACKLINKS,
+    ENGINE_READ_INSPECTOR_PANEL_OUTGOING, ENGINE_READ_INSPECTOR_PANEL_PROPERTIES,
+    ENGINE_READ_INSPECTOR_PANEL_TAGS, ENGINE_READ_LOCAL_GRAPH_DEPTH_ONE_HOP,
+    ENGINE_READ_LOCAL_GRAPH_DEPTH_TWO_HOP, ENGINE_READ_SEARCH_MODE_BODY,
+    ENGINE_READ_SEARCH_MODE_FILE_NAME, ENGINE_READ_STATE_CANCELLED, ENGINE_READ_STATE_COMPLETE,
+    ENGINE_READ_STATE_ERROR, ENGINE_READ_STATE_INDEX_UNAVAILABLE, ENGINE_READ_STATE_PARTIAL,
+    ENGINE_READ_STATE_STALE, FileOpenMetadata, LivePreviewMetadataItem,
+    LivePreviewMetadataItemKind, LivePreviewMetadataSource, LivePreviewMetadataState, PageRequest,
+    READ_BACKEND_NAME, READ_BACKEND_VERSION, READ_TOKENIZER_CONFIG, ReadApiError, ReadApiResult,
+    ReadOpenError, ReadOpenResult, ReadPage, ReadState, ReadValue, SearchHit,
 };
 pub use crate::use_cases::read_vault::{
     VaultReadApi, expected_read_schema_metadata, open_metadata_store_for_read,
     open_tantivy_index_for_read, open_vault_read_api,
 };
-
-pub const READ_BACKEND_NAME: &str = "sqlite+tantivy";
-pub const READ_BACKEND_VERSION: &str = "metadata-v2";
-pub const READ_TOKENIZER_CONFIG: &str = "tantivy";
-pub const ENGINE_READ_SEARCH_MODE_FILE_NAME: u32 = 1;
-pub const ENGINE_READ_SEARCH_MODE_BODY: u32 = 2;
-pub const ENGINE_READ_INSPECTOR_PANEL_BACKLINKS: u32 = 1;
-pub const ENGINE_READ_INSPECTOR_PANEL_OUTGOING: u32 = 2;
-pub const ENGINE_READ_INSPECTOR_PANEL_TAGS: u32 = 3;
-pub const ENGINE_READ_INSPECTOR_PANEL_PROPERTIES: u32 = 4;
-pub const ENGINE_READ_INSPECTOR_PANEL_ATTACHMENTS: u32 = 5;
-pub const ENGINE_READ_LOCAL_GRAPH_DEPTH_ONE_HOP: u32 = 1;
-pub const ENGINE_READ_LOCAL_GRAPH_DEPTH_TWO_HOP: u32 = 2;
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct SearchHit {
-    pub file_id: String,
-    pub path: String,
-    pub title: String,
-    pub rank: f64,
-    pub snippet: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FileOpenMetadata {
-    pub file: FileRecord,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LivePreviewMetadataItem {
-    pub kind: LivePreviewMetadataItemKind,
-    pub key: String,
-    pub value: String,
-    pub resolved_file_id: Option<String>,
-    pub resolved_relative_path: Option<String>,
-    pub heading: Option<String>,
-    pub alias: Option<String>,
-    pub state: LivePreviewMetadataState,
-    pub source: LivePreviewMetadataSource,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LivePreviewMetadataItemKind {
-    Property,
-    Tag,
-    Link,
-    Attachment,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LivePreviewMetadataState {
-    None,
-    Resolved,
-    Missing,
-    Remote,
-    Rejected,
-    Unsupported,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LivePreviewMetadataSource {
-    None,
-    Inline,
-    WikiLink,
-    MarkdownLink,
-    WikiEmbed,
-    MarkdownImage,
-}
-
-#[derive(Debug)]
-pub enum ReadApiError {
-    Metadata(MetadataStoreError),
-    Search(TantivySearchError),
-    InvalidInput(&'static str),
-    NotFound(&'static str),
-}
-
-pub type ReadApiResult<T> = Result<T, ReadApiError>;
 
 impl VaultReadApi {
     pub fn whole_vault_graph(
@@ -181,43 +105,6 @@ impl VaultReadApi {
             },
             value: graph.snapshot,
         })
-    }
-}
-
-impl fmt::Display for ReadApiError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Metadata(error) => write!(formatter, "read api metadata error: {error}"),
-            Self::Search(error) => write!(formatter, "read api search error: {error}"),
-            Self::InvalidInput(field) => write!(formatter, "invalid read api input: {field}"),
-            Self::NotFound(field) => write!(formatter, "read api target not found: {field}"),
-        }
-    }
-}
-
-impl std::error::Error for ReadApiError {}
-
-impl From<MetadataStoreError> for ReadApiError {
-    fn from(error: MetadataStoreError) -> Self {
-        Self::Metadata(error)
-    }
-}
-
-impl From<TantivySearchError> for ReadApiError {
-    fn from(error: TantivySearchError) -> Self {
-        Self::Search(error)
-    }
-}
-
-impl From<SearchResult> for SearchHit {
-    fn from(result: SearchResult) -> Self {
-        Self {
-            file_id: result.file_id,
-            path: result.path,
-            title: result.title,
-            rank: result.rank,
-            snippet: result.snippet,
-        }
     }
 }
 

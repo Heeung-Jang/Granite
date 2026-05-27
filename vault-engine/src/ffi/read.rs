@@ -9,19 +9,17 @@ use crate::ffi::read_rows::{
     ENGINE_READ_ROW_KIND_PROPERTY, ENGINE_READ_ROW_KIND_TAG, EngineReadResultBuffer,
     EngineReadResultBuilder, error_result_buffer, open_error_buffer, open_status_buffer,
 };
-use crate::index_rebuild::IndexRebuildPaths;
-use crate::indexing_pipeline::{
-    IndexingPipelineOptions, load_search_document_sources, run_full_rebuild_pipeline_and_commit,
+use crate::use_cases::index_rebuild::{
+    ReadIndexRebuildError, rebuild_read_index as rebuild_read_index_use_case,
 };
-use crate::paths::VaultRoot;
-use crate::read_api::{
+use crate::use_cases::read_types::{
     ENGINE_READ_INSPECTOR_PANEL_ATTACHMENTS, ENGINE_READ_INSPECTOR_PANEL_BACKLINKS,
     ENGINE_READ_INSPECTOR_PANEL_OUTGOING, ENGINE_READ_INSPECTOR_PANEL_PROPERTIES,
     ENGINE_READ_INSPECTOR_PANEL_TAGS, ENGINE_READ_STATE_CANCELLED, ENGINE_READ_STATE_COMPLETE,
     ENGINE_READ_STATE_ERROR, ENGINE_READ_STATE_PARTIAL, ENGINE_READ_STATE_STALE, ReadApiError,
-    ReadOpenError, ReadPage, ReadState, VaultReadApi, expected_read_schema_metadata,
-    open_vault_read_api,
+    ReadOpenError, ReadPage, ReadState,
 };
+use crate::use_cases::read_vault::{VaultReadApi, open_vault_read_api};
 
 use super::{EngineReadHandle, EngineReadLocalGraphResult, EngineReadOpenResult};
 
@@ -88,6 +86,16 @@ impl ReadRebuildFfiError {
     }
 }
 
+impl From<ReadIndexRebuildError> for ReadRebuildFfiError {
+    fn from(error: ReadIndexRebuildError) -> Self {
+        match error {
+            ReadIndexRebuildError::InvalidInput(field) => Self::invalid_input(field),
+            ReadIndexRebuildError::Path(error) => Self::rebuild_failed(error),
+            ReadIndexRebuildError::RebuildFailed(error) => Self::rebuild_failed(error),
+        }
+    }
+}
+
 pub(super) fn read_rebuild_response<F>(call: F) -> EngineReadResultBuffer
 where
     F: FnOnce() -> Result<u64, ReadRebuildFfiError>,
@@ -111,23 +119,7 @@ pub(super) fn rebuild_read_index(
     data_path: &Path,
     rebuild_path: &Path,
 ) -> Result<u64, ReadRebuildFfiError> {
-    let root = VaultRoot::open(vault_path).map_err(ReadRebuildFfiError::rebuild_failed)?;
-    let index_root = data_path
-        .parent()
-        .ok_or_else(|| ReadRebuildFfiError::invalid_input("data_path"))?;
-    let paths = IndexRebuildPaths::new(root.canonical_root(), index_root, data_path, rebuild_path);
-    let loaded =
-        load_search_document_sources(&root).map_err(ReadRebuildFfiError::rebuild_failed)?;
-    let metadata = expected_read_schema_metadata();
-    let result = run_full_rebuild_pipeline_and_commit(
-        &paths,
-        &loaded.sources,
-        &metadata,
-        &IndexingPipelineOptions::default(),
-    )
-    .map_err(ReadRebuildFfiError::rebuild_failed)?;
-
-    Ok(result.generation)
+    rebuild_read_index_use_case(vault_path, data_path, rebuild_path).map_err(Into::into)
 }
 
 pub(super) fn read_page_response<T, Row, Call, BuildRow>(

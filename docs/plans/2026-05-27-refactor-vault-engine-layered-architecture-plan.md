@@ -849,7 +849,7 @@ Default stop conditions:
   - Build: move current-buffer link/tag/attachment metadata resolution into `use_cases/live_preview_metadata.rs`.
   - Verify: `engine_read_live_preview_metadata_uses_buffer_without_vault_scan` still passes.
 
-- [ ] **RA05.03a Retarget read FFI to use cases**
+- [x] **RA05.03a Retarget read FFI to use cases**
   - Build: migrate `ffi/read.rs` away from `crate::read_api`, `crate::indexing_pipeline`, `crate::index_rebuild`, and `crate::paths`; FFI should call read-vault and rebuild use-case entry points only.
   - Verify: read FFI tests, rebuild FFI tests, and Swift engine smoke pass; FFI direct-adapter scan shows only documented handle-construction exceptions.
 
@@ -1305,10 +1305,10 @@ Use this checklist for each PR or worktree batch:
 
 ## Next Step
 
-On the active `codex/refactor-vault-engine-layered-architecture` branch, Phase 0 through Phase 4 and RA05.01 through RA05.03 are already green. Before continuing the save move, run or explicitly resolve the newly added guard tasks that sit before RA05.04:
+On the active `codex/refactor-vault-engine-layered-architecture` branch, Phase 0 through Phase 4 and RA05.01 through RA05.04e are green. Before continuing deeper indexing moves, resolve the remaining newly added guard tasks:
 
 1. RA01.12 unsafe allowlist audit if it was not already covered by existing FFI/FSEvents tests.
 2. RA04.11 post-adapter performance gate, or document why it is deferred and keep it as a merge blocker.
-3. RA05.03a read FFI retargeting and RA05.03b parser ownership classification.
+3. RA05.03b parser ownership classification.
 
-Then continue with RA05.04 save use-case extraction. Do not start Phase 6 or Phase 7 until Phase 5 boundary scans and FFI retargeting are green.
+Then continue with RA05.05 and RA05.06 indexing use-case extraction. Do not start Phase 6 or Phase 7 until Phase 5 boundary scans and FFI retargeting are green.

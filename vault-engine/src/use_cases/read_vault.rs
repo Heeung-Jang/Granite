@@ -6,11 +6,6 @@ use crate::adapters::sqlite::{
     PropertyProjection, PropertyRecord, TagRecord,
 };
 use crate::adapters::tantivy::{TantivySearchError, TantivySearchIndex};
-use crate::read_api::{
-    ENGINE_READ_SEARCH_MODE_BODY, ENGINE_READ_SEARCH_MODE_FILE_NAME, FileOpenMetadata,
-    READ_BACKEND_NAME, READ_BACKEND_VERSION, READ_TOKENIZER_CONFIG, ReadApiError, ReadApiResult,
-    SearchHit,
-};
 
 use super::read_graph::{
     LocalGraph, LocalGraphBuild, LocalGraphBuilder, LocalGraphDepth, LocalGraphEdge,
@@ -18,8 +13,10 @@ use super::read_graph::{
     graph_file_node_id, graph_unresolved_node_id, push_frontier_file, unresolved_graph_node,
 };
 use super::read_types::{
-    MAX_FILE_TREE_PAGE_LIMIT, MAX_PAGE_LIMIT, PageRequest, ReadOpenError, ReadOpenResult, ReadPage,
-    ReadState, ReadValue,
+    ENGINE_READ_SEARCH_MODE_BODY, ENGINE_READ_SEARCH_MODE_FILE_NAME, FileOpenMetadata,
+    MAX_FILE_TREE_PAGE_LIMIT, MAX_PAGE_LIMIT, PageRequest, READ_BACKEND_NAME, READ_BACKEND_VERSION,
+    READ_TOKENIZER_CONFIG, ReadApiError, ReadApiResult, ReadOpenError, ReadOpenResult, ReadPage,
+    ReadState, ReadValue, SearchHit,
 };
 
 pub struct VaultReadApi {
