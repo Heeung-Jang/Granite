@@ -22,6 +22,15 @@ func summaryLanguageFollowsKoreanEnglishPolicy() {
 }
 
 @Test
+func summaryLimitsDecideBackgroundRefinementBySourceSize() {
+    let limits = DocumentSummaryLimits(refinementSourceByteThreshold: 100)
+
+    #expect(!limits.shouldRunBackgroundRefinement(sourceByteCount: 99))
+    #expect(limits.shouldRunBackgroundRefinement(sourceByteCount: 100))
+    #expect(limits.shouldRunBackgroundRefinement(sourceByteCount: 101))
+}
+
+@Test
 func summaryStageRawValuesAreStable() {
     #expect(SummaryStage.fast.rawValue == "fast")
     #expect(SummaryStage.refined.rawValue == "refined")

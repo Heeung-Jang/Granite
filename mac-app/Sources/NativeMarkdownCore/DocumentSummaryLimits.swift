@@ -9,6 +9,7 @@ public struct DocumentSummaryLimits: Equatable, Sendable {
     public let chunkOutputTokens: Int
     public let fastOutputTokens: Int
     public let finalOutputTokens: Int
+    public let refinementSourceByteThreshold: Int
 
     public init(
         maxSourceBytes: Int = 512 * 1024,
@@ -18,7 +19,8 @@ public struct DocumentSummaryLimits: Equatable, Sendable {
         fallbackInputCharacters: Int = 6_000,
         chunkOutputTokens: Int = 220,
         fastOutputTokens: Int = 280,
-        finalOutputTokens: Int = 500
+        finalOutputTokens: Int = 500,
+        refinementSourceByteThreshold: Int = 48 * 1024
     ) {
         self.maxSourceBytes = max(1, maxSourceBytes)
         self.maxChunks = max(1, maxChunks)
@@ -28,5 +30,10 @@ public struct DocumentSummaryLimits: Equatable, Sendable {
         self.chunkOutputTokens = max(64, chunkOutputTokens)
         self.fastOutputTokens = max(64, fastOutputTokens)
         self.finalOutputTokens = max(128, finalOutputTokens)
+        self.refinementSourceByteThreshold = max(1, refinementSourceByteThreshold)
+    }
+
+    public func shouldRunBackgroundRefinement(sourceByteCount: Int) -> Bool {
+        sourceByteCount >= refinementSourceByteThreshold
     }
 }

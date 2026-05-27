@@ -97,6 +97,8 @@ public enum SummaryProgressState: Equatable, Sendable {
     case fastStreaming
     case fastComplete
     case fallingBack
+    case refining
+    case refinedComplete
     case summarizingChunk(current: Int, total: Int)
     case finalizing
     case complete
