@@ -2,14 +2,16 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 use crate::adapters::sqlite::reads::{
+    backlink_projections as read_backlink_projections, backlinks as read_backlinks,
     file_tree_projection as read_file_tree_projection, get_file as read_get_file,
     list_files as read_list_files, list_markdown_files as read_list_markdown_files,
-    lookup_file as read_lookup_file,
+    lookup_file as read_lookup_file, outgoing_link_projections as read_outgoing_link_projections,
+    outgoing_links as read_outgoing_links,
 };
 use crate::adapters::sqlite::rows::{
     row_to_attachment, row_to_graph_file, row_to_graph_resolved_edge, row_to_graph_tag,
-    row_to_graph_unresolved_edge, row_to_heading, row_to_link, row_to_link_projection,
-    row_to_property, row_to_tag, row_to_tag_note_projection,
+    row_to_graph_unresolved_edge, row_to_heading, row_to_property, row_to_tag,
+    row_to_tag_note_projection,
 };
 use crate::adapters::sqlite::schema::{
     create_projection_indexes, create_schema, drop_projection_indexes, read_schema_metadata,
@@ -611,13 +613,7 @@ impl MetadataStore {
         offset: usize,
         limit: usize,
     ) -> MetadataStoreResult<Vec<LinkEdgeRecord>> {
-        let mut statement = self.connection.prepare(
-            "SELECT source_file_id, target_text, resolved_target_file_id, heading, alias, is_embed \
-             FROM links WHERE source_file_id = ?1 ORDER BY target_text, id LIMIT ?2 OFFSET ?3",
-        )?;
-        let rows =
-            statement.query_map(params![file_id, limit as i64, offset as i64], row_to_link)?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+        read_outgoing_links(&self.connection, file_id, offset, limit)
     }
 
     pub fn backlinks(
@@ -626,14 +622,7 @@ impl MetadataStore {
         offset: usize,
         limit: usize,
     ) -> MetadataStoreResult<Vec<LinkEdgeRecord>> {
-        let mut statement = self.connection.prepare(
-            "SELECT source_file_id, target_text, resolved_target_file_id, heading, alias, is_embed \
-             FROM links WHERE resolved_target_file_id = ?1 \
-             ORDER BY source_file_id, target_text, id LIMIT ?2 OFFSET ?3",
-        )?;
-        let rows =
-            statement.query_map(params![file_id, limit as i64, offset as i64], row_to_link)?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+        read_backlinks(&self.connection, file_id, offset, limit)
     }
 
     pub fn backlink_projections(
@@ -642,20 +631,7 @@ impl MetadataStore {
         offset: usize,
         limit: usize,
     ) -> MetadataStoreResult<Vec<LinkProjection>> {
-        let mut statement = self.connection.prepare(
-            "SELECT l.source_file_id, source.relative_path, l.resolved_target_file_id,
-                    target.relative_path, l.target_text, l.heading, l.alias, l.is_embed
-             FROM links l
-             LEFT JOIN files source ON source.file_id = l.source_file_id
-             LEFT JOIN files target ON target.file_id = l.resolved_target_file_id
-             WHERE l.resolved_target_file_id = ?1
-             ORDER BY source.relative_path, l.target_text, l.id LIMIT ?2 OFFSET ?3",
-        )?;
-        let rows = statement.query_map(
-            params![file_id, limit as i64, offset as i64],
-            row_to_link_projection,
-        )?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+        read_backlink_projections(&self.connection, file_id, offset, limit)
     }
 
     pub fn outgoing_link_projections(
@@ -664,20 +640,7 @@ impl MetadataStore {
         offset: usize,
         limit: usize,
     ) -> MetadataStoreResult<Vec<LinkProjection>> {
-        let mut statement = self.connection.prepare(
-            "SELECT l.source_file_id, source.relative_path, l.resolved_target_file_id,
-                    target.relative_path, l.target_text, l.heading, l.alias, l.is_embed
-             FROM links l
-             LEFT JOIN files source ON source.file_id = l.source_file_id
-             LEFT JOIN files target ON target.file_id = l.resolved_target_file_id
-             WHERE l.source_file_id = ?1
-             ORDER BY l.target_text, l.id LIMIT ?2 OFFSET ?3",
-        )?;
-        let rows = statement.query_map(
-            params![file_id, limit as i64, offset as i64],
-            row_to_link_projection,
-        )?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+        read_outgoing_link_projections(&self.connection, file_id, offset, limit)
     }
 
     pub fn tags(
