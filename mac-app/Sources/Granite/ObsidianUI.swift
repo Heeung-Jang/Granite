@@ -52,6 +52,10 @@ enum ObsidianUI {
         scaled(6, scale: scale)
     }
 
+    static func fontSize(_ value: CGFloat, scale: Double) -> CGFloat {
+        scaled(value, scale: scale)
+    }
+
     static func displayedPaneWidth(logicalWidth: Double, scale: Double) -> CGFloat {
         CGFloat(logicalWidth) * normalizedScale(scale)
     }
@@ -66,6 +70,7 @@ enum ObsidianUI {
     }
 }
 struct ObsidianIconButton: View {
+    @Environment(\.appContentZoomScale) private var appContentZoomScale
     let systemName: String
     let accessibilityLabel: String
     var isSelected = false
@@ -74,14 +79,20 @@ struct ObsidianIconButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 16, weight: isSelected ? .semibold : .regular))
+                .font(.system(
+                    size: ObsidianUI.iconFontSize(scale: appContentZoomScale),
+                    weight: isSelected ? .semibold : .regular
+                ))
                 .foregroundStyle(isSelected ? Color.accentColor : .secondary)
-                .frame(width: 30, height: 30)
+                .frame(
+                    width: ObsidianUI.iconButtonSize(scale: appContentZoomScale),
+                    height: ObsidianUI.iconButtonSize(scale: appContentZoomScale)
+                )
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .background(isSelected ? ObsidianUI.selectedFill : Color.clear)
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .clipShape(RoundedRectangle(cornerRadius: ObsidianUI.iconCornerRadius(scale: appContentZoomScale)))
         .help(accessibilityLabel)
         .accessibilityLabel(accessibilityLabel)
     }
