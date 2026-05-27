@@ -567,7 +567,7 @@ Default stop conditions:
   - Build: move parser output structs/enums and property value types before metadata conversion moves.
   - Verify: parser fixture tests and metadata property tests still pass.
 
-- [ ] **RA03.01f Move attachment domain enums**
+- [x] **RA03.01f Move attachment domain enums**
   - Build: move attachment reference source/state/settings enums that are stored by metadata records into `core/attachments.rs`.
   - Verify: attachment resolution tests and metadata attachment tests pass.
 
