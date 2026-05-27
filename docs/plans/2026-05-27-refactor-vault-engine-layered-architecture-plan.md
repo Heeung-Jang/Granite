@@ -664,7 +664,7 @@ Default stop conditions:
   - Verify: after each surface move, run the narrow test for that surface before moving the next one.
   - Stop condition: query ordering, limit semantics, or partial-state behavior changes.
 
-- [ ] **RA04.02f Move `MetadataStore` shell last**
+- [x] **RA04.02f Move `MetadataStore` shell last**
   - Build: move `MetadataStore`, `IndexedFileRecords`, `MetadataStoreError`, and constructor/open methods to `adapters/sqlite/metadata_store.rs` after helpers are already under the SQLite adapter.
   - Verify: full `index::tests` filter or new `adapters::sqlite` test filter passes.
 

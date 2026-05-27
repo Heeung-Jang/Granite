@@ -1,7 +1,7 @@
 use rusqlite::{Connection, OptionalExtension, params};
 
+use crate::adapters::sqlite::metadata_store::{MetadataStoreError, MetadataStoreResult};
 use crate::core::metadata::IndexSchemaMetadata;
-use crate::index::{MetadataStoreError, MetadataStoreResult};
 
 pub(crate) fn create_schema(connection: &Connection) -> MetadataStoreResult<()> {
     connection.execute_batch(

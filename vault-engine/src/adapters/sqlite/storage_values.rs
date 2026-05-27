@@ -1,11 +1,11 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crate::adapters::sqlite::metadata_store::{MetadataStoreError, MetadataStoreResult};
 use crate::core::attachments::{
     AttachmentReferenceSource, AttachmentRejectReason, AttachmentResolutionState,
 };
 use crate::core::metadata::{FileIndexStatus, IndexPropertyValue, TagSource};
-use crate::index::{MetadataStoreError, MetadataStoreResult};
 use crate::scanner::ScanEntryKind;
 
 pub(crate) fn property_value_to_storage(

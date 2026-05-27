@@ -1,3 +1,4 @@
+pub(crate) mod metadata_store;
 pub(crate) mod reads;
 pub(crate) mod rows;
 pub(crate) mod schema;

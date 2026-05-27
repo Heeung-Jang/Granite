@@ -1,5 +1,4 @@
-use std::fmt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::adapters::sqlite::reads::{
     attachment_projections as read_attachment_projections, attachments as read_attachments,
@@ -19,10 +18,7 @@ use crate::adapters::sqlite::reads::{
     property_projections as read_property_projections,
     tag_note_projections as read_tag_note_projections, tags as read_tags,
 };
-use crate::adapters::sqlite::schema::{
-    create_projection_indexes, create_schema, drop_projection_indexes, read_schema_metadata,
-    write_schema_metadata,
-};
+use crate::adapters::sqlite::schema::{create_projection_indexes, drop_projection_indexes};
 use crate::adapters::sqlite::storage_values::{
     attachment_source_to_str, attachment_state_to_storage, bool_to_int, file_status_to_str,
     path_to_string, property_value_to_storage, scan_kind_to_str, system_time_to_unix_ms,
@@ -33,7 +29,7 @@ use crate::adapters::sqlite::writes::{
     insert_tag, upsert_file,
 };
 use crate::attachments::{AttachmentReferenceSource, AttachmentResolutionState};
-use rusqlite::{Connection, OpenFlags, params};
+use rusqlite::params;
 
 use crate::graph_key::unresolved_target_key;
 use crate::paths::lookup_key;
@@ -42,6 +38,9 @@ use crate::scanner::{ScanEntry, ScanEntryKind};
 pub const INDEX_SCHEMA_VERSION: u32 = 2;
 pub const MAX_INDEX_ERROR_CHARS: usize = 512;
 
+pub use crate::adapters::sqlite::metadata_store::{
+    MetadataStore, MetadataStoreError, MetadataStoreResult,
+};
 pub use crate::core::metadata::{
     AttachmentRecord, FileIndexStatus, FileMetadataRecords, FileRecord, HeadingRecord,
     IndexPropertyValue, IndexSchemaMetadata, IndexedFileRecords, LinkEdgeRecord, PropertyRecord,
@@ -144,22 +143,6 @@ pub struct AttachmentProjection {
     pub resolved_relative_path: Option<PathBuf>,
 }
 
-pub struct MetadataStore {
-    connection: Connection,
-}
-
-#[derive(Debug)]
-pub enum MetadataStoreError {
-    Sqlite(rusqlite::Error),
-    SchemaMismatch {
-        stored: Box<IndexSchemaMetadata>,
-        expected: Box<IndexSchemaMetadata>,
-    },
-    InvalidStoredValue(&'static str),
-}
-
-pub type MetadataStoreResult<T> = Result<T, MetadataStoreError>;
-
 impl IndexSchemaMetadata {
     pub fn new(
         backend_name: impl Into<String>,
@@ -228,69 +211,6 @@ impl FileRecord {
 }
 
 impl MetadataStore {
-    pub fn open(
-        path: impl AsRef<std::path::Path>,
-        expected: &IndexSchemaMetadata,
-    ) -> MetadataStoreResult<Self> {
-        Self::from_connection(Connection::open(path)?, expected)
-    }
-
-    pub fn stored_schema_metadata(
-        path: impl AsRef<std::path::Path>,
-    ) -> MetadataStoreResult<Option<IndexSchemaMetadata>> {
-        let connection = Connection::open(path)?;
-        read_schema_metadata(&connection)
-    }
-
-    pub fn open_in_memory(expected: &IndexSchemaMetadata) -> MetadataStoreResult<Self> {
-        Self::from_connection(Connection::open_in_memory()?, expected)
-    }
-
-    pub fn release_memory(&self) -> MetadataStoreResult<()> {
-        self.connection.execute_batch("PRAGMA shrink_memory;")?;
-        Ok(())
-    }
-
-    pub fn open_existing_read_only(
-        path: impl AsRef<Path>,
-        expected: &IndexSchemaMetadata,
-    ) -> MetadataStoreResult<(Self, IndexSchemaMetadata)> {
-        let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-        let stored = read_schema_metadata(&connection)?
-            .ok_or(MetadataStoreError::InvalidStoredValue("schema_version"))?;
-        let expected_with_stored_generation = IndexSchemaMetadata {
-            generation: stored.generation,
-            ..expected.clone()
-        };
-        if stored != expected_with_stored_generation {
-            return Err(MetadataStoreError::SchemaMismatch {
-                stored: Box::new(stored),
-                expected: Box::new(expected_with_stored_generation),
-            });
-        }
-
-        Ok((Self { connection }, stored))
-    }
-
-    fn from_connection(
-        connection: Connection,
-        expected: &IndexSchemaMetadata,
-    ) -> MetadataStoreResult<Self> {
-        create_schema(&connection)?;
-        match read_schema_metadata(&connection)? {
-            Some(stored) if stored != *expected => {
-                return Err(MetadataStoreError::SchemaMismatch {
-                    stored: Box::new(stored),
-                    expected: Box::new(expected.clone()),
-                });
-            }
-            Some(_) => {}
-            None => write_schema_metadata(&connection, expected)?,
-        }
-
-        Ok(Self { connection })
-    }
-
     pub fn replace_file_records(
         &mut self,
         file: &FileRecord,
@@ -842,37 +762,22 @@ fn truncate_index_error(error: &str) -> String {
     trimmed.chars().take(MAX_INDEX_ERROR_CHARS).collect()
 }
 
-impl fmt::Display for MetadataStoreError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Sqlite(error) => write!(formatter, "sqlite metadata store error: {error}"),
-            Self::SchemaMismatch { .. } => write!(formatter, "metadata schema mismatch"),
-            Self::InvalidStoredValue(field) => {
-                write!(formatter, "invalid stored metadata value for {field}")
-            }
-        }
-    }
-}
-
-impl std::error::Error for MetadataStoreError {}
-
-impl From<rusqlite::Error> for MetadataStoreError {
-    fn from(error: rusqlite::Error) -> Self {
-        Self::Sqlite(error)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::adapters::sqlite::reads as sqlite_reads;
+    use crate::adapters::sqlite::schema::{create_schema, write_schema_metadata};
     use crate::attachments::{
         AttachmentReferenceSource, AttachmentRejectReason, AttachmentResolutionState,
     };
     use crate::parser::PropertyValue;
     use crate::paths::VaultRoot;
     use crate::scanner::scan_vault;
-    use std::{path::PathBuf, time::Instant};
+    use rusqlite::Connection;
+    use std::{
+        path::{Path, PathBuf},
+        time::Instant,
+    };
 
     #[test]
     fn fixture_file_transitions_from_seen_to_search_indexed() {

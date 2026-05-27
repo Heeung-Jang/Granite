@@ -1,5 +1,6 @@
 use rusqlite::{Connection, params};
 
+use crate::adapters::sqlite::metadata_store::MetadataStoreResult;
 use crate::adapters::sqlite::storage_values::{
     attachment_source_to_str, attachment_state_to_storage, bool_to_int, file_status_to_str,
     path_to_string, property_value_to_storage, scan_kind_to_str, system_time_to_unix_ms,
@@ -9,7 +10,6 @@ use crate::core::metadata::{
     AttachmentRecord, FileRecord, HeadingRecord, LinkEdgeRecord, PropertyRecord, TagRecord,
 };
 use crate::graph_key::unresolved_target_key;
-use crate::index::MetadataStoreResult;
 
 pub(crate) fn upsert_file(connection: &Connection, file: &FileRecord) -> MetadataStoreResult<()> {
     connection.execute(

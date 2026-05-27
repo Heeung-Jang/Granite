@@ -1,5 +1,6 @@
 use rusqlite::{Connection, OptionalExtension, params};
 
+use crate::adapters::sqlite::metadata_store::MetadataStoreResult;
 use crate::adapters::sqlite::rows::{
     row_to_attachment, row_to_file_lookup_projection, row_to_file_record, row_to_graph_file,
     row_to_graph_resolved_edge, row_to_graph_tag, row_to_graph_unresolved_edge, row_to_heading,
@@ -13,8 +14,7 @@ use crate::core::metadata::{
 use crate::index::{
     AttachmentProjection, FileLookupProjection, FileTreeProjection, GraphFileRecord,
     GraphQueryPlanSummary, GraphQueryStage, GraphResolvedEdgeRecord, GraphTagRecord,
-    GraphUnresolvedEdgeRecord, LinkProjection, MetadataStoreResult, PropertyProjection,
-    TagNoteProjection,
+    GraphUnresolvedEdgeRecord, LinkProjection, PropertyProjection, TagNoteProjection,
 };
 
 pub(crate) fn get_file(
