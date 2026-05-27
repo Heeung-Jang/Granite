@@ -1537,9 +1537,10 @@ Default stop conditions:
   - Build: if `bench/vault-profiler` remains a separate crate, expose only deliberate `diagnostics` facades and document why they are public.
   - Verify: `lib.rs` public modules are `ffi`, `diagnostics`, and any explicitly documented stable facade only.
 
-- [ ] **RA07.02 Update health check module list**
+- [x] **RA07.02 Update health check module list**
   - Build: update `health_check()` to report architecture-level modules or intentional engine capabilities, not every internal file.
   - Verify: health check unit test and Swift engine smoke pass.
+  - Evidence: `health_check()` now reports capability groups (`ffi`, `diagnostics`, `read`, `save`, `indexing`, `graph`, `watcher`) instead of transitional file/module names. `cargo test --manifest-path vault-engine/Cargo.toml health_check_reports_expected_modules`, full `vault-engine` tests, and `swift test --package-path mac-app --filter engineHealthDetectsAbiMismatch` passed.
 
 - [ ] **RA07.03 Remove transitional re-exports**
   - Build: delete compatibility modules added only for incremental migration.
