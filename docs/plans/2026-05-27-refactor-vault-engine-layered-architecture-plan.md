@@ -1105,13 +1105,14 @@ Default stop conditions:
   - Note: the conservative profiler default with unresolved links and orphan nodes enabled exceeded the bridge/memory budget (`69,385,498` bytes and `443,088,896` bytes RSS delta). Keep that as future graph option optimization work, not the shipped default gate.
   - Stop condition: graph artifact includes private note paths/content, stable private file identifiers, tags/frontmatter values, or exceeds the graph-view memory/bridge budget.
 
-- [ ] **RA05.09f3 Prove graph FFI does not add a second graph materialization**
+- [x] **RA05.09f3 Prove graph FFI does not add a second graph materialization**
   - Build: no behavior change; inspect graph FFI/use-case diff after retargeting for duplicate `Vec` materialization or JSON round trips before final encoding.
   - Verify:
     ```sh
     git diff --unified=0 -- vault-engine/src/ffi/graph.rs vault-engine/src/use_cases/build_graph.rs |
       rg -n '^\+.*(collect::<Vec|\.collect\(\)|clone\(\)|serde_json::|to_string\(\)|format!\()'
     ```
+  - Evidence: checked the committed graph retargeting diff with `git diff --unified=0 857ca0a..111dbd3 -- vault-engine/src/ffi/graph.rs vault-engine/src/use_cases/build_graph.rs`. The only matches are owned candidate-file IDs (`file_id.to_string()`), the tag lookup ID list (`file.file_id.clone().collect::<Vec<_>>()`) used only when group rules need tags, and no FFI-side `serde_json` round trip or duplicate full graph collection.
   - Stop condition: a new materialization appears in graph FFI/use-case code without a benchmark note and an explicit reason.
 
 - [ ] **RA05.09f4 Add graph byte-cap serialization memory gate**
