@@ -153,7 +153,9 @@ enum FoundationModelsSummaryPerformanceProbe {
         }
         sensitiveValues.append(source)
 
-        let compressed = DocumentSummaryCompressor().compress(source)
+        let limits = performanceLimits(contextSize: contextSize)
+        let compressed = DocumentSummaryCompressor(maxCharacters: limits.fastSourceCharacters)
+            .compress(source)
         sensitiveValues.append(compressed.text)
         let snapshot = EditorBufferSnapshot(
             vaultID: vaultURL.standardizedFileURL.path,
@@ -163,7 +165,7 @@ enum FoundationModelsSummaryPerformanceProbe {
             revision: 1,
             contents: source
         )
-        let request = DocumentSummaryRequest(snapshot: snapshot, limits: performanceLimits(contextSize: contextSize))
+        let request = DocumentSummaryRequest(snapshot: snapshot, limits: limits)
         let pipeline = DocumentSummaryPipeline(generator: generator, cache: DocumentSummaryCache())
         let timer = AppTelemetryTimer()
         let firstSnapshot = FirstSnapshotRecorder()
@@ -372,8 +374,9 @@ enum FoundationModelsSummaryPerformanceProbe {
             maxModelCalls: 160,
             maxReduceInputTokens: 3_000,
             fallbackInputCharacters: min(12_000, max(6_000, (contextSize ?? 4_096) * 2)),
+            fastSourceCharacters: 1_000,
             chunkOutputTokens: 220,
-            fastOutputTokens: 280,
+            fastOutputTokens: 64,
             finalOutputTokens: 500,
             refinementSourceByteThreshold: 48 * 1024
         )

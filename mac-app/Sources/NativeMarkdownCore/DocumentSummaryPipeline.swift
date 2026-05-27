@@ -213,12 +213,12 @@ public struct DocumentSummaryPipeline: Sendable {
             throw SummaryGenerationError.unavailable(reason)
         }
 
-        let compressed = DocumentSummaryCompressor().compress(request.snapshot.contents)
+        let compressed = DocumentSummaryCompressor(maxCharacters: request.limits.fastSourceCharacters)
+            .compress(request.snapshot.contents)
         let prompt = DocumentSummaryPromptBuilder.fastPrompt(
             compressedSource: compressed.text,
             language: language
         )
-        _ = try await generator.tokenCount(prompt)
         try await ensureFresh(request.key, isFresh: isFresh)
 
         let response = try await generator.stream(

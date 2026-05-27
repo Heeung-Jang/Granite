@@ -143,7 +143,10 @@ swift run --package-path mac-app Granite --editor-bridge-probe
 swift run --package-path mac-app Granite --workspace-tabs-probe
 swift run --package-path mac-app Granite --startup-vault-restore-probe
 swift run --package-path mac-app Granite --foundation-models-smoke-probe
+swift run --package-path mac-app Granite --foundation-models-performance-probe --vault "/path/to/your/vault"
 ```
+
+The Foundation Models performance probe is a manual private-vault benchmark. It reports only safe case IDs, byte counts, compression ratios, timings, pass/fail state, and skip reasons; it must not emit raw note text, generated summaries, prompts, content hashes, or absolute vault paths.
 
 Packaged app verification:
 
@@ -152,6 +155,7 @@ codesign --verify --deep --strict dist/Granite.app
 dist/Granite.app/Contents/MacOS/Granite --live-preview-style-probe
 dist/Granite.app/Contents/MacOS/Granite --editor-bridge-probe
 dist/Granite.app/Contents/MacOS/Granite --foundation-models-smoke-probe
+dist/Granite.app/Contents/MacOS/Granite --foundation-models-performance-probe --vault "/path/to/your/vault"
 ```
 
 ## Technology Stack

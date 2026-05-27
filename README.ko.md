@@ -147,7 +147,10 @@ swift run --package-path mac-app Granite --editor-bridge-probe
 swift run --package-path mac-app Granite --workspace-tabs-probe
 swift run --package-path mac-app Granite --startup-vault-restore-probe
 swift run --package-path mac-app Granite --foundation-models-smoke-probe
+swift run --package-path mac-app Granite --foundation-models-performance-probe --vault "/path/to/your/vault"
 ```
+
+Foundation Models performance probe는 개인 vault를 사용하는 수동 benchmark입니다. 출력은 안전한 case ID, byte 수, compression ratio, timing, pass/fail, skip reason만 포함해야 하며 원문 note text, 생성된 summary, prompt, content hash, vault 절대 경로를 출력하지 않아야 합니다.
 
 패키지된 앱 검증:
 
@@ -156,6 +159,7 @@ codesign --verify --deep --strict dist/Granite.app
 dist/Granite.app/Contents/MacOS/Granite --live-preview-style-probe
 dist/Granite.app/Contents/MacOS/Granite --editor-bridge-probe
 dist/Granite.app/Contents/MacOS/Granite --foundation-models-smoke-probe
+dist/Granite.app/Contents/MacOS/Granite --foundation-models-performance-probe --vault "/path/to/your/vault"
 ```
 
 ## 기술 스택

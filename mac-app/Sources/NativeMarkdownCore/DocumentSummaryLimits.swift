@@ -6,6 +6,7 @@ public struct DocumentSummaryLimits: Equatable, Sendable {
     public let maxModelCalls: Int
     public let maxReduceInputTokens: Int
     public let fallbackInputCharacters: Int
+    public let fastSourceCharacters: Int
     public let chunkOutputTokens: Int
     public let fastOutputTokens: Int
     public let finalOutputTokens: Int
@@ -17,8 +18,9 @@ public struct DocumentSummaryLimits: Equatable, Sendable {
         maxModelCalls: Int = 80,
         maxReduceInputTokens: Int = 3_000,
         fallbackInputCharacters: Int = 6_000,
+        fastSourceCharacters: Int = 1_000,
         chunkOutputTokens: Int = 220,
-        fastOutputTokens: Int = 280,
+        fastOutputTokens: Int = 64,
         finalOutputTokens: Int = 500,
         refinementSourceByteThreshold: Int = 48 * 1024
     ) {
@@ -27,6 +29,7 @@ public struct DocumentSummaryLimits: Equatable, Sendable {
         self.maxModelCalls = max(1, maxModelCalls)
         self.maxReduceInputTokens = max(1, maxReduceInputTokens)
         self.fallbackInputCharacters = max(200, fallbackInputCharacters)
+        self.fastSourceCharacters = max(512, fastSourceCharacters)
         self.chunkOutputTokens = max(64, chunkOutputTokens)
         self.fastOutputTokens = max(64, fastOutputTokens)
         self.finalOutputTokens = max(128, finalOutputTokens)

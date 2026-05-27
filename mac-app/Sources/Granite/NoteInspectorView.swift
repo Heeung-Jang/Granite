@@ -370,7 +370,11 @@ struct NoteInspectorView: View {
             } else {
                 summaryState = .loading(progress)
             }
-        case .fastComplete, .refinedComplete:
+        case .fastComplete:
+            if case .refining(let summary) = summaryState {
+                summaryState = .fastComplete(summary)
+            }
+        case .refinedComplete:
             break
         default:
             summaryState = .loading(progress)

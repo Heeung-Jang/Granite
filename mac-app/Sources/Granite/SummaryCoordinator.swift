@@ -168,6 +168,13 @@ final class SummaryCoordinator: @unchecked Sendable {
             } catch is CancellationError {
                 return
             } catch {
+                guard let self else {
+                    return
+                }
+                let fresh = await self.isFreshForRefinement(request.key, appStateBox: appStateBox)
+                if fresh {
+                    await progress(.fastComplete)
+                }
                 return
             }
         }

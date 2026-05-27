@@ -87,8 +87,8 @@ struct FoundationModelsSummaryGenerator: DocumentSummaryGenerating {
             )
             var latest = ""
             for try await snapshot in stream {
-                latest = snapshot
-                await onSnapshot(snapshot)
+                latest = snapshot.content
+                await onSnapshot(snapshot.content)
             }
             return latest
         } catch is CancellationError {

@@ -23,6 +23,7 @@ struct SummaryPanelProbeReport: Codable, Equatable {
     var stagedCancelStopsFastStream: Bool
     var stagedCancelStopsRefinement: Bool
     var stagedStaleRefinedRejected: Bool
+    var stagedRefinementFailureKeepsFastComplete: Bool
     var foundationModelsCompilePath: String
     var summary: ProbeCheckSummary
 }
@@ -114,6 +115,7 @@ enum SummaryPanelProbe {
             stagedCancelStopsFastStream: false,
             stagedCancelStopsRefinement: false,
             stagedStaleRefinedRejected: false,
+            stagedRefinementFailureKeepsFastComplete: false,
             foundationModelsCompilePath: foundationModelsCompilePath,
             summary: .passed
         )
@@ -126,6 +128,7 @@ enum SummaryPanelProbe {
         report.stagedCancelStopsFastStream = staged.cancelStopsFastStream
         report.stagedCancelStopsRefinement = staged.cancelStopsRefinement
         report.stagedStaleRefinedRejected = staged.staleRefinedRejected
+        report.stagedRefinementFailureKeepsFastComplete = staged.refinementFailureKeepsFastComplete
         let encoded = encodedReport(report)
         report.artifactPrivacyScan = !encoded.contains(source)
             && !encoded.contains("secret-token-should-not-leak")
@@ -214,7 +217,8 @@ enum SummaryPanelProbe {
             refinementProgress: await stagedRefinementProgressRecorded(),
             cancelStopsFastStream: await stagedCancelStopsFastStream(),
             cancelStopsRefinement: await stagedCancelStopsRefinement(),
-            staleRefinedRejected: await stagedStaleRefinedRejected()
+            staleRefinedRejected: await stagedStaleRefinedRejected(),
+            refinementFailureKeepsFastComplete: await stagedRefinementFailureKeepsFastComplete()
         )
     }
 
@@ -498,6 +502,38 @@ enum SummaryPanelProbe {
     }
 
     @MainActor
+    private static func stagedRefinementFailureKeepsFastComplete() async -> Bool {
+        let generator = ProbeSummaryGenerator(throwsOnGenerate: true)
+        let coordinator = SummaryCoordinator(generatorFactory: { generator })
+        let context = stagedContext(
+            source: longProbeSource(),
+            limits: longProbeLimits(refinementSourceByteThreshold: 200)
+        )
+        let recorder = StagedSummaryProbeRecorder()
+        do {
+            let summary = try await coordinator.summarizeStaged(
+                request: context.request,
+                appState: context.appState,
+                progress: recorder.recordProgress,
+                onSnapshot: recorder.recordSnapshot,
+                onSummary: recorder.recordSummary
+            )
+            let fastCompleteRestored = await waitForCondition {
+                recorder.progressStates.containsOrdered([.refining, .fastComplete])
+            }
+            let generateCount = await generator.generateCount
+            coordinator.cancel()
+            return summary.metadata.stage == .fast
+                && recorder.summaryStages == [.fast]
+                && generateCount > 0
+                && fastCompleteRestored
+        } catch {
+            coordinator.cancel()
+            return false
+        }
+    }
+
+    @MainActor
     private static func stagedContext(
         source: String,
         limits: DocumentSummaryLimits
@@ -581,6 +617,7 @@ private struct StagedCoordinatorProbeResult: Equatable {
     var cancelStopsFastStream: Bool
     var cancelStopsRefinement: Bool
     var staleRefinedRejected: Bool
+    var refinementFailureKeepsFastComplete: Bool
 }
 
 private struct StagedCoordinatorProbeContext {
@@ -647,13 +684,16 @@ private actor ProbeSummaryGenerator: DocumentSummaryGenerating {
     private(set) var streamCount = 0
     private let fastDelayNanoseconds: UInt64
     private let refinedDelayNanoseconds: UInt64
+    private let throwsOnGenerate: Bool
 
     init(
         fastDelayNanoseconds: UInt64 = 0,
-        refinedDelayNanoseconds: UInt64 = 0
+        refinedDelayNanoseconds: UInt64 = 0,
+        throwsOnGenerate: Bool = false
     ) {
         self.fastDelayNanoseconds = fastDelayNanoseconds
         self.refinedDelayNanoseconds = refinedDelayNanoseconds
+        self.throwsOnGenerate = throwsOnGenerate
     }
 
     func availability() async -> SummaryModelAvailability {
@@ -670,6 +710,9 @@ private actor ProbeSummaryGenerator: DocumentSummaryGenerating {
 
     func generate(prompt: String, maxTokens: Int) async throws -> String {
         generateCount += 1
+        if throwsOnGenerate {
+            throw SummaryGenerationError.tooLarge(sourceByteCount: 1_000_000, maxSourceBytes: 10)
+        }
         if refinedDelayNanoseconds > 0 {
             try await Task.sleep(nanoseconds: refinedDelayNanoseconds)
         }
