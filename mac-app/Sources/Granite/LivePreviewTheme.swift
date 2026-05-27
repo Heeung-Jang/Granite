@@ -3,16 +3,28 @@ import NativeMarkdownCore
 
 @MainActor
 enum LivePreviewTheme {
-    static let baseFont = NSFont.systemFont(ofSize: 16, weight: .regular)
-    static let sourceFont = NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
-    static let codeFont = NSFont.monospacedSystemFont(ofSize: 15, weight: .regular)
-    static let strongFont = NSFont.systemFont(ofSize: 16, weight: .bold)
-    static let h1Font = NSFont.systemFont(ofSize: 28, weight: .bold)
-    static let h2Font = NSFont.systemFont(ofSize: 23, weight: .bold)
-    static let h3Font = NSFont.systemFont(ofSize: 20, weight: .semibold)
-    static let h4Font = NSFont.systemFont(ofSize: 18, weight: .semibold)
-    static let h5Font = NSFont.systemFont(ofSize: 17, weight: .semibold)
-    static let h6Font = NSFont.systemFont(ofSize: 16, weight: .semibold)
+    static let defaultFontSet = LivePreviewFontSet(
+        baseFont: NSFont.systemFont(ofSize: 16, weight: .regular),
+        sourceFont: NSFont.monospacedSystemFont(ofSize: 14, weight: .regular),
+        codeFont: NSFont.monospacedSystemFont(ofSize: 15, weight: .regular),
+        strongFont: NSFont.systemFont(ofSize: 16, weight: .bold),
+        h1Font: NSFont.systemFont(ofSize: 28, weight: .bold),
+        h2Font: NSFont.systemFont(ofSize: 23, weight: .bold),
+        h3Font: NSFont.systemFont(ofSize: 20, weight: .semibold),
+        h4Font: NSFont.systemFont(ofSize: 18, weight: .semibold),
+        h5Font: NSFont.systemFont(ofSize: 17, weight: .semibold),
+        h6Font: NSFont.systemFont(ofSize: 16, weight: .semibold)
+    )
+    static var baseFont: NSFont { defaultFontSet.baseFont }
+    static var sourceFont: NSFont { defaultFontSet.sourceFont }
+    static var codeFont: NSFont { defaultFontSet.codeFont }
+    static var strongFont: NSFont { defaultFontSet.strongFont }
+    static var h1Font: NSFont { defaultFontSet.h1Font }
+    static var h2Font: NSFont { defaultFontSet.h2Font }
+    static var h3Font: NSFont { defaultFontSet.h3Font }
+    static var h4Font: NSFont { defaultFontSet.h4Font }
+    static var h5Font: NSFont { defaultFontSet.h5Font }
+    static var h6Font: NSFont { defaultFontSet.h6Font }
 
     static let textColor = NSColor.labelColor
     static let secondaryTextColor = NSColor.secondaryLabelColor
@@ -53,20 +65,7 @@ enum LivePreviewTheme {
     static let propertyRowParagraphSpacing: CGFloat = 4
 
     static func headingFont(level: Int) -> NSFont {
-        switch level {
-        case 1:
-            return h1Font
-        case 2:
-            return h2Font
-        case 3:
-            return h3Font
-        case 4:
-            return h4Font
-        case 5:
-            return h5Font
-        default:
-            return h6Font
-        }
+        defaultFontSet.headingFont(level: level)
     }
 
     static var baseParagraphStyle: NSParagraphStyle {
