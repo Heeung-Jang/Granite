@@ -23,12 +23,12 @@ use crate::ffi::read_rows::{
     local_graph_node_kind_code, property_value_kind, tag_source_code,
 };
 use crate::ffi::{EngineReadLocalGraphResult, EngineReadOpenResult};
-use crate::graph::{
+use crate::scanner::ScanEntryKind;
+use crate::use_cases::build_graph::{
     MAX_WHOLE_VAULT_GRAPH_EDGES, MAX_WHOLE_VAULT_GRAPH_GROUPS, MAX_WHOLE_VAULT_GRAPH_LABEL_BYTES,
     MAX_WHOLE_VAULT_GRAPH_NODES, MAX_WHOLE_VAULT_GRAPH_RULE_LENGTH,
     MAX_WHOLE_VAULT_GRAPH_TAGS_PER_NODE,
 };
-use crate::scanner::ScanEntryKind;
 use crate::use_cases::read_graph::{LocalGraphEdgeDirection, LocalGraphNodeKind};
 use crate::use_cases::read_types::{
     ENGINE_READ_INSPECTOR_PANEL_ATTACHMENTS, ENGINE_READ_INSPECTOR_PANEL_BACKLINKS,

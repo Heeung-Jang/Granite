@@ -15,8 +15,8 @@ use crate::adapters::sqlite::{SqliteFtsError, SqliteFtsIndex};
 use crate::adapters::tantivy::{
     TantivyIndexingStageMetrics, TantivySearchError, TantivySearchIndex,
 };
+use crate::core::graph::{WholeVaultGraphRequest, WholeVaultGraphSnapshot};
 use crate::core::search::{SearchDocument, SearchResult};
-use crate::graph::{WholeVaultGraphRequest, WholeVaultGraphSnapshot};
 #[cfg(test)]
 use crate::indexing_pipeline::read_parse_source;
 pub use crate::indexing_pipeline::{

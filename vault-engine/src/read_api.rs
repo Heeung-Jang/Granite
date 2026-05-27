@@ -1,4 +1,4 @@
-use crate::graph::{WholeVaultGraphRequest, WholeVaultGraphSnapshot};
+use crate::core::graph::{WholeVaultGraphRequest, WholeVaultGraphSnapshot};
 use crate::use_cases::build_graph::build_whole_vault_graph_from_metadata;
 pub use crate::use_cases::read_graph::{
     LocalGraphDepth, LocalGraphEdgeDirection, LocalGraphNodeKind, LocalGraphRequest,

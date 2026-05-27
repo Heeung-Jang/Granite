@@ -1474,6 +1474,23 @@ Default stop conditions:
     ```
   - Stop condition: FFI still calls one of these legacy modules directly.
 
+- [x] **RA07.01b4a Retarget graph compatibility consumers**
+  - Build: retarget remaining internal graph DTO/constant consumers away from the legacy `graph` facade before reducing graph/watcher public modules.
+  - Verify:
+    ```sh
+    rg -n "vault_engine::(graph|graph_key|startup_reconciliation|watcher_burst)" bench/vault-profiler/src
+    rg -n "crate::(graph|startup_reconciliation|watcher_burst)(::|\b)" vault-engine/src/ffi vault-engine/src/use_cases vault-engine/src/adapters vault-engine/src/diagnostics vault-engine/src/read_api.rs
+    rg -n "crate::graph_key(::|\b)" vault-engine/src/ffi vault-engine/src/use_cases vault-engine/src/adapters vault-engine/src/diagnostics vault-engine/src/read_api.rs
+    cargo fmt --manifest-path vault-engine/Cargo.toml --check
+    cargo test --manifest-path vault-engine/Cargo.toml graph::
+    cargo test --manifest-path vault-engine/Cargo.toml startup_reconciliation::
+    cargo test --manifest-path vault-engine/Cargo.toml watcher_burst::
+    cargo test --manifest-path vault-engine/Cargo.toml
+    cargo test --manifest-path bench/vault-profiler/Cargo.toml
+    ```
+  - Evidence: diagnostics ABI constants now import from `use_cases::build_graph`, diagnostics graph benchmark DTOs and `read_api` graph DTOs import from `core::graph`, the profiler legacy import scan returned no matches, and the exact `crate::graph` / `crate::startup_reconciliation` / `crate::watcher_burst` scan returned no matches. `crate::graph_key` still has three internal consumers in SQLite and local-graph use-case code, so `graph`, `graph_key`, `startup_reconciliation`, and `watcher_burst` remain public until that ownership cleanup avoids dead-code warning noise. All listed tests passed without warnings.
+  - Stop condition: changing graph/startup/watcher module visibility reintroduces dead-code warnings in still-public use-case contracts.
+
 - [ ] **RA07.01b4 Make graph/watcher compatibility modules private**
   - Build: change only `graph`, `graph_key`, `startup_reconciliation`, and `watcher_burst` legacy modules after graph FFI retargeting and watcher/startup use-case moves are verified.
   - Verify:
