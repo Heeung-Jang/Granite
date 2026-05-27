@@ -1368,13 +1368,14 @@ Default stop conditions:
 
 ### Phase 7: Reduce Public Surface
 
-- [ ] **RA07.00 Preflight external Rust consumers**
+- [x] **RA07.00 Preflight external Rust consumers**
   - Build: no code change; confirm `bench/vault-profiler` no longer imports legacy public modules directly before changing `lib.rs` visibility.
   - Verify:
     ```sh
     rg -n "vault_engine::(attachments|index|parser|paths|scanner|sqlite_fts|tantivy_search|benchmarks|read_api|save|graph|index_rebuild|indexing_pipeline|startup_reconciliation|watcher_burst)" bench/vault-profiler/src
     cargo test --manifest-path bench/vault-profiler/Cargo.toml
     ```
+  - Evidence: legacy import scan returned no matches; `cargo test --manifest-path bench/vault-profiler/Cargo.toml` passed after the diagnostics facade migration.
   - Stop condition: any external Rust consumer still needs an old public path that lacks a diagnostics or intentional facade replacement.
 
 - [ ] **RA07.00a Drain internal legacy imports before deleting shims**
@@ -1403,18 +1404,29 @@ Default stop conditions:
   - Build: first change `pub mod` to `pub(crate) mod` only for modules with no external Rust consumers. Then remove transitional modules in a separate step.
   - Verify: each pass compiles independently.
 
-- [ ] **RA07.01b1 Make parser/path/scanner compatibility modules private**
-  - Build: change only `attachments`, `parser`, `paths`, and `scanner` legacy modules to private or compatibility-only visibility after profiler imports are gone.
+- [x] **RA07.01b1 Make parser/path/scanner compatibility modules private**
+  - Build: change only `parser`, `paths`, and `scanner` legacy modules to private or compatibility-only visibility after profiler imports are gone. Keep `attachments` public until its compatibility facade is drained without dead-code warning noise.
   - Verify:
     ```sh
-    rg -n "vault_engine::(attachments|parser|paths|scanner)" bench/vault-profiler/src
+    rg -n "vault_engine::(parser|paths|scanner)" bench/vault-profiler/src
     cargo test --manifest-path vault-engine/Cargo.toml parser::
     cargo test --manifest-path vault-engine/Cargo.toml paths::
     cargo test --manifest-path vault-engine/Cargo.toml scanner::
     cargo test --manifest-path vault-engine/Cargo.toml
     cargo test --manifest-path bench/vault-profiler/Cargo.toml
     ```
+  - Evidence: `parser`, `paths`, and `scanner` are now `pub(crate)` in `lib.rs`; `paths.rs` no longer re-exports unused private-only path types. The profiler scan returned no matches and all listed tests passed.
   - Stop condition: any external Rust consumer or integration test still requires those legacy public paths.
+
+- [ ] **RA07.01b1a Drain attachments compatibility facade**
+  - Build: retarget or remove the remaining legacy `attachments` public facade without hiding warning-generating dead code behind `allow` attributes.
+  - Verify:
+    ```sh
+    rg -n "vault_engine::attachments|crate::attachments" bench/vault-profiler/src vault-engine/src/core vault-engine/src/adapters vault-engine/src/use_cases vault-engine/src/ffi
+    cargo test --manifest-path vault-engine/Cargo.toml attachments::
+    cargo test --manifest-path vault-engine/Cargo.toml
+    ```
+  - Stop condition: making `attachments` private creates dead-code warnings or requires changing attachment parsing behavior in the same commit.
 
 - [ ] **RA07.01b2 Make storage/search compatibility modules private**
   - Build: change only `index`, `indexing_queue`, `sqlite_fts`, and `tantivy_search` legacy modules after diagnostics/profiler imports use intentional facades.
