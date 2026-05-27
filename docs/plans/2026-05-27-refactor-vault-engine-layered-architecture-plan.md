@@ -744,9 +744,10 @@ Default stop conditions:
   - Build: keep disk-canonicalization and vault root opening in an adapter path if it imports filesystem APIs.
   - Verify: save path safety and scanner tests pass.
 
-- [ ] **RA04.09 Run adapter boundary scan**
+- [x] **RA04.09 Run adapter boundary scan**
   - Build: no code change after RA04.08.
   - Verify: adapters do not import `crate::ffi`, and Tantivy/SQLite adapters do not import each other's private modules.
+  - Result: `core` denylist scan is clean. Adapter scan has two pre-Phase-5 transitional exceptions: `adapters/fs/index_directory.rs` still uses `index_rebuild` path/result types, and `adapters/fs/note_writer.rs` still uses `save` baseline/error types. `SnippetStorageMode` was moved to core to remove the Tantivy-to-pipeline reverse dependency.
 
 - [ ] **RA04.10 Add rebuild adversarial path tests**
   - Build: cover `index_root` inside vault, `data_directory`/`rebuild_directory` outside index root, `data == rebuild`, symlinked data/rebuild/previous-data paths pointing into the vault, and failed commit/abort/reset paths.
