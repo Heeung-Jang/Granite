@@ -716,7 +716,7 @@ Default stop conditions:
   - Build: move percentile/duration/directory-size helpers and indexing-stage metrics types only after search behavior is green.
   - Verify: indexing/search metrics tests pass.
 
-- [ ] **RA04.05d Move `TantivySearchIndex` shell**
+- [x] **RA04.05d Move `TantivySearchIndex` shell**
   - Build: move the search index type, open/rebuild/add/commit/search methods, writer options, and error type into `adapters/tantivy/search_index.rs`.
   - Verify: Tantivy search tests and indexing pipeline tests pass.
 
