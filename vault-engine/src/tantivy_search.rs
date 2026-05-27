@@ -5,10 +5,11 @@ use std::time::{Duration, Instant};
 
 use tantivy::collector::TopDocs;
 use tantivy::query::{QueryParser, QueryParserError};
-use tantivy::schema::{Field, STORED, STRING, Schema, TEXT, TantivyDocument, Value};
+use tantivy::schema::{Field, TantivyDocument, Value};
 use tantivy::snippet::SnippetGenerator;
 use tantivy::{Index, IndexReader, TantivyError, Term, doc};
 
+use crate::adapters::tantivy::{TantivyFields, search_schema, search_schema_for_snippet_mode};
 use crate::core::search::{SearchDocument, SearchMeasurement, SearchResult};
 use crate::indexing_pipeline::SnippetStorageMode;
 use crate::paths::{FileIdentity, PathError, VaultRoot};
@@ -47,14 +48,6 @@ impl Default for TantivyWriterOptions {
             writer_thread_count: None,
         }
     }
-}
-
-#[derive(Debug, Clone, Copy)]
-struct TantivyFields {
-    file_id: Field,
-    path: Field,
-    title: Field,
-    body: Field,
 }
 
 #[derive(Debug)]
@@ -486,33 +479,6 @@ fn snippet_around(body: &str, byte_index: usize, max_chars: usize) -> String {
     let start_char = center_char.saturating_sub(half);
     let end_char = (start_char + max_chars).min(char_positions.len().saturating_sub(1));
     body[char_positions[start_char]..char_positions[end_char]].to_string()
-}
-
-fn search_schema() -> (Schema, TantivyFields) {
-    search_schema_for_snippet_mode(SnippetStorageMode::StoredBody)
-}
-
-fn search_schema_for_snippet_mode(
-    snippet_storage_mode: SnippetStorageMode,
-) -> (Schema, TantivyFields) {
-    let mut builder = Schema::builder();
-    let file_id = builder.add_text_field("file_id", STRING | STORED);
-    let path = builder.add_text_field("path", TEXT | STORED);
-    let title = builder.add_text_field("title", TEXT | STORED);
-    let body_options = match snippet_storage_mode {
-        SnippetStorageMode::StoredBody => TEXT | STORED,
-        SnippetStorageMode::LazySourceExperiment => TEXT,
-    };
-    let body = builder.add_text_field("body", body_options);
-    (
-        builder.build(),
-        TantivyFields {
-            file_id,
-            path,
-            title,
-            body,
-        },
-    )
 }
 
 fn stored_text(document: &TantivyDocument, field: Field) -> String {

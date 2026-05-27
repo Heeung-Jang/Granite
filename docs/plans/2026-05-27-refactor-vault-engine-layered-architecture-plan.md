@@ -704,7 +704,7 @@ Default stop conditions:
   - Build: add `adapters/tantivy/mod.rs` that temporarily re-exports current `tantivy_search` symbols.
   - Verify: `cargo test --manifest-path vault-engine/Cargo.toml tantivy_search::tests::safe_tantivy_query_bounds_and_quotes_user_input`.
 
-- [ ] **RA04.05a Move Tantivy schema and field helpers**
+- [x] **RA04.05a Move Tantivy schema and field helpers**
   - Build: move schema construction, stored-text extraction, and field lookup helpers into `adapters/tantivy/schema.rs` without changing field names, storage flags, tokenizer, or snippet mode.
   - Verify: search tests pass without changing expected snippets, scores, or error states.
 
