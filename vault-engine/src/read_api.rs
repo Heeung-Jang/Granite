@@ -6,6 +6,7 @@ use crate::adapters::sqlite::{
     IndexSchemaMetadata, LinkEdgeRecord, LinkProjection, MetadataStore, MetadataStoreError,
     PropertyProjection, PropertyRecord, TagRecord,
 };
+use crate::adapters::tantivy::{TantivySearchError, TantivySearchIndex};
 use crate::graph::{
     WholeVaultGraphInputs, WholeVaultGraphRequest, WholeVaultGraphSnapshot,
     build_whole_vault_graph_snapshot, whole_vault_graph_needs_tags,
@@ -14,7 +15,6 @@ use crate::graph_key::unresolved_target_key;
 use crate::parser::{MarkdownLink, PropertyValue, WikiLink, parse_markdown};
 use crate::scanner::{ScanEntryKind, classify_file};
 use crate::sqlite_fts::SearchResult;
-use crate::tantivy_search::{TantivySearchError, TantivySearchIndex};
 
 const MAX_PAGE_LIMIT: usize = 100;
 const MAX_FILE_TREE_PAGE_LIMIT: usize = 100_000;
@@ -1448,12 +1448,12 @@ mod tests {
         FileRecord, HeadingRecord, IndexSchemaMetadata, MetadataStore, PropertyRecord, TagRecord,
         TagSource, slugify_heading,
     };
+    use crate::adapters::tantivy::TantivySearchIndex;
     use crate::attachments::{AttachmentReferenceSource, AttachmentResolutionState};
     use crate::parser::PropertyValue;
     use crate::paths::{VaultRoot, lookup_key};
     use crate::scanner::{ScanEntry, ScanEntryKind, scan_vault};
     use crate::sqlite_fts::SearchDocument;
-    use crate::tantivy_search::TantivySearchIndex;
     use tempfile::tempdir;
 
     #[test]

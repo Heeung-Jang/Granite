@@ -17,15 +17,15 @@ use crate::adapters::sqlite::{
 use crate::adapters::sqlite::{
     IndexingQueue, IndexingQueueError, IndexingQueueItem, IndexingQueueReason, IndexingQueueSummary,
 };
+use crate::adapters::tantivy::{
+    TantivyIndexingStageMetrics, TantivySearchError, TantivySearchIndex, TantivyWriterOptions,
+};
 use crate::attachments::{AttachmentReferenceSource, AttachmentResolutionState};
 use crate::index_rebuild::{IndexRebuildError, IndexRebuildPaths, commit_index_rebuild};
 use crate::parser::{ParsedMarkdown, PropertyValue, parse_markdown};
 use crate::paths::{FileIdentity, PathError, VaultRoot, lookup_key};
 use crate::scanner::{ScanEntryKind, scan_vault};
 use crate::sqlite_fts::SearchDocument;
-use crate::tantivy_search::{
-    TantivyIndexingStageMetrics, TantivySearchError, TantivySearchIndex, TantivyWriterOptions,
-};
 
 pub const MAX_DEFAULT_READ_PARSE_WORKERS: usize = 4;
 const DEFAULT_CHANNEL_CAPACITY: usize = 32;

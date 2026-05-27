@@ -345,6 +345,7 @@ mod tests {
         AttachmentRecord, FileRecord, HeadingRecord, IndexSchemaMetadata, LinkEdgeRecord,
         MetadataStore, PropertyRecord, TagRecord, TagSource, slugify_heading,
     };
+    use crate::adapters::tantivy::TantivySearchIndex;
     use crate::attachments::{
         AttachmentReferenceSource, AttachmentRejectReason, AttachmentResolutionState,
     };
@@ -370,7 +371,6 @@ mod tests {
     };
     use crate::scanner::{ScanEntry, ScanEntryKind};
     use crate::sqlite_fts::SearchDocument;
-    use crate::tantivy_search::TantivySearchIndex;
     use serde_json::{Value, json};
     use std::{ffi::CString, fs, path::PathBuf, time::UNIX_EPOCH};
     use tempfile::{TempDir, tempdir};

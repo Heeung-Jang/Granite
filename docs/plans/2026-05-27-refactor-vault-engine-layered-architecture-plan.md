@@ -720,7 +720,7 @@ Default stop conditions:
   - Build: move the search index type, open/rebuild/add/commit/search methods, writer options, and error type into `adapters/tantivy/search_index.rs`.
   - Verify: Tantivy search tests and indexing pipeline tests pass.
 
-- [ ] **RA04.05e Update callers from `crate::tantivy_search`**
+- [x] **RA04.05e Update callers from `crate::tantivy_search`**
   - Build: migrate read API, indexing pipeline, diagnostics, and profiler imports one group at a time.
   - Verify: after each caller group, run the matching narrow test.
 
