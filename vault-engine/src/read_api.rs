@@ -1,10 +1,9 @@
 use std::{collections::HashSet, fmt, path::Path};
 
 use crate::adapters::sqlite::{
-    AttachmentProjection, AttachmentRecord, FileLookupProjection, FileRecord, FileTreeProjection,
-    GraphFileRecord, GraphResolvedEdgeRecord, GraphUnresolvedEdgeRecord, HeadingRecord,
-    LinkEdgeRecord, LinkProjection, MetadataStoreError, PropertyProjection, PropertyRecord,
-    TagRecord,
+    AttachmentProjection, AttachmentRecord, FileLookupProjection, FileRecord, GraphFileRecord,
+    GraphResolvedEdgeRecord, GraphUnresolvedEdgeRecord, HeadingRecord, LinkEdgeRecord,
+    LinkProjection, MetadataStoreError, PropertyProjection, PropertyRecord, TagRecord,
 };
 use crate::adapters::tantivy::TantivySearchError;
 use crate::graph::{
@@ -15,12 +14,12 @@ use crate::graph_key::unresolved_target_key;
 use crate::parser::{MarkdownLink, PropertyValue, WikiLink, parse_markdown};
 use crate::scanner::{ScanEntryKind, classify_file};
 use crate::sqlite_fts::SearchResult;
+use crate::use_cases::read_types::MAX_PAGE_LIMIT;
 pub use crate::use_cases::read_types::{
     ENGINE_READ_STATE_CANCELLED, ENGINE_READ_STATE_COMPLETE, ENGINE_READ_STATE_ERROR,
     ENGINE_READ_STATE_INDEX_UNAVAILABLE, ENGINE_READ_STATE_PARTIAL, ENGINE_READ_STATE_STALE,
     PageRequest, ReadOpenError, ReadOpenResult, ReadPage, ReadState, ReadValue,
 };
-use crate::use_cases::read_types::{MAX_FILE_TREE_PAGE_LIMIT, MAX_PAGE_LIMIT};
 pub use crate::use_cases::read_vault::{
     VaultReadApi, expected_read_schema_metadata, open_metadata_store_for_read,
     open_tantivy_index_for_read, open_vault_read_api,
@@ -191,18 +190,6 @@ impl LocalGraphRequest {
 }
 
 impl VaultReadApi {
-    pub fn file_tree_projection(
-        &self,
-        page: PageRequest,
-    ) -> ReadApiResult<ReadPage<FileTreeProjection>> {
-        Ok(self.page_from_overfetch_with_limit(
-            self.metadata
-                .file_tree_projection(page.offset, page.file_tree_fetch_limit())?,
-            page,
-            MAX_FILE_TREE_PAGE_LIMIT,
-        ))
-    }
-
     pub fn file_open_metadata(
         &self,
         file_id: &str,

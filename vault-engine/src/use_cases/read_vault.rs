@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::adapters::sqlite::{FileRecord, IndexSchemaMetadata, MetadataStore};
+use crate::adapters::sqlite::{FileRecord, FileTreeProjection, IndexSchemaMetadata, MetadataStore};
 use crate::adapters::tantivy::TantivySearchIndex;
 use crate::read_api::{
     READ_BACKEND_NAME, READ_BACKEND_VERSION, READ_TOKENIZER_CONFIG, ReadApiResult,
@@ -42,6 +42,18 @@ impl VaultReadApi {
         Ok(self.page_from_overfetch_with_limit(
             self.metadata
                 .list_markdown_files(page.offset, page.file_tree_fetch_limit())?,
+            page,
+            MAX_FILE_TREE_PAGE_LIMIT,
+        ))
+    }
+
+    pub fn file_tree_projection(
+        &self,
+        page: PageRequest,
+    ) -> ReadApiResult<ReadPage<FileTreeProjection>> {
+        Ok(self.page_from_overfetch_with_limit(
+            self.metadata
+                .file_tree_projection(page.offset, page.file_tree_fetch_limit())?,
             page,
             MAX_FILE_TREE_PAGE_LIMIT,
         ))

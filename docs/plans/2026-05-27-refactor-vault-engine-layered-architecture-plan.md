@@ -775,7 +775,7 @@ Default stop conditions:
   - Build: move only the file tree page method and page-limit handling.
   - Verify: file tree large-page and read FFI file tree tests pass.
 
-- [ ] **RA05.02d Move file tree projection read method**
+- [x] **RA05.02d Move file tree projection read method**
   - Build: move only display-ready file tree projection logic.
   - Verify: metadata projection tests and read FFI projection tests pass.
 
