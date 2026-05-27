@@ -901,7 +901,7 @@ Default stop conditions:
   - Build: move `run_read_parse_pipeline`, read/parse progress types, and metadata count aggregation into a use-case module while preserving worker cap and channel capacity.
   - Verify: read/parse pipeline tests pass and artifact fields preserve `read_parse_workers <= 4`, `channel_capacity == 32`, `metadata_batch_size == 256`, `writer_memory_budget_bytes == 50000000`, and `peak_in_flight_items <= workers + channel_capacity`.
 
-- [ ] **RA05.06d Move Tantivy rebuild orchestration**
+- [x] **RA05.06d Move Tantivy rebuild orchestration**
   - Build: move `run_tantivy_rebuild_pipeline` and stage metrics merge logic without changing writer memory or commit timing.
   - Verify: Tantivy rebuild pipeline tests pass.
 
@@ -1305,10 +1305,10 @@ Use this checklist for each PR or worktree batch:
 
 ## Next Step
 
-On the active `codex/refactor-vault-engine-layered-architecture` branch, Phase 0 through Phase 4 and RA05.01 through RA05.06c are green. Remaining follow-up gates and next work:
+On the active `codex/refactor-vault-engine-layered-architecture` branch, Phase 0 through Phase 4 and RA05.01 through RA05.06d are green. Remaining follow-up gates and next work:
 
 1. RA01.12 unsafe allowlist audit if it was not already covered by existing FFI/FSEvents tests.
 2. RA04.11 post-adapter performance gate, or document why it is deferred and keep it as a merge blocker.
-3. Continue RA05.06d Tantivy rebuild orchestration.
+3. Continue RA05.06e full rebuild commit orchestration.
 
 Do not start Phase 6 or Phase 7 until Phase 5 boundary scans and FFI retargeting are green.

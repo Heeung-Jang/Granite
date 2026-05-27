@@ -1,9 +1,6 @@
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::sync_channel;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -20,7 +17,6 @@ pub use crate::core::search::SnippetStorageMode;
 use crate::index_rebuild::{IndexRebuildError, IndexRebuildPaths, commit_index_rebuild};
 use crate::paths::{FileIdentity, PathError, VaultRoot, lookup_key};
 use crate::scanner::{ScanEntryKind, scan_vault};
-use crate::sqlite_fts::SearchDocument;
 pub use crate::use_cases::process_indexing_queue::{
     QueueBatchIndexOptions, QueueLeaseBatch, QueuePipelineItem, lease_queue_batch,
     process_indexing_queue_batch,
@@ -33,6 +29,8 @@ pub use crate::use_cases::read_parse_documents::{
     ReadParseTiming, TimedSearchDocument, read_parse_source, read_parse_source_at,
     read_search_document, run_read_parse_pipeline,
 };
+use crate::use_cases::rebuild_tantivy::merge_tantivy_metrics;
+pub use crate::use_cases::rebuild_tantivy::{TantivyPipelineRun, run_tantivy_rebuild_pipeline};
 
 pub const MAX_DEFAULT_READ_PARSE_WORKERS: usize = 4;
 const DEFAULT_CHANNEL_CAPACITY: usize = 32;
@@ -257,12 +255,6 @@ pub struct LoadedSearchDocumentSources {
 pub struct PipelineCorpusStageMetrics {
     pub scan_micros: u64,
     pub source_collection_micros: u64,
-}
-
-pub struct TantivyPipelineRun {
-    pub stats: PipelineCorpusStats,
-    pub peak_in_flight_items: usize,
-    pub stages: TantivyIndexingStageMetrics,
 }
 
 pub fn load_search_document_sources(
@@ -579,63 +571,6 @@ pub fn run_full_rebuild_pipeline_and_commit(
     Ok(result)
 }
 
-pub fn run_tantivy_rebuild_pipeline(
-    index: &mut TantivySearchIndex,
-    sources: &[SearchDocumentSource],
-    options: &IndexingPipelineOptions,
-) -> IndexingPipelineResult<TantivyPipelineRun> {
-    let options = options.normalized();
-    let (sender, receiver) =
-        sync_channel::<IndexingPipelineResult<TimedSearchDocument>>(options.channel_capacity);
-    let next_source = AtomicUsize::new(0);
-    let in_flight = Arc::new(AtomicUsize::new(0));
-    let peak_in_flight = Arc::new(AtomicUsize::new(0));
-    let mut stats = PipelineCorpusStats::default();
-
-    let stages = thread::scope(|scope| {
-        for _ in 0..options.read_parse_workers {
-            let sender = sender.clone();
-            let in_flight = Arc::clone(&in_flight);
-            let peak_in_flight = Arc::clone(&peak_in_flight);
-            let next_source = &next_source;
-            scope.spawn(move || {
-                loop {
-                    let index = next_source.fetch_add(1, Ordering::Relaxed);
-                    let Some(source) = sources.get(index) else {
-                        break;
-                    };
-                    let result = read_parse_source_at(index, source);
-                    let current_in_flight = in_flight.fetch_add(1, Ordering::AcqRel) + 1;
-                    update_peak_in_flight(&peak_in_flight, current_in_flight);
-                    if sender.send(result).is_err() {
-                        in_flight.fetch_sub(1, Ordering::AcqRel);
-                        break;
-                    }
-                }
-            });
-        }
-        drop(sender);
-
-        let documents = receiver.into_iter().map(|result| {
-            in_flight.fetch_sub(1, Ordering::AcqRel);
-            let timed = result?;
-            stats.record_timed(&timed);
-            Ok::<SearchDocument, IndexingPipelineError>(timed.document)
-        });
-
-        index.add_documents_for_rebuild_from_result_iter_with_options_and_stage_durations(
-            documents,
-            options.writer_options,
-        )
-    })?;
-
-    Ok(TantivyPipelineRun {
-        stats,
-        peak_in_flight_items: peak_in_flight.load(Ordering::Acquire),
-        stages,
-    })
-}
-
 fn production_result(
     generation: u64,
     processed_count: usize,
@@ -691,21 +626,6 @@ fn tier_transition(tier: IndexingPipelineTier, elapsed: Duration) -> IndexingTie
     }
 }
 
-fn merge_tantivy_metrics(
-    left: TantivyIndexingStageMetrics,
-    right: TantivyIndexingStageMetrics,
-) -> TantivyIndexingStageMetrics {
-    TantivyIndexingStageMetrics {
-        add_micros: left.add_micros + right.add_micros,
-        commit_micros: left.commit_micros + right.commit_micros,
-        reader_reload_micros: left.reader_reload_micros + right.reader_reload_micros,
-        added_document_count: left.added_document_count + right.added_document_count,
-        deleted_document_count: left.deleted_document_count + right.deleted_document_count,
-        skipped_document_count: left.skipped_document_count + right.skipped_document_count,
-        failed_document_count: left.failed_document_count + right.failed_document_count,
-    }
-}
-
 impl fmt::Display for IndexingPipelineError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -757,16 +677,6 @@ impl From<IndexingQueueError> for IndexingPipelineError {
 impl From<TantivySearchError> for IndexingPipelineError {
     fn from(error: TantivySearchError) -> Self {
         Self::Tantivy(error)
-    }
-}
-
-fn update_peak_in_flight(peak: &AtomicUsize, candidate: usize) {
-    let mut current = peak.load(Ordering::Acquire);
-    while candidate > current {
-        match peak.compare_exchange(current, candidate, Ordering::AcqRel, Ordering::Acquire) {
-            Ok(_) => break,
-            Err(observed) => current = observed,
-        }
     }
 }
 
