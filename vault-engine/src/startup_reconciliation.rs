@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::index::{FileIndexStatus, FileRecord, MetadataStore, MetadataStoreError};
+use crate::adapters::sqlite::{FileIndexStatus, FileRecord, MetadataStore, MetadataStoreError};
 use crate::indexing_queue::{
     IndexingQueue, IndexingQueueError, IndexingQueueReason, IndexingQueueResult,
 };
@@ -200,7 +200,7 @@ impl From<IndexingQueueError> for StartupReconciliationError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::index::IndexSchemaMetadata;
+    use crate::adapters::sqlite::IndexSchemaMetadata;
     use crate::paths::VaultRoot;
     use crate::scanner::scan_vault;
     use std::fs;

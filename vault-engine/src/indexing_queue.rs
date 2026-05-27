@@ -4,7 +4,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rusqlite::{Connection, OptionalExtension, params};
 
-use crate::index::{FileRecord, MAX_INDEX_ERROR_CHARS};
+use crate::adapters::sqlite::{FileRecord, MAX_INDEX_ERROR_CHARS};
 use crate::scanner::ScanEntryKind;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

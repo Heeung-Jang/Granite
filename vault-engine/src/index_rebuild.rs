@@ -5,7 +5,7 @@ use crate::adapters::fs::index_directory::{
     abort_index_rebuild as abort_index_rebuild_impl,
     commit_index_rebuild as commit_index_rebuild_impl, reset_rebuild_directory, validate_paths,
 };
-use crate::index::{FileRecord, IndexSchemaMetadata, MetadataStore, MetadataStoreError};
+use crate::adapters::sqlite::{FileRecord, IndexSchemaMetadata, MetadataStore, MetadataStoreError};
 use crate::indexing_queue::{IndexingQueue, IndexingQueueError, IndexingQueueReason};
 use crate::scanner::ScanSummary;
 
@@ -194,7 +194,7 @@ impl From<IndexingQueueError> for IndexRebuildError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::index::IndexSchemaMetadata;
+    use crate::adapters::sqlite::IndexSchemaMetadata;
     use crate::indexing_queue::IndexingQueueStatus;
     use crate::paths::FileIdentity;
     use crate::scanner::{ScanEntry, ScanEntryKind};

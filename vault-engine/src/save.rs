@@ -6,7 +6,7 @@ use std::time::SystemTime;
 use crate::adapters::fs::note_writer::{
     FileSnapshot, capture_snapshot, rename_temp_file, sync_parent, write_new_note, write_temp_file,
 };
-use crate::index::FileRecord;
+use crate::adapters::sqlite::FileRecord;
 use crate::indexing_queue::{
     IndexingQueue, IndexingQueueError, IndexingQueueItem, IndexingQueueReason,
 };
