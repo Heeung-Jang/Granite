@@ -1,11 +1,13 @@
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[cfg(test)]
 pub struct AttachmentSettings {
     pub attachment_folder: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(test)]
 pub struct AttachmentReference {
     pub source: AttachmentReferenceSource,
     pub raw_target: String,

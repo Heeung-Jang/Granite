@@ -1563,6 +1563,19 @@ Default stop conditions:
   - Evidence: `benchmarks.rs` only re-exported `diagnostics::benchmarks::*`; no profiler imports used `vault_engine::benchmarks`, and the diagnostics benchmark, full engine, and profiler test gates passed without warnings.
   - Stop condition: external profiler code still imports the root `benchmarks` shim.
 
+- [x] **RA07.03a2 Make attachments compatibility shim test-only**
+  - Build: make the root `attachments` compatibility module test-only after type consumers use `core::attachments` or diagnostics facades. Gate the resolver-only `AttachmentSettings` and `AttachmentReference` structs to tests because production read parsing stores unsupported attachment states without using the compatibility resolver.
+  - Verify:
+    ```sh
+    rg -n "vault_engine::attachments|crate::attachments" bench/vault-profiler/src vault-engine/src
+    cargo fmt --manifest-path vault-engine/Cargo.toml --check
+    cargo test --manifest-path vault-engine/Cargo.toml attachments::
+    cargo test --manifest-path vault-engine/Cargo.toml
+    cargo test --manifest-path bench/vault-profiler/Cargo.toml
+    ```
+  - Evidence: the attachment resolver remains covered by compatibility tests, production attachment DTO/state consumers use `core::attachments`, profiler imports use diagnostics facades, and the listed tests passed without warnings.
+  - Stop condition: production parsing starts resolving attachments through the root compatibility module.
+
 - [ ] **RA07.04 Add architecture placement checklist**
   - Build: add a short checklist to `docs/architecture/rust-engine.md` explaining where new parser, storage, FFI, and use-case code should go.
   - Verify: checklist covers future work for read API, save, graph, indexing, watcher, benchmarks, and profiler imports.

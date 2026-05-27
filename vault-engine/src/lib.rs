@@ -1,5 +1,6 @@
 pub(crate) mod adapters;
-pub mod attachments;
+#[cfg(test)]
+pub(crate) mod attachments;
 pub(crate) mod core;
 pub mod diagnostics;
 pub mod errors;
