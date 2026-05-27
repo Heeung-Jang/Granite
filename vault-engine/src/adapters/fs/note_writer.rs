@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::adapters::fs::path_resolver::VaultRoot;
+use crate::adapters::fs::path_resolver::is_unsupported_hardlinked_file;
 use crate::core::paths::{PathError, normalize_relative_path};
 use crate::use_cases::save_note::{SafeSaveError, SafeSaveResult, SaveBaseline, SaveIoOperation};
 
@@ -49,6 +50,11 @@ pub(crate) fn capture_snapshot(
         return Err(SafeSaveError::NotRegularFile {
             relative_path: relative_path_string(&resolved.relative_path),
         });
+    }
+    if is_unsupported_hardlinked_file(&metadata) {
+        return Err(SafeSaveError::Path(PathError::UnsupportedHardlink(
+            resolved.relative_path.clone(),
+        )));
     }
 
     let contents = fs::read(&resolved.canonical_path).map_err(|error| SafeSaveError::Io {

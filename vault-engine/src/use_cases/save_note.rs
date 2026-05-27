@@ -399,6 +399,7 @@ pub(crate) fn current_snapshot(
             Err(conflict(expected, SaveConflictKind::Deleted, None))
         }
         Err(SafeSaveError::Path(PathError::SymlinkEscape { .. }))
+        | Err(SafeSaveError::Path(PathError::UnsupportedHardlink(_)))
         | Err(SafeSaveError::NotRegularFile { .. }) => {
             Err(conflict(expected, SaveConflictKind::SymlinkChanged, None))
         }

@@ -3,6 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::adapters::fs::path_resolver::VaultRoot;
+use crate::adapters::fs::path_resolver::is_unsupported_hardlinked_file;
 use crate::core::files::FileIdentity;
 pub use crate::core::scan::{ScanEntry, ScanEntryKind, ScanSummary, classify_file};
 
@@ -17,6 +18,7 @@ pub enum ScanError {
         kind: std::io::ErrorKind,
     },
     OutsideVault(PathBuf),
+    UnsupportedHardlink(PathBuf),
 }
 
 pub fn scan_vault(root: &VaultRoot) -> Result<ScanSummary, ScanError> {
@@ -80,6 +82,10 @@ impl Scanner {
 
             if !file_type.is_file() {
                 continue;
+            }
+
+            if is_unsupported_hardlinked_file(&metadata) {
+                return Err(ScanError::UnsupportedHardlink(path));
             }
 
             self.push_file(path, metadata)?;
@@ -170,6 +176,26 @@ mod tests {
                 .iter()
                 .all(|entry| !entry.relative_path.starts_with(".obsidian"))
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_hardlinked_regular_files() {
+        use std::fs::hard_link;
+
+        let vault = tempdir().expect("vault tempdir");
+        let outside = tempdir().expect("outside tempdir");
+        fs::write(outside.path().join("shared.md"), "# Shared").expect("outside note");
+        hard_link(
+            outside.path().join("shared.md"),
+            vault.path().join("shared.md"),
+        )
+        .expect("hardlink");
+        let root = VaultRoot::open(vault.path()).expect("root");
+
+        let error = scan_vault(&root).expect_err("hardlink rejection");
+
+        assert!(matches!(error, ScanError::UnsupportedHardlink(_)));
     }
 
     #[test]

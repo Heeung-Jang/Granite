@@ -3,6 +3,7 @@ mod tests {
     use crate::adapters::fs::note_writer::{rename_temp_file, stable_content_hash};
     use crate::adapters::fs::path_resolver::VaultRoot;
     use crate::adapters::sqlite::{IndexingQueue, IndexingQueueReason};
+    use crate::core::paths::PathError;
     use crate::use_cases::save_note::enqueue_saved_file;
     use crate::use_cases::save_note::{
         SafeSaveError, SaveBaseline, SaveConflict, SaveConflictChoice, SaveConflictChoiceError,
@@ -186,6 +187,27 @@ mod tests {
         assert_conflict_kind(error, SaveConflictKind::SymlinkChanged);
         assert_eq!(
             fs::read_to_string(outside.path().join("secret.md")).expect("outside unchanged"),
+            "# Secret\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_baseline_rejects_hardlinked_note_without_reading_outside_content() {
+        let fixture = copied_save_fixture();
+        let outside = tempfile::tempdir().expect("outside");
+        fs::write(outside.path().join("shared.md"), "# Secret\n").expect("outside");
+        let target = fixture.root_path.join("Shared.md");
+        std::fs::hard_link(outside.path().join("shared.md"), &target).expect("hardlink");
+
+        let error = SaveBaseline::capture(&fixture.root, "Shared.md").expect_err("hardlink");
+
+        assert!(matches!(
+            error,
+            SafeSaveError::Path(PathError::UnsupportedHardlink(_))
+        ));
+        assert_eq!(
+            fs::read_to_string(outside.path().join("shared.md")).expect("outside unchanged"),
             "# Secret\n"
         );
     }

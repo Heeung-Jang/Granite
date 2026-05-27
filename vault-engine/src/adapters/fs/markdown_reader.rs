@@ -1,9 +1,19 @@
 use std::fs;
+use std::io;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+use super::path_resolver::is_unsupported_hardlinked_file;
+
 pub(crate) fn read_markdown_body(path: &Path) -> std::io::Result<(String, u64)> {
     let start = Instant::now();
+    let metadata = fs::metadata(path)?;
+    if is_unsupported_hardlinked_file(&metadata) {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "hardlinked markdown files are not supported",
+        ));
+    }
     let body = fs::read_to_string(path)?;
     Ok((body, duration_micros_nonzero(start.elapsed())))
 }

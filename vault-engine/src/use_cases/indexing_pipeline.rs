@@ -747,6 +747,74 @@ mod tests {
         });
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn queue_item_source_rejects_hardlinked_notes() {
+        let temp = tempdir().expect("tempdir");
+        let root = fixture_vault(temp.path(), &["Safe.md"]);
+        let outside = temp.path().join("outside");
+        std::fs::create_dir_all(&outside).expect("outside dir");
+        std::fs::write(outside.join("Shared.md"), "# Secret").expect("outside note");
+        let hardlinked_path = root.canonical_root().join("Shared.md");
+        std::fs::hard_link(outside.join("Shared.md"), &hardlinked_path).expect("hardlink");
+        let metadata = std::fs::metadata(&hardlinked_path).expect("metadata");
+        let file = FileRecord {
+            file_id: lookup_key(Path::new("Shared.md")),
+            relative_path: PathBuf::from("Shared.md"),
+            kind: ScanEntryKind::Markdown,
+            size_bytes: metadata.len(),
+            modified: metadata.modified().ok(),
+            file_identity: FileIdentity::from_metadata(&metadata),
+            content_hash: None,
+            generation: 1,
+            status: FileIndexStatus::SeenMetadata,
+            last_error: None,
+        };
+        let mut queue = IndexingQueue::open_in_memory().expect("queue");
+        queue
+            .enqueue_file(&file, IndexingQueueReason::FileChanged)
+            .expect("enqueue hardlink");
+
+        let error = lease_queue_batch(&mut queue, &root, 1).expect_err("hardlink");
+
+        assert!(matches!(
+            error,
+            IndexingPipelineError::Path(PathError::UnsupportedHardlink(_))
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_parse_source_rejects_hardlinked_markdown_body() {
+        let temp = tempdir().expect("tempdir");
+        let root = fixture_vault(temp.path(), &["Safe.md"]);
+        let outside = temp.path().join("outside");
+        std::fs::create_dir_all(&outside).expect("outside dir");
+        std::fs::write(outside.join("Shared.md"), "# Secret").expect("outside note");
+        let hardlinked_path = root.canonical_root().join("Shared.md");
+        std::fs::hard_link(outside.join("Shared.md"), &hardlinked_path).expect("hardlink");
+        let metadata = std::fs::metadata(&hardlinked_path).expect("metadata");
+        let source = SearchDocumentSource {
+            file_id: lookup_key(Path::new("Shared.md")),
+            relative_path: PathBuf::from("Shared.md"),
+            absolute_path: hardlinked_path,
+            kind: ScanEntryKind::Markdown,
+            size_bytes: metadata.len(),
+            modified: metadata.modified().ok(),
+            file_identity: FileIdentity::from_metadata(&metadata),
+        };
+
+        let error = match read_parse_source(&source) {
+            Ok(_) => panic!("expected hardlinked read to fail"),
+            Err(error) => error,
+        };
+
+        assert!(matches!(
+            error,
+            IndexingPipelineError::Io(error) if error.kind() == std::io::ErrorKind::PermissionDenied
+        ));
+    }
+
     #[test]
     fn process_queue_batch_marks_created_and_changed_files_complete() {
         let temp = tempdir().expect("tempdir");

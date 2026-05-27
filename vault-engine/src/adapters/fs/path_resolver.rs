@@ -53,6 +53,9 @@ impl VaultRoot {
 
         let metadata = fs::metadata(&canonical_path)
             .map_err(|_| PathError::MissingPath(canonical_path.clone()))?;
+        if is_unsupported_hardlinked_file(&metadata) {
+            return Err(PathError::UnsupportedHardlink(relative_path));
+        }
 
         Ok(ResolvedVaultPath {
             relative_path,
@@ -61,6 +64,18 @@ impl VaultRoot {
             file_identity: FileIdentity::from_metadata(&metadata),
         })
     }
+}
+
+#[cfg(unix)]
+pub(crate) fn is_unsupported_hardlinked_file(metadata: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    metadata.is_file() && metadata.nlink() > 1
+}
+
+#[cfg(not(unix))]
+pub(crate) fn is_unsupported_hardlinked_file(_metadata: &fs::Metadata) -> bool {
+    false
 }
 
 impl FileIdentity {
@@ -134,5 +149,27 @@ mod tests {
             .expect_err("symlink escape");
 
         assert!(matches!(error, PathError::SymlinkEscape { .. }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_hardlinked_files() {
+        use std::fs::hard_link;
+
+        let vault = tempdir().expect("vault tempdir");
+        let outside = tempdir().expect("outside tempdir");
+        fs::write(outside.path().join("shared.md"), "# Shared").expect("outside note");
+        hard_link(
+            outside.path().join("shared.md"),
+            vault.path().join("shared.md"),
+        )
+        .expect("hardlink");
+        let root = VaultRoot::open(vault.path()).expect("root");
+
+        let error = root
+            .resolve_existing_relative("shared.md")
+            .expect_err("hardlink rejection");
+
+        assert!(matches!(error, PathError::UnsupportedHardlink(_)));
     }
 }

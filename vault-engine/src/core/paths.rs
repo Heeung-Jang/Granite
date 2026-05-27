@@ -27,6 +27,7 @@ pub enum PathError {
     AbsolutePath(PathBuf),
     OutsideVault(PathBuf),
     SymlinkEscape { input: PathBuf, canonical: PathBuf },
+    UnsupportedHardlink(PathBuf),
 }
 
 impl fmt::Display for PathError {
@@ -62,6 +63,13 @@ impl fmt::Display for PathError {
                 input.display(),
                 canonical.display()
             ),
+            Self::UnsupportedHardlink(path) => {
+                write!(
+                    formatter,
+                    "hardlinked files are not supported: {}",
+                    path.display()
+                )
+            }
         }
     }
 }

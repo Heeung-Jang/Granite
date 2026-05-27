@@ -248,7 +248,9 @@ fn map_path_error(error: PathError) -> AttachmentResolutionState {
         PathError::TildePrefix => AttachmentRejectReason::TildePrefix,
         PathError::AbsolutePath(_) => AttachmentRejectReason::AbsolutePath,
         PathError::OutsideVault(_) => AttachmentRejectReason::OutsideVault,
-        PathError::SymlinkEscape { .. } => AttachmentRejectReason::SymlinkEscape,
+        PathError::SymlinkEscape { .. } | PathError::UnsupportedHardlink(_) => {
+            AttachmentRejectReason::SymlinkEscape
+        }
         PathError::RootNotDirectory(_) | PathError::MissingRoot(_) | PathError::MissingPath(_) => {
             AttachmentRejectReason::InvalidRoot
         }

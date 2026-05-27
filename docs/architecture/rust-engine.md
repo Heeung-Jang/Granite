@@ -527,6 +527,10 @@ Move these groups one at a time and run the matching gate before continuing:
   `adapters::tantivy`.
 - New filesystem traversal, canonicalization, save/write primitive, or index
   directory mutation: `adapters::fs`.
+- Hardlinked regular files are unsupported at filesystem boundaries. Scanner,
+  path resolution, markdown reads, save baseline capture, and queued indexing
+  must reject files with Unix link count greater than one instead of indexing,
+  exposing, or mutating content shared outside the vault.
 - New FSEvents call or event flag decoding: `adapters::fsevents`.
 - New user/system workflow orchestration: `use_cases`.
 - New C ABI entry point, raw pointer, C string, Swift row layout, or JSON envelope:

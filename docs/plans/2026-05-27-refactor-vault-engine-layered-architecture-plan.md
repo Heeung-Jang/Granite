@@ -823,10 +823,11 @@ Default stop conditions:
   - Stop condition: any destructive operation relies only on path containment without proving the target is engine-owned.
   - Evidence: index directory reset, rebuild reset, abort, commit data/rebuild/previous cleanup, and full rebuild Tantivy reset now require `.granite-engine-owned` before removal. `cargo test --manifest-path vault-engine/Cargo.toml index_rebuild::`, `cargo test --manifest-path vault-engine/Cargo.toml use_cases::indexing_pipeline::tests::`, full `cargo test --manifest-path vault-engine/Cargo.toml`, and the unsafe clippy gate passed.
 
-- [ ] **RA04.10c Decide and test hardlink policy**
+- [x] **RA04.10c Decide and test hardlink policy**
   - Build: document whether hardlinked markdown files are supported. If unsupported, reject or skip regular files with link count `> 1` in scanner/read/save/indexing filesystem boundaries.
   - Verify: Unix-only tests create a hardlinked note from outside the vault; scan, save baseline capture, markdown read, and queue indexing handle it consistently without exposing or mutating outside-vault content.
   - Stop condition: scanner/read/save/indexing boundaries disagree on hardlink behavior.
+  - Evidence: policy is documented as unsupported in `docs/architecture/rust-engine.md`. Scanner, `VaultRoot` resolution, markdown body read, save baseline capture, and queue source leasing now reject hardlinked files. `cargo test --manifest-path vault-engine/Cargo.toml hardlink`, full `cargo test --manifest-path vault-engine/Cargo.toml`, `cargo test --manifest-path bench/vault-profiler/Cargo.toml`, and the unsafe clippy gate passed.
 
 - [ ] **RA04.11 Post-adapter performance gate**
   - Build: no refactor code changes. Run release fixture `backend-benchmark`, `materialize-read-index`, `read-api-benchmark`, and Swift read UI probe after adapter moves are complete; if private inputs are available, also run real-vault backend and UI probes with ignored/private output paths.
