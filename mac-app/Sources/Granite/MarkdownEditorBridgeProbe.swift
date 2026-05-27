@@ -71,6 +71,7 @@ struct MarkdownEditorBridgeProbeReport: Codable, Equatable {
     var selectionChangeDecorationDoesNotReenter: Bool
     var zoomUpdateDoesNotMutateSource: Bool
     var zoomUpdatePreservesSelection: Bool
+    var zoomRedecorationDoesNotReenter: Bool
     var unsafeMarkdownLinkTargetsRemainVisible: Bool
     var unsafeWikiLinkTargetsRemainVisible: Bool
     var plainTextPastePolicy: Bool
@@ -167,6 +168,7 @@ enum MarkdownEditorBridgeProbe {
         let markerStyleProbe = probeMarkerStyleStorageCompatibility()
         let selectionChangeProbe = probeSelectionChangeDecorationDoesNotReenter()
         let zoomUpdateProbe = probeZoomUpdatePreservesSourceAndSelection()
+        let zoomRedecorationProbe = probeZoomRedecorationDoesNotReenter()
         let checkboxProbe = probeCheckboxToggle()
         let tableCellProbe = probeTableCellEdit()
         let zoomedTableProbe = probeZoomedTableEditing()
@@ -243,6 +245,7 @@ enum MarkdownEditorBridgeProbe {
             selectionChangeDecorationDoesNotReenter: selectionChangeProbe,
             zoomUpdateDoesNotMutateSource: zoomUpdateProbe.sourcePreserved,
             zoomUpdatePreservesSelection: zoomUpdateProbe.selectionPreserved,
+            zoomRedecorationDoesNotReenter: zoomRedecorationProbe,
             unsafeMarkdownLinkTargetsRemainVisible: renderProbe.unsafeMarkdownLinkTargetsRemainVisible,
             unsafeWikiLinkTargetsRemainVisible: renderProbe.unsafeWikiLinkTargetsRemainVisible,
             plainTextPastePolicy: renderProbe.plainTextPastePolicy,
@@ -851,6 +854,47 @@ enum MarkdownEditorBridgeProbe {
             textView.string == source,
             NSEqualRanges(textView.selectedRange(), selection)
         )
+    }
+
+    private static func probeZoomRedecorationDoesNotReenter() -> Bool {
+        var modelText = "# Heading\n\nBody with [[Link]] and `code`.\n"
+        var bindingWriteCount = 0
+        let binding = Binding<String>(
+            get: { modelText },
+            set: {
+                modelText = $0
+                bindingWriteCount += 1
+            }
+        )
+        let coordinator = MarkdownEditorView.Coordinator(
+            text: binding,
+            appContentZoomScale: 1.0
+        )
+        let textView = MarkdownEditorTextViewFactory.makeTextView(scale: 1.0)
+        textView.delegate = coordinator
+        coordinator.textView = textView
+        textView.string = modelText
+        let selection = NSRange(location: 12, length: 4)
+        textView.setSelectedRange(selection)
+
+        coordinator.decorateVisibleRange(in: textView)
+        coordinator.update(
+            text: binding,
+            interactionHandler: nil,
+            livePreviewMode: .livePreview,
+            linkStyleMap: LivePreviewLinkStyleMap(),
+            embedPreviewMap: LivePreviewEmbedPreviewMap(),
+            markerStyle: .defaultValue,
+            documentTitle: nil,
+            appContentZoomScale: 1.25,
+            focusRequestID: nil
+        )
+        MarkdownEditorTextViewFactory.applyAppContentZoomScale(1.25, to: textView)
+        coordinator.decorateVisibleRange(in: textView)
+
+        return bindingWriteCount == 0
+            && textView.string == modelText
+            && NSEqualRanges(textView.selectedRange(), selection)
     }
 
     private static func probeAppKitChangeSkip() -> Bool {

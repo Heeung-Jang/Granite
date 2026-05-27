@@ -13,6 +13,7 @@ struct LivePreviewStyleProbeReport: Codable, Equatable {
     var collapsedHeadingMarkerLineHeightPreserved: Bool
     var collapsedHeadingMarkerSelectionSafe: Bool
     var collapsedHeadingMarkerMarkedTextSafe: Bool
+    var collapsedSyntaxFontRemainsTiny: Bool
     var baseParagraphSpacingApplied: Bool
     var inlineCodeStyleApplied: Bool
     var inlineCodePreservesSource: Bool
@@ -447,6 +448,7 @@ enum LivePreviewStyleProbe {
             collapsedHeadingMarkerLineHeightPreserved: headingMarkerFields.collapsedLineHeightPreserved,
             collapsedHeadingMarkerSelectionSafe: headingMarkerFields.collapsedSelectionSafe,
             collapsedHeadingMarkerMarkedTextSafe: headingMarkerFields.collapsedMarkedTextSafe,
+            collapsedSyntaxFontRemainsTiny: probeCollapsedSyntaxFontRemainsTiny(),
             baseParagraphSpacingApplied: baseParagraphStyle?.lineHeightMultiple ?? 0 > 1
                 && baseParagraphStyle?.paragraphSpacing ?? 0 > 0,
             inlineCodeStyleApplied: inlineCodeAttributes?[.font] as? NSFont == LivePreviewTheme.codeFont
@@ -2060,6 +2062,30 @@ enum LivePreviewStyleProbe {
             return nil
         }
         return font.pointSize
+    }
+
+    private static func probeCollapsedSyntaxFontRemainsTiny() -> Bool {
+        let source = "# Hidden Heading\n\nBody"
+        let textView = MarkdownEditorTextViewFactory.makeTextView(scale: 1.25)
+        textView.string = source
+        textView.setSelectedRange(NSRange(location: (source as NSString).length, length: 0))
+        MarkdownVisibleRangeDecorator.decorateVisibleRange(
+            in: textView,
+            livePreviewMode: .livePreview,
+            revealRange: textView.selectedRange(),
+            markerStyle: .obsidian,
+            scale: 1.25
+        )
+
+        guard let font = textView.textStorage?.attribute(
+            .font,
+            at: 0,
+            effectiveRange: nil
+        ) as? NSFont
+        else {
+            return false
+        }
+        return font.pointSize == LivePreviewTheme.collapsedSyntaxFont.pointSize
     }
 
     private static func approximately(_ lhs: CGFloat, _ rhs: CGFloat, tolerance: CGFloat) -> Bool {
