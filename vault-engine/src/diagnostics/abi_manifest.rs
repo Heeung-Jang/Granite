@@ -7,6 +7,20 @@ use crate::ENGINE_ABI_VERSION;
 use crate::attachments::{
     AttachmentReferenceSource, AttachmentRejectReason, AttachmentResolutionState,
 };
+use crate::ffi::read_rows::{
+    ENGINE_READ_NO_NEXT_OFFSET, ENGINE_READ_ROW_KIND_ATTACHMENT, ENGINE_READ_ROW_KIND_BACKLINK,
+    ENGINE_READ_ROW_KIND_FILE_TREE, ENGINE_READ_ROW_KIND_GRAPH_EDGE,
+    ENGINE_READ_ROW_KIND_GRAPH_NODE, ENGINE_READ_ROW_KIND_LIVE_PREVIEW_METADATA,
+    ENGINE_READ_ROW_KIND_OPEN_STATUS, ENGINE_READ_ROW_KIND_OUTGOING_LINK,
+    ENGINE_READ_ROW_KIND_PROPERTY, ENGINE_READ_ROW_KIND_SEARCH_HIT, ENGINE_READ_ROW_KIND_TAG,
+    EngineReadAttachmentRow, EngineReadFileTreeRow, EngineReadGraphEdgeRow, EngineReadGraphNodeRow,
+    EngineReadLinkRow, EngineReadLivePreviewMetadataRow, EngineReadPropertyRow,
+    EngineReadResultBuffer, EngineReadResultHeader, EngineReadSearchHitRow, EngineReadStringRef,
+    EngineReadTagRow, attachment_source_code, attachment_state_code, file_kind_code,
+    file_status_code, link_resolution_state_code, live_preview_item_kind_code,
+    live_preview_source_code, live_preview_state_code, local_graph_edge_direction_code,
+    local_graph_node_kind_code, property_value_kind, tag_source_code,
+};
 use crate::ffi::{EngineReadLocalGraphResult, EngineReadOpenResult};
 use crate::graph::{
     MAX_WHOLE_VAULT_GRAPH_EDGES, MAX_WHOLE_VAULT_GRAPH_GROUPS, MAX_WHOLE_VAULT_GRAPH_LABEL_BYTES,
@@ -23,20 +37,6 @@ use crate::read_api::{
     ENGINE_READ_STATE_ERROR, ENGINE_READ_STATE_INDEX_UNAVAILABLE, ENGINE_READ_STATE_PARTIAL,
     ENGINE_READ_STATE_STALE, LivePreviewMetadataItemKind, LivePreviewMetadataSource,
     LivePreviewMetadataState, LocalGraphEdgeDirection, LocalGraphNodeKind, ReadOpenError,
-};
-use crate::read_ffi::{
-    ENGINE_READ_NO_NEXT_OFFSET, ENGINE_READ_ROW_KIND_ATTACHMENT, ENGINE_READ_ROW_KIND_BACKLINK,
-    ENGINE_READ_ROW_KIND_FILE_TREE, ENGINE_READ_ROW_KIND_GRAPH_EDGE,
-    ENGINE_READ_ROW_KIND_GRAPH_NODE, ENGINE_READ_ROW_KIND_LIVE_PREVIEW_METADATA,
-    ENGINE_READ_ROW_KIND_OPEN_STATUS, ENGINE_READ_ROW_KIND_OUTGOING_LINK,
-    ENGINE_READ_ROW_KIND_PROPERTY, ENGINE_READ_ROW_KIND_SEARCH_HIT, ENGINE_READ_ROW_KIND_TAG,
-    EngineReadAttachmentRow, EngineReadFileTreeRow, EngineReadGraphEdgeRow, EngineReadGraphNodeRow,
-    EngineReadLinkRow, EngineReadLivePreviewMetadataRow, EngineReadPropertyRow,
-    EngineReadResultBuffer, EngineReadResultHeader, EngineReadSearchHitRow, EngineReadStringRef,
-    EngineReadTagRow, attachment_source_code, attachment_state_code, file_kind_code,
-    file_status_code, link_resolution_state_code, live_preview_item_kind_code,
-    live_preview_source_code, live_preview_state_code, local_graph_edge_direction_code,
-    local_graph_node_kind_code, property_value_kind, tag_source_code,
 };
 use crate::scanner::ScanEntryKind;
 

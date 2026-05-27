@@ -2,7 +2,7 @@ use std::ffi::CString;
 use std::os::raw::c_char;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use crate::read_ffi::EngineReadResultBuffer;
+use crate::ffi::read_rows::EngineReadResultBuffer;
 
 use super::EngineReadHandle;
 

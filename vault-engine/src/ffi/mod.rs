@@ -2,14 +2,7 @@ use std::os::raw::{c_char, c_uchar};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 
-use crate::read_api::{
-    ENGINE_READ_INSPECTOR_PANEL_ATTACHMENTS, ENGINE_READ_INSPECTOR_PANEL_BACKLINKS,
-    ENGINE_READ_INSPECTOR_PANEL_OUTGOING, ENGINE_READ_INSPECTOR_PANEL_PROPERTIES,
-    ENGINE_READ_INSPECTOR_PANEL_TAGS, ENGINE_READ_LOCAL_GRAPH_DEPTH_ONE_HOP,
-    ENGINE_READ_LOCAL_GRAPH_DEPTH_TWO_HOP, LocalGraphDepth, LocalGraphRequest, ReadApiError,
-    ReadOpenError, VaultReadApi,
-};
-use crate::read_ffi::{
+use crate::ffi::read_rows::{
     ENGINE_READ_ROW_KIND_ATTACHMENT, ENGINE_READ_ROW_KIND_BACKLINK, ENGINE_READ_ROW_KIND_FILE_TREE,
     ENGINE_READ_ROW_KIND_GRAPH_EDGE, ENGINE_READ_ROW_KIND_GRAPH_NODE,
     ENGINE_READ_ROW_KIND_LIVE_PREVIEW_METADATA, ENGINE_READ_ROW_KIND_OUTGOING_LINK,
@@ -17,6 +10,13 @@ use crate::read_ffi::{
     EngineReadAttachmentRow, EngineReadFileTreeRow, EngineReadGraphEdgeRow, EngineReadGraphNodeRow,
     EngineReadLinkRow, EngineReadLivePreviewMetadataRow, EngineReadPropertyRow,
     EngineReadResultBuffer, EngineReadSearchHitRow, EngineReadTagRow,
+};
+use crate::read_api::{
+    ENGINE_READ_INSPECTOR_PANEL_ATTACHMENTS, ENGINE_READ_INSPECTOR_PANEL_BACKLINKS,
+    ENGINE_READ_INSPECTOR_PANEL_OUTGOING, ENGINE_READ_INSPECTOR_PANEL_PROPERTIES,
+    ENGINE_READ_INSPECTOR_PANEL_TAGS, ENGINE_READ_LOCAL_GRAPH_DEPTH_ONE_HOP,
+    ENGINE_READ_LOCAL_GRAPH_DEPTH_TWO_HOP, LocalGraphDepth, LocalGraphRequest, ReadApiError,
+    ReadOpenError, VaultReadApi,
 };
 
 mod graph;
@@ -344,6 +344,16 @@ mod tests {
     use crate::attachments::{
         AttachmentReferenceSource, AttachmentRejectReason, AttachmentResolutionState,
     };
+    use crate::ffi::read_rows::{
+        ENGINE_READ_NO_NEXT_OFFSET, ENGINE_READ_ROW_KIND_ATTACHMENT, ENGINE_READ_ROW_KIND_BACKLINK,
+        ENGINE_READ_ROW_KIND_FILE_TREE, ENGINE_READ_ROW_KIND_GRAPH_EDGE,
+        ENGINE_READ_ROW_KIND_GRAPH_NODE, ENGINE_READ_ROW_KIND_LIVE_PREVIEW_METADATA,
+        ENGINE_READ_ROW_KIND_OPEN_STATUS, ENGINE_READ_ROW_KIND_OUTGOING_LINK,
+        ENGINE_READ_ROW_KIND_PROPERTY, ENGINE_READ_ROW_KIND_SEARCH_HIT, ENGINE_READ_ROW_KIND_TAG,
+        EngineReadAttachmentRow, EngineReadFileTreeRow, EngineReadGraphNodeRow, EngineReadLinkRow,
+        EngineReadLivePreviewMetadataRow, EngineReadPropertyRow, EngineReadSearchHitRow,
+        EngineReadTagRow, decode_header_for_test, string_for_test,
+    };
     use crate::index::{
         AttachmentRecord, FileRecord, HeadingRecord, IndexSchemaMetadata, LinkEdgeRecord,
         MetadataStore, PropertyRecord, TagRecord, TagSource, slugify_heading,
@@ -357,16 +367,6 @@ mod tests {
         ENGINE_READ_LOCAL_GRAPH_DEPTH_TWO_HOP, ENGINE_READ_SEARCH_MODE_BODY,
         ENGINE_READ_SEARCH_MODE_FILE_NAME, ENGINE_READ_STATE_COMPLETE, ENGINE_READ_STATE_ERROR,
         ENGINE_READ_STATE_PARTIAL, READ_BACKEND_NAME, READ_BACKEND_VERSION, READ_TOKENIZER_CONFIG,
-    };
-    use crate::read_ffi::{
-        ENGINE_READ_NO_NEXT_OFFSET, ENGINE_READ_ROW_KIND_ATTACHMENT, ENGINE_READ_ROW_KIND_BACKLINK,
-        ENGINE_READ_ROW_KIND_FILE_TREE, ENGINE_READ_ROW_KIND_GRAPH_EDGE,
-        ENGINE_READ_ROW_KIND_GRAPH_NODE, ENGINE_READ_ROW_KIND_LIVE_PREVIEW_METADATA,
-        ENGINE_READ_ROW_KIND_OPEN_STATUS, ENGINE_READ_ROW_KIND_OUTGOING_LINK,
-        ENGINE_READ_ROW_KIND_PROPERTY, ENGINE_READ_ROW_KIND_SEARCH_HIT, ENGINE_READ_ROW_KIND_TAG,
-        EngineReadAttachmentRow, EngineReadFileTreeRow, EngineReadGraphNodeRow, EngineReadLinkRow,
-        EngineReadLivePreviewMetadataRow, EngineReadPropertyRow, EngineReadSearchHitRow,
-        EngineReadTagRow, decode_header_for_test, string_for_test,
     };
     use crate::scanner::{ScanEntry, ScanEntryKind};
     use crate::sqlite_fts::SearchDocument;
@@ -1435,7 +1435,7 @@ mod tests {
 
     unsafe fn take_open_header(
         buffer: EngineReadResultBuffer,
-    ) -> crate::read_ffi::EngineReadResultHeader {
+    ) -> crate::ffi::read_rows::EngineReadResultHeader {
         assert!(!buffer.ptr.is_null());
         let header = decode_header_for_test(&buffer);
         unsafe {
@@ -1446,7 +1446,7 @@ mod tests {
 
     unsafe fn take_open_error(
         buffer: EngineReadResultBuffer,
-    ) -> (crate::read_ffi::EngineReadResultHeader, String) {
+    ) -> (crate::ffi::read_rows::EngineReadResultHeader, String) {
         assert!(!buffer.ptr.is_null());
         let header = decode_header_for_test(&buffer);
         let error_code = string_for_test(&buffer, header.error_code);

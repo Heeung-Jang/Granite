@@ -2,6 +2,13 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 use std::ptr::NonNull;
 
+use crate::ffi::read_rows::{
+    ENGINE_READ_ROW_KIND_ATTACHMENT, ENGINE_READ_ROW_KIND_BACKLINK,
+    ENGINE_READ_ROW_KIND_GRAPH_EDGE, ENGINE_READ_ROW_KIND_GRAPH_NODE,
+    ENGINE_READ_ROW_KIND_OPEN_STATUS, ENGINE_READ_ROW_KIND_OUTGOING_LINK,
+    ENGINE_READ_ROW_KIND_PROPERTY, ENGINE_READ_ROW_KIND_TAG, EngineReadResultBuffer,
+    EngineReadResultBuilder, error_result_buffer, open_error_buffer, open_status_buffer,
+};
 use crate::index_rebuild::IndexRebuildPaths;
 use crate::indexing_pipeline::{
     IndexingPipelineOptions, load_search_document_sources, run_full_rebuild_pipeline_and_commit,
@@ -14,13 +21,6 @@ use crate::read_api::{
     ENGINE_READ_STATE_ERROR, ENGINE_READ_STATE_PARTIAL, ENGINE_READ_STATE_STALE, ReadApiError,
     ReadOpenError, ReadPage, ReadState, VaultReadApi, expected_read_schema_metadata,
     open_vault_read_api,
-};
-use crate::read_ffi::{
-    ENGINE_READ_ROW_KIND_ATTACHMENT, ENGINE_READ_ROW_KIND_BACKLINK,
-    ENGINE_READ_ROW_KIND_GRAPH_EDGE, ENGINE_READ_ROW_KIND_GRAPH_NODE,
-    ENGINE_READ_ROW_KIND_OPEN_STATUS, ENGINE_READ_ROW_KIND_OUTGOING_LINK,
-    ENGINE_READ_ROW_KIND_PROPERTY, ENGINE_READ_ROW_KIND_TAG, EngineReadResultBuffer,
-    EngineReadResultBuilder, error_result_buffer, open_error_buffer, open_status_buffer,
 };
 
 use super::{EngineReadHandle, EngineReadLocalGraphResult, EngineReadOpenResult};

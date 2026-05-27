@@ -529,7 +529,7 @@ Default stop conditions:
   - Build: if existing modules still import `crate::read_ffi`, keep a temporary `read_ffi` compatibility module that re-exports `ffi::read_rows` for one phase only.
   - Verify: no Swift-facing behavior changes.
 
-- [ ] **RA02.03 Update imports to the new FFI row path**
+- [x] **RA02.03 Update imports to the new FFI row path**
   - Build: change Rust imports from `crate::read_ffi::*` to `crate::ffi::read_rows::*`.
   - Verify: `rg "crate::read_ffi" vault-engine/src` returns only the temporary compatibility module, or no matches if removed.
 
