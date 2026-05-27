@@ -88,6 +88,18 @@ impl VaultReadApi {
         query: &str,
         page: PageRequest,
     ) -> ReadApiResult<ReadPage<SearchHit>> {
+        self.search(query, page)
+    }
+
+    pub fn body_search(
+        &self,
+        query: &str,
+        page: PageRequest,
+    ) -> ReadApiResult<ReadPage<SearchHit>> {
+        self.search(query, page)
+    }
+
+    fn search(&self, query: &str, page: PageRequest) -> ReadApiResult<ReadPage<SearchHit>> {
         let results = match self
             .search
             .search_page(query, page.offset, page.fetch_limit())

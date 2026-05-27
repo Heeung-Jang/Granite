@@ -190,14 +190,6 @@ impl LocalGraphRequest {
 }
 
 impl VaultReadApi {
-    pub fn body_search(
-        &self,
-        query: &str,
-        page: PageRequest,
-    ) -> ReadApiResult<ReadPage<SearchHit>> {
-        self.search(query, page)
-    }
-
     pub fn search_with_mode(
         &self,
         mode: u32,
@@ -521,26 +513,6 @@ impl VaultReadApi {
                 ReadState::Complete
             },
         })
-    }
-
-    fn search(&self, query: &str, page: PageRequest) -> ReadApiResult<ReadPage<SearchHit>> {
-        let results = match self
-            .search
-            .search_page(query, page.offset, page.fetch_limit())
-        {
-            Ok(results) => results,
-            Err(TantivySearchError::EmptyQuery) => {
-                return Ok(ReadPage {
-                    request_id: page.request_id,
-                    generation: self.generation,
-                    items: Vec::new(),
-                    next_offset: None,
-                    state: ReadState::Error,
-                });
-            }
-            Err(error) => return Err(error.into()),
-        };
-        Ok(self.page_from_overfetch(results.into_iter().map(SearchHit::from).collect(), page))
     }
 
     fn require_file(&self, relative_path: &str) -> ReadApiResult<FileLookupProjection> {

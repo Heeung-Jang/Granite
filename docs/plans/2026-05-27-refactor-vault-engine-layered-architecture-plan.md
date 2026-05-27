@@ -787,7 +787,7 @@ Default stop conditions:
   - Build: move filename search without moving Tantivy body search or search-mode dispatch.
   - Verify: search state tests pass for filename search.
 
-- [ ] **RA05.02g Move body search method**
+- [x] **RA05.02g Move body search method**
   - Build: move Tantivy-backed body search and result conversion without changing query sanitization or snippets.
   - Verify: Tantivy search tests and read API body-search tests pass.
 
