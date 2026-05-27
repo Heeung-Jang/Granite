@@ -479,6 +479,32 @@ mod tests {
         );
         assert!(plans.iter().any(|plan| plan.stage == GraphQueryStage::Tags));
         assert!(plans.iter().all(|plan| !plan.detail.contains("Home.md")));
+        assert_graph_stage_uses_index(
+            &plans,
+            GraphQueryStage::Files,
+            "idx_files_kind_status_generation",
+        );
+        assert_graph_stage_uses_index(
+            &plans,
+            GraphQueryStage::ResolvedEdges,
+            "idx_links_resolved_pair",
+        );
+        assert_graph_stage_uses_index(
+            &plans,
+            GraphQueryStage::ResolvedEdgesCompact,
+            "idx_links_resolved_pair",
+        );
+        assert_graph_stage_uses_index(
+            &plans,
+            GraphQueryStage::UnresolvedEdges,
+            "idx_links_unresolved_source_target_key",
+        );
+        assert_graph_stage_uses_index(&plans, GraphQueryStage::Tags, "idx_tags_file_id");
+        assert_no_unindexed_scan(&plans, GraphQueryStage::ResolvedEdges, "links");
+        assert_no_unindexed_scan(&plans, GraphQueryStage::ResolvedEdgesCompact, "links");
+        assert_no_unindexed_scan(&plans, GraphQueryStage::UnresolvedEdges, "links");
+        assert_no_unindexed_scan(&plans, GraphQueryStage::Tags, "tags");
+        assert_eq!(sqlite_reads::GRAPH_TAG_FILE_ID_CHUNK_SIZE, 400);
         let unresolved_plan_details = plans
             .iter()
             .filter(|plan| plan.stage == GraphQueryStage::UnresolvedEdges)
@@ -1011,5 +1037,39 @@ mod tests {
             )
             .expect("index exists query")
             == 1
+    }
+
+    fn assert_graph_stage_uses_index(
+        plans: &[GraphQueryPlanSummary],
+        stage: GraphQueryStage,
+        index: &str,
+    ) {
+        let details = graph_stage_details(plans, stage);
+        assert!(
+            details.iter().any(|detail| detail.contains(index)),
+            "{stage:?} should use {index}: {details:?}"
+        );
+    }
+
+    fn assert_no_unindexed_scan(
+        plans: &[GraphQueryPlanSummary],
+        stage: GraphQueryStage,
+        table: &str,
+    ) {
+        let details = graph_stage_details(plans, stage);
+        assert!(
+            details.iter().all(|detail| {
+                !detail.contains(&format!("SCAN {table}")) || detail.contains("INDEX")
+            }),
+            "{stage:?} should not full-scan {table}: {details:?}"
+        );
+    }
+
+    fn graph_stage_details(plans: &[GraphQueryPlanSummary], stage: GraphQueryStage) -> Vec<&str> {
+        plans
+            .iter()
+            .filter(|plan| plan.stage == stage)
+            .map(|plan| plan.detail.as_str())
+            .collect()
     }
 }

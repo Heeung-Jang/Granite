@@ -17,6 +17,8 @@ use crate::core::metadata::{
     AttachmentRecord, FileRecord, HeadingRecord, LinkEdgeRecord, PropertyRecord, TagRecord,
 };
 
+pub(crate) const GRAPH_TAG_FILE_ID_CHUNK_SIZE: usize = 400;
+
 pub(crate) fn get_file(
     connection: &Connection,
     file_id: &str,
@@ -613,7 +615,7 @@ pub(crate) fn graph_tags_for_files(
     }
 
     let mut tags = Vec::new();
-    for chunk in file_ids.chunks(400) {
+    for chunk in file_ids.chunks(GRAPH_TAG_FILE_ID_CHUNK_SIZE) {
         let placeholders = std::iter::repeat_n("?", chunk.len())
             .collect::<Vec<_>>()
             .join(", ");

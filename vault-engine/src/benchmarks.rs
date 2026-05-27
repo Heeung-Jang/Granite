@@ -494,7 +494,20 @@ pub fn run_whole_vault_graph_snapshot_benchmark(
     }
 
     let plans = store.graph_query_plan_summaries(1)?;
-    let indexed_access_summary = graph_indexed_access_summary(&plans, request, snapshot_duration);
+    let node_count_start = Instant::now();
+    let _ =
+        store.graph_visible_node_count(1, request.include_unresolved, request.include_orphans)?;
+    let node_count_duration = node_count_start.elapsed();
+    let edge_count_start = Instant::now();
+    let _ = store.graph_visible_edge_count(1, request.include_unresolved)?;
+    let edge_count_duration = edge_count_start.elapsed();
+    let indexed_access_summary = graph_indexed_access_summary(
+        &plans,
+        request,
+        snapshot_duration,
+        node_count_duration,
+        edge_count_duration,
+    );
     let memory_target = 250.0 * 1024.0 * 1024.0;
     let swift_decode_target = 1_500.0;
     let swift_decode_memory_target = 200.0 * 1024.0 * 1024.0;
@@ -1425,6 +1438,8 @@ fn graph_indexed_access_summary(
     plans: &[crate::adapters::sqlite::GraphQueryPlanSummary],
     request: WholeVaultGraphRequest,
     snapshot_duration: Duration,
+    node_count_duration: Duration,
+    edge_count_duration: Duration,
 ) -> Vec<WholeVaultGraphIndexedAccess> {
     vec![
         indexed_access("files", plans, GraphQueryStage::Files, Duration::ZERO),
@@ -1472,6 +1487,18 @@ fn graph_indexed_access_summary(
             uses_index: false,
             scan_kind: "productionUseCase".to_string(),
             duration_milliseconds: duration_millis(snapshot_duration),
+        },
+        WholeVaultGraphIndexedAccess {
+            stage: "nodeCount".to_string(),
+            uses_index: true,
+            scan_kind: "diagnosticCount".to_string(),
+            duration_milliseconds: duration_millis(node_count_duration),
+        },
+        WholeVaultGraphIndexedAccess {
+            stage: "edgeCount".to_string(),
+            uses_index: true,
+            scan_kind: "diagnosticCount".to_string(),
+            duration_milliseconds: duration_millis(edge_count_duration),
         },
     ]
 }
