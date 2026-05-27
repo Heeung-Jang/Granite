@@ -2,16 +2,18 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 use crate::adapters::sqlite::reads::{
+    attachment_projections as read_attachment_projections, attachments as read_attachments,
     backlink_projections as read_backlink_projections, backlinks as read_backlinks,
     file_tree_projection as read_file_tree_projection, get_file as read_get_file,
-    list_files as read_list_files, list_markdown_files as read_list_markdown_files,
-    lookup_file as read_lookup_file, outgoing_link_projections as read_outgoing_link_projections,
-    outgoing_links as read_outgoing_links,
+    headings as read_headings, list_files as read_list_files,
+    list_markdown_files as read_list_markdown_files, lookup_file as read_lookup_file,
+    outgoing_link_projections as read_outgoing_link_projections,
+    outgoing_links as read_outgoing_links, properties as read_properties,
+    property_projections as read_property_projections,
+    tag_note_projections as read_tag_note_projections, tags as read_tags,
 };
 use crate::adapters::sqlite::rows::{
-    row_to_attachment, row_to_graph_file, row_to_graph_resolved_edge, row_to_graph_tag,
-    row_to_graph_unresolved_edge, row_to_heading, row_to_property, row_to_tag,
-    row_to_tag_note_projection,
+    row_to_graph_file, row_to_graph_resolved_edge, row_to_graph_tag, row_to_graph_unresolved_edge,
 };
 use crate::adapters::sqlite::schema::{
     create_projection_indexes, create_schema, drop_projection_indexes, read_schema_metadata,
@@ -649,13 +651,7 @@ impl MetadataStore {
         offset: usize,
         limit: usize,
     ) -> MetadataStoreResult<Vec<TagRecord>> {
-        let mut statement = self.connection.prepare(
-            "SELECT file_id, tag, source FROM tags \
-             WHERE file_id = ?1 ORDER BY tag, source, id LIMIT ?2 OFFSET ?3",
-        )?;
-        let rows =
-            statement.query_map(params![file_id, limit as i64, offset as i64], row_to_tag)?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+        read_tags(&self.connection, file_id, offset, limit)
     }
 
     pub fn graph_files(
@@ -875,19 +871,7 @@ impl MetadataStore {
         offset: usize,
         limit: usize,
     ) -> MetadataStoreResult<Vec<TagNoteProjection>> {
-        let mut statement = self.connection.prepare(
-            "SELECT t.file_id, f.relative_path, t.tag, MIN(t.source)
-             FROM tags t
-             JOIN files f ON f.file_id = t.file_id
-             WHERE t.tag = ?1
-             GROUP BY t.file_id, f.relative_path, t.tag
-             ORDER BY f.relative_path, t.file_id LIMIT ?2 OFFSET ?3",
-        )?;
-        let rows = statement.query_map(
-            params![tag, limit as i64, offset as i64],
-            row_to_tag_note_projection,
-        )?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+        read_tag_note_projections(&self.connection, tag, offset, limit)
     }
 
     pub fn properties(
@@ -896,15 +880,7 @@ impl MetadataStore {
         offset: usize,
         limit: usize,
     ) -> MetadataStoreResult<Vec<PropertyRecord>> {
-        let mut statement = self.connection.prepare(
-            "SELECT file_id, key, value_kind, value_json FROM properties \
-             WHERE file_id = ?1 ORDER BY key, id LIMIT ?2 OFFSET ?3",
-        )?;
-        let rows = statement.query_map(
-            params![file_id, limit as i64, offset as i64],
-            row_to_property,
-        )?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+        read_properties(&self.connection, file_id, offset, limit)
     }
 
     pub fn property_projections(
@@ -913,16 +889,7 @@ impl MetadataStore {
         offset: usize,
         limit: usize,
     ) -> MetadataStoreResult<Vec<PropertyProjection>> {
-        let properties = self.properties(file_id, offset, limit)?;
-        Ok(properties
-            .into_iter()
-            .map(|property| PropertyProjection {
-                display_value: property.value.display_value(),
-                file_id: property.file_id,
-                key: property.key,
-                value: property.value,
-            })
-            .collect())
+        read_property_projections(&self.connection, file_id, offset, limit)
     }
 
     pub fn headings(
@@ -931,15 +898,7 @@ impl MetadataStore {
         offset: usize,
         limit: usize,
     ) -> MetadataStoreResult<Vec<HeadingRecord>> {
-        let mut statement = self.connection.prepare(
-            "SELECT file_id, slug, title, level, byte_offset FROM headings \
-             WHERE file_id = ?1 ORDER BY byte_offset, id LIMIT ?2 OFFSET ?3",
-        )?;
-        let rows = statement.query_map(
-            params![file_id, limit as i64, offset as i64],
-            row_to_heading,
-        )?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+        read_headings(&self.connection, file_id, offset, limit)
     }
 
     pub fn attachments(
@@ -948,15 +907,7 @@ impl MetadataStore {
         offset: usize,
         limit: usize,
     ) -> MetadataStoreResult<Vec<AttachmentRecord>> {
-        let mut statement = self.connection.prepare(
-            "SELECT source_file_id, source, raw_target, state, state_detail FROM attachments \
-             WHERE source_file_id = ?1 ORDER BY raw_target, id LIMIT ?2 OFFSET ?3",
-        )?;
-        let rows = statement.query_map(
-            params![file_id, limit as i64, offset as i64],
-            row_to_attachment,
-        )?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+        read_attachments(&self.connection, file_id, offset, limit)
     }
 
     pub fn attachment_projections(
@@ -965,22 +916,7 @@ impl MetadataStore {
         offset: usize,
         limit: usize,
     ) -> MetadataStoreResult<Vec<AttachmentProjection>> {
-        let attachments = self.attachments(file_id, offset, limit)?;
-        Ok(attachments
-            .into_iter()
-            .map(|attachment| AttachmentProjection {
-                resolved_relative_path: match &attachment.state {
-                    AttachmentResolutionState::Resolved { relative_path } => {
-                        Some(relative_path.clone())
-                    }
-                    _ => None,
-                },
-                source_file_id: attachment.source_file_id,
-                raw_target: attachment.raw_target,
-                source: attachment.source,
-                state: attachment.state,
-            })
-            .collect())
+        read_attachment_projections(&self.connection, file_id, offset, limit)
     }
 
     pub fn delete_file(&mut self, file_id: &str) -> MetadataStoreResult<()> {
