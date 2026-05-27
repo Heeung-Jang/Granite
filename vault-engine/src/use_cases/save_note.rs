@@ -1,11 +1,18 @@
 use std::{fmt, path::PathBuf, time::SystemTime};
 
-use crate::adapters::fs::note_writer::capture_snapshot;
-use crate::adapters::sqlite::{IndexingQueue, IndexingQueueError, IndexingQueueItem};
+use std::path::Path;
+
+use crate::adapters::fs::note_writer::{
+    FileSnapshot, capture_snapshot, rename_temp_file, sync_parent, write_temp_file,
+};
+use crate::adapters::sqlite::{
+    FileRecord, IndexingQueue, IndexingQueueError, IndexingQueueItem, IndexingQueueReason,
+};
+use crate::core::scan::{ScanEntry, classify_file};
 use crate::paths::{FileIdentity, PathError, VaultRoot};
 use crate::save::{
     keep_conflicted_buffer_as_new_note_impl, overwrite_after_conflict_impl,
-    reload_after_conflict_impl, safe_save_and_enqueue_own_save_impl, safe_save_impl,
+    reload_after_conflict_impl,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -139,7 +146,25 @@ impl<'a> SaveRequest<'a> {
 }
 
 pub fn safe_save(root: &VaultRoot, request: SaveRequest<'_>) -> SafeSaveResult<SaveOutcome> {
-    safe_save_impl(root, request)
+    let current = current_snapshot(root, request.baseline)?;
+    ensure_baseline_matches(request.baseline, &current)?;
+
+    if current.readonly {
+        return Err(SafeSaveError::ReadOnly {
+            relative_path: request.baseline.relative_path.clone(),
+        });
+    }
+
+    let temp_path = write_temp_file(&current, request.contents)?;
+    let display_path = Path::new(&current.baseline.relative_path);
+    rename_temp_file(&temp_path, &current.absolute_path, display_path)?;
+    sync_parent(&current.absolute_path, display_path)?;
+
+    let baseline = SaveBaseline::capture(root, &request.baseline.relative_path)?;
+    Ok(SaveOutcome {
+        baseline,
+        bytes_written: request.contents.len() as u64,
+    })
 }
 
 pub fn safe_save_and_enqueue_own_save(
@@ -148,7 +173,20 @@ pub fn safe_save_and_enqueue_own_save(
     request: SaveRequest<'_>,
     generation: u64,
 ) -> SaveConflictChoiceResult<QueuedSaveOutcome> {
-    safe_save_and_enqueue_own_save_impl(root, queue, request, generation)
+    let outcome = safe_save(root, request)?;
+    let queued_item = enqueue_saved_file(
+        queue,
+        &outcome.baseline,
+        generation,
+        IndexingQueueReason::OwnSave,
+    )?;
+
+    Ok(QueuedSaveOutcome {
+        baseline: outcome.baseline,
+        bytes_written: outcome.bytes_written,
+        queued_item,
+        dirty: false,
+    })
 }
 
 pub fn reload_after_conflict(
@@ -247,4 +285,83 @@ impl From<IndexingQueueError> for SaveConflictChoiceError {
     fn from(error: IndexingQueueError) -> Self {
         Self::Queue(error)
     }
+}
+
+pub(crate) fn current_snapshot(
+    root: &VaultRoot,
+    expected: &SaveBaseline,
+) -> SafeSaveResult<FileSnapshot> {
+    match capture_snapshot(root, &expected.relative_path) {
+        Ok(snapshot) => Ok(snapshot),
+        Err(SafeSaveError::Path(PathError::MissingPath(_))) => {
+            Err(conflict(expected, SaveConflictKind::Deleted, None))
+        }
+        Err(SafeSaveError::Path(PathError::SymlinkEscape { .. }))
+        | Err(SafeSaveError::NotRegularFile { .. }) => {
+            Err(conflict(expected, SaveConflictKind::SymlinkChanged, None))
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn ensure_baseline_matches(expected: &SaveBaseline, current: &FileSnapshot) -> SafeSaveResult<()> {
+    let actual = SaveConflictSnapshot::from(&current.baseline);
+
+    if expected.file_identity != current.baseline.file_identity {
+        return Err(conflict(
+            expected,
+            SaveConflictKind::FileIdentityChanged,
+            Some(actual),
+        ));
+    }
+
+    if expected.content_hash != current.baseline.content_hash {
+        return Err(conflict(
+            expected,
+            SaveConflictKind::ContentChanged,
+            Some(actual),
+        ));
+    }
+
+    if expected.size_bytes != current.baseline.size_bytes
+        || expected.modified != current.baseline.modified
+    {
+        return Err(conflict(
+            expected,
+            SaveConflictKind::MetadataChanged,
+            Some(actual),
+        ));
+    }
+
+    Ok(())
+}
+
+fn conflict(
+    expected: &SaveBaseline,
+    kind: SaveConflictKind,
+    actual: Option<SaveConflictSnapshot>,
+) -> SafeSaveError {
+    SafeSaveError::Conflict(Box::new(SaveConflict {
+        relative_path: expected.relative_path.clone(),
+        kind,
+        expected: expected.clone(),
+        actual,
+    }))
+}
+
+pub(crate) fn enqueue_saved_file(
+    queue: &mut IndexingQueue,
+    baseline: &SaveBaseline,
+    generation: u64,
+    reason: IndexingQueueReason,
+) -> Result<IndexingQueueItem, IndexingQueueError> {
+    let entry = ScanEntry {
+        relative_path: PathBuf::from(&baseline.relative_path),
+        kind: classify_file(Path::new(&baseline.relative_path)),
+        size_bytes: baseline.size_bytes,
+        modified: baseline.modified,
+        file_identity: baseline.file_identity.clone(),
+    };
+    let file = FileRecord::from_scan_entry(&entry, generation);
+    queue.enqueue_file(&file, reason)
 }

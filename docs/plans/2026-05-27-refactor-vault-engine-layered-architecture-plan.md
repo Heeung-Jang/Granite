@@ -865,7 +865,7 @@ Default stop conditions:
   - Build: move baseline capture orchestration while keeping file snapshot reads in the filesystem adapter or existing save module until RA04 filesystem moves are green.
   - Verify: baseline capture FFI and safe-save baseline tests pass.
 
-- [ ] **RA05.04b Move save write orchestration**
+- [x] **RA05.04b Move save write orchestration**
   - Build: move save write decision flow, conflict detection, and queue enqueue call sites without moving temp write primitives.
   - Verify: external edit/delete/replace and queue enqueue tests pass.
 
