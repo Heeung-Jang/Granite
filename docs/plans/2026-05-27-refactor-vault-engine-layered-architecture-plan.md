@@ -861,7 +861,7 @@ Default stop conditions:
   - Build: create `use_cases/save_note.rs` and move only `SaveRequest`, `SaveOutcome`, conflict choice DTOs, and public orchestration entry points.
   - Verify: save safety and FFI conflict choice tests pass.
 
-- [ ] **RA05.04a Move save baseline/capture orchestration**
+- [x] **RA05.04a Move save baseline/capture orchestration**
   - Build: move baseline capture orchestration while keeping file snapshot reads in the filesystem adapter or existing save module until RA04 filesystem moves are green.
   - Verify: baseline capture FFI and safe-save baseline tests pass.
 
