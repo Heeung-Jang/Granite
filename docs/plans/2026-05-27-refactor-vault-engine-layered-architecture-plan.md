@@ -759,7 +759,7 @@ Default stop conditions:
   - Build: add `vault-engine/src/use_cases/mod.rs`.
   - Verify: no behavior changes.
 
-- [ ] **RA05.02 Move `VaultReadApi` shell**
+- [x] **RA05.02 Move `VaultReadApi` shell**
   - Build: move `VaultReadApi` type, constructor, generation getter, and open lifecycle into `use_cases/read_vault.rs`.
   - Verify: Rust read API constructor/open tests and Swift engine smoke pass.
 

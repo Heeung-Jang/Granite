@@ -3,10 +3,10 @@ use std::{collections::HashSet, fmt, path::Path};
 use crate::adapters::sqlite::{
     AttachmentProjection, AttachmentRecord, FileLookupProjection, FileRecord, FileTreeProjection,
     GraphFileRecord, GraphResolvedEdgeRecord, GraphUnresolvedEdgeRecord, HeadingRecord,
-    IndexSchemaMetadata, LinkEdgeRecord, LinkProjection, MetadataStore, MetadataStoreError,
-    PropertyProjection, PropertyRecord, TagRecord,
+    LinkEdgeRecord, LinkProjection, MetadataStoreError, PropertyProjection, PropertyRecord,
+    TagRecord,
 };
-use crate::adapters::tantivy::{TantivySearchError, TantivySearchIndex};
+use crate::adapters::tantivy::TantivySearchError;
 use crate::graph::{
     WholeVaultGraphInputs, WholeVaultGraphRequest, WholeVaultGraphSnapshot,
     build_whole_vault_graph_snapshot, whole_vault_graph_needs_tags,
@@ -15,6 +15,10 @@ use crate::graph_key::unresolved_target_key;
 use crate::parser::{MarkdownLink, PropertyValue, WikiLink, parse_markdown};
 use crate::scanner::{ScanEntryKind, classify_file};
 use crate::sqlite_fts::SearchResult;
+pub use crate::use_cases::read_vault::{
+    VaultReadApi, expected_read_schema_metadata, open_metadata_store_for_read,
+    open_tantivy_index_for_read, open_vault_read_api,
+};
 
 const MAX_PAGE_LIMIT: usize = 100;
 const MAX_FILE_TREE_PAGE_LIMIT: usize = 100_000;
@@ -179,12 +183,6 @@ pub enum LivePreviewMetadataSource {
     MarkdownImage,
 }
 
-pub struct VaultReadApi {
-    metadata: MetadataStore,
-    search: TantivySearchIndex,
-    generation: u64,
-}
-
 #[derive(Debug)]
 pub enum ReadApiError {
     Metadata(MetadataStoreError),
@@ -282,26 +280,6 @@ impl LocalGraphRequest {
 }
 
 impl VaultReadApi {
-    pub fn new(metadata: MetadataStore, search: TantivySearchIndex) -> Self {
-        Self::with_generation(metadata, search, 0)
-    }
-
-    pub fn with_generation(
-        metadata: MetadataStore,
-        search: TantivySearchIndex,
-        generation: u64,
-    ) -> Self {
-        Self {
-            metadata,
-            search,
-            generation,
-        }
-    }
-
-    pub fn generation(&self) -> u64 {
-        self.generation
-    }
-
     pub fn file_tree(&self, page: PageRequest) -> ReadApiResult<ReadPage<FileRecord>> {
         Ok(self.page_from_overfetch_with_limit(
             self.metadata
@@ -990,55 +968,6 @@ impl VaultReadApi {
     }
 }
 
-pub fn expected_read_schema_metadata() -> IndexSchemaMetadata {
-    IndexSchemaMetadata::new(
-        READ_BACKEND_NAME,
-        READ_BACKEND_VERSION,
-        READ_TOKENIZER_CONFIG,
-        0,
-    )
-}
-
-pub fn open_metadata_store_for_read(
-    metadata_path: impl AsRef<Path>,
-) -> ReadOpenResult<(MetadataStore, u64)> {
-    let metadata_path = metadata_path.as_ref();
-    if metadata_path.as_os_str().is_empty() {
-        return Err(ReadOpenError::InvalidInput("metadata_path"));
-    }
-    if !metadata_path.is_file() {
-        return Err(ReadOpenError::MissingMetadata);
-    }
-
-    let expected = expected_read_schema_metadata();
-    let (metadata, stored) = MetadataStore::open_existing_read_only(metadata_path, &expected)
-        .map_err(ReadOpenError::from_metadata_open)?;
-    Ok((metadata, stored.generation))
-}
-
-pub fn open_tantivy_index_for_read(
-    tantivy_path: impl AsRef<Path>,
-) -> ReadOpenResult<TantivySearchIndex> {
-    let tantivy_path = tantivy_path.as_ref();
-    if tantivy_path.as_os_str().is_empty() {
-        return Err(ReadOpenError::InvalidInput("tantivy_path"));
-    }
-    if !tantivy_path.is_dir() {
-        return Err(ReadOpenError::MissingTantivyIndex);
-    }
-    TantivySearchIndex::open_existing_dir(tantivy_path)
-        .map_err(|_| ReadOpenError::MissingTantivyIndex)
-}
-
-pub fn open_vault_read_api(
-    metadata_path: impl AsRef<Path>,
-    tantivy_path: impl AsRef<Path>,
-) -> ReadOpenResult<VaultReadApi> {
-    let (metadata, generation) = open_metadata_store_for_read(metadata_path)?;
-    let search = open_tantivy_index_for_read(tantivy_path)?;
-    Ok(VaultReadApi::with_generation(metadata, search, generation))
-}
-
 struct LocalGraphBuild {
     graph: LocalGraph,
     partial: bool,
@@ -1363,7 +1292,7 @@ impl ReadOpenError {
         }
     }
 
-    fn from_metadata_open(error: MetadataStoreError) -> Self {
+    pub(crate) fn from_metadata_open(error: MetadataStoreError) -> Self {
         match error {
             MetadataStoreError::SchemaMismatch { stored, expected } => {
                 if stored.schema_version != expected.schema_version {
