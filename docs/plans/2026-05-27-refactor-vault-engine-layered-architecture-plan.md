@@ -1550,6 +1550,19 @@ Default stop conditions:
   - Verify: run the narrow test for that module plus full Rust tests after each deletion.
   - Stop condition: deleting one shim requires changing unrelated behavior or public facade policy.
 
+- [x] **RA07.03a1 Remove benchmarks compatibility shim**
+  - Build: delete the root `benchmarks` module after confirming profiler imports use `diagnostics::profiler` and benchmark tests use `diagnostics::benchmarks` directly.
+  - Verify:
+    ```sh
+    rg -n "vault_engine::(benchmarks|diagnostics)" bench/vault-profiler/src
+    cargo fmt --manifest-path vault-engine/Cargo.toml --check
+    cargo test --manifest-path vault-engine/Cargo.toml diagnostics::benchmarks::
+    cargo test --manifest-path vault-engine/Cargo.toml
+    cargo test --manifest-path bench/vault-profiler/Cargo.toml
+    ```
+  - Evidence: `benchmarks.rs` only re-exported `diagnostics::benchmarks::*`; no profiler imports used `vault_engine::benchmarks`, and the diagnostics benchmark, full engine, and profiler test gates passed without warnings.
+  - Stop condition: external profiler code still imports the root `benchmarks` shim.
+
 - [ ] **RA07.04 Add architecture placement checklist**
   - Build: add a short checklist to `docs/architecture/rust-engine.md` explaining where new parser, storage, FFI, and use-case code should go.
   - Verify: checklist covers future work for read API, save, graph, indexing, watcher, benchmarks, and profiler imports.
