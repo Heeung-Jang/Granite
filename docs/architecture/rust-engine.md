@@ -400,6 +400,23 @@ against an allowlist:
 - Remove compatibility shims in a separate cleanup commit.
 - Do not proceed to the next phase when the current phase gate fails.
 
+## Phase 1 FFI Split Checklist
+
+Move these groups one at a time and run the matching gate before continuing:
+
+| Task | Group | Target |
+| --- | --- | --- |
+| RA01.01 | Existing module body | `vault-engine/src/ffi/mod.rs` |
+| RA01.02 | Panic containment | `vault-engine/src/ffi/panic.rs` |
+| RA01.03 | C string and byte decoding | `vault-engine/src/ffi/strings.rs` |
+| RA01.04-RA01.04a | JSON response envelope and JSON DTO contracts | `vault-engine/src/ffi/json.rs` or focused save/graph modules |
+| RA01.05-RA01.05b | Read open, rebuild, page buffers, and read error/state mapping | `vault-engine/src/ffi/read.rs` |
+| RA01.06 | ABI version and health | `vault-engine/src/ffi/health.rs` |
+| RA01.06a | Rust-owned string/read-buffer lifecycle | `vault-engine/src/ffi/lifecycle.rs` |
+| RA01.07 | Save FFI entry points and save DTOs | `vault-engine/src/ffi/save.rs` |
+| RA01.08 | Whole-vault graph FFI entry point and graph DTOs | `vault-engine/src/ffi/graph.rs` |
+| RA01.09-RA01.11 | Compatibility, symbol comparison, boundary scan, invalid-input regressions | `crate::ffi` remains the public Rust module path |
+
 ## Placement Checklist For New Rust Code
 
 - New domain record or pure value conversion: `core`.

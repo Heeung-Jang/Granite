@@ -425,11 +425,11 @@ Stop at the end of any phase if a gate fails. Do not proceed by compensating in 
 
 ### Phase 1: Split FFI Without Behavior Changes
 
-- [ ] **RA01.00 Add FFI split checklist**
+- [x] **RA01.00 Add FFI split checklist**
   - Build: add a temporary checklist in `vault-engine/src/ffi/mod.rs` comments or `docs/architecture/rust-engine.md` listing each helper group being moved.
   - Verify: checklist maps to RA01.01 through RA01.09.
 
-- [ ] **RA01.01 Convert `ffi.rs` to a directory module**
+- [x] **RA01.01 Convert `ffi.rs` to a directory module**
   - Build: move `vault-engine/src/ffi.rs` to `vault-engine/src/ffi/mod.rs`.
   - Verify: `cargo test --manifest-path vault-engine/Cargo.toml ffi::`.
 
