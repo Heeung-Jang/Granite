@@ -1089,11 +1089,11 @@ Default stop conditions:
     ```
   - Stop condition: exported `engine_*` symbols change or Swift fails to load the dylib.
 
-- [ ] **RA05.09f1 Add graph snapshot fixture benchmark gate**
+- [x] **RA05.09f1 Add graph snapshot fixture benchmark gate**
   - Build: after graph FFI/use-case retargeting, update the graph snapshot benchmark to call the same production graph use case, or a diagnostics timing wrapper around that use case. Remove benchmark-only graph candidate-file assembly and duplicated `WholeVaultGraphInputs` construction.
   - Verify:
     ```sh
-    rg -n "benchmark_graph_candidate_files|push_graph_candidate_file|WholeVaultGraphInputs|build_whole_vault_graph_snapshot" vault-engine/src/benchmarks.rs
+    rg -n "benchmark_graph_candidate_files|push_graph_candidate_file|push_graph_file|WholeVaultGraphInputs|build_whole_vault_graph_snapshot" vault-engine/src/benchmarks.rs
     cargo test --manifest-path vault-engine/Cargo.toml benchmarks::
     ```
   - Stop condition: benchmark code still mirrors production graph fetch/assembly instead of measuring the production path.

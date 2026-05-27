@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt;
 use std::fs;
 use std::io::{self, Write};
@@ -8,16 +8,13 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use serde::Serialize;
 
 use crate::adapters::sqlite::{
-    FileRecord, GraphFileRecord, GraphQueryStage, IndexSchemaMetadata, LinkEdgeRecord,
-    MetadataStore, MetadataStoreError, MetadataTable, TagRecord, TagSource,
+    FileRecord, GraphQueryStage, IndexSchemaMetadata, LinkEdgeRecord, MetadataStore,
+    MetadataStoreError, MetadataTable, TagRecord, TagSource,
 };
 use crate::adapters::tantivy::{
     TantivyIndexingStageMetrics, TantivySearchError, TantivySearchIndex,
 };
-use crate::graph::{
-    WholeVaultGraphInputs, WholeVaultGraphRequest, WholeVaultGraphSnapshot,
-    build_whole_vault_graph_snapshot, whole_vault_graph_needs_tags,
-};
+use crate::graph::{WholeVaultGraphRequest, WholeVaultGraphSnapshot};
 use crate::index_rebuild::IndexRebuildPaths;
 #[cfg(test)]
 use crate::indexing_pipeline::read_parse_source;
@@ -35,6 +32,7 @@ use crate::paths::FileIdentity;
 use crate::paths::{PathError, VaultRoot, lookup_key};
 use crate::scanner::{ScanEntryKind, ScanError, scan_vault};
 use crate::sqlite_fts::{SearchDocument, SearchResult, SqliteFtsError, SqliteFtsIndex};
+use crate::use_cases::build_graph::build_whole_vault_graph_from_metadata;
 
 pub const BACKEND_BENCHMARK_ARTIFACT_SCHEMA_VERSION: u32 = 7;
 
@@ -481,67 +479,7 @@ pub fn run_whole_vault_graph_snapshot_benchmark(
     release_benchmark_allocator_memory();
     let rss_before = current_rss_bytes();
     let snapshot_start = Instant::now();
-    let node_fetch_limit = request.node_limit().saturating_add(1);
-    let edge_fetch_limit = request.edge_limit().saturating_add(1);
-    let (all_files, files_duration) = timed(|| Ok(store.graph_files(1, node_fetch_limit)?))?;
-    let has_all_files = all_files.len() < node_fetch_limit;
-    let (resolved_edges, resolved_duration) = if has_all_files {
-        timed(|| Ok(store.graph_resolved_edges_compact(1, edge_fetch_limit)?))?
-    } else {
-        timed(|| Ok(store.graph_resolved_edges(1, edge_fetch_limit)?))?
-    };
-    let resolved_query_stage = if has_all_files {
-        GraphQueryStage::ResolvedEdgesCompact
-    } else {
-        GraphQueryStage::ResolvedEdges
-    };
-    let (unresolved_edges, unresolved_duration) = if request.include_unresolved {
-        timed(|| Ok(store.graph_unresolved_edges(1, edge_fetch_limit)?))?
-    } else {
-        (Vec::new(), Duration::ZERO)
-    };
-    let (orphan_files, orphan_duration) = if request.include_orphans {
-        timed(|| Ok(store.graph_orphan_files(1, request.include_unresolved, node_fetch_limit)?))?
-    } else {
-        (Vec::new(), Duration::ZERO)
-    };
-    let files = if has_all_files {
-        all_files
-    } else {
-        benchmark_graph_candidate_files(
-            &resolved_edges,
-            &unresolved_edges,
-            &orphan_files,
-            node_fetch_limit,
-        )
-    };
-    let (tags, tags_duration) = if whole_vault_graph_needs_tags(request) {
-        let file_ids = files
-            .iter()
-            .map(|file| file.file_id.clone())
-            .collect::<Vec<_>>();
-        timed(|| Ok(store.graph_tags_for_files(&file_ids, request.tag_limit().saturating_add(1))?))?
-    } else {
-        (Vec::new(), Duration::ZERO)
-    };
-    let node_count_total =
-        store.graph_visible_node_count(1, request.include_unresolved, request.include_orphans)?;
-    let edge_count_total = store.graph_visible_edge_count(1, request.include_unresolved)?;
-    let assembly_start = Instant::now();
-    let build = build_whole_vault_graph_snapshot(
-        request,
-        1,
-        WholeVaultGraphInputs {
-            node_count_total,
-            edge_count_total,
-            files,
-            resolved_edges,
-            unresolved_edges,
-            orphan_files,
-            tags,
-        },
-    );
-    let assembly_duration = assembly_start.elapsed();
+    let build = build_whole_vault_graph_from_metadata(&store, 1, request)?;
     let snapshot_duration = snapshot_start.elapsed();
     let snapshot_ms = duration_millis(snapshot_duration);
     let encoded_payload_bytes = graph_payload_bytes(&build.snapshot, snapshot_ms)?;
@@ -556,41 +494,7 @@ pub fn run_whole_vault_graph_snapshot_benchmark(
     }
 
     let plans = store.graph_query_plan_summaries(1)?;
-    let indexed_access_summary = vec![
-        indexed_access("files", &plans, GraphQueryStage::Files, files_duration),
-        indexed_access(
-            "resolvedEdges",
-            &plans,
-            resolved_query_stage,
-            resolved_duration,
-        ),
-        if request.include_unresolved {
-            indexed_access(
-                "unresolvedEdges",
-                &plans,
-                GraphQueryStage::UnresolvedEdges,
-                unresolved_duration,
-            )
-        } else {
-            skipped_indexed_access("unresolvedEdges")
-        },
-        if request.include_orphans {
-            indexed_access_for_orphans(&plans, orphan_duration)
-        } else {
-            skipped_indexed_access("orphans")
-        },
-        if whole_vault_graph_needs_tags(request) {
-            indexed_access("tags", &plans, GraphQueryStage::Tags, tags_duration)
-        } else {
-            skipped_indexed_access("tags")
-        },
-        WholeVaultGraphIndexedAccess {
-            stage: "assembly".to_string(),
-            uses_index: false,
-            scan_kind: "unknown".to_string(),
-            duration_milliseconds: duration_millis(assembly_duration),
-        },
-    ];
+    let indexed_access_summary = graph_indexed_access_summary(&plans, request, snapshot_duration);
     let memory_target = 250.0 * 1024.0 * 1024.0;
     let swift_decode_target = 1_500.0;
     let swift_decode_memory_target = 200.0 * 1024.0 * 1024.0;
@@ -1286,15 +1190,6 @@ fn duration_millis(duration: Duration) -> f64 {
     duration.as_secs_f64() * 1_000.0
 }
 
-fn timed<T, F>(operation: F) -> BackendBenchmarkResultType<(T, Duration)>
-where
-    F: FnOnce() -> BackendBenchmarkResultType<T>,
-{
-    let start = Instant::now();
-    let value = operation()?;
-    Ok((value, start.elapsed()))
-}
-
 fn duration_micros_nonzero(duration: Duration) -> u64 {
     duration_micros(duration).max(1)
 }
@@ -1433,67 +1328,6 @@ fn resolve_benchmark_target(
     (candidates.len() == 1).then(|| candidates[0].clone())
 }
 
-fn benchmark_graph_candidate_files(
-    resolved_edges: &[crate::adapters::sqlite::GraphResolvedEdgeRecord],
-    unresolved_edges: &[crate::adapters::sqlite::GraphUnresolvedEdgeRecord],
-    orphan_files: &[GraphFileRecord],
-    limit: usize,
-) -> Vec<GraphFileRecord> {
-    let mut files = Vec::new();
-    let mut seen = HashSet::new();
-    for edge in resolved_edges {
-        push_graph_file(
-            &mut files,
-            &mut seen,
-            &edge.source_file_id,
-            &edge.source_relative_path,
-            limit,
-        );
-        push_graph_file(
-            &mut files,
-            &mut seen,
-            &edge.target_file_id,
-            &edge.target_relative_path,
-            limit,
-        );
-    }
-    for edge in unresolved_edges {
-        push_graph_file(
-            &mut files,
-            &mut seen,
-            &edge.source_file_id,
-            &edge.source_relative_path,
-            limit,
-        );
-    }
-    for file in orphan_files {
-        push_graph_file(
-            &mut files,
-            &mut seen,
-            &file.file_id,
-            &file.relative_path,
-            limit,
-        );
-    }
-    files
-}
-
-fn push_graph_file(
-    files: &mut Vec<GraphFileRecord>,
-    seen: &mut HashSet<String>,
-    file_id: &str,
-    relative_path: &Path,
-    limit: usize,
-) {
-    if files.len() >= limit || !seen.insert(file_id.to_string()) {
-        return;
-    }
-    files.push(GraphFileRecord {
-        file_id: file_id.to_string(),
-        relative_path: relative_path.to_path_buf(),
-    });
-}
-
 #[derive(Serialize)]
 struct WholeVaultGraphPayloadEnvelope<'a> {
     ok: bool,
@@ -1587,15 +1421,80 @@ impl Write for CountingWriter {
     }
 }
 
+fn graph_indexed_access_summary(
+    plans: &[crate::adapters::sqlite::GraphQueryPlanSummary],
+    request: WholeVaultGraphRequest,
+    snapshot_duration: Duration,
+) -> Vec<WholeVaultGraphIndexedAccess> {
+    vec![
+        indexed_access("files", plans, GraphQueryStage::Files, Duration::ZERO),
+        indexed_access_any(
+            "resolvedEdges",
+            plans,
+            &[
+                GraphQueryStage::ResolvedEdgesCompact,
+                GraphQueryStage::ResolvedEdges,
+            ],
+            Duration::ZERO,
+            "unknown",
+        ),
+        if request.include_unresolved {
+            indexed_access(
+                "unresolvedEdges",
+                plans,
+                GraphQueryStage::UnresolvedEdges,
+                Duration::ZERO,
+            )
+        } else {
+            skipped_indexed_access("unresolvedEdges")
+        },
+        if request.include_orphans {
+            indexed_access_any(
+                "orphans",
+                plans,
+                &[
+                    GraphQueryStage::OrphansResolvedOnly,
+                    GraphQueryStage::OrphansWithUnresolved,
+                ],
+                Duration::ZERO,
+                "intentionalFullPass",
+            )
+        } else {
+            skipped_indexed_access("orphans")
+        },
+        if request.group_rule_count > 0 {
+            indexed_access("tags", plans, GraphQueryStage::Tags, Duration::ZERO)
+        } else {
+            skipped_indexed_access("tags")
+        },
+        WholeVaultGraphIndexedAccess {
+            stage: "productionSnapshot".to_string(),
+            uses_index: false,
+            scan_kind: "productionUseCase".to_string(),
+            duration_milliseconds: duration_millis(snapshot_duration),
+        },
+    ]
+}
+
 fn indexed_access(
     stage: &str,
     plans: &[crate::adapters::sqlite::GraphQueryPlanSummary],
     query_stage: GraphQueryStage,
     duration: Duration,
 ) -> WholeVaultGraphIndexedAccess {
+    indexed_access_any(stage, plans, &[query_stage], duration, "unknown")
+}
+
+fn indexed_access_any(
+    stage: &str,
+    plans: &[crate::adapters::sqlite::GraphQueryPlanSummary],
+    query_stages: &[GraphQueryStage],
+    duration: Duration,
+    fallback_scan_kind: &str,
+) -> WholeVaultGraphIndexedAccess {
     let stage_plans = plans
         .iter()
-        .filter(|plan| plan.stage == query_stage)
+        .filter(|plan| query_stages.contains(&plan.stage))
         .collect::<Vec<_>>();
     let uses_index = stage_plans.iter().any(|plan| plan.detail.contains("INDEX"));
     WholeVaultGraphIndexedAccess {
@@ -1604,29 +1503,7 @@ fn indexed_access(
         scan_kind: if uses_index {
             "indexed".to_string()
         } else {
-            "unknown".to_string()
-        },
-        duration_milliseconds: duration_millis(duration),
-    }
-}
-
-fn indexed_access_for_orphans(
-    plans: &[crate::adapters::sqlite::GraphQueryPlanSummary],
-    duration: Duration,
-) -> WholeVaultGraphIndexedAccess {
-    let uses_index = plans.iter().any(|plan| {
-        matches!(
-            plan.stage,
-            GraphQueryStage::OrphansResolvedOnly | GraphQueryStage::OrphansWithUnresolved
-        ) && plan.detail.contains("INDEX")
-    });
-    WholeVaultGraphIndexedAccess {
-        stage: "orphans".to_string(),
-        uses_index,
-        scan_kind: if uses_index {
-            "indexed".to_string()
-        } else {
-            "intentionalFullPass".to_string()
+            fallback_scan_kind.to_string()
         },
         duration_milliseconds: duration_millis(duration),
     }
