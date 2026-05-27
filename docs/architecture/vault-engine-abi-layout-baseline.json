@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "abi_version": 1,
   "layouts": [
     {
@@ -505,6 +505,266 @@
     {
       "name": "ENGINE_READ_LOCAL_GRAPH_DEPTH_TWO_HOP",
       "value": "2"
+    },
+    {
+      "name": "FILE_KIND_MARKDOWN",
+      "value": "1"
+    },
+    {
+      "name": "FILE_KIND_ATTACHMENT",
+      "value": "2"
+    },
+    {
+      "name": "FILE_KIND_OTHER",
+      "value": "3"
+    },
+    {
+      "name": "FILE_STATUS_SEEN_METADATA",
+      "value": "1"
+    },
+    {
+      "name": "FILE_STATUS_PARSED",
+      "value": "2"
+    },
+    {
+      "name": "FILE_STATUS_SEARCH_INDEXED",
+      "value": "3"
+    },
+    {
+      "name": "FILE_STATUS_TOMBSTONED",
+      "value": "4"
+    },
+    {
+      "name": "FILE_STATUS_ERROR",
+      "value": "5"
+    },
+    {
+      "name": "TAG_SOURCE_INLINE",
+      "value": "1"
+    },
+    {
+      "name": "TAG_SOURCE_FRONTMATTER",
+      "value": "2"
+    },
+    {
+      "name": "PROPERTY_VALUE_KIND_STRING",
+      "value": "1"
+    },
+    {
+      "name": "PROPERTY_VALUE_KIND_BOOL",
+      "value": "2"
+    },
+    {
+      "name": "PROPERTY_VALUE_KIND_LIST",
+      "value": "3"
+    },
+    {
+      "name": "LINK_RESOLUTION_STATE_RESOLVED",
+      "value": "1"
+    },
+    {
+      "name": "LINK_RESOLUTION_STATE_UNRESOLVED",
+      "value": "2"
+    },
+    {
+      "name": "ATTACHMENT_SOURCE_WIKI_EMBED",
+      "value": "1"
+    },
+    {
+      "name": "ATTACHMENT_SOURCE_MARKDOWN_IMAGE",
+      "value": "2"
+    },
+    {
+      "name": "ATTACHMENT_SOURCE_MARKDOWN_LINK",
+      "value": "3"
+    },
+    {
+      "name": "ATTACHMENT_STATE_RESOLVED",
+      "value": "1"
+    },
+    {
+      "name": "ATTACHMENT_STATE_MISSING",
+      "value": "2"
+    },
+    {
+      "name": "ATTACHMENT_STATE_DUPLICATE",
+      "value": "3"
+    },
+    {
+      "name": "ATTACHMENT_STATE_REMOTE",
+      "value": "4"
+    },
+    {
+      "name": "ATTACHMENT_STATE_REJECTED",
+      "value": "5"
+    },
+    {
+      "name": "ATTACHMENT_STATE_UNSUPPORTED",
+      "value": "6"
+    },
+    {
+      "name": "LOCAL_GRAPH_NODE_CENTER",
+      "value": "1"
+    },
+    {
+      "name": "LOCAL_GRAPH_NODE_RESOLVED",
+      "value": "2"
+    },
+    {
+      "name": "LOCAL_GRAPH_NODE_UNRESOLVED",
+      "value": "3"
+    },
+    {
+      "name": "LOCAL_GRAPH_EDGE_OUTGOING",
+      "value": "1"
+    },
+    {
+      "name": "LOCAL_GRAPH_EDGE_BACKLINK",
+      "value": "2"
+    },
+    {
+      "name": "LIVE_PREVIEW_ITEM_PROPERTY",
+      "value": "1"
+    },
+    {
+      "name": "LIVE_PREVIEW_ITEM_TAG",
+      "value": "2"
+    },
+    {
+      "name": "LIVE_PREVIEW_ITEM_LINK",
+      "value": "3"
+    },
+    {
+      "name": "LIVE_PREVIEW_ITEM_ATTACHMENT",
+      "value": "4"
+    },
+    {
+      "name": "LIVE_PREVIEW_STATE_NONE",
+      "value": "0"
+    },
+    {
+      "name": "LIVE_PREVIEW_STATE_RESOLVED",
+      "value": "1"
+    },
+    {
+      "name": "LIVE_PREVIEW_STATE_MISSING",
+      "value": "2"
+    },
+    {
+      "name": "LIVE_PREVIEW_STATE_REMOTE",
+      "value": "4"
+    },
+    {
+      "name": "LIVE_PREVIEW_STATE_REJECTED",
+      "value": "5"
+    },
+    {
+      "name": "LIVE_PREVIEW_STATE_UNSUPPORTED",
+      "value": "6"
+    },
+    {
+      "name": "LIVE_PREVIEW_SOURCE_NONE",
+      "value": "0"
+    },
+    {
+      "name": "LIVE_PREVIEW_SOURCE_INLINE",
+      "value": "1"
+    },
+    {
+      "name": "LIVE_PREVIEW_SOURCE_WIKI_LINK",
+      "value": "2"
+    },
+    {
+      "name": "LIVE_PREVIEW_SOURCE_MARKDOWN_LINK",
+      "value": "3"
+    },
+    {
+      "name": "LIVE_PREVIEW_SOURCE_WIKI_EMBED",
+      "value": "4"
+    },
+    {
+      "name": "LIVE_PREVIEW_SOURCE_MARKDOWN_IMAGE",
+      "value": "5"
+    },
+    {
+      "name": "WHOLE_VAULT_GRAPH_PAYLOAD_VERSION",
+      "value": "1"
+    },
+    {
+      "name": "WHOLE_VAULT_GRAPH_CURRENT_GENERATION",
+      "value": "0"
+    },
+    {
+      "name": "MAX_WHOLE_VAULT_GRAPH_NODES",
+      "value": "100000"
+    },
+    {
+      "name": "MAX_WHOLE_VAULT_GRAPH_EDGES",
+      "value": "250000"
+    },
+    {
+      "name": "MAX_WHOLE_VAULT_GRAPH_LABEL_BYTES",
+      "value": "512"
+    },
+    {
+      "name": "MAX_WHOLE_VAULT_GRAPH_TAGS_PER_NODE",
+      "value": "32"
+    },
+    {
+      "name": "MAX_WHOLE_VAULT_GRAPH_GROUPS",
+      "value": "32"
+    },
+    {
+      "name": "MAX_WHOLE_VAULT_GRAPH_RULE_LENGTH",
+      "value": "512"
+    },
+    {
+      "name": "WHOLE_VAULT_GRAPH_STATE_COMPLETE",
+      "value": "complete"
+    },
+    {
+      "name": "WHOLE_VAULT_GRAPH_STATE_PARTIAL",
+      "value": "partial"
+    },
+    {
+      "name": "WHOLE_VAULT_GRAPH_NODE_KIND_RESOLVED",
+      "value": "Resolved"
+    },
+    {
+      "name": "WHOLE_VAULT_GRAPH_NODE_KIND_UNRESOLVED",
+      "value": "Unresolved"
+    },
+    {
+      "name": "WHOLE_VAULT_GRAPH_EDGE_KIND_RESOLVED",
+      "value": "Resolved"
+    },
+    {
+      "name": "WHOLE_VAULT_GRAPH_EDGE_KIND_UNRESOLVED",
+      "value": "Unresolved"
+    },
+    {
+      "name": "WHOLE_VAULT_GRAPH_PARTIAL_MAX_NODES",
+      "value": "MaxNodes"
+    },
+    {
+      "name": "WHOLE_VAULT_GRAPH_PARTIAL_MAX_EDGES",
+      "value": "MaxEdges"
+    },
+    {
+      "name": "WHOLE_VAULT_GRAPH_PARTIAL_MAX_LABEL_BYTES",
+      "value": "MaxLabelBytes"
+    },
+    {
+      "name": "WHOLE_VAULT_GRAPH_PARTIAL_MAX_TAGS_PER_NODE",
+      "value": "MaxTagsPerNode"
+    },
+    {
+      "name": "WHOLE_VAULT_GRAPH_PARTIAL_MAX_GROUPS",
+      "value": "MaxGroups"
+    },
+    {
+      "name": "WHOLE_VAULT_GRAPH_PARTIAL_MAX_RULE_LENGTH",
+      "value": "MaxRuleLength"
     }
   ],
   "error_codes": [
@@ -648,6 +908,24 @@
     },
     {
       "group": "json_response",
+      "code": "read_only",
+      "numeric_code": null,
+      "state_code": null
+    },
+    {
+      "group": "json_response",
+      "code": "not_regular_file",
+      "numeric_code": null,
+      "state_code": null
+    },
+    {
+      "group": "json_response",
+      "code": "io_error",
+      "numeric_code": null,
+      "state_code": null
+    },
+    {
+      "group": "json_response",
       "code": "queue_error",
       "numeric_code": null,
       "state_code": null
@@ -681,6 +959,336 @@
       "code": "panic",
       "numeric_code": null,
       "state_code": 4
+    }
+  ],
+  "json_contracts": [
+    {
+      "name": "FfiResponse<T>",
+      "direction": "rust_to_swift",
+      "fields": [
+        "ok",
+        "value",
+        "error"
+      ],
+      "values": []
+    },
+    {
+      "name": "FfiError",
+      "direction": "rust_to_swift",
+      "fields": [
+        "code",
+        "message",
+        "conflict_kind",
+        "conflict"
+      ],
+      "values": []
+    },
+    {
+      "name": "FfiFileIdentity",
+      "direction": "both",
+      "fields": [
+        "device",
+        "inode"
+      ],
+      "values": []
+    },
+    {
+      "name": "FfiSystemTime",
+      "direction": "both",
+      "fields": [
+        "secs_since_unix_epoch",
+        "nanos"
+      ],
+      "values": []
+    },
+    {
+      "name": "FfiSaveBaseline",
+      "direction": "both",
+      "fields": [
+        "relative_path",
+        "file_identity",
+        "size_bytes",
+        "modified",
+        "content_hash"
+      ],
+      "values": []
+    },
+    {
+      "name": "FfiSaveConflictSnapshot",
+      "direction": "both",
+      "fields": [
+        "file_identity",
+        "size_bytes",
+        "modified",
+        "content_hash"
+      ],
+      "values": []
+    },
+    {
+      "name": "FfiSaveConflict",
+      "direction": "both",
+      "fields": [
+        "relative_path",
+        "kind",
+        "expected",
+        "actual"
+      ],
+      "values": [
+        {
+          "name": "kind.Deleted",
+          "value": "Deleted"
+        },
+        {
+          "name": "kind.FileIdentityChanged",
+          "value": "FileIdentityChanged"
+        },
+        {
+          "name": "kind.ContentChanged",
+          "value": "ContentChanged"
+        },
+        {
+          "name": "kind.MetadataChanged",
+          "value": "MetadataChanged"
+        },
+        {
+          "name": "kind.SymlinkChanged",
+          "value": "SymlinkChanged"
+        }
+      ]
+    },
+    {
+      "name": "FfiSaveOutcome",
+      "direction": "rust_to_swift",
+      "fields": [
+        "baseline",
+        "bytes_written"
+      ],
+      "values": []
+    },
+    {
+      "name": "FfiQueuedItem",
+      "direction": "rust_to_swift",
+      "fields": [
+        "relative_path",
+        "generation",
+        "reason",
+        "status"
+      ],
+      "values": [
+        {
+          "name": "reason.InitialScan",
+          "value": "InitialScan"
+        },
+        {
+          "name": "reason.FileCreated",
+          "value": "FileCreated"
+        },
+        {
+          "name": "reason.FileChanged",
+          "value": "FileChanged"
+        },
+        {
+          "name": "reason.FileDeleted",
+          "value": "FileDeleted"
+        },
+        {
+          "name": "reason.Rebuild",
+          "value": "Rebuild"
+        },
+        {
+          "name": "reason.OwnSave",
+          "value": "OwnSave"
+        },
+        {
+          "name": "status.Pending",
+          "value": "Pending"
+        },
+        {
+          "name": "status.InProgress",
+          "value": "InProgress"
+        },
+        {
+          "name": "status.Completed",
+          "value": "Completed"
+        },
+        {
+          "name": "status.Failed",
+          "value": "Failed"
+        },
+        {
+          "name": "status.Cancelled",
+          "value": "Cancelled"
+        }
+      ]
+    },
+    {
+      "name": "FfiSaveReloadOutcome",
+      "direction": "rust_to_swift",
+      "fields": [
+        "baseline",
+        "contents",
+        "queued_item",
+        "dirty"
+      ],
+      "values": []
+    },
+    {
+      "name": "FfiSaveChoiceOutcome",
+      "direction": "rust_to_swift",
+      "fields": [
+        "choice",
+        "baseline",
+        "bytes_written",
+        "queued_item",
+        "dirty"
+      ],
+      "values": [
+        {
+          "name": "choice.KeepAsNewNote",
+          "value": "KeepAsNewNote"
+        },
+        {
+          "name": "choice.Overwrite",
+          "value": "Overwrite"
+        }
+      ]
+    },
+    {
+      "name": "FfiWholeVaultGraphRequest",
+      "direction": "swift_to_rust",
+      "fields": [
+        "payload_version",
+        "request_id",
+        "generation",
+        "include_unresolved",
+        "include_orphans",
+        "max_nodes",
+        "max_edges",
+        "byte_cap_bytes"
+      ],
+      "values": [
+        {
+          "name": "payload_version",
+          "value": "1"
+        },
+        {
+          "name": "current_generation",
+          "value": "0"
+        }
+      ]
+    },
+    {
+      "name": "FfiWholeVaultGraphPayload",
+      "direction": "rust_to_swift",
+      "fields": [
+        "payload_version",
+        "request_id",
+        "generation",
+        "state",
+        "metrics",
+        "snapshot"
+      ],
+      "values": [
+        {
+          "name": "state.complete",
+          "value": "complete"
+        },
+        {
+          "name": "state.partial",
+          "value": "partial"
+        }
+      ]
+    },
+    {
+      "name": "FfiWholeVaultGraphMetrics",
+      "direction": "rust_to_swift",
+      "fields": [
+        "snapshot_duration_milliseconds",
+        "encoded_payload_bytes"
+      ],
+      "values": []
+    },
+    {
+      "name": "WholeVaultGraphSnapshot",
+      "direction": "rust_to_swift",
+      "fields": [
+        "request_id",
+        "generation",
+        "partial_reasons",
+        "node_count_total",
+        "edge_count_total",
+        "nodes",
+        "edges"
+      ],
+      "values": [
+        {
+          "name": "partial_reason.MaxNodes",
+          "value": "MaxNodes"
+        },
+        {
+          "name": "partial_reason.MaxEdges",
+          "value": "MaxEdges"
+        },
+        {
+          "name": "partial_reason.MaxLabelBytes",
+          "value": "MaxLabelBytes"
+        },
+        {
+          "name": "partial_reason.MaxTagsPerNode",
+          "value": "MaxTagsPerNode"
+        },
+        {
+          "name": "partial_reason.MaxGroups",
+          "value": "MaxGroups"
+        },
+        {
+          "name": "partial_reason.MaxRuleLength",
+          "value": "MaxRuleLength"
+        }
+      ]
+    },
+    {
+      "name": "WholeVaultGraphNode",
+      "direction": "rust_to_swift",
+      "fields": [
+        "node_id",
+        "file_id",
+        "relative_path",
+        "label",
+        "kind",
+        "degree",
+        "tags"
+      ],
+      "values": [
+        {
+          "name": "kind.Resolved",
+          "value": "Resolved"
+        },
+        {
+          "name": "kind.Unresolved",
+          "value": "Unresolved"
+        }
+      ]
+    },
+    {
+      "name": "WholeVaultGraphEdge",
+      "direction": "rust_to_swift",
+      "fields": [
+        "source_node_id",
+        "target_node_id",
+        "kind",
+        "weight"
+      ],
+      "values": [
+        {
+          "name": "kind.Resolved",
+          "value": "Resolved"
+        },
+        {
+          "name": "kind.Unresolved",
+          "value": "Unresolved"
+        }
+      ]
     }
   ]
 }

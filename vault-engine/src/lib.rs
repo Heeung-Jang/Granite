@@ -1,5 +1,6 @@
 pub mod attachments;
 pub mod benchmarks;
+pub mod diagnostics;
 pub mod errors;
 pub mod ffi;
 pub mod file_watcher;
@@ -48,6 +49,7 @@ pub fn health_check() -> EngineHealth {
             "ffi",
             "errors",
             "benchmarks",
+            "diagnostics",
             "sqlite_fts",
             "tantivy_search",
             "startup_reconciliation",
@@ -84,6 +86,7 @@ mod tests {
                 "ffi",
                 "errors",
                 "benchmarks",
+                "diagnostics",
                 "sqlite_fts",
                 "tantivy_search",
                 "startup_reconciliation",

@@ -341,10 +341,7 @@ impl EngineReadTagRow {
         Self {
             file_id: builder.push_string(&record.file_id),
             tag: builder.push_string(&record.tag),
-            source: match record.source {
-                crate::index::TagSource::Inline => 1,
-                crate::index::TagSource::Frontmatter => 2,
-            },
+            source: tag_source_code(record.source),
         }
     }
 }
@@ -382,11 +379,7 @@ impl EngineReadLinkRow {
                 .as_ref()
                 .map(|value| builder.push_string(value))
                 .unwrap_or_else(EngineReadStringRef::empty),
-            resolution_state: if projection.target_file_id.is_some() {
-                1
-            } else {
-                2
-            },
+            resolution_state: link_resolution_state_code(projection.target_file_id.is_some()),
             is_embed: u32::from(projection.is_embed),
         }
     }
@@ -394,16 +387,16 @@ impl EngineReadLinkRow {
 
 impl EngineReadPropertyRow {
     pub fn from_record(builder: &mut EngineReadResultBuilder, record: &PropertyRecord) -> Self {
-        let (display_value, value_kind) = match &record.value {
-            IndexPropertyValue::String(value) => (value.clone(), 1),
-            IndexPropertyValue::Bool(value) => (value.to_string(), 2),
-            IndexPropertyValue::List(values) => (values.join(", "), 3),
+        let display_value = match &record.value {
+            IndexPropertyValue::String(value) => value.clone(),
+            IndexPropertyValue::Bool(value) => value.to_string(),
+            IndexPropertyValue::List(values) => values.join(", "),
         };
         Self {
             file_id: builder.push_string(&record.file_id),
             key: builder.push_string(&record.key),
             display_value: builder.push_string(&display_value),
-            value_kind,
+            value_kind: property_value_kind(&record.value),
         }
     }
 
@@ -422,22 +415,22 @@ impl EngineReadPropertyRow {
 
 impl EngineReadAttachmentRow {
     pub fn from_record(builder: &mut EngineReadResultBuilder, record: &AttachmentRecord) -> Self {
-        let (resolved_relative_path, state_kind) = match &record.state {
+        let resolved_relative_path = match &record.state {
             AttachmentResolutionState::Resolved { relative_path } => {
-                (builder.push_string(&path_display(relative_path)), 1)
+                builder.push_string(&path_display(relative_path))
             }
-            AttachmentResolutionState::Missing => (EngineReadStringRef::empty(), 2),
-            AttachmentResolutionState::Duplicate { .. } => (EngineReadStringRef::empty(), 3),
-            AttachmentResolutionState::Remote => (EngineReadStringRef::empty(), 4),
-            AttachmentResolutionState::Rejected(_) => (EngineReadStringRef::empty(), 5),
-            AttachmentResolutionState::Unsupported => (EngineReadStringRef::empty(), 6),
+            AttachmentResolutionState::Missing
+            | AttachmentResolutionState::Duplicate { .. }
+            | AttachmentResolutionState::Remote
+            | AttachmentResolutionState::Rejected(_)
+            | AttachmentResolutionState::Unsupported => EngineReadStringRef::empty(),
         };
         Self {
             source_file_id: builder.push_string(&record.source_file_id),
             raw_target: builder.push_string(&record.raw_target),
             resolved_relative_path,
             source_kind: attachment_source_code(record.source),
-            state_kind,
+            state_kind: attachment_state_code(&record.state),
         }
     }
 
@@ -470,11 +463,7 @@ impl EngineReadGraphNodeRow {
                 .map(|value| builder.push_string(value))
                 .unwrap_or_else(EngineReadStringRef::empty),
             label: builder.push_string(&node.label),
-            node_kind: match node.kind {
-                LocalGraphNodeKind::Center => 1,
-                LocalGraphNodeKind::Resolved => 2,
-                LocalGraphNodeKind::Unresolved => 3,
-            },
+            node_kind: local_graph_node_kind_code(node.kind),
         }
     }
 }
@@ -485,10 +474,7 @@ impl EngineReadGraphEdgeRow {
             source_node_id: builder.push_string(&edge.source_node_id),
             target_node_id: builder.push_string(&edge.target_node_id),
             target_text: builder.push_string(&edge.target_text),
-            direction: match edge.direction {
-                LocalGraphEdgeDirection::Outgoing => 1,
-                LocalGraphEdgeDirection::Backlink => 2,
-            },
+            direction: local_graph_edge_direction_code(edge.direction),
             is_embed: u32::from(edge.is_embed),
             hop: u32::from(edge.hop),
         }
@@ -568,7 +554,7 @@ fn unix_ms(time: Option<SystemTime>) -> i64 {
         .unwrap_or(-1)
 }
 
-fn file_kind_code(kind: ScanEntryKind) -> u32 {
+pub(crate) fn file_kind_code(kind: ScanEntryKind) -> u32 {
     match kind {
         ScanEntryKind::Markdown => 1,
         ScanEntryKind::Attachment => 2,
@@ -576,7 +562,7 @@ fn file_kind_code(kind: ScanEntryKind) -> u32 {
     }
 }
 
-fn file_status_code(status: FileIndexStatus) -> u32 {
+pub(crate) fn file_status_code(status: FileIndexStatus) -> u32 {
     match status {
         FileIndexStatus::SeenMetadata => 1,
         FileIndexStatus::Parsed => 2,
@@ -586,7 +572,18 @@ fn file_status_code(status: FileIndexStatus) -> u32 {
     }
 }
 
-fn attachment_source_code(source: AttachmentReferenceSource) -> u32 {
+pub(crate) fn tag_source_code(source: crate::index::TagSource) -> u32 {
+    match source {
+        crate::index::TagSource::Inline => 1,
+        crate::index::TagSource::Frontmatter => 2,
+    }
+}
+
+pub(crate) fn link_resolution_state_code(resolved: bool) -> u32 {
+    if resolved { 1 } else { 2 }
+}
+
+pub(crate) fn attachment_source_code(source: AttachmentReferenceSource) -> u32 {
     match source {
         AttachmentReferenceSource::WikiEmbed => 1,
         AttachmentReferenceSource::MarkdownImage => 2,
@@ -594,7 +591,7 @@ fn attachment_source_code(source: AttachmentReferenceSource) -> u32 {
     }
 }
 
-fn attachment_state_code(state: &AttachmentResolutionState) -> u32 {
+pub(crate) fn attachment_state_code(state: &AttachmentResolutionState) -> u32 {
     match state {
         AttachmentResolutionState::Resolved { .. } => 1,
         AttachmentResolutionState::Missing => 2,
@@ -605,7 +602,7 @@ fn attachment_state_code(state: &AttachmentResolutionState) -> u32 {
     }
 }
 
-fn property_value_kind(value: &IndexPropertyValue) -> u32 {
+pub(crate) fn property_value_kind(value: &IndexPropertyValue) -> u32 {
     match value {
         IndexPropertyValue::String(_) => 1,
         IndexPropertyValue::Bool(_) => 2,
@@ -613,7 +610,22 @@ fn property_value_kind(value: &IndexPropertyValue) -> u32 {
     }
 }
 
-fn live_preview_item_kind_code(kind: LivePreviewMetadataItemKind) -> u32 {
+pub(crate) fn local_graph_node_kind_code(kind: LocalGraphNodeKind) -> u32 {
+    match kind {
+        LocalGraphNodeKind::Center => 1,
+        LocalGraphNodeKind::Resolved => 2,
+        LocalGraphNodeKind::Unresolved => 3,
+    }
+}
+
+pub(crate) fn local_graph_edge_direction_code(direction: LocalGraphEdgeDirection) -> u32 {
+    match direction {
+        LocalGraphEdgeDirection::Outgoing => 1,
+        LocalGraphEdgeDirection::Backlink => 2,
+    }
+}
+
+pub(crate) fn live_preview_item_kind_code(kind: LivePreviewMetadataItemKind) -> u32 {
     match kind {
         LivePreviewMetadataItemKind::Property => 1,
         LivePreviewMetadataItemKind::Tag => 2,
@@ -622,7 +634,7 @@ fn live_preview_item_kind_code(kind: LivePreviewMetadataItemKind) -> u32 {
     }
 }
 
-fn live_preview_state_code(state: LivePreviewMetadataState) -> u32 {
+pub(crate) fn live_preview_state_code(state: LivePreviewMetadataState) -> u32 {
     match state {
         LivePreviewMetadataState::None => 0,
         LivePreviewMetadataState::Resolved => 1,
@@ -633,7 +645,7 @@ fn live_preview_state_code(state: LivePreviewMetadataState) -> u32 {
     }
 }
 
-fn live_preview_source_code(source: LivePreviewMetadataSource) -> u32 {
+pub(crate) fn live_preview_source_code(source: LivePreviewMetadataSource) -> u32 {
     match source {
         LivePreviewMetadataSource::None => 0,
         LivePreviewMetadataSource::Inline => 1,
