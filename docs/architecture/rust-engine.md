@@ -1,7 +1,7 @@
 ---
 title: "Rust Engine Layered Architecture"
 date: 2026-05-27
-status: phase-0-baseline
+status: implemented
 ---
 
 # Rust Engine Layered Architecture

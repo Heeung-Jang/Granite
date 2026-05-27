@@ -1819,58 +1819,73 @@ At the end of each phase:
 
 ## Acceptance Criteria
 
+Final evidence captured on 2026-05-28:
+
+- `cargo fmt --manifest-path vault-engine/Cargo.toml --check` passed.
+- `cargo test --manifest-path vault-engine/Cargo.toml` passed: `187` passed, `1` ignored.
+- `swift test --package-path mac-app` passed: `398` tests.
+- `cargo test --manifest-path bench/vault-profiler/Cargo.toml` passed: `19` lib tests, `13` binary tests.
+- `cargo clippy --manifest-path vault-engine/Cargo.toml -- -D clippy::undocumented_unsafe_blocks -D unsafe_op_in_unsafe_fn` passed; remaining clippy output is pre-existing non-denied warnings for enum variant names, argument count, and large `FfiError`.
+- `cargo build --manifest-path vault-engine/Cargo.toml --release` passed.
+- ABI symbol diff and ABI layout manifest diff against `docs/architecture/*baseline*` returned no output.
+- `VAULT_ENGINE_DYLIB_PATH="$PWD/vault-engine/target/release/libvault_engine.dylib" swift run --package-path mac-app Granite --engine-smoke-test` passed with `loaded: vault-engine:ok:abi=1`.
+- Fixture read UI probe passed with `hardCeilingPassed: true`, file tree p95 `0.250ms`, search p95 `0.243ms`, inspector p95 `0.702ms`.
+- `./scripts/package-macos-app.sh` passed and produced `dist/Granite.app`; packaged smoke, engine smoke, telemetry, live preview, workspace, zoom, summary, and Foundation Models probes passed.
+- Public artifact privacy grep over `docs/benchmarks/artifacts/*.json` returned no private-vault path/content matches.
+- Boundary scans found no production reverse dependency from `core`/`use_cases`/`adapters` to `ffi` or `diagnostics`; broad text scans still show documented false positives in test code and names such as `rename_all`, `unsafe_*` test names, and `std::fs` test fixtures.
+
 ### Architecture
 
-- [ ] `vault-engine` has explicit `core`, `use_cases`, `adapters`, `ffi`, and `diagnostics` module areas.
-- [ ] `core` does not import `rusqlite`, `tantivy`, `libc`, FSEvents APIs, or filesystem crawling APIs.
-- [ ] `ffi` contains C ABI, buffer ownership, string decoding, panic containment, and conversion code only.
-- [ ] Use cases own orchestration and do not expose adapter internals to Swift.
-- [ ] SQLite, Tantivy, filesystem scanning, and file watching live under adapters.
-- [ ] `lib.rs` no longer publicly exposes every internal module.
-- [ ] `docs/architecture/rust-engine.md` documents placement rules.
-- [ ] Architecture doc maps every current module, including `attachments`, `parser`, `paths`, `sqlite_fts`, `graph_key`, `errors`, and `bench/vault-profiler` imports.
-- [ ] Import guard proves no reverse dependencies: core has no adapters/use_cases/ffi/diagnostics; adapters have no ffi/use_cases/diagnostics; use cases have no ffi/diagnostics/direct storage/platform crates.
-- [ ] Final `ffi` imports no `MetadataStore`, `IndexingQueue`, `TantivySearchIndex`, `IndexRebuildPaths`, scanner, parser, or SQL/Tantivy types except through approved handle wiring.
-- [ ] Final read/save/graph/rebuild FFI paths call use cases rather than legacy orchestration modules.
-- [ ] Import boundary scans pass or documented exceptions are explicit and narrow.
-- [ ] Mechanical moves and semantic extractions are separated in the implementation history.
-- [ ] Unsafe/FFI grep output matches the approved allowlist; no unsafe FFI helpers drift into `core` or `use_cases`.
-- [ ] `core` denylist gate passes.
-- [ ] `lib.rs` exposes only intentional public facades, including a deliberate diagnostics/profiler facade if `bench/vault-profiler` remains a separate crate.
-- [ ] `bench/vault-profiler` imports only intentional diagnostics/public facades, not legacy internal module paths.
+- [x] `vault-engine` has explicit `core`, `use_cases`, `adapters`, `ffi`, and `diagnostics` module areas.
+- [x] `core` does not import `rusqlite`, `tantivy`, `libc`, FSEvents APIs, or filesystem crawling APIs.
+- [x] `ffi` contains C ABI, buffer ownership, string decoding, panic containment, and conversion code only.
+- [x] Use cases own orchestration and do not expose adapter internals to Swift.
+- [x] SQLite, Tantivy, filesystem scanning, and file watching live under adapters.
+- [x] `lib.rs` no longer publicly exposes every internal module.
+- [x] `docs/architecture/rust-engine.md` documents placement rules.
+- [x] Architecture doc maps every current module, including `attachments`, `parser`, `paths`, `sqlite_fts`, `graph_key`, `errors`, and `bench/vault-profiler` imports.
+- [x] Import guard proves no reverse dependencies: core has no adapters/use_cases/ffi/diagnostics; adapters have no ffi/use_cases/diagnostics; use cases have no ffi/diagnostics/direct storage/platform crates.
+- [x] Final `ffi` imports no `MetadataStore`, `IndexingQueue`, `TantivySearchIndex`, `IndexRebuildPaths`, scanner, parser, or SQL/Tantivy types except through approved handle wiring.
+- [x] Final read/save/graph/rebuild FFI paths call use cases rather than legacy orchestration modules.
+- [x] Import boundary scans pass or documented exceptions are explicit and narrow.
+- [x] Mechanical moves and semantic extractions are separated in the implementation history.
+- [x] Unsafe/FFI grep output matches the approved allowlist; no unsafe FFI helpers drift into `core` or `use_cases`.
+- [x] `core` denylist gate passes.
+- [x] `lib.rs` exposes only intentional public facades, including a deliberate diagnostics/profiler facade if `bench/vault-profiler` remains a separate crate.
+- [x] `bench/vault-profiler` imports only intentional diagnostics/public facades, not legacy internal module paths.
 
 ### Compatibility
 
-- [ ] All exported C symbol names used by Swift remain available.
-- [ ] Read result row layouts remain ABI-compatible.
-- [ ] Save JSON envelopes remain compatible.
-- [ ] Read error codes and states remain compatible.
-- [ ] Packaged `Granite.app` still bundles and loads `libvault_engine.dylib`.
-- [ ] Exported `engine_*` symbols match the pre-refactor baseline.
-- [ ] ABI layout manifest is unchanged after Phases 1, 2, 5, and 6.
-- [ ] All FFI invalid-input and panic tests return structured errors without aborting.
+- [x] All exported C symbol names used by Swift remain available.
+- [x] Read result row layouts remain ABI-compatible.
+- [x] Save JSON envelopes remain compatible.
+- [x] Read error codes and states remain compatible.
+- [x] Packaged `Granite.app` still bundles and loads `libvault_engine.dylib`.
+- [x] Exported `engine_*` symbols match the pre-refactor baseline.
+- [x] ABI layout manifest is unchanged after Phases 1, 2, 5, and 6.
+- [x] All FFI invalid-input and panic tests return structured errors without aborting.
 
 ### Quality
 
-- [ ] Rust tests pass.
-- [ ] Swift tests pass.
-- [ ] `cargo test --manifest-path bench/vault-profiler/Cargo.toml` passes before public-surface cleanup is accepted.
-- [ ] Engine smoke test passes.
-- [ ] Read API UI probe passes on fixture.
-- [ ] Package script passes.
-- [ ] No private vault content is committed.
-- [ ] No behavior-changing optimization or schema migration is bundled into the refactor.
-- [ ] No new adapter trait exists unless the plan or implementation documents the concrete test seam it enables.
-- [ ] No production module depends on `diagnostics`.
-- [ ] Destructive path tests prove failed save/rebuild operations do not mutate vault sentinel files.
-- [ ] New or modified diagnostics artifacts pass the privacy scan.
-- [ ] SQLite/Tantivy/search adapter moves do not introduce string-built SQL from user input; query sanitization tests still pass.
-- [ ] Paths from SQLite/JSON are revalidated at mutation boundaries and are never trusted as already safe.
-- [ ] Diagnostics privacy covers error strings, panic payloads, `Debug` output, CLI args, and backend error messages.
-- [ ] Post-adapter, streaming rebuild, and graph snapshot performance gates pass or the refactor stops for redesign.
-- [ ] Hot-path no-allocation rules are preserved or exceptions are benchmarked and documented.
-- [ ] Graph refactor preserves graph snapshot privacy and bridge gates from `docs/architecture/graph-view.md`, not only unit tests.
-- [ ] Public benchmark/probe artifacts do not contain raw backend error strings, stable private-file identifiers, private vault root names, or unsalted per-input hashes.
+- [x] Rust tests pass.
+- [x] Swift tests pass.
+- [x] `cargo test --manifest-path bench/vault-profiler/Cargo.toml` passes before public-surface cleanup is accepted.
+- [x] Engine smoke test passes.
+- [x] Read API UI probe passes on fixture.
+- [x] Package script passes.
+- [x] No private vault content is committed.
+- [x] No behavior-changing optimization or schema migration is bundled into the refactor.
+- [x] No new adapter trait exists unless the plan or implementation documents the concrete test seam it enables.
+- [x] No production module depends on `diagnostics`.
+- [x] Destructive path tests prove failed save/rebuild operations do not mutate vault sentinel files.
+- [x] New or modified diagnostics artifacts pass the privacy scan.
+- [x] SQLite/Tantivy/search adapter moves do not introduce string-built SQL from user input; query sanitization tests still pass.
+- [x] Paths from SQLite/JSON are revalidated at mutation boundaries and are never trusted as already safe.
+- [x] Diagnostics privacy covers error strings, panic payloads, `Debug` output, CLI args, and backend error messages.
+- [x] Post-adapter, streaming rebuild, and graph snapshot performance gates pass or the refactor stops for redesign.
+- [x] Hot-path no-allocation rules are preserved or exceptions are benchmarked and documented.
+- [x] Graph refactor preserves graph snapshot privacy and bridge gates from `docs/architecture/graph-view.md`, not only unit tests.
+- [x] Public benchmark/probe artifacts do not contain raw backend error strings, stable private-file identifiers, private vault root names, or unsalted per-input hashes.
 
 ## Dependencies And Risks
 
@@ -1912,25 +1927,27 @@ At the end of each phase:
 
 ## Implementation Review Checklist
 
-Use this checklist for each PR or worktree batch:
+Use this checklist for each PR or worktree batch. Final review completed on
+2026-05-28. A checked negative-form question means the review was performed
+and no blocking violation was found:
 
-- [ ] Does this batch contain only one phase or a clearly contiguous subset of a phase?
-- [ ] Is each commit a single RA task, or is the reason for grouping documented?
-- [ ] Did the task fit the implementation unit contract, especially the move-only rule for large line-count changes?
-- [ ] Are file moves separated from semantic edits?
-- [ ] Did any `#[repr(C)]` struct change? If yes, stop unless explicitly planned.
-- [ ] Did any C symbol name change? If yes, stop unless explicitly planned.
-- [ ] Did any SQLite schema/index/query text change? If yes, split it out of this refactor.
-- [ ] Did any SQL construction use string interpolation for user/vault values? If yes, replace with bound parameters before continuing.
-- [ ] Did any Tantivy schema/tokenizer/writer option change? If yes, split it out.
-- [ ] Did `core` gain a storage, FFI, or filesystem import?
-- [ ] Did `use_cases` gain direct filesystem, SQLite, Tantivy, libc, or FSEvents imports?
-- [ ] Did FFI call a legacy orchestration module instead of a use case?
-- [ ] Did production code start importing `diagnostics`?
-- [ ] Did a destructive operation accept a path from SQLite/JSON without re-normalizing it?
-- [ ] Did a diagnostics artifact include raw paths, note text, snippets, query terms, tags, frontmatter keys, or stable file IDs?
-- [ ] Are tests moved with their owning module, or intentionally kept as integration tests?
-- [ ] Is any new trait justified by an immediate test seam?
+- [x] Does this batch contain only one phase or a clearly contiguous subset of a phase?
+- [x] Is each commit a single RA task, or is the reason for grouping documented?
+- [x] Did the task fit the implementation unit contract, especially the move-only rule for large line-count changes?
+- [x] Are file moves separated from semantic edits?
+- [x] Did any `#[repr(C)]` struct change? If yes, stop unless explicitly planned.
+- [x] Did any C symbol name change? If yes, stop unless explicitly planned.
+- [x] Did any SQLite schema/index/query text change? If yes, split it out of this refactor.
+- [x] Did any SQL construction use string interpolation for user/vault values? If yes, replace with bound parameters before continuing.
+- [x] Did any Tantivy schema/tokenizer/writer option change? If yes, split it out.
+- [x] Did `core` gain a storage, FFI, or filesystem import?
+- [x] Did `use_cases` gain direct filesystem, SQLite, Tantivy, libc, or FSEvents imports?
+- [x] Did FFI call a legacy orchestration module instead of a use case?
+- [x] Did production code start importing `diagnostics`?
+- [x] Did a destructive operation accept a path from SQLite/JSON without re-normalizing it?
+- [x] Did a diagnostics artifact include raw paths, note text, snippets, query terms, tags, frontmatter keys, or stable file IDs?
+- [x] Are tests moved with their owning module, or intentionally kept as integration tests?
+- [x] Is any new trait justified by an immediate test seam?
 
 ## References
 
@@ -1960,13 +1977,10 @@ Use this checklist for each PR or worktree batch:
 
 ## Next Step
 
-On the active `codex/refactor-vault-engine-layered-architecture` branch, Phase 0 through Phase 4 and RA05.01 through RA05.09c are either green or in the current graph-use-case work batch. Remaining follow-up gates and next work:
+All planned phases and final acceptance gates for
+`codex/refactor-vault-engine-layered-architecture` are complete. The remaining
+project work is outside this refactor:
 
-1. RA01.12 unsafe allowlist audit if it was not already covered by existing FFI/FSEvents tests.
-2. RA04.10b/RA04.10c destructive-index marker and hardlink policy follow-up gates.
-3. RA04.11 post-adapter performance gate, or document why it is deferred and keep it as a merge blocker.
-4. Finish RA05.09d1 through RA05.09d5 graph FFI retargeting before starting graph performance gates.
-5. Run RA05.09e ABI/smoke, then RA05.09f1 through RA05.09f5 graph benchmark/privacy/memory/query-plan gates.
-6. Run RA05.10a through RA05.10c focused boundary, allocation, and query-count scans.
-
-Do not start Phase 6 or Phase 7 until Phase 5 boundary scans and FFI retargeting are green.
+1. Decide whether the documented non-denied clippy warnings should become a
+   separate cleanup.
+2. Merge the branch after review.
