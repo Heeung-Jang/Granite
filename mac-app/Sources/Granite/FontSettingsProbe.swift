@@ -44,6 +44,9 @@ enum FontSettingsProbe {
             customTextFamilyScenario(candidates.proportional),
             customMonospaceFamilyScenario(candidates.fixedWidth),
             invalidMonospaceFallbackScenario(candidates.proportional),
+            editorFontSettingsPersistenceScenario(candidates.proportional, candidates.fixedWidth),
+            invalidMonospaceSelectionScenario(candidates.proportional, candidates.fixedWidth),
+            fontPanelSelectionRoutingScenario(candidates.proportional, candidates.fixedWidth),
             fontPanelOwnershipScenario()
         ]
         return FontSettingsProbeReport(
@@ -168,6 +171,170 @@ enum FontSettingsProbe {
         )
     }
 
+    private static func editorFontSettingsPersistenceScenario(
+        _ textCandidate: FontCandidate?,
+        _ monospaceCandidate: FontCandidate?
+    ) -> FontSettingsProbeScenario {
+        guard let textCandidate,
+              let monospaceCandidate,
+              let monospaceFont = regularFont(for: monospaceCandidate)
+        else {
+            return skip("editor-font-settings-persistence", reason: "No text or fixed-width family available.")
+        }
+        let suiteName = "FontSettingsProbe.persistence.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            return skip("editor-font-settings-persistence", reason: "Could not create isolated defaults suite.")
+        }
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+        let store = UserDefaultsEditorFontPreferenceStore(defaults: defaults, keyPrefix: "probeFonts")
+        let settings = EditorFontSettings(store: store)
+
+        settings.setTextFontFamily("  \(textCandidate.familyName)  ")
+        let textSaved = normalizedFamilyName(settings.preferences.textFamilyName) == textCandidate.normalizedFamilyName
+
+        let monospaceAccepted = settings.selectMonospaceFont(monospaceFont)
+        let monospaceSaved = normalizedFamilyName(settings.preferences.monospaceFamilyName)
+            == normalizedFamilyName(monospaceFont.familyName)
+        let reloaded = EditorFontSettings(store: store)
+        let persisted = normalizedFamilyName(reloaded.preferences.textFamilyName) == textCandidate.normalizedFamilyName
+            && normalizedFamilyName(reloaded.preferences.monospaceFamilyName)
+                == normalizedFamilyName(monospaceFont.familyName)
+
+        settings.resetTextFont()
+        let resetTextOnly = settings.preferences.textFamilyName == nil
+            && normalizedFamilyName(settings.preferences.monospaceFamilyName)
+                == normalizedFamilyName(monospaceFont.familyName)
+        settings.resetMonospaceFont()
+        let resetBoth = settings.preferences == EditorFontPreferences()
+        let resetPersisted = EditorFontSettings(store: store).preferences == EditorFontPreferences()
+
+        return scenario(
+            "editor-font-settings-persistence",
+            passed: textSaved
+                && monospaceAccepted
+                && monospaceSaved
+                && persisted
+                && resetTextOnly
+                && resetBoth
+                && resetPersisted,
+            details: [
+                "textFamily": textCandidate.familyName,
+                "monospaceFamily": monospaceFont.familyName ?? monospaceCandidate.familyName,
+                "textSaved": String(textSaved),
+                "monospaceAccepted": String(monospaceAccepted),
+                "persisted": String(persisted),
+                "resetTextOnly": String(resetTextOnly),
+                "resetPersisted": String(resetPersisted)
+            ]
+        )
+    }
+
+    private static func invalidMonospaceSelectionScenario(
+        _ proportionalCandidate: FontCandidate?,
+        _ fixedWidthCandidate: FontCandidate?
+    ) -> FontSettingsProbeScenario {
+        guard let proportionalCandidate,
+              let fixedWidthCandidate,
+              let proportionalFont = regularFont(for: proportionalCandidate),
+              let fixedWidthFont = regularFont(for: fixedWidthCandidate)
+        else {
+            return skip("invalid-monospace-selection", reason: "No proportional or fixed-width family available.")
+        }
+        let settings = EditorFontSettings(store: MemoryEditorFontPreferenceStore())
+
+        let acceptedInitialFont = settings.selectMonospaceFont(fixedWidthFont)
+        let previousMonospaceFamily = settings.preferences.monospaceFamilyName
+        let rejectedProportionalFont = !settings.selectMonospaceFont(proportionalFont)
+        let previousSelectionKept = normalizedFamilyName(settings.preferences.monospaceFamilyName)
+            == normalizedFamilyName(previousMonospaceFamily)
+        let warningShown = settings.monospaceWarningMessage == "Choose a fixed-width font for Monospace font."
+        settings.clearMonospaceWarning()
+        let warningCleared = settings.monospaceWarningMessage == nil
+
+        return scenario(
+            "invalid-monospace-selection",
+            passed: acceptedInitialFont
+                && rejectedProportionalFont
+                && previousSelectionKept
+                && warningShown
+                && warningCleared,
+            details: [
+                "fixedWidthFamily": fixedWidthFont.familyName ?? fixedWidthCandidate.familyName,
+                "rejectedFamily": proportionalFont.familyName ?? proportionalCandidate.familyName,
+                "previousSelectionKept": String(previousSelectionKept),
+                "warningShown": String(warningShown)
+            ]
+        )
+    }
+
+    private static func fontPanelSelectionRoutingScenario(
+        _ textCandidate: FontCandidate?,
+        _ monospaceCandidate: FontCandidate?
+    ) -> FontSettingsProbeScenario {
+        guard let textCandidate,
+              let monospaceCandidate,
+              let textFont = regularFont(for: textCandidate, size: 31),
+              let monospaceFont = regularFont(for: monospaceCandidate, size: 29)
+        else {
+            return skip("font-panel-selection-routing", reason: "No text or fixed-width family available.")
+        }
+
+        let manager = NSFontManager.shared
+        let previousTarget = manager.target
+        let previousAction = manager.action
+        let previousSelectedFont = manager.selectedFont
+        let settings = EditorFontSettings(store: MemoryEditorFontPreferenceStore())
+        let coordinator = FontPanelCoordinator()
+        var activeRole = FontPreferenceRole.text
+        defer {
+            manager.target = previousTarget
+            manager.action = previousAction
+            if let previousSelectedFont {
+                manager.setSelectedFont(previousSelectedFont, isMultiple: false)
+            }
+        }
+
+        coordinator.editorFontSettings = settings
+        coordinator.activeRole = { activeRole }
+        coordinator.beginOwningFontPanel()
+
+        manager.setSelectedFont(textFont, isMultiple: false)
+        coordinator.changeFont(manager)
+        let textRouted = normalizedFamilyName(settings.preferences.textFamilyName) == textCandidate.normalizedFamilyName
+        let textSizeIgnored = settings.fontSet.baseFont.pointSize == LivePreviewTheme.defaultFontSet.baseFont.pointSize
+
+        activeRole = .monospace
+        manager.setSelectedFont(monospaceFont, isMultiple: false)
+        coordinator.changeFont(manager)
+        let monospaceRouted = normalizedFamilyName(settings.preferences.monospaceFamilyName)
+            == normalizedFamilyName(monospaceFont.familyName)
+        let monospaceSizeIgnored = settings.fontSet.codeFont.pointSize == LivePreviewTheme.defaultFontSet.codeFont.pointSize
+            && settings.fontSet.sourceFont.pointSize == LivePreviewTheme.defaultFontSet.sourceFont.pointSize
+
+        coordinator.clearFontPanelOwnershipIfCurrent()
+        let ownershipRestored = target(manager.target, matches: previousTarget) && manager.action == previousAction
+
+        return scenario(
+            "font-panel-selection-routing",
+            passed: textRouted
+                && textSizeIgnored
+                && monospaceRouted
+                && monospaceSizeIgnored
+                && ownershipRestored,
+            details: [
+                "textFamily": textFont.familyName ?? textCandidate.familyName,
+                "monospaceFamily": monospaceFont.familyName ?? monospaceCandidate.familyName,
+                "textRouted": String(textRouted),
+                "textSizeIgnored": String(textSizeIgnored),
+                "monospaceRouted": String(monospaceRouted),
+                "monospaceSizeIgnored": String(monospaceSizeIgnored),
+                "ownershipRestored": String(ownershipRestored)
+            ]
+        )
+    }
+
     private static func fontPanelOwnershipScenario() -> FontSettingsProbeScenario {
         let manager = NSFontManager.shared
         let previousTarget = manager.target
@@ -209,6 +376,15 @@ enum FontSettingsProbe {
         default:
             return false
         }
+    }
+
+    private static func regularFont(for candidate: FontCandidate, size: CGFloat = 16) -> NSFont? {
+        NSFontManager.shared.font(
+            withFamily: candidate.familyName,
+            traits: [],
+            weight: 5,
+            size: size
+        )
     }
 
     private static func installedCandidates() -> (proportional: FontCandidate?, fixedWidth: FontCandidate?) {
@@ -307,5 +483,35 @@ private struct FontCandidate {
     var normalizedFamilyName: String? {
         let trimmed = familyName.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed.lowercased()
+    }
+}
+
+private final class MemoryEditorFontPreferenceStore: EditorFontPreferenceStoring {
+    private var preferences = EditorFontPreferences()
+
+    func load() -> EditorFontPreferences {
+        preferences
+    }
+
+    func saveTextFamilyName(_ familyName: String?) {
+        preferences = EditorFontPreferences(
+            textFamilyName: familyName,
+            monospaceFamilyName: preferences.monospaceFamilyName
+        )
+    }
+
+    func saveMonospaceFamilyName(_ familyName: String?) {
+        preferences = EditorFontPreferences(
+            textFamilyName: preferences.textFamilyName,
+            monospaceFamilyName: familyName
+        )
+    }
+
+    func resetTextFamilyName() {
+        preferences = EditorFontPreferences(monospaceFamilyName: preferences.monospaceFamilyName)
+    }
+
+    func resetMonospaceFamilyName() {
+        preferences = EditorFontPreferences(textFamilyName: preferences.textFamilyName)
     }
 }
