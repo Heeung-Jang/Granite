@@ -547,7 +547,7 @@ Default stop conditions:
   - Build: add `vault-engine/src/core/mod.rs`.
   - Verify: no public behavior changes; `cargo test` passes.
 
-- [ ] **RA03.01a Add core import purity test script note**
+- [x] **RA03.01a Add core import purity test script note**
   - Build: document the `rg` import purity command in `docs/architecture/rust-engine.md` before moving records.
   - Verify: the command initially returns no matches for the empty/new `core` module.
 

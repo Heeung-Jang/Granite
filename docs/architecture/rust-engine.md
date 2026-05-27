@@ -173,6 +173,15 @@ rg -n "crate::diagnostics" vault-engine/src/core vault-engine/src/use_cases vaul
 
 Any match must be removed or documented here as an explicit exception.
 
+For incremental core extraction work, use this fail-on-match gate before and
+after each move into `vault-engine/src/core`:
+
+```sh
+if rg -n "std::fs|canonicalize|symlink_metadata|MetadataExt|OpenOptions|rename|remove_dir_all|rusqlite|tantivy|libc|FSEvent|extern \"C\"|unsafe|CStr|CString|no_mangle" vault-engine/src/core; then
+  exit 1
+fi
+```
+
 Allowed exceptions after Phase 1 FFI splitting:
 
 - `vault-engine/src/ffi/` owns Rust-owned C ABI entry points, C string decoding, response buffers, and free functions.
