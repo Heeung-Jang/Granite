@@ -672,7 +672,7 @@ Default stop conditions:
   - Build: turn `index.rs` into a temporary compatibility module that re-exports `adapters::sqlite` symbols still used by unmigrated callers.
   - Verify: `cargo test --manifest-path vault-engine/Cargo.toml` passes and `rg "crate::index::" vault-engine/src` shows only expected temporary callers.
 
-- [ ] **RA04.02h Update callers from `crate::index` to `crate::adapters::sqlite`**
+- [x] **RA04.02h Update callers from `crate::index` to `crate::adapters::sqlite`**
   - Build: migrate callers one group at a time: read API, save/index queue, graph, indexing pipeline, diagnostics/profiler.
   - Verify: after each caller group, run that group's narrow test filter.
 
