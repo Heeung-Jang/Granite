@@ -8,3 +8,4 @@ pub(crate) mod read_vault;
 pub(crate) mod rebuild_tantivy;
 pub(crate) mod reconcile_startup;
 pub(crate) mod save_note;
+pub(crate) mod watcher_burst;

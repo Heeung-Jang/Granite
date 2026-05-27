@@ -968,7 +968,7 @@ Default stop conditions:
     ```
   - Stop condition: any production caller except the compatibility module still depends on the legacy root module.
 
-- [ ] **RA05.08a Add watcher burst use-case module**
+- [x] **RA05.08a Add watcher burst use-case module**
   - Build: add `use_cases/watcher_burst.rs` and `pub(crate) mod watcher_burst;` without moving logic yet.
   - Verify: `cargo test --manifest-path vault-engine/Cargo.toml watcher_burst::`.
 
