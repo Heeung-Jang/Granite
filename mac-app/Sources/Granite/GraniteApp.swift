@@ -234,6 +234,7 @@ struct GraniteApp: App {
                 .environmentObject(appState)
                 .environmentObject(editorFontSettings)
         }
+        .windowResizability(.contentSize)
     }
 }
 

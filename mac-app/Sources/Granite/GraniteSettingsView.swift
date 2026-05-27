@@ -51,7 +51,7 @@ struct GraniteSettingsView: View {
         }
         .formStyle(.grouped)
         .scenePadding()
-        .frame(width: 560, height: 420)
+        .frame(width: 560, height: 640)
         .onDisappear {
             activeFontRole = nil
             fontPanelCoordinator.clearFontPanelOwnershipIfCurrent()
@@ -99,7 +99,10 @@ private struct FontPreferenceRow: View {
     let resetAction: () -> Void
 
     var body: some View {
-        LabeledContent {
+        HStack(alignment: .top, spacing: 14) {
+            Text(role.displayLabel)
+                .frame(width: 92, alignment: .leading)
+
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 8) {
                     Text(familyDisplayName)
@@ -130,10 +133,8 @@ private struct FontPreferenceRow: View {
                         .accessibilityLabel(role.warningAccessibilityLabel)
                 }
             }
-        } label: {
-            Text(role.displayLabel)
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 6)
     }
 
     private var previewSwiftUIFont: Font {
