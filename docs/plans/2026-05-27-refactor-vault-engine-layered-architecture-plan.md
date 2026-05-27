@@ -437,7 +437,7 @@ Stop at the end of any phase if a gate fails. Do not proceed by compensating in 
   - Build: move panic hook lock and unwind helper logic into `vault-engine/src/ffi/panic.rs`.
   - Verify: existing panic-boundary tests still pass, and no panic helper is duplicated in read/save/graph FFI modules.
 
-- [ ] **RA01.03 Extract C string and byte decoding helpers**
+- [x] **RA01.03 Extract C string and byte decoding helpers**
   - Build: move `read_c_string`, `read_read_string`, `read_rebuild_c_string`, and `read_bytes` style helpers into `vault-engine/src/ffi/strings.rs`.
   - Verify: invalid pointer/null/UTF-8 tests still return structured errors.
 

@@ -1,10 +1,9 @@
 use std::collections::HashSet;
-use std::ffi::{CStr, CString};
+use std::ffi::CString;
 use std::os::raw::{c_char, c_uchar};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 use std::ptr::NonNull;
-use std::slice;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -51,8 +50,10 @@ use crate::save::{
 };
 
 mod panic;
+mod strings;
 
 use self::panic::catch_ffi_unwind;
+use self::strings::{read_bytes, read_c_string, read_read_string, read_rebuild_c_string};
 
 pub fn abi_version() -> u32 {
     ENGINE_ABI_VERSION
@@ -1242,13 +1243,6 @@ impl ReadRebuildFfiError {
     }
 }
 
-unsafe fn read_rebuild_c_string(
-    ptr: *const c_char,
-    field: &'static str,
-) -> Result<String, ReadRebuildFfiError> {
-    unsafe { read_c_string(ptr, field) }.map_err(|_| ReadRebuildFfiError::invalid_input(field))
-}
-
 fn read_rebuild_response<F>(call: F) -> EngineReadResultBuffer
 where
     F: FnOnce() -> Result<u64, ReadRebuildFfiError>,
@@ -1434,38 +1428,6 @@ unsafe fn read_handle(
     handle: *mut EngineReadHandle,
 ) -> Result<NonNull<EngineReadHandle>, ReadApiError> {
     NonNull::new(handle).ok_or(ReadApiError::InvalidInput("handle"))
-}
-
-unsafe fn read_read_string(
-    ptr: *const c_char,
-    field: &'static str,
-) -> Result<String, ReadApiError> {
-    unsafe { read_c_string(ptr, field) }.map_err(|_| ReadApiError::InvalidInput(field))
-}
-
-unsafe fn read_c_string(ptr: *const c_char, field: &str) -> Result<String, FfiError> {
-    if ptr.is_null() {
-        return Err(FfiError::invalid_input(field, "null pointer"));
-    }
-    let value = unsafe { CStr::from_ptr(ptr) };
-    value
-        .to_str()
-        .map(str::to_owned)
-        .map_err(|error| FfiError::invalid_input(field, error.to_string()))
-}
-
-unsafe fn read_bytes<'a>(
-    ptr: *const c_uchar,
-    len: usize,
-    field: &str,
-) -> Result<&'a [u8], FfiError> {
-    if len == 0 {
-        return Ok(&[]);
-    }
-    if ptr.is_null() {
-        return Err(FfiError::invalid_input(field, "null pointer"));
-    }
-    Ok(unsafe { slice::from_raw_parts(ptr, len) })
 }
 
 fn read_json<T: for<'de> Deserialize<'de>>(json: &str, field: &str) -> Result<T, FfiError> {
@@ -2255,7 +2217,7 @@ mod tests {
 
     unsafe fn take_response(ptr: *mut c_char) -> String {
         assert!(!ptr.is_null());
-        let value = unsafe { CStr::from_ptr(ptr) }
+        let value = unsafe { std::ffi::CStr::from_ptr(ptr) }
             .to_string_lossy()
             .into_owned();
         unsafe {
