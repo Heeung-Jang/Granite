@@ -629,7 +629,7 @@ Default stop conditions:
   - Build: move `VaultRoot::open`, canonicalization, symlink checks, `FileIdentity::from_metadata`, and metadata extension usage into `adapters/fs/path_resolver.rs`.
   - Verify: save path safety, scanner, startup reconciliation, and rebuild path tests still pass.
 
-- [ ] **RA04.01b Move filesystem note writer**
+- [x] **RA04.01b Move filesystem note writer**
   - Build: move temp write, permission preservation, atomic replacement, and mutation-time path revalidation into `adapters/fs/note_writer.rs` without changing save semantics.
   - Verify: save safety tests and FFI conflict choice tests pass.
 
