@@ -190,19 +190,6 @@ impl LocalGraphRequest {
 }
 
 impl VaultReadApi {
-    pub fn search_with_mode(
-        &self,
-        mode: u32,
-        query: &str,
-        page: PageRequest,
-    ) -> ReadApiResult<ReadPage<SearchHit>> {
-        match mode {
-            ENGINE_READ_SEARCH_MODE_FILE_NAME => self.file_name_search(query, page),
-            ENGINE_READ_SEARCH_MODE_BODY => self.body_search(query, page),
-            _ => Err(ReadApiError::InvalidInput("search_mode")),
-        }
-    }
-
     pub fn backlinks_for_path(
         &self,
         relative_path: &str,

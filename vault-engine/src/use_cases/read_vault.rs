@@ -3,8 +3,9 @@ use std::path::Path;
 use crate::adapters::sqlite::{FileRecord, FileTreeProjection, IndexSchemaMetadata, MetadataStore};
 use crate::adapters::tantivy::{TantivySearchError, TantivySearchIndex};
 use crate::read_api::{
-    FileOpenMetadata, READ_BACKEND_NAME, READ_BACKEND_VERSION, READ_TOKENIZER_CONFIG,
-    ReadApiResult, SearchHit,
+    ENGINE_READ_SEARCH_MODE_BODY, ENGINE_READ_SEARCH_MODE_FILE_NAME, FileOpenMetadata,
+    READ_BACKEND_NAME, READ_BACKEND_VERSION, READ_TOKENIZER_CONFIG, ReadApiError, ReadApiResult,
+    SearchHit,
 };
 
 use super::read_types::{
@@ -97,6 +98,19 @@ impl VaultReadApi {
         page: PageRequest,
     ) -> ReadApiResult<ReadPage<SearchHit>> {
         self.search(query, page)
+    }
+
+    pub fn search_with_mode(
+        &self,
+        mode: u32,
+        query: &str,
+        page: PageRequest,
+    ) -> ReadApiResult<ReadPage<SearchHit>> {
+        match mode {
+            ENGINE_READ_SEARCH_MODE_FILE_NAME => self.file_name_search(query, page),
+            ENGINE_READ_SEARCH_MODE_BODY => self.body_search(query, page),
+            _ => Err(ReadApiError::InvalidInput("search_mode")),
+        }
     }
 
     fn search(&self, query: &str, page: PageRequest) -> ReadApiResult<ReadPage<SearchHit>> {

@@ -791,7 +791,7 @@ Default stop conditions:
   - Build: move Tantivy-backed body search and result conversion without changing query sanitization or snippets.
   - Verify: Tantivy search tests and read API body-search tests pass.
 
-- [ ] **RA05.02h Move search mode dispatch**
+- [x] **RA05.02h Move search mode dispatch**
   - Build: move the mode selection wrapper after filename and body search methods are already green.
   - Verify: combined search-mode read FFI tests pass.
 
