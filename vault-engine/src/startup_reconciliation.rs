@@ -3,7 +3,7 @@ use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::adapters::sqlite::{FileIndexStatus, FileRecord, MetadataStore, MetadataStoreError};
-use crate::indexing_queue::{
+use crate::adapters::sqlite::{
     IndexingQueue, IndexingQueueError, IndexingQueueReason, IndexingQueueResult,
 };
 use crate::paths::FileIdentity;

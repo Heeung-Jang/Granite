@@ -14,11 +14,11 @@ use crate::adapters::sqlite::{
     IndexSchemaMetadata, LinkEdgeRecord, MetadataStore, MetadataStoreError, PropertyRecord,
     TagRecord, TagSource, slugify_heading,
 };
-use crate::attachments::{AttachmentReferenceSource, AttachmentResolutionState};
-use crate::index_rebuild::{IndexRebuildError, IndexRebuildPaths, commit_index_rebuild};
-use crate::indexing_queue::{
+use crate::adapters::sqlite::{
     IndexingQueue, IndexingQueueError, IndexingQueueItem, IndexingQueueReason, IndexingQueueSummary,
 };
+use crate::attachments::{AttachmentReferenceSource, AttachmentResolutionState};
+use crate::index_rebuild::{IndexRebuildError, IndexRebuildPaths, commit_index_rebuild};
 use crate::parser::{ParsedMarkdown, PropertyValue, parse_markdown};
 use crate::paths::{FileIdentity, PathError, VaultRoot, lookup_key};
 use crate::scanner::{ScanEntryKind, scan_vault};
@@ -1238,7 +1238,7 @@ fn duration_micros_nonzero(duration: Duration) -> u64 {
 mod tests {
     use super::*;
     use crate::adapters::sqlite::{FileIndexStatus, IndexSchemaMetadata};
-    use crate::indexing_queue::{IndexingQueueReason, IndexingQueueStatus};
+    use crate::adapters::sqlite::{IndexingQueueReason, IndexingQueueStatus};
     use std::path::{Path, PathBuf};
     use tempfile::tempdir;
 

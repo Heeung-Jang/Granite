@@ -136,7 +136,7 @@ impl FfiError {
         }
     }
 
-    pub(super) fn from_queue(error: crate::indexing_queue::IndexingQueueError) -> Self {
+    pub(super) fn from_queue(error: crate::adapters::sqlite::IndexingQueueError) -> Self {
         Self {
             code: "queue_error".to_string(),
             message: error.to_string(),

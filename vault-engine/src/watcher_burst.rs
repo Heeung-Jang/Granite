@@ -3,11 +3,11 @@ use std::fmt;
 use std::path::PathBuf;
 
 use crate::adapters::sqlite::MetadataStore;
+use crate::adapters::sqlite::{IndexingQueue, IndexingQueueError};
 use crate::file_watcher::{
     WATCHER_FLAG_EVENT_IDS_WRAPPED, WATCHER_FLAG_KERNEL_DROPPED, WATCHER_FLAG_MUST_SCAN_SUBDIRS,
     WATCHER_FLAG_USER_DROPPED, WatcherEvent, WatcherEventKind,
 };
-use crate::indexing_queue::{IndexingQueue, IndexingQueueError};
 use crate::scanner::ScanSummary;
 use crate::startup_reconciliation::{
     StartupReconciliationError, StartupReconciliationSummary, reconcile_startup,
@@ -174,10 +174,10 @@ impl From<IndexingQueueError> for WatcherBurstError {
 mod tests {
     use super::*;
     use crate::adapters::sqlite::{FileRecord, IndexSchemaMetadata, MetadataStore};
+    use crate::adapters::sqlite::{IndexingQueueReason, IndexingQueueStatus};
     use crate::file_watcher::{
         WATCHER_FLAG_ITEM_MODIFIED, WATCHER_FLAG_ITEM_RENAMED, WATCHER_FLAG_KERNEL_DROPPED,
     };
-    use crate::indexing_queue::{IndexingQueueReason, IndexingQueueStatus};
     use crate::paths::FileIdentity;
     use crate::scanner::{ScanEntry, ScanEntryKind};
     use std::time::{Duration, UNIX_EPOCH};

@@ -3,7 +3,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::indexing_queue::{IndexingQueue, IndexingQueueItem};
+use crate::adapters::sqlite::{IndexingQueue, IndexingQueueItem};
 use crate::paths::{FileIdentity, VaultRoot};
 use crate::save::{
     SaveBaseline, SaveChoiceOutcome, SaveConflict, SaveConflictKind, SaveConflictSnapshot,

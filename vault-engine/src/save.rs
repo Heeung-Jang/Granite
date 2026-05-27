@@ -7,7 +7,7 @@ use crate::adapters::fs::note_writer::{
     FileSnapshot, capture_snapshot, rename_temp_file, sync_parent, write_new_note, write_temp_file,
 };
 use crate::adapters::sqlite::FileRecord;
-use crate::indexing_queue::{
+use crate::adapters::sqlite::{
     IndexingQueue, IndexingQueueError, IndexingQueueItem, IndexingQueueReason,
 };
 use crate::paths::{FileIdentity, PathError, VaultRoot};
@@ -417,7 +417,7 @@ impl From<IndexingQueueError> for SaveConflictChoiceError {
 mod tests {
     use super::*;
     use crate::adapters::fs::note_writer::stable_content_hash;
-    use crate::indexing_queue::{IndexingQueue, IndexingQueueReason};
+    use crate::adapters::sqlite::{IndexingQueue, IndexingQueueReason};
     use std::fs;
     #[cfg(unix)]
     use std::os::unix::fs::{PermissionsExt, symlink};

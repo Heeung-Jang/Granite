@@ -696,7 +696,7 @@ Default stop conditions:
   - Build: move `IndexingQueue`, `IndexingQueueItem`, summary/error types, and methods into `adapters/sqlite/indexing_queue.rs`.
   - Verify: queue tests and indexing pipeline queue-batch tests pass.
 
-- [ ] **RA04.04c Remove old queue compatibility module**
+- [x] **RA04.04c Remove old queue compatibility module**
   - Build: update all callers away from `crate::indexing_queue`, then delete or narrow the old module path.
   - Verify: `rg "crate::indexing_queue" vault-engine/src` returns no production callers.
 
