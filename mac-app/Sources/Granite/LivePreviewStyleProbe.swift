@@ -93,6 +93,11 @@ struct LivePreviewStyleProbeReport: Codable, Equatable {
     var calloutVariantAccentColorsResolved: Bool
     var calloutBackgroundUsesAccentAlpha: Bool
     var calloutRenderPreservesSource: Bool
+    var appZoomBaseFontScales: Bool
+    var appZoomSourceFontScales: Bool
+    var appZoomCodeFontScales: Bool
+    var appZoomStrongFontScales: Bool
+    var appZoomHeadingFontsScale: Bool
     var appZoomCalloutGeometryScales: Bool
     var propertiesChromeApplied: Bool
     var propertiesTitleSpacingApplied: Bool
@@ -116,6 +121,10 @@ struct LivePreviewStyleProbeReport: Codable, Equatable {
     var tableRenderPreservesSource: Bool
     var tableCompactWidthApplied: Bool
     var tableAlignmentApplied: Bool
+    var appZoomTableColumnWidthsScale: Bool
+    var appZoomTableRowHeightsScale: Bool
+    var appZoomTableControlsScale: Bool
+    var appZoomTableTextFontScales: Bool
     var horizontalRuleDashVariantRendered: Bool
     var horizontalRuleAsteriskVariantRendered: Bool
     var horizontalRuleUnderscoreVariantRendered: Bool
@@ -414,7 +423,9 @@ enum LivePreviewStyleProbe {
         let taskOverlayFields = probeTaskCheckboxOverlayPolicy()
         let tableGeometryFields = probeTableGeometry()
         let tableActiveCellControls = probeTableActiveCellControls()
+        let appZoomTableFields = probeAppZoomTableFields()
         let nestedListFields = probeNestedListHierarchy()
+        let appZoomPrimaryFontFields = probeAppZoomPrimaryFontFields()
         let appZoomOverlayFields = probeAppZoomOverlayFields()
 
         var report = LivePreviewStyleProbeReport(
@@ -527,6 +538,11 @@ enum LivePreviewStyleProbe {
                 && LivePreviewTheme.calloutAccentColor(for: .callout(kind: "quote")) == NSColor.systemGray,
             calloutBackgroundUsesAccentAlpha: LivePreviewTheme.calloutBackgroundColor(for: .callout(kind: "warning")) == NSColor.systemOrange.withAlphaComponent(0.12),
             calloutRenderPreservesSource: textView.string.contains("> [!note] Callout body"),
+            appZoomBaseFontScales: appZoomPrimaryFontFields.baseFontScales,
+            appZoomSourceFontScales: appZoomPrimaryFontFields.sourceFontScales,
+            appZoomCodeFontScales: appZoomPrimaryFontFields.codeFontScales,
+            appZoomStrongFontScales: appZoomPrimaryFontFields.strongFontScales,
+            appZoomHeadingFontsScale: appZoomPrimaryFontFields.headingFontsScale,
             appZoomCalloutGeometryScales: appZoomOverlayFields.calloutGeometryScales,
             propertiesChromeApplied: propertyKeyAttributes?[.foregroundColor] as? NSColor == LivePreviewTheme.concealedColor
                 && propertyValueAttributes?[.foregroundColor] as? NSColor == LivePreviewTheme.concealedColor
@@ -576,6 +592,10 @@ enum LivePreviewStyleProbe {
                 && textView.string.contains("| Alpha | Draft |"),
             tableCompactWidthApplied: tableGeometryFields.compactWidthApplied,
             tableAlignmentApplied: tableGeometryFields.alignmentApplied,
+            appZoomTableColumnWidthsScale: appZoomTableFields.columnWidthsScale,
+            appZoomTableRowHeightsScale: appZoomTableFields.rowHeightsScale,
+            appZoomTableControlsScale: appZoomTableFields.controlsScale,
+            appZoomTableTextFontScales: appZoomTableFields.textFontScales,
             horizontalRuleDashVariantRendered: horizontalRuleFields.dashVariantRendered,
             horizontalRuleAsteriskVariantRendered: horizontalRuleFields.asteriskVariantRendered,
             horizontalRuleUnderscoreVariantRendered: horizontalRuleFields.underscoreVariantRendered,
@@ -916,6 +936,70 @@ enum LivePreviewStyleProbe {
             calloutGeometryScales,
             horizontalRuleGeometryScales,
             listMarkerGeometryScales
+        )
+    }
+
+    private static func probeAppZoomPrimaryFontFields() -> (
+        baseFontScales: Bool,
+        sourceFontScales: Bool,
+        codeFontScales: Bool,
+        strongFontScales: Bool,
+        headingFontsScale: Bool
+    ) {
+        let baseFontScales = approximately(
+            LivePreviewTheme.baseFont(scale: 1.0).pointSize,
+            LivePreviewTheme.baseFont.pointSize,
+            tolerance: 0.1
+        ) && approximately(
+            LivePreviewTheme.baseFont(scale: 1.25).pointSize,
+            LivePreviewTheme.baseFont.pointSize * 1.25,
+            tolerance: 0.1
+        )
+        let sourceFontScales = approximately(
+            LivePreviewTheme.sourceFont(scale: 1.0).pointSize,
+            LivePreviewTheme.sourceFont.pointSize,
+            tolerance: 0.1
+        ) && approximately(
+            LivePreviewTheme.sourceFont(scale: 1.25).pointSize,
+            LivePreviewTheme.sourceFont.pointSize * 1.25,
+            tolerance: 0.1
+        )
+        let codeFontScales = approximately(
+            LivePreviewTheme.codeFont(scale: 1.0).pointSize,
+            LivePreviewTheme.codeFont.pointSize,
+            tolerance: 0.1
+        ) && approximately(
+            LivePreviewTheme.codeFont(scale: 1.25).pointSize,
+            LivePreviewTheme.codeFont.pointSize * 1.25,
+            tolerance: 0.1
+        )
+        let strongFontScales = approximately(
+            LivePreviewTheme.strongFont(scale: 1.0).pointSize,
+            LivePreviewTheme.strongFont.pointSize,
+            tolerance: 0.1
+        ) && approximately(
+            LivePreviewTheme.strongFont(scale: 1.25).pointSize,
+            LivePreviewTheme.strongFont.pointSize * 1.25,
+            tolerance: 0.1
+        )
+        let headingFontsScale = (1...6).allSatisfy { level in
+            approximately(
+                LivePreviewTheme.headingFont(level: level, scale: 1.0).pointSize,
+                LivePreviewTheme.headingFont(level: level).pointSize,
+                tolerance: 0.1
+            ) && approximately(
+                LivePreviewTheme.headingFont(level: level, scale: 1.25).pointSize,
+                LivePreviewTheme.headingFont(level: level).pointSize * 1.25,
+                tolerance: 0.1
+            )
+        }
+
+        return (
+            baseFontScales,
+            sourceFontScales,
+            codeFontScales,
+            strongFontScales,
+            headingFontsScale
         )
     }
 
@@ -1912,6 +1996,74 @@ enum LivePreviewStyleProbe {
             $0.columnIndex == 2 && $0.alignment == .right
         }
         return (compactWidthApplied, centerColumnApplied && rightColumnApplied)
+    }
+
+    private static func probeAppZoomTableFields() -> (
+        columnWidthsScale: Bool,
+        rowHeightsScale: Bool,
+        controlsScale: Bool,
+        textFontScales: Bool
+    ) {
+        let source = """
+        | Extremely Long Header Name For Zoom Measurement | Status |
+        | --- | --- |
+        | Alpha Value | Draft |
+        """
+        let defaultTextView = MarkdownEditorTextViewFactory.makeTextView()
+        defaultTextView.string = source
+        let zoomTextView = MarkdownEditorTextViewFactory.makeTextView(scale: 1.25)
+        zoomTextView.string = source
+        guard let table = LivePreviewTableParser.parse(source).first,
+              let defaultLayout = LivePreviewTableLayout.make(for: table, in: defaultTextView),
+              let zoomLayout = LivePreviewTableLayout.make(for: table, in: zoomTextView),
+              let defaultColumnWidth = defaultLayout.columnRects.first?.width,
+              let zoomColumnWidth = zoomLayout.columnRects.first?.width,
+              let defaultRowHeight = defaultLayout.rowRects.first?.height,
+              let zoomRowHeight = zoomLayout.rowRects.first?.height,
+              let defaultCell = defaultLayout.cells.first(where: { !$0.isHeader && $0.tableCell.text == "Draft" }),
+              let zoomCell = zoomLayout.cells.first(where: { !$0.isHeader && $0.tableCell.text == "Draft" }),
+              let defaultRowControl = defaultLayout.rowAddControlRect(for: defaultCell.tableCell),
+              let zoomRowControl = zoomLayout.rowAddControlRect(for: zoomCell.tableCell),
+              let defaultColumnControl = defaultLayout.columnAddControlRect(for: defaultCell.tableCell),
+              let zoomColumnControl = zoomLayout.columnAddControlRect(for: zoomCell.tableCell)
+        else {
+            return (false, false, false, false)
+        }
+
+        let defaultBodyText = LivePreviewOverlayRenderer.markdownInlineString("Body", scale: 1.0)
+        let zoomBodyText = LivePreviewOverlayRenderer.markdownInlineString("Body", scale: 1.25)
+        let defaultHeaderText = LivePreviewOverlayRenderer.markdownInlineString("Header", isHeader: true, scale: 1.0)
+        let zoomHeaderText = LivePreviewOverlayRenderer.markdownInlineString("Header", isHeader: true, scale: 1.25)
+        let defaultCodeText = LivePreviewOverlayRenderer.markdownInlineString("`Code`", scale: 1.0)
+        let zoomCodeText = LivePreviewOverlayRenderer.markdownInlineString("`Code`", scale: 1.25)
+        let textFontScales = fontPointSize(in: zoomBodyText, marker: "Body")
+            == (fontPointSize(in: defaultBodyText, marker: "Body") ?? 0) * 1.25
+            && fontPointSize(in: zoomHeaderText, marker: "Header")
+                == (fontPointSize(in: defaultHeaderText, marker: "Header") ?? 0) * 1.25
+            && fontPointSize(in: zoomCodeText, marker: "Code")
+                == (fontPointSize(in: defaultCodeText, marker: "Code") ?? 0) * 1.25
+
+        return (
+            approximately(zoomColumnWidth, defaultColumnWidth * 1.25, tolerance: 1.5),
+            approximately(zoomRowHeight, defaultRowHeight * 1.25, tolerance: 1),
+            approximately(zoomRowControl.width, defaultRowControl.width * 1.25, tolerance: 0.5)
+                && approximately(zoomColumnControl.width, defaultColumnControl.width * 1.25, tolerance: 0.5),
+            textFontScales
+        )
+    }
+
+    private static func fontPointSize(in text: NSAttributedString, marker: String) -> CGFloat? {
+        let range = (text.string as NSString).range(of: marker)
+        guard range.location != NSNotFound,
+              let font = text.attribute(.font, at: range.location, effectiveRange: nil) as? NSFont
+        else {
+            return nil
+        }
+        return font.pointSize
+    }
+
+    private static func approximately(_ lhs: CGFloat, _ rhs: CGFloat, tolerance: CGFloat) -> Bool {
+        abs(lhs - rhs) <= tolerance
     }
 
     private static func probeCollapsedHeadingMarkerMarkedText(source: String, markerRange: NSRange) -> Bool {

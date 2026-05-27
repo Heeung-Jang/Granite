@@ -19,6 +19,8 @@ struct AppContentZoomProbeReport: Codable, Equatable {
     var paneDisplayedWidthsScaleFromLogical: Bool
     var leftPaneDragConvertsDisplayedDeltaToLogicalWidth: Bool
     var rightPaneDragConvertsDisplayedDeltaToLogicalWidth: Bool
+    var zoomDoesNotPersistPaneLayout: Bool
+    var collapsedPaneStateSurvivesZoom: Bool
     var workspaceAvailableWidthSubtractsScaledRibbon: Bool
     var graphViewportZoomUnaffectedByAppZoom: Bool
     var summary: ProbeCheckSummary
@@ -58,6 +60,8 @@ enum AppContentZoomProbe {
                 translationWidth: 25,
                 appContentZoomScale: 1.25
             ) == 280,
+            zoomDoesNotPersistPaneLayout: zoomDoesNotPersistPaneLayout(),
+            collapsedPaneStateSurvivesZoom: collapsedPaneStateSurvivesZoom(),
             workspaceAvailableWidthSubtractsScaledRibbon: ObsidianUI.logicalWorkspaceAvailableWidth(
                 displayedWidth: 1_440,
                 scale: 1.25
@@ -101,6 +105,46 @@ enum AppContentZoomProbe {
             && ObsidianUI.iconButtonSize(scale: 1.0) == 30
             && ObsidianUI.iconFontSize(scale: 1.0) == 16
             && ObsidianUI.iconCornerRadius(scale: 1.0) == 6
+    }
+
+    private static func zoomDoesNotPersistPaneLayout() -> Bool {
+        let layout = WorkspacePaneLayout(leftSidebarWidth: 272, rightSidebarWidth: 300)
+        let displayedLeft = ObsidianUI.displayedPaneWidth(
+            logicalWidth: layout.leftSidebarWidth,
+            scale: 1.25
+        )
+        let displayedRight = ObsidianUI.displayedPaneWidth(
+            logicalWidth: layout.rightSidebarWidth,
+            scale: 0.75
+        )
+
+        return displayedLeft == 340
+            && displayedRight == 225
+            && layout == WorkspacePaneLayout(leftSidebarWidth: 272, rightSidebarWidth: 300)
+    }
+
+    private static func collapsedPaneStateSurvivesZoom() -> Bool {
+        let layout = WorkspacePaneLayout(
+            leftSidebarWidth: 333,
+            rightSidebarWidth: 444,
+            isLeftSidebarCollapsed: true,
+            isRightSidebarCollapsed: true
+        )
+        let expandedLeftWidth = ObsidianUI.displayedPaneWidth(
+            logicalWidth: layout.leftSidebarWidth,
+            scale: 1.25
+        )
+        let expandedRightWidth = ObsidianUI.displayedPaneWidth(
+            logicalWidth: layout.rightSidebarWidth,
+            scale: 0.75
+        )
+
+        return expandedLeftWidth == 416.25
+            && expandedRightWidth == 333
+            && layout.isLeftSidebarCollapsed
+            && layout.isRightSidebarCollapsed
+            && layout.leftSidebarWidth == 333
+            && layout.rightSidebarWidth == 444
     }
 
     private static func graphViewportZoomUnaffectedByAppZoom() -> Bool {

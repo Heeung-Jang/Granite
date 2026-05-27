@@ -825,7 +825,8 @@ final class MarkdownInteractionTextView: NSTextView, NSTextFieldDelegate {
             removeTableCellEditor()
             return
         }
-        updateTableCellEditor(for: cell, frame: layoutCell.textRect.insetBy(dx: -2, dy: -2))
+        let inset = 2 * CGFloat(appContentZoomScale)
+        updateTableCellEditor(for: cell, frame: layoutCell.textRect.insetBy(dx: -inset, dy: -inset))
     }
 
     private func updateTableCellEditor(for cell: LivePreviewTableCell, frame: NSRect) {
@@ -838,7 +839,6 @@ final class MarkdownInteractionTextView: NSTextView, NSTextFieldDelegate {
             field.isBezeled = false
             field.drawsBackground = true
             field.backgroundColor = LivePreviewTheme.tableCellBackgroundColor
-            field.font = LivePreviewTheme.baseFont
             field.focusRingType = .none
             field.usesSingleLineMode = true
             field.lineBreakMode = .byTruncatingTail
@@ -848,6 +848,7 @@ final class MarkdownInteractionTextView: NSTextView, NSTextFieldDelegate {
             tableCellEditor = field
         }
 
+        editor.font = LivePreviewTheme.baseFont(scale: appContentZoomScale)
         if tableCellEditorTarget != cell {
             editor.stringValue = cell.text
             tableCellEditorSelectionBeforeEdit = selectedRange()

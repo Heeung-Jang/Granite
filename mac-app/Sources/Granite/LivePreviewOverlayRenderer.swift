@@ -351,7 +351,8 @@ enum LivePreviewOverlayRenderer {
         for cell in layout.cells where shouldDrawTableCellText(cell.tableCell, state: state) {
             let text = NSMutableAttributedString(attributedString: markdownInlineString(
                 displayValue(cell.tableCell.text, key: nil),
-                isHeader: cell.isHeader
+                isHeader: cell.isHeader,
+                scale: layout.scale
             ))
             let paragraphStyle = NSMutableParagraphStyle()
             paragraphStyle.alignment = cell.alignment.textAlignment
@@ -384,20 +385,22 @@ enum LivePreviewOverlayRenderer {
         else {
             return
         }
+        let scale = CGFloat(layout.scale)
         [layout.rowAddControlRect(for: cell), layout.columnAddControlRect(for: cell)].compactMap { $0 }.forEach { rect in
             LivePreviewTheme.tableHeaderBackgroundColor.setFill()
             NSBezierPath(ovalIn: rect).fill()
             LivePreviewTheme.tableBorderColor.setStroke()
             let path = NSBezierPath(ovalIn: rect)
-            path.lineWidth = 1
+            path.lineWidth = 1 * scale
             path.stroke()
             LivePreviewTheme.textColor.setStroke()
             let plus = NSBezierPath()
-            plus.lineWidth = 1.2
-            plus.move(to: NSPoint(x: rect.midX - 4, y: rect.midY))
-            plus.line(to: NSPoint(x: rect.midX + 4, y: rect.midY))
-            plus.move(to: NSPoint(x: rect.midX, y: rect.midY - 4))
-            plus.line(to: NSPoint(x: rect.midX, y: rect.midY + 4))
+            plus.lineWidth = 1.2 * scale
+            let arm = 4 * scale
+            plus.move(to: NSPoint(x: rect.midX - arm, y: rect.midY))
+            plus.line(to: NSPoint(x: rect.midX + arm, y: rect.midY))
+            plus.move(to: NSPoint(x: rect.midX, y: rect.midY - arm))
+            plus.line(to: NSPoint(x: rect.midX, y: rect.midY + arm))
             plus.stroke()
         }
     }
@@ -699,9 +702,13 @@ enum LivePreviewOverlayRenderer {
         path.stroke()
     }
 
-    private static func markdownInlineString(_ text: String, isHeader: Bool = false) -> NSAttributedString {
+    static func markdownInlineString(
+        _ text: String,
+        isHeader: Bool = false,
+        scale: Double = AppContentZoom.defaultScale
+    ) -> NSAttributedString {
         let output = NSMutableAttributedString()
-        let baseFont = isHeader ? LivePreviewTheme.strongFont : LivePreviewTheme.baseFont
+        let baseFont = isHeader ? LivePreviewTheme.strongFont(scale: scale) : LivePreviewTheme.baseFont(scale: scale)
         var index = text.startIndex
 
         while index < text.endIndex {
@@ -711,7 +718,7 @@ enum LivePreviewOverlayRenderer {
                 output.append(NSAttributedString(
                     string: String(text[contentStart..<end]),
                     attributes: [
-                        .font: LivePreviewTheme.codeFont,
+                        .font: LivePreviewTheme.codeFont(scale: scale),
                         .foregroundColor: LivePreviewTheme.codeColor,
                         .backgroundColor: LivePreviewTheme.inlineCodeBackgroundColor
                     ]
@@ -742,7 +749,7 @@ enum LivePreviewOverlayRenderer {
                 output.append(NSAttributedString(
                     string: String(text[contentStart..<end.lowerBound]),
                     attributes: [
-                        .font: LivePreviewTheme.strongFont,
+                        .font: LivePreviewTheme.strongFont(scale: scale),
                         .foregroundColor: LivePreviewTheme.textColor
                     ]
                 ))
