@@ -72,10 +72,12 @@ pub struct InitialScanWatcher {
 #[derive(Debug)]
 pub enum WatcherError {
     BufferPoisoned,
+    #[allow(dead_code)]
     Platform(String),
 }
 
 impl InitialScanWatcher {
+    #[allow(dead_code)]
     pub fn start(root: &VaultRoot, capacity: usize) -> Result<Self, WatcherError> {
         let canonical_root = root.canonical_root().to_path_buf();
         let stream_started_at = SystemTime::now();
@@ -271,6 +273,7 @@ fn flags_require_full_rescan(flags: u32) -> bool {
 }
 
 #[cfg(target_os = "macos")]
+#[allow(dead_code)]
 mod macos_fsevents {
     use super::*;
     use std::ffi::{CStr, CString, c_char, c_void};

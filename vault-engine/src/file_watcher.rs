@@ -1,14 +1,9 @@
-pub use crate::adapters::fs::watcher::{
-    InitialScanReconciliation, InitialScanState, InitialScanWatcher,
-    WATCHER_FLAG_EVENT_IDS_WRAPPED, WATCHER_FLAG_ITEM_CREATED, WATCHER_FLAG_ITEM_MODIFIED,
-    WATCHER_FLAG_ITEM_REMOVED, WATCHER_FLAG_ITEM_RENAMED, WATCHER_FLAG_KERNEL_DROPPED,
-    WATCHER_FLAG_MUST_SCAN_SUBDIRS, WATCHER_FLAG_ROOT_CHANGED, WATCHER_FLAG_USER_DROPPED,
-    WatchedInitialScan, WatcherError, WatcherEvent, WatcherEventKind,
-};
-
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::adapters::fs::watcher::{
+        InitialScanState, InitialScanWatcher, WATCHER_FLAG_ITEM_MODIFIED,
+        WATCHER_FLAG_KERNEL_DROPPED, WatcherEventKind,
+    };
     use crate::paths::VaultRoot;
     use crate::scanner::scan_vault;
     use std::fs;

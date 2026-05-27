@@ -1457,8 +1457,8 @@ Default stop conditions:
     cargo test --manifest-path vault-engine/Cargo.toml
     cargo test --manifest-path bench/vault-profiler/Cargo.toml
     ```
-  - Evidence: FFI save error mapping imports `use_cases::save_note` directly; diagnostics profiler/ABI imports read DTOs from `use_cases::read_*`; diagnostics benchmarks import rebuild paths from `use_cases::index_rebuild`; `read_api` is now test-only in `lib.rs`. The listed scans returned no matches and all listed tests passed without warnings. `save`, `index_rebuild`, and `indexing_pipeline` remain public because closing them now exposes dead-code warnings in still-public use-case contracts.
-  - Stop condition: reducing `save`, `index_rebuild`, or `indexing_pipeline` visibility produces dead-code warnings that require a separate ownership cleanup.
+  - Evidence: FFI save error mapping imports `use_cases::save_note` directly; diagnostics profiler/ABI imports read DTOs from `use_cases::read_*`; diagnostics benchmarks import rebuild paths from `use_cases::index_rebuild`; `read_api`, `save`, and `index_rebuild` are now test-only in `lib.rs`. The listed scans returned no matches and all listed tests passed without warnings. `indexing_pipeline` remains public because closing it still exposes dead-code warnings in production queue/rebuild progress contracts that require a separate ownership cleanup.
+  - Stop condition: reducing `indexing_pipeline` visibility produces dead-code warnings that require a separate ownership cleanup.
 
 - [ ] **RA07.01b3 Make save/rebuild/indexing compatibility modules private**
   - Build: change only `save`, `read_api`, `index_rebuild`, and `indexing_pipeline` legacy modules after FFI and profiler consumers use use-case/diagnostics facades.
@@ -1531,7 +1531,7 @@ Default stop conditions:
     cargo test --manifest-path vault-engine/Cargo.toml
     cargo test --manifest-path bench/vault-profiler/Cargo.toml
     ```
-  - Evidence: `save` and `index_rebuild` root compatibility shims are now test-only, so their production contracts live under `use_cases`. The public API grep now shows only `diagnostics`, `ffi`, and the temporary `file_watcher`/`indexing_pipeline` facades. `docs/architecture/rust-engine.md` documents the stable public contracts, the two temporary facades, and the removed/test-only compatibility modules.
+  - Evidence: `save`, `index_rebuild`, and `file_watcher` root compatibility shims are now test-only, so their production contracts live under owning modules or remain inactive until integration. The public API grep now shows only `diagnostics`, `ffi`, and the temporary `indexing_pipeline` facade. `docs/architecture/rust-engine.md` documents the stable public contracts, the temporary facade, and the removed/test-only compatibility modules.
   - Stop condition: any remaining public module lacks a documented reason in `docs/architecture/rust-engine.md`.
 
 - [x] **RA07.01c Keep diagnostics public by design if profiler still needs it**
@@ -1591,6 +1591,19 @@ Default stop conditions:
   - Evidence: production code and profiler code no longer import the root `save` or `index_rebuild` shims. The compatibility tests now depend on `use_cases::save_note` and `use_cases::index_rebuild` directly, and the focused save/index rebuild test gates passed without warnings.
   - Stop condition: production save or rebuild callers need the crate-root compatibility paths again.
 
+- [x] **RA07.03a4 Make file watcher compatibility shim test-only**
+  - Build: make the root `file_watcher` compatibility module and inactive filesystem watcher adapter test-only. Move compatibility test imports to the adapter owner and keep the unused production FSEvents start path explicitly allowed while no production watcher caller exists.
+  - Verify:
+    ```sh
+    rg -n "crate::file_watcher|vault_engine::file_watcher" vault-engine/src bench/vault-profiler/src
+    cargo fmt --manifest-path vault-engine/Cargo.toml --check
+    cargo test --manifest-path vault-engine/Cargo.toml file_watcher::
+    cargo test --manifest-path vault-engine/Cargo.toml watcher_burst::
+    cargo test --manifest-path vault-engine/Cargo.toml
+    ```
+  - Evidence: production code and profiler code no longer import `file_watcher`. The focused watcher tests and full Rust engine suite passed without warnings, and `docs/architecture/rust-engine.md` now records the watcher adapter as test-only until production integration lands.
+  - Stop condition: a production watcher caller needs the crate-root compatibility path or adapter module before its use-case boundary is defined.
+
 - [x] **RA07.04 Add architecture placement checklist**
   - Build: add a short checklist to `docs/architecture/rust-engine.md` explaining where new parser, storage, FFI, and use-case code should go.
   - Verify: checklist covers future work for read API, save, graph, indexing, watcher, benchmarks, and profiler imports.
@@ -1599,7 +1612,7 @@ Default stop conditions:
 - [x] **RA07.05 Run public API grep**
   - Build: no code change after RA07.04.
   - Verify: inspect remaining `pub mod` and `pub use` entries in `vault-engine/src/lib.rs`; each has a documented reason.
-  - Evidence: `rg -n "^pub mod|^pub use|^#\\[cfg\\(test\\)\\]|pub\\(crate\\) mod" vault-engine/src/lib.rs` shows stable public `diagnostics` and `ffi`, temporary public `file_watcher` and `indexing_pipeline`, and test-only compatibility modules for the remaining legacy roots. `docs/architecture/rust-engine.md` records the reason for each remaining public surface.
+  - Evidence: `rg -n "^pub mod|^pub use|^#\\[cfg\\(test\\)\\]|pub\\(crate\\) mod" vault-engine/src/lib.rs` shows stable public `diagnostics` and `ffi`, temporary public `indexing_pipeline`, and test-only compatibility modules for the remaining legacy roots. `docs/architecture/rust-engine.md` records the reason for each remaining public surface.
 
 - [x] **RA07.06 Classify `errors.rs`**
   - Build: either reduce `errors.rs` to a deliberate cross-layer contract or move layer-specific errors into their owning modules before public-surface cleanup is accepted.

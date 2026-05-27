@@ -4,7 +4,8 @@ pub(crate) mod attachments;
 pub(crate) mod core;
 pub mod diagnostics;
 pub mod ffi;
-pub mod file_watcher;
+#[cfg(test)]
+pub(crate) mod file_watcher;
 #[cfg(test)]
 pub(crate) mod graph;
 #[cfg(test)]

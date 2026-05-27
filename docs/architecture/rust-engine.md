@@ -123,7 +123,7 @@ imports are allowed only for the callers above.
 | `benchmarks` | `diagnostics/benchmarks.rs` | Keep aggregate-only artifact rules. |
 | `errors` | Removed; layer-owned errors remain with their modules | The unused global `EngineError::NotImplemented` placeholder was not a deliberate contract. |
 | `ffi` | `ffi/mod.rs` plus focused FFI files | Split panic, strings, health, read, save, graph, and buffers. |
-| `file_watcher` | `adapters/fsevents/watcher.rs` | Raw FSEvents and platform flags stay in the adapter. |
+| `file_watcher` | `adapters/fs/watcher.rs` | Root compatibility shim and FSEvents adapter are test-only until production watcher integration lands. |
 | `graph` | `core/graph.rs` and `use_cases/build_graph.rs` | Pure graph records in core; snapshot construction orchestration in use cases. |
 | `graph_key` | `core/links.rs` | Link key and unresolved target normalization are pure domain logic. |
 | `index` | `core/metadata.rs` and `adapters/sqlite/metadata_store.rs` | Domain records move inward; schema, row decoding, and SQL stay in SQLite adapter. |
@@ -158,22 +158,22 @@ only; profiler code must not import crate-root compatibility modules directly.
 ### Current Public Rust Surface
 
 After the public-surface audit, `vault-engine/src/lib.rs` intentionally exposes
-only stable Swift/diagnostic entry points plus two temporary compatibility
-facades:
+only stable Swift/diagnostic entry points plus one temporary compatibility
+facade:
 
 | Surface | Status | Reason / Next Cleanup |
 | --- | --- | --- |
 | `ENGINE_ABI_VERSION`, `EngineHealth`, `health_check()` | Stable public contract | Swift health checks need ABI and capability metadata without depending on internal module names. |
 | `ffi` | Public by design | Owns C ABI symbols, pointer handling, panic containment, and Swift field-code mappings. |
 | `diagnostics` | Public by design | `bench/vault-profiler` is a separate crate and must enter through a narrow diagnostic facade. |
-| `file_watcher` | Temporary public facade | Root re-export keeps the current FSEvents watcher contract reachable while watcher ownership is split into adapter/use-case files. Making it test-only currently produces warning churn from unused platform constants and watcher helpers. |
 | `indexing_pipeline` | Temporary public facade | This module still owns production queue/rebuild progress DTOs and re-exports used by diagnostics and indexing use cases. Split those contracts into `use_cases` and adapters before hiding it. |
 
 The following root compatibility modules are now test-only: `attachments`,
-`graph`, `index`, `index_rebuild`, `indexing_queue`, `read_api`, `save`,
-`sqlite_fts`, `startup_reconciliation`, `tantivy_search`, and `watcher_burst`.
-`benchmarks`, `errors`, and `graph_key` have been removed. `adapters`, `core`,
-`parser`, `paths`, `scanner`, and `use_cases` are internal crate modules.
+`file_watcher`, `graph`, `index`, `index_rebuild`, `indexing_queue`,
+`read_api`, `save`, `sqlite_fts`, `startup_reconciliation`, `tantivy_search`,
+and `watcher_burst`. `benchmarks`, `errors`, and `graph_key` have been removed.
+`adapters`, `core`, `parser`, `paths`, `scanner`, and `use_cases` are internal
+crate modules.
 
 ## Target Module Shape
 
@@ -286,7 +286,8 @@ fi
 Allowed exceptions after Phase 1 FFI splitting:
 
 - `vault-engine/src/ffi/` owns Rust-owned C ABI entry points, C string decoding, response buffers, and free functions.
-- `vault-engine/src/file_watcher.rs` owns FSEvents until moved.
+- `vault-engine/src/adapters/fs/watcher.rs` owns FSEvents adapter code and is
+  currently test-only until production watcher integration lands.
 - `vault-engine/src/read_ffi.rs` owns FFI row buffers until moved.
 
 ## ABI Baseline Commands
