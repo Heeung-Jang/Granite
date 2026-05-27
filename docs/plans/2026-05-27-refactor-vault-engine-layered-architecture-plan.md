@@ -465,7 +465,7 @@ Stop at the end of any phase if a gate fails. Do not proceed by compensating in 
   - Build: move `engine_abi_version` and `engine_health_check` into `vault-engine/src/ffi/health.rs`.
   - Verify: `swift run --package-path mac-app Granite --engine-smoke-test`.
 
-- [ ] **RA01.06a Extract memory/free lifecycle functions**
+- [x] **RA01.06a Extract memory/free lifecycle functions**
   - Build: move `engine_string_free`, `engine_read_close`, and `engine_read_result_free` into the smallest appropriate FFI lifecycle module.
   - Verify: null-safe free/close tests still pass.
 

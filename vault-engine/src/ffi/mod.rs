@@ -1,5 +1,4 @@
 use std::collections::HashSet;
-use std::ffi::CString;
 use std::os::raw::{c_char, c_uchar};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
@@ -41,35 +40,20 @@ use crate::save::{
 
 mod health;
 mod json;
+mod lifecycle;
 mod panic;
 mod read;
 mod strings;
 
 pub use self::health::abi_version;
 use self::json::{FfiError, ffi_response, ffi_success_response_len, read_json};
+pub use self::lifecycle::{engine_read_close, engine_read_result_free, engine_string_free};
 use self::read::{
     graph_error_result, panel_row_kind, read_api_error_buffer, read_generation, read_handle,
     read_items_buffer, read_open_response, read_page_response, read_rebuild_response,
     read_state_code, rebuild_read_index,
 };
 use self::strings::{read_bytes, read_c_string, read_read_string, read_rebuild_c_string};
-
-/// Frees strings returned by the vault engine FFI.
-///
-/// # Safety
-///
-/// `ptr` must be null or a pointer previously returned by this library through
-/// `CString::into_raw`. Passing any other pointer is undefined behavior.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn engine_string_free(ptr: *mut c_char) {
-    if ptr.is_null() {
-        return;
-    }
-
-    unsafe {
-        drop(CString::from_raw(ptr));
-    }
-}
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -105,30 +89,6 @@ pub unsafe extern "C" fn engine_read_open(
         };
         EngineReadHandle::open(metadata_path, tantivy_path)
     })
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn engine_read_close(handle: *mut EngineReadHandle) {
-    let _ = catch_unwind(AssertUnwindSafe(|| {
-        if handle.is_null() {
-            return;
-        }
-        unsafe {
-            drop(Box::from_raw(handle));
-        }
-    }));
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn engine_read_result_free(buffer: EngineReadResultBuffer) {
-    let _ = catch_unwind(AssertUnwindSafe(|| {
-        if buffer.ptr.is_null() {
-            return;
-        }
-        unsafe {
-            drop(Vec::from_raw_parts(buffer.ptr, buffer.len, buffer.capacity));
-        }
-    }));
 }
 
 #[unsafe(no_mangle)]
@@ -1037,7 +997,7 @@ mod tests {
     use crate::sqlite_fts::SearchDocument;
     use crate::tantivy_search::TantivySearchIndex;
     use serde_json::Value;
-    use std::{fs, path::PathBuf};
+    use std::{ffi::CString, fs, path::PathBuf};
     use tempfile::{TempDir, tempdir};
 
     #[test]
