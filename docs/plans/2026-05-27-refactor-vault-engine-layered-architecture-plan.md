@@ -1153,9 +1153,10 @@ Default stop conditions:
   - Evidence: after RA05.09f commits, the exact current-worktree diff scan returned no matches. The committed graph retargeting allocation candidates are already documented in RA05.09f3, and the graph benchmark count rows added in RA05.09f5 are diagnostics-only.
   - Stop condition: a new allocation/materialization appears in read/search/graph/indexing hot paths without benchmark evidence.
 
-- [ ] **RA05.10c Add read API query-count sentinel**
+- [x] **RA05.10c Add read API query-count sentinel**
   - Build: add fixture instrumentation or a diagnostics-only probe for file tree, search, inspector panels, and local graph query counts. Preserve current counts as a no-worse baseline.
   - Verify: local graph one-hop/two-hop query counts stay bounded by request limits and do not gain new per-edge metadata reads; search/file-tree/inspector read surfaces do not reopen SQLite/Tantivy per page.
+  - Evidence: enabled `rusqlite` trace instrumentation for tests and added `read_api_sql_query_counts_stay_bounded_for_ui_surfaces`. Baselines are file tree `1`, file-name/body search `0` SQLite statements, path inspector-style panels `2`, local graph one-hop `5`, and local graph two-hop `8`.
   - Stop condition: a use-case extraction adds a query loop proportional to result rows without an explicit benchmark-backed reason.
 
 - [ ] **RA05.11 Re-run save path safety through moved use case**

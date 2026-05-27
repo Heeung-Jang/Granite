@@ -44,7 +44,7 @@ impl VaultReadApi {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{fs, path::PathBuf};
+    use std::{fs, path::PathBuf, sync::Mutex};
 
     use crate::adapters::sqlite::{
         AttachmentRecord, FileRecord, HeadingRecord, IndexSchemaMetadata, MetadataStore,
@@ -57,7 +57,11 @@ mod tests {
     use crate::scanner::{ScanEntry, ScanEntryKind, scan_vault};
     use crate::sqlite_fts::SearchDocument;
     use crate::use_cases::read_graph::{graph_file_node_id, graph_unresolved_node_id};
+    use rusqlite::trace::{TraceEvent, TraceEventCodes};
     use tempfile::tempdir;
+
+    static READ_API_TRACE_LOCK: Mutex<()> = Mutex::new(());
+    static READ_API_TRACE_SQL: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
     #[test]
     fn read_open_error_codes_are_stable() {
@@ -248,6 +252,155 @@ mod tests {
                 .iter()
                 .all(|item| item.file.kind == ScanEntryKind::Markdown)
         );
+    }
+
+    #[test]
+    fn read_api_sql_query_counts_stay_bounded_for_ui_surfaces() {
+        let metadata = IndexSchemaMetadata::new("sqlite+tantivy", "metadata-v1", "tantivy", 1);
+        let mut store = MetadataStore::open_in_memory(&metadata).expect("store");
+        let mut search = TantivySearchIndex::open_in_ram().expect("search");
+
+        let mut home = FileRecord::from_scan_entry(&fixture_entry("Home.md"), 1);
+        home.mark_search_indexed();
+        let mut target = FileRecord::from_scan_entry(&fixture_entry("Folder/Target.md"), 1);
+        target.mark_search_indexed();
+        let mut guide = FileRecord::from_scan_entry(&fixture_entry("Docs/Guide.md"), 1);
+        guide.mark_search_indexed();
+
+        let home_to_target = crate::adapters::sqlite::LinkEdgeRecord {
+            source_file_id: home.file_id.clone(),
+            target_text: "Folder/Target".to_string(),
+            resolved_target_file_id: Some(target.file_id.clone()),
+            heading: None,
+            alias: None,
+            is_embed: false,
+        };
+        let home_to_missing = crate::adapters::sqlite::LinkEdgeRecord {
+            source_file_id: home.file_id.clone(),
+            target_text: "Missing Note".to_string(),
+            resolved_target_file_id: None,
+            heading: None,
+            alias: None,
+            is_embed: false,
+        };
+        let target_to_home = crate::adapters::sqlite::LinkEdgeRecord {
+            source_file_id: target.file_id.clone(),
+            target_text: "Home".to_string(),
+            resolved_target_file_id: Some(home.file_id.clone()),
+            heading: None,
+            alias: None,
+            is_embed: false,
+        };
+        let target_to_guide = crate::adapters::sqlite::LinkEdgeRecord {
+            source_file_id: target.file_id.clone(),
+            target_text: "Docs/Guide".to_string(),
+            resolved_target_file_id: Some(guide.file_id.clone()),
+            heading: None,
+            alias: None,
+            is_embed: false,
+        };
+        let tag = TagRecord {
+            file_id: home.file_id.clone(),
+            tag: "project/native".to_string(),
+            source: TagSource::Inline,
+        };
+        let property = PropertyRecord::from_property_value(
+            home.file_id.clone(),
+            "status",
+            &PropertyValue::String("active".to_string()),
+        );
+        let heading = HeadingRecord {
+            file_id: home.file_id.clone(),
+            slug: slugify_heading("Home"),
+            title: "Home".to_string(),
+            level: 1,
+            byte_offset: Some(0),
+        };
+        let attachment = AttachmentRecord {
+            source_file_id: home.file_id.clone(),
+            source: AttachmentReferenceSource::WikiEmbed,
+            raw_target: "attachments/diagram.svg".to_string(),
+            state: AttachmentResolutionState::Resolved {
+                relative_path: PathBuf::from("attachments/diagram.svg"),
+            },
+        };
+
+        store
+            .replace_file_records(
+                &home,
+                &[home_to_target, home_to_missing],
+                std::slice::from_ref(&tag),
+                std::slice::from_ref(&property),
+                std::slice::from_ref(&heading),
+                std::slice::from_ref(&attachment),
+            )
+            .expect("home");
+        store
+            .replace_file_records(
+                &target,
+                &[target_to_home, target_to_guide],
+                &[],
+                &[],
+                &[],
+                &[],
+            )
+            .expect("target");
+        store
+            .replace_file_records(&guide, &[], &[], &[], &[], &[])
+            .expect("guide");
+        search
+            .replace_documents(&[
+                SearchDocument {
+                    file_id: home.file_id.clone(),
+                    path: "Home.md".to_string(),
+                    title: "Home".to_string(),
+                    body: "Home body mentions compatibility.".to_string(),
+                },
+                SearchDocument {
+                    file_id: target.file_id.clone(),
+                    path: "Folder/Target.md".to_string(),
+                    title: "Target".to_string(),
+                    body: "Target body receives backlinks.".to_string(),
+                },
+            ])
+            .expect("index");
+
+        let api = VaultReadApi::with_generation(store, search, 1);
+        assert_sql_count("file tree", &api, 1, || {
+            api.file_tree_projection(PageRequest::new(0, 10))
+                .expect("file tree")
+        });
+        assert_sql_count("file-name search", &api, 0, || {
+            api.file_name_search("Home", PageRequest::new(0, 10))
+                .expect("file-name search")
+        });
+        assert_sql_count("body search", &api, 0, || {
+            api.body_search("compatibility", PageRequest::new(0, 10))
+                .expect("body search")
+        });
+        assert_sql_count("outgoing by path", &api, 2, || {
+            api.outgoing_links_for_path("Home.md", PageRequest::new(0, 10))
+                .expect("outgoing by path")
+        });
+        assert_sql_count("properties by path", &api, 2, || {
+            api.properties_for_path("Home.md", PageRequest::new(0, 10))
+                .expect("properties by path")
+        });
+        assert_sql_count("attachments by path", &api, 2, || {
+            api.attachments_for_path("Home.md", PageRequest::new(0, 10))
+                .expect("attachments by path")
+        });
+        assert_sql_count("local graph one-hop", &api, 5, || {
+            api.local_graph(&home.file_id, LocalGraphRequest::new(10, 10))
+                .expect("one-hop graph")
+        });
+        assert_sql_count("local graph two-hop", &api, 8, || {
+            api.local_graph(
+                &home.file_id,
+                LocalGraphRequest::with_depth(0, 10, 10, LocalGraphDepth::TwoHop),
+            )
+            .expect("two-hop graph")
+        });
     }
 
     #[test]
@@ -598,5 +751,44 @@ mod tests {
             .into_iter()
             .find(|entry| entry.relative_path == PathBuf::from(relative_path))
             .expect("fixture entry")
+    }
+
+    fn assert_sql_count<T, F>(label: &str, api: &VaultReadApi, expected: usize, operation: F) -> T
+    where
+        F: FnOnce() -> T,
+    {
+        let (value, statements) = traced_sql(api, operation);
+        assert_eq!(
+            statements.len(),
+            expected,
+            "{label} SQL count changed: {statements:#?}"
+        );
+        value
+    }
+
+    fn traced_sql<T, F>(api: &VaultReadApi, operation: F) -> (T, Vec<String>)
+    where
+        F: FnOnce() -> T,
+    {
+        let _guard = READ_API_TRACE_LOCK.lock().expect("trace lock");
+        READ_API_TRACE_SQL.lock().expect("trace sql").clear();
+        api.metadata.connection.trace_v2(
+            TraceEventCodes::SQLITE_TRACE_STMT,
+            Some(record_read_api_sql),
+        );
+        let value = operation();
+        api.metadata
+            .connection
+            .trace_v2(TraceEventCodes::empty(), None);
+        let statements = READ_API_TRACE_SQL.lock().expect("trace sql").clone();
+        (value, statements)
+    }
+
+    fn record_read_api_sql(event: TraceEvent<'_>) {
+        if let TraceEvent::Stmt(_, sql) = event {
+            if let Ok(mut statements) = READ_API_TRACE_SQL.lock() {
+                statements.push(sql.to_string());
+            }
+        }
     }
 }
