@@ -7,7 +7,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::ENGINE_ABI_VERSION;
 use crate::graph::{
     WholeVaultGraphInputs, WholeVaultGraphRequest, WholeVaultGraphSnapshot,
     build_whole_vault_graph_snapshot, whole_vault_graph_needs_tags,
@@ -22,9 +21,8 @@ use crate::read_api::{
     ENGINE_READ_INSPECTOR_PANEL_ATTACHMENTS, ENGINE_READ_INSPECTOR_PANEL_BACKLINKS,
     ENGINE_READ_INSPECTOR_PANEL_OUTGOING, ENGINE_READ_INSPECTOR_PANEL_PROPERTIES,
     ENGINE_READ_INSPECTOR_PANEL_TAGS, ENGINE_READ_LOCAL_GRAPH_DEPTH_ONE_HOP,
-    ENGINE_READ_LOCAL_GRAPH_DEPTH_TWO_HOP, ENGINE_READ_STATE_COMPLETE, ENGINE_READ_STATE_ERROR,
-    ENGINE_READ_STATE_PARTIAL, LocalGraphDepth, LocalGraphRequest, ReadApiError, ReadOpenError,
-    VaultReadApi,
+    ENGINE_READ_LOCAL_GRAPH_DEPTH_TWO_HOP, LocalGraphDepth, LocalGraphRequest, ReadApiError,
+    ReadOpenError, VaultReadApi,
 };
 use crate::read_ffi::{
     ENGINE_READ_ROW_KIND_ATTACHMENT, ENGINE_READ_ROW_KIND_BACKLINK, ENGINE_READ_ROW_KIND_FILE_TREE,
@@ -41,11 +39,13 @@ use crate::save::{
     overwrite_after_conflict, reload_after_conflict, safe_save,
 };
 
+mod health;
 mod json;
 mod panic;
 mod read;
 mod strings;
 
+pub use self::health::abi_version;
 use self::json::{FfiError, ffi_response, ffi_success_response_len, read_json};
 use self::read::{
     graph_error_result, panel_row_kind, read_api_error_buffer, read_generation, read_handle,
@@ -53,23 +53,6 @@ use self::read::{
     read_state_code, rebuild_read_index,
 };
 use self::strings::{read_bytes, read_c_string, read_read_string, read_rebuild_c_string};
-
-pub fn abi_version() -> u32 {
-    ENGINE_ABI_VERSION
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn engine_abi_version() -> u32 {
-    ENGINE_ABI_VERSION
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn engine_health_check() -> *mut c_char {
-    let message = format!("vault-engine:ok:abi={ENGINE_ABI_VERSION}");
-    CString::new(message)
-        .expect("engine health message must not contain nul bytes")
-        .into_raw()
-}
 
 /// Frees strings returned by the vault engine FFI.
 ///
@@ -1022,6 +1005,7 @@ fn system_time(time: FfiSystemTime) -> SystemTime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ENGINE_ABI_VERSION;
     use crate::attachments::{
         AttachmentReferenceSource, AttachmentRejectReason, AttachmentResolutionState,
     };
@@ -1036,8 +1020,8 @@ mod tests {
         ENGINE_READ_INSPECTOR_PANEL_OUTGOING, ENGINE_READ_INSPECTOR_PANEL_PROPERTIES,
         ENGINE_READ_INSPECTOR_PANEL_TAGS, ENGINE_READ_LOCAL_GRAPH_DEPTH_ONE_HOP,
         ENGINE_READ_LOCAL_GRAPH_DEPTH_TWO_HOP, ENGINE_READ_SEARCH_MODE_BODY,
-        ENGINE_READ_SEARCH_MODE_FILE_NAME, READ_BACKEND_NAME, READ_BACKEND_VERSION,
-        READ_TOKENIZER_CONFIG,
+        ENGINE_READ_SEARCH_MODE_FILE_NAME, ENGINE_READ_STATE_COMPLETE, ENGINE_READ_STATE_ERROR,
+        ENGINE_READ_STATE_PARTIAL, READ_BACKEND_NAME, READ_BACKEND_VERSION, READ_TOKENIZER_CONFIG,
     };
     use crate::read_ffi::{
         ENGINE_READ_NO_NEXT_OFFSET, ENGINE_READ_ROW_KIND_ATTACHMENT, ENGINE_READ_ROW_KIND_BACKLINK,

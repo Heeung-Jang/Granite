@@ -461,7 +461,7 @@ Stop at the end of any phase if a gate fails. Do not proceed by compensating in 
   - Build: move `read_api_error_buffer`, `read_api_error_payload`, and read state code mapping into `vault-engine/src/ffi/read.rs`.
   - Verify: read error tests preserve existing error codes and state values.
 
-- [ ] **RA01.06 Extract health functions**
+- [x] **RA01.06 Extract health functions**
   - Build: move `engine_abi_version` and `engine_health_check` into `vault-engine/src/ffi/health.rs`.
   - Verify: `swift run --package-path mac-app Granite --engine-smoke-test`.
 
