@@ -986,7 +986,7 @@ Default stop conditions:
     ```
   - Stop condition: recovery starts bypassing `use_cases::reconcile_startup` or queue summary state semantics change.
 
-- [ ] **RA05.08d Keep watcher compatibility temporary**
+- [x] **RA05.08d Keep watcher compatibility temporary**
   - Build: leave `watcher_burst.rs` as a compatibility re-export only until Phase 7 removes transitional modules.
   - Verify: `rg -n "pub use crate::use_cases::watcher_burst" vault-engine/src/watcher_burst.rs` matches and no production logic remains in the compatibility file.
 
