@@ -441,11 +441,11 @@ Stop at the end of any phase if a gate fails. Do not proceed by compensating in 
   - Build: move `read_c_string`, `read_read_string`, `read_rebuild_c_string`, and `read_bytes` style helpers into `vault-engine/src/ffi/strings.rs`.
   - Verify: invalid pointer/null/UTF-8 tests still return structured errors.
 
-- [ ] **RA01.04 Extract JSON response envelope helpers**
+- [x] **RA01.04 Extract JSON response envelope helpers**
   - Build: move `FfiResponse`, `FfiError`, JSON parse helpers, and `ffi_response` helpers into `vault-engine/src/ffi/json.rs` or `ffi/save.rs` if only save/graph uses them.
   - Verify: save baseline, save write, conflict choice, and whole-vault graph JSON tests still pass.
 
-- [ ] **RA01.04a Keep JSON envelope names stable**
+- [x] **RA01.04a Keep JSON envelope names stable**
   - Build: preserve serialized field names `ok`, `value`, `error`, `code`, and `message`.
   - Verify: existing JSON assertions pass without snapshot updates except module path changes.
 

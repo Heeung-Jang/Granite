@@ -22,7 +22,7 @@ use crate::indexing_pipeline::{
     IndexingPipelineOptions, load_search_document_sources, run_full_rebuild_pipeline_and_commit,
 };
 use crate::indexing_queue::{IndexingQueue, IndexingQueueItem};
-use crate::paths::{FileIdentity, PathError, VaultRoot};
+use crate::paths::{FileIdentity, VaultRoot};
 use crate::read_api::{
     ENGINE_READ_INSPECTOR_PANEL_ATTACHMENTS, ENGINE_READ_INSPECTOR_PANEL_BACKLINKS,
     ENGINE_READ_INSPECTOR_PANEL_OUTGOING, ENGINE_READ_INSPECTOR_PANEL_PROPERTIES,
@@ -44,15 +44,16 @@ use crate::read_ffi::{
     open_error_buffer, open_status_buffer,
 };
 use crate::save::{
-    SafeSaveError, SaveBaseline, SaveChoiceOutcome, SaveConflict, SaveConflictChoiceError,
-    SaveConflictKind, SaveConflictSnapshot, SaveOutcome, SaveReloadOutcome, SaveRequest,
-    keep_conflicted_buffer_as_new_note, overwrite_after_conflict, reload_after_conflict, safe_save,
+    SaveBaseline, SaveChoiceOutcome, SaveConflict, SaveConflictKind, SaveConflictSnapshot,
+    SaveOutcome, SaveReloadOutcome, SaveRequest, keep_conflicted_buffer_as_new_note,
+    overwrite_after_conflict, reload_after_conflict, safe_save,
 };
 
+mod json;
 mod panic;
 mod strings;
 
-use self::panic::catch_ffi_unwind;
+use self::json::{FfiError, ffi_response, ffi_success_response_len, read_json};
 use self::strings::{read_bytes, read_c_string, read_read_string, read_rebuild_c_string};
 
 pub fn abi_version() -> u32 {
@@ -537,21 +538,6 @@ pub unsafe extern "C" fn engine_graph_snapshot(
     })
 }
 
-#[derive(Debug, Serialize)]
-struct FfiResponse<T> {
-    ok: bool,
-    value: Option<T>,
-    error: Option<FfiError>,
-}
-
-#[derive(Debug, Serialize)]
-struct FfiError {
-    code: String,
-    message: String,
-    conflict_kind: Option<String>,
-    conflict: Option<FfiSaveConflict>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct FfiFileIdentity {
     device: u64,
@@ -646,137 +632,6 @@ struct FfiWholeVaultGraphPayload {
 struct FfiWholeVaultGraphMetrics {
     snapshot_duration_milliseconds: f64,
     encoded_payload_bytes: usize,
-}
-
-impl FfiError {
-    fn invalid_input(field: &str, message: impl Into<String>) -> Self {
-        Self {
-            code: "invalid_input".to_string(),
-            message: format!("{field}: {}", message.into()),
-            conflict_kind: None,
-            conflict: None,
-        }
-    }
-
-    fn invalid_json(field: &str, message: impl Into<String>) -> Self {
-        Self {
-            code: "invalid_json".to_string(),
-            message: format!("{field}: {}", message.into()),
-            conflict_kind: None,
-            conflict: None,
-        }
-    }
-
-    fn unsupported_encoding(field: &str, message: impl Into<String>) -> Self {
-        Self {
-            code: "unsupported_encoding".to_string(),
-            message: format!("{field}: {}", message.into()),
-            conflict_kind: None,
-            conflict: None,
-        }
-    }
-
-    fn invalid_request(message: impl Into<String>) -> Self {
-        Self {
-            code: "invalid_request".to_string(),
-            message: message.into(),
-            conflict_kind: None,
-            conflict: None,
-        }
-    }
-
-    fn missing_index() -> Self {
-        Self {
-            code: "missing_index".to_string(),
-            message: "graph index is missing".to_string(),
-            conflict_kind: None,
-            conflict: None,
-        }
-    }
-
-    fn stale_schema() -> Self {
-        Self {
-            code: "stale_schema".to_string(),
-            message: "graph index schema is stale".to_string(),
-            conflict_kind: None,
-            conflict: None,
-        }
-    }
-
-    fn graph_index_error() -> Self {
-        Self {
-            code: "graph_index_error".to_string(),
-            message: "graph index could not be read".to_string(),
-            conflict_kind: None,
-            conflict: None,
-        }
-    }
-
-    fn oversized_response() -> Self {
-        Self {
-            code: "oversized_response".to_string(),
-            message: "graph response exceeded byte cap".to_string(),
-            conflict_kind: None,
-            conflict: None,
-        }
-    }
-
-    fn from_path(error: PathError) -> Self {
-        Self {
-            code: "path_error".to_string(),
-            message: error.to_string(),
-            conflict_kind: None,
-            conflict: None,
-        }
-    }
-
-    fn from_save(error: SafeSaveError) -> Self {
-        let (conflict_kind, conflict) = match &error {
-            SafeSaveError::Conflict(conflict) => (
-                Some(format!("{:?}", conflict.kind)),
-                Some(FfiSaveConflict::from(conflict.as_ref())),
-            ),
-            _ => (None, None),
-        };
-        Self {
-            code: match &error {
-                SafeSaveError::Path(_) => "path_error",
-                SafeSaveError::Conflict(_) => "save_conflict",
-                SafeSaveError::ReadOnly { .. } => "read_only",
-                SafeSaveError::NotRegularFile { .. } => "not_regular_file",
-                SafeSaveError::Io { .. } => "io_error",
-            }
-            .to_string(),
-            message: error.to_string(),
-            conflict_kind,
-            conflict,
-        }
-    }
-
-    fn from_choice(error: SaveConflictChoiceError) -> Self {
-        match error {
-            SaveConflictChoiceError::Save(error) => Self::from_save(error),
-            SaveConflictChoiceError::Queue(error) => Self::from_queue(error),
-        }
-    }
-
-    fn from_queue(error: crate::indexing_queue::IndexingQueueError) -> Self {
-        Self {
-            code: "queue_error".to_string(),
-            message: error.to_string(),
-            conflict_kind: None,
-            conflict: None,
-        }
-    }
-
-    fn panic() -> Self {
-        Self {
-            code: "panic".to_string(),
-            message: "vault engine FFI call panicked".to_string(),
-            conflict_kind: None,
-            conflict: None,
-        }
-    }
 }
 
 impl From<&FileIdentity> for FfiFileIdentity {
@@ -1068,17 +923,6 @@ fn finalize_graph_payload(
     Ok(payload)
 }
 
-fn ffi_success_response_len<T: Serialize>(value: &T) -> Result<usize, FfiError> {
-    let response: FfiResponse<&T> = FfiResponse {
-        ok: true,
-        value: Some(value),
-        error: None,
-    };
-    serde_json::to_vec(&response)
-        .map(|bytes| bytes.len())
-        .map_err(|_| FfiError::graph_index_error())
-}
-
 fn graph_metadata_error(error: MetadataStoreError) -> FfiError {
     match error {
         MetadataStoreError::SchemaMismatch { .. } => FfiError::stale_schema(),
@@ -1149,35 +993,6 @@ fn push_graph_candidate_file(
         file_id: file_id.to_string(),
         relative_path: relative_path.to_path_buf(),
     });
-}
-
-fn ffi_response<T, F>(call: F) -> *mut c_char
-where
-    T: Serialize,
-    F: FnOnce() -> Result<T, FfiError>,
-{
-    let result = catch_ffi_unwind(call).unwrap_or_else(|_| Err(FfiError::panic()));
-    let response = match result {
-        Ok(value) => FfiResponse {
-            ok: true,
-            value: Some(value),
-            error: None,
-        },
-        Err(error) => FfiResponse {
-            ok: false,
-            value: None,
-            error: Some(error),
-        },
-    };
-    let json = serde_json::to_string(&response).unwrap_or_else(|error| {
-        format!(
-            r#"{{"ok":false,"value":null,"error":{{"code":"serialization_error","message":"{}","conflict_kind":null,"conflict":null}}}}"#,
-            error
-        )
-    });
-    CString::new(json)
-        .expect("serialized FFI response must not contain nul bytes")
-        .into_raw()
 }
 
 impl EngineReadHandle {
@@ -1428,10 +1243,6 @@ unsafe fn read_handle(
     handle: *mut EngineReadHandle,
 ) -> Result<NonNull<EngineReadHandle>, ReadApiError> {
     NonNull::new(handle).ok_or(ReadApiError::InvalidInput("handle"))
-}
-
-fn read_json<T: for<'de> Deserialize<'de>>(json: &str, field: &str) -> Result<T, FfiError> {
-    serde_json::from_str(json).map_err(|error| FfiError::invalid_json(field, error.to_string()))
 }
 
 fn save_conflict_kind_from_str(kind: &str) -> Result<SaveConflictKind, FfiError> {
