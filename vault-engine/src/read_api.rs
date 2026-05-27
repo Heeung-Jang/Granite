@@ -20,13 +20,12 @@ pub use crate::use_cases::read_types::{
     ENGINE_READ_STATE_INDEX_UNAVAILABLE, ENGINE_READ_STATE_PARTIAL, ENGINE_READ_STATE_STALE,
     PageRequest, ReadOpenError, ReadOpenResult, ReadPage, ReadState, ReadValue,
 };
+use crate::use_cases::read_types::{MAX_FILE_TREE_PAGE_LIMIT, MAX_PAGE_LIMIT};
 pub use crate::use_cases::read_vault::{
     VaultReadApi, expected_read_schema_metadata, open_metadata_store_for_read,
     open_tantivy_index_for_read, open_vault_read_api,
 };
 
-const MAX_PAGE_LIMIT: usize = 100;
-const MAX_FILE_TREE_PAGE_LIMIT: usize = 100_000;
 const MAX_GRAPH_NODES: usize = 250;
 const MAX_GRAPH_EDGES: usize = 500;
 pub const READ_BACKEND_NAME: &str = "sqlite+tantivy";
@@ -159,36 +158,6 @@ pub enum ReadApiError {
 
 pub type ReadApiResult<T> = Result<T, ReadApiError>;
 
-impl PageRequest {
-    pub fn new(offset: usize, limit: usize) -> Self {
-        Self::with_request_id(0, offset, limit)
-    }
-
-    pub fn with_request_id(request_id: u64, offset: usize, limit: usize) -> Self {
-        Self {
-            request_id,
-            offset,
-            limit,
-        }
-    }
-
-    fn fetch_limit(self) -> usize {
-        self.fetch_limit_capped(MAX_PAGE_LIMIT)
-    }
-
-    fn file_tree_fetch_limit(self) -> usize {
-        self.fetch_limit_capped(MAX_FILE_TREE_PAGE_LIMIT)
-    }
-
-    fn visible_limit_capped(self, max_limit: usize) -> usize {
-        self.limit.clamp(1, max_limit)
-    }
-
-    fn fetch_limit_capped(self, max_limit: usize) -> usize {
-        self.visible_limit_capped(max_limit) + 1
-    }
-}
-
 impl LocalGraphRequest {
     pub fn new(max_nodes: usize, max_edges: usize) -> Self {
         Self::with_request_id(0, max_nodes, max_edges)
@@ -222,15 +191,6 @@ impl LocalGraphRequest {
 }
 
 impl VaultReadApi {
-    pub fn file_tree(&self, page: PageRequest) -> ReadApiResult<ReadPage<FileRecord>> {
-        Ok(self.page_from_overfetch_with_limit(
-            self.metadata
-                .list_markdown_files(page.offset, page.file_tree_fetch_limit())?,
-            page,
-            MAX_FILE_TREE_PAGE_LIMIT,
-        ))
-    }
-
     pub fn file_tree_projection(
         &self,
         page: PageRequest,
@@ -625,34 +585,6 @@ impl VaultReadApi {
             Err(error) => return Err(error.into()),
         };
         Ok(self.page_from_overfetch(results.into_iter().map(SearchHit::from).collect(), page))
-    }
-
-    fn page_from_overfetch<T>(&self, items: Vec<T>, page: PageRequest) -> ReadPage<T> {
-        self.page_from_overfetch_with_limit(items, page, MAX_PAGE_LIMIT)
-    }
-
-    fn page_from_overfetch_with_limit<T>(
-        &self,
-        mut items: Vec<T>,
-        page: PageRequest,
-        max_limit: usize,
-    ) -> ReadPage<T> {
-        let visible_limit = page.visible_limit_capped(max_limit);
-        let has_next = items.len() > visible_limit;
-        if has_next {
-            items.truncate(visible_limit);
-        }
-        ReadPage {
-            request_id: page.request_id,
-            generation: self.generation,
-            items,
-            next_offset: has_next.then_some(page.offset + visible_limit),
-            state: if has_next {
-                ReadState::Partial
-            } else {
-                ReadState::Complete
-            },
-        }
     }
 
     fn require_file(&self, relative_path: &str) -> ReadApiResult<FileLookupProjection> {

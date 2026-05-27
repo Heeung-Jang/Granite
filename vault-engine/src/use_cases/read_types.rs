@@ -8,6 +8,8 @@ pub const ENGINE_READ_STATE_STALE: u32 = 2;
 pub const ENGINE_READ_STATE_CANCELLED: u32 = 3;
 pub const ENGINE_READ_STATE_ERROR: u32 = 4;
 pub const ENGINE_READ_STATE_INDEX_UNAVAILABLE: u32 = 5;
+pub(crate) const MAX_PAGE_LIMIT: usize = 100;
+pub(crate) const MAX_FILE_TREE_PAGE_LIMIT: usize = 100_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PageRequest {
@@ -66,6 +68,36 @@ pub enum ReadOpenError {
 }
 
 pub type ReadOpenResult<T> = Result<T, ReadOpenError>;
+
+impl PageRequest {
+    pub fn new(offset: usize, limit: usize) -> Self {
+        Self::with_request_id(0, offset, limit)
+    }
+
+    pub fn with_request_id(request_id: u64, offset: usize, limit: usize) -> Self {
+        Self {
+            request_id,
+            offset,
+            limit,
+        }
+    }
+
+    pub(crate) fn fetch_limit(self) -> usize {
+        self.fetch_limit_capped(MAX_PAGE_LIMIT)
+    }
+
+    pub(crate) fn file_tree_fetch_limit(self) -> usize {
+        self.fetch_limit_capped(MAX_FILE_TREE_PAGE_LIMIT)
+    }
+
+    pub(crate) fn visible_limit_capped(self, max_limit: usize) -> usize {
+        self.limit.clamp(1, max_limit)
+    }
+
+    pub(crate) fn fetch_limit_capped(self, max_limit: usize) -> usize {
+        self.visible_limit_capped(max_limit) + 1
+    }
+}
 
 impl ReadOpenError {
     pub fn abi_code(&self) -> &'static str {

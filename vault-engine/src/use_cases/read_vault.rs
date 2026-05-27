@@ -1,10 +1,15 @@
 use std::path::Path;
 
-use crate::adapters::sqlite::{IndexSchemaMetadata, MetadataStore};
+use crate::adapters::sqlite::{FileRecord, IndexSchemaMetadata, MetadataStore};
 use crate::adapters::tantivy::TantivySearchIndex;
-use crate::read_api::{READ_BACKEND_NAME, READ_BACKEND_VERSION, READ_TOKENIZER_CONFIG};
+use crate::read_api::{
+    READ_BACKEND_NAME, READ_BACKEND_VERSION, READ_TOKENIZER_CONFIG, ReadApiResult,
+};
 
-use super::read_types::{ReadOpenError, ReadOpenResult};
+use super::read_types::{
+    MAX_FILE_TREE_PAGE_LIMIT, MAX_PAGE_LIMIT, PageRequest, ReadOpenError, ReadOpenResult, ReadPage,
+    ReadState,
+};
 
 pub struct VaultReadApi {
     pub(crate) metadata: MetadataStore,
@@ -31,6 +36,43 @@ impl VaultReadApi {
 
     pub fn generation(&self) -> u64 {
         self.generation
+    }
+
+    pub fn file_tree(&self, page: PageRequest) -> ReadApiResult<ReadPage<FileRecord>> {
+        Ok(self.page_from_overfetch_with_limit(
+            self.metadata
+                .list_markdown_files(page.offset, page.file_tree_fetch_limit())?,
+            page,
+            MAX_FILE_TREE_PAGE_LIMIT,
+        ))
+    }
+
+    pub(crate) fn page_from_overfetch<T>(&self, items: Vec<T>, page: PageRequest) -> ReadPage<T> {
+        self.page_from_overfetch_with_limit(items, page, MAX_PAGE_LIMIT)
+    }
+
+    pub(crate) fn page_from_overfetch_with_limit<T>(
+        &self,
+        mut items: Vec<T>,
+        page: PageRequest,
+        max_limit: usize,
+    ) -> ReadPage<T> {
+        let visible_limit = page.visible_limit_capped(max_limit);
+        let has_next = items.len() > visible_limit;
+        if has_next {
+            items.truncate(visible_limit);
+        }
+        ReadPage {
+            request_id: page.request_id,
+            generation: self.generation,
+            items,
+            next_offset: has_next.then_some(page.offset + visible_limit),
+            state: if has_next {
+                ReadState::Partial
+            } else {
+                ReadState::Complete
+            },
+        }
     }
 }
 

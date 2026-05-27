@@ -771,7 +771,7 @@ Default stop conditions:
   - Build: move `PageRequest`, `ReadPage`, `ReadValue`, `ReadState`, and read open errors into `use_cases/read_vault.rs` or `use_cases/read_types.rs`.
   - Verify: read state ABI constants and read open error-code tests pass.
 
-- [ ] **RA05.02c Move file tree read method**
+- [x] **RA05.02c Move file tree read method**
   - Build: move only the file tree page method and page-limit handling.
   - Verify: file tree large-page and read FFI file tree tests pass.
 
