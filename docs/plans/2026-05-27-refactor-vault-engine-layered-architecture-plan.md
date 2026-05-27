@@ -637,7 +637,7 @@ Default stop conditions:
   - Build: move rebuild directory validation, swap, abort cleanup, and destructive directory operations into `adapters/fs/index_directory.rs`.
   - Verify: rebuild path safety and sentinel vault note tests pass.
 
-- [ ] **RA04.02 Add SQLite adapter facade without moving storage**
+- [x] **RA04.02 Add SQLite adapter facade without moving storage**
   - Build: add `adapters/sqlite/mod.rs` that temporarily re-exports current metadata-store symbols from `crate::index`.
   - Verify: `cargo test --manifest-path vault-engine/Cargo.toml index::tests::metadata_schema_has_projection_indexes`.
 
