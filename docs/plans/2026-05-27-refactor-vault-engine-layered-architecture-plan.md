@@ -1173,22 +1173,24 @@ Default stop conditions:
 
 ### Phase 6: Diagnostics, Benchmarks, And Profiler Boundary
 
-- [ ] **RA06.01a Move benchmark module mechanically**
+- [x] **RA06.01a Move benchmark module mechanically**
   - Build: move `benchmarks.rs` to `diagnostics/benchmarks.rs`; add `pub mod benchmarks;` under `diagnostics`.
   - Verify:
     ```sh
     cargo test --manifest-path vault-engine/Cargo.toml benchmarks::
     cargo test --manifest-path bench/vault-profiler/Cargo.toml
     ```
+  - Evidence: `vault-engine/src/benchmarks.rs` is now a compatibility facade and the implementation lives at `vault-engine/src/diagnostics/benchmarks.rs`. `cargo test --manifest-path vault-engine/Cargo.toml benchmarks::` passed `13` tests and `cargo test --manifest-path bench/vault-profiler/Cargo.toml` passed `30` tests.
   - Stop condition: benchmark artifact schema, stage metrics, or profiler imports require behavior changes during the file move.
 
-- [ ] **RA06.01b Keep temporary benchmark compatibility facade**
+- [x] **RA06.01b Keep temporary benchmark compatibility facade**
   - Build: keep `vault_engine::benchmarks` as a temporary re-export or compatibility module until `bench/vault-profiler` imports move to `vault_engine::diagnostics::benchmarks`.
   - Verify:
     ```sh
     rg -n "crate::benchmarks|vault_engine::benchmarks" vault-engine/src bench/vault-profiler/src
     cargo test --manifest-path bench/vault-profiler/Cargo.toml
     ```
+  - Evidence: remaining `vault_engine::benchmarks` references are only profiler compatibility imports in `bench/vault-profiler/src/main.rs` and `bench/vault-profiler/src/synthetic.rs`; no `crate::benchmarks` implementation import remains in `vault-engine/src`.
   - Stop condition: Phase 7 begins while profiler still requires the legacy benchmark path.
 
 - [ ] **RA06.02a Preserve aggregate-only privacy rules**
