@@ -10,7 +10,7 @@ mod tests {
     use super::*;
     use crate::adapters::sqlite::{
         FileRecord, IndexSchemaMetadata, IndexingQueue, IndexingQueueReason, IndexingQueueStatus,
-        MetadataStore,
+        MetadataStore, MetadataTable,
     };
     use crate::core::files::FileIdentity;
     use crate::scanner::{ScanEntry, ScanEntryKind, ScanSummary};
@@ -318,11 +318,39 @@ mod tests {
         )
         .expect("open compatible metadata");
 
-        let MetadataOpenRecovery::Opened(_) = recovery else {
+        let MetadataOpenRecovery::Opened(store) = recovery else {
             panic!("expected opened metadata");
         };
+        assert_eq!(store.row_count(MetadataTable::Files).expect("files"), 0);
         assert!(!fixture.paths.rebuild_directory.exists());
         assert_eq!(queue.summary().expect("queue").pending, 0);
+        assert_eq!(fixture.read_vault_note(), "private");
+    }
+
+    #[test]
+    fn abort_rebuild_removes_rebuild_directory_without_touching_data() {
+        let fixture = RebuildFixture::new();
+        fixture.write_vault_note("private");
+        fs::create_dir_all(&fixture.paths.data_directory).expect("data");
+        fs::write(
+            fixture.paths.data_directory.join("metadata.sqlite"),
+            "active",
+        )
+        .expect("active metadata");
+        fs::create_dir_all(&fixture.paths.rebuild_directory).expect("rebuild");
+        fs::write(fixture.paths.rebuild_directory.join("stale.tmp"), "stale")
+            .expect("stale rebuild");
+
+        abort_index_rebuild(&fixture.paths).expect("abort rebuild");
+
+        assert!(!fixture.paths.rebuild_directory.exists());
+        assert!(
+            fixture
+                .paths
+                .data_directory
+                .join("metadata.sqlite")
+                .exists()
+        );
         assert_eq!(fixture.read_vault_note(), "private");
     }
 

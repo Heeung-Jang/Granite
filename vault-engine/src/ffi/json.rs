@@ -4,7 +4,7 @@ use std::os::raw::c_char;
 
 use serde::{Deserialize, Serialize};
 
-use crate::save::{SafeSaveError, SaveConflictChoiceError};
+use crate::use_cases::save_note::{SafeSaveError, SaveConflictChoiceError};
 
 use super::panic::catch_ffi_unwind;
 use super::save::FfiSaveConflict;

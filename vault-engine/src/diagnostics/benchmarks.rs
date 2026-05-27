@@ -17,7 +17,6 @@ use crate::adapters::tantivy::{
 };
 use crate::core::search::{SearchDocument, SearchResult};
 use crate::graph::{WholeVaultGraphRequest, WholeVaultGraphSnapshot};
-use crate::index_rebuild::IndexRebuildPaths;
 #[cfg(test)]
 use crate::indexing_pipeline::read_parse_source;
 pub use crate::indexing_pipeline::{
@@ -34,6 +33,7 @@ use crate::paths::FileIdentity;
 use crate::paths::{PathError, VaultRoot, lookup_key};
 use crate::scanner::{ScanEntryKind, ScanError, scan_vault};
 use crate::use_cases::build_graph::build_whole_vault_graph_from_metadata;
+use crate::use_cases::index_rebuild::IndexRebuildPaths;
 
 pub const BACKEND_BENCHMARK_ARTIFACT_SCHEMA_VERSION: u32 = 7;
 

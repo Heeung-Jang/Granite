@@ -1,24 +1,16 @@
 use crate::graph::{WholeVaultGraphRequest, WholeVaultGraphSnapshot};
 use crate::use_cases::build_graph::build_whole_vault_graph_from_metadata;
 pub use crate::use_cases::read_graph::{
-    LocalGraph, LocalGraphDepth, LocalGraphEdge, LocalGraphEdgeDirection, LocalGraphNode,
-    LocalGraphNodeKind, LocalGraphRequest,
+    LocalGraphDepth, LocalGraphEdgeDirection, LocalGraphNodeKind, LocalGraphRequest,
 };
 pub use crate::use_cases::read_types::{
-    ENGINE_READ_INSPECTOR_PANEL_ATTACHMENTS, ENGINE_READ_INSPECTOR_PANEL_BACKLINKS,
-    ENGINE_READ_INSPECTOR_PANEL_OUTGOING, ENGINE_READ_INSPECTOR_PANEL_PROPERTIES,
-    ENGINE_READ_INSPECTOR_PANEL_TAGS, ENGINE_READ_LOCAL_GRAPH_DEPTH_ONE_HOP,
-    ENGINE_READ_LOCAL_GRAPH_DEPTH_TWO_HOP, ENGINE_READ_SEARCH_MODE_BODY,
-    ENGINE_READ_SEARCH_MODE_FILE_NAME, ENGINE_READ_STATE_CANCELLED, ENGINE_READ_STATE_COMPLETE,
-    ENGINE_READ_STATE_ERROR, ENGINE_READ_STATE_INDEX_UNAVAILABLE, ENGINE_READ_STATE_PARTIAL,
-    ENGINE_READ_STATE_STALE, FileOpenMetadata, LivePreviewMetadataItem,
-    LivePreviewMetadataItemKind, LivePreviewMetadataSource, LivePreviewMetadataState, PageRequest,
-    READ_BACKEND_NAME, READ_BACKEND_VERSION, READ_TOKENIZER_CONFIG, ReadApiError, ReadApiResult,
-    ReadOpenError, ReadOpenResult, ReadPage, ReadState, ReadValue, SearchHit,
+    ENGINE_READ_STATE_CANCELLED, ENGINE_READ_STATE_COMPLETE, ENGINE_READ_STATE_ERROR,
+    ENGINE_READ_STATE_INDEX_UNAVAILABLE, ENGINE_READ_STATE_PARTIAL, ENGINE_READ_STATE_STALE,
+    PageRequest, READ_BACKEND_NAME, READ_BACKEND_VERSION, READ_TOKENIZER_CONFIG, ReadApiResult,
+    ReadOpenError, ReadState, ReadValue,
 };
 pub use crate::use_cases::read_vault::{
-    VaultReadApi, expected_read_schema_metadata, open_metadata_store_for_read,
-    open_tantivy_index_for_read, open_vault_read_api,
+    VaultReadApi, open_metadata_store_for_read, open_tantivy_index_for_read,
 };
 
 impl VaultReadApi {

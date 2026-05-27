@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::paths::{PathError, VaultRoot};
-use crate::save::{SafeSaveError, SafeSaveResult, SaveBaseline, SaveIoOperation};
+use crate::use_cases::save_note::{SafeSaveError, SafeSaveResult, SaveBaseline, SaveIoOperation};
 
 const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
 const FNV_PRIME: u64 = 0x100000001b3;

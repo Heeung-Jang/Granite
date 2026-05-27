@@ -28,7 +28,9 @@ use crate::graph::{
     MAX_WHOLE_VAULT_GRAPH_NODES, MAX_WHOLE_VAULT_GRAPH_RULE_LENGTH,
     MAX_WHOLE_VAULT_GRAPH_TAGS_PER_NODE,
 };
-use crate::read_api::{
+use crate::scanner::ScanEntryKind;
+use crate::use_cases::read_graph::{LocalGraphEdgeDirection, LocalGraphNodeKind};
+use crate::use_cases::read_types::{
     ENGINE_READ_INSPECTOR_PANEL_ATTACHMENTS, ENGINE_READ_INSPECTOR_PANEL_BACKLINKS,
     ENGINE_READ_INSPECTOR_PANEL_OUTGOING, ENGINE_READ_INSPECTOR_PANEL_PROPERTIES,
     ENGINE_READ_INSPECTOR_PANEL_TAGS, ENGINE_READ_LOCAL_GRAPH_DEPTH_ONE_HOP,
@@ -36,9 +38,8 @@ use crate::read_api::{
     ENGINE_READ_SEARCH_MODE_FILE_NAME, ENGINE_READ_STATE_CANCELLED, ENGINE_READ_STATE_COMPLETE,
     ENGINE_READ_STATE_ERROR, ENGINE_READ_STATE_INDEX_UNAVAILABLE, ENGINE_READ_STATE_PARTIAL,
     ENGINE_READ_STATE_STALE, LivePreviewMetadataItemKind, LivePreviewMetadataSource,
-    LivePreviewMetadataState, LocalGraphEdgeDirection, LocalGraphNodeKind, ReadOpenError,
+    LivePreviewMetadataState, ReadOpenError,
 };
-use crate::scanner::ScanEntryKind;
 
 #[derive(Serialize)]
 struct AbiManifest {

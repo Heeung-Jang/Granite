@@ -16,7 +16,8 @@ pub mod indexing_pipeline;
 pub(crate) mod indexing_queue;
 pub(crate) mod parser;
 pub(crate) mod paths;
-pub mod read_api;
+#[cfg(test)]
+pub(crate) mod read_api;
 pub mod save;
 pub(crate) mod scanner;
 #[cfg(test)]

@@ -13,9 +13,9 @@ use crate::adapters::tantivy::{
     TantivyIndexingStageMetrics, TantivySearchError, TantivySearchIndex, TantivyWriterOptions,
 };
 pub use crate::core::search::SnippetStorageMode;
-use crate::index_rebuild::IndexRebuildError;
 use crate::paths::{FileIdentity, PathError, VaultRoot, lookup_key};
 use crate::scanner::{ScanEntryKind, scan_vault};
+use crate::use_cases::index_rebuild::IndexRebuildError;
 pub use crate::use_cases::index_rebuild::{
     run_full_rebuild_pipeline, run_full_rebuild_pipeline_and_commit,
 };
@@ -577,7 +577,7 @@ mod tests {
     use super::*;
     use crate::adapters::sqlite::{FileIndexStatus, FileRecord, IndexSchemaMetadata};
     use crate::adapters::sqlite::{IndexingQueueReason, IndexingQueueStatus};
-    use crate::index_rebuild::IndexRebuildPaths;
+    use crate::use_cases::index_rebuild::IndexRebuildPaths;
     #[cfg(unix)]
     use std::os::unix::fs::symlink;
     use std::path::{Path, PathBuf};

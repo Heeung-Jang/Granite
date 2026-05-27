@@ -1444,6 +1444,22 @@ Default stop conditions:
   - Evidence: `index`, `indexing_queue`, `sqlite_fts`, and `tantivy_search` are now test-only compatibility modules in `lib.rs`; profiler imports storage/search DTOs through diagnostics and adapter/core facades rather than legacy module paths. The profiler legacy import scan returned no matches, all listed target tests passed, and full `vault-engine` plus `vault-profiler` tests passed without warnings.
   - Stop condition: public visibility is still needed only because diagnostics APIs are incomplete.
 
+- [x] **RA07.01b3a Retarget save/read/rebuild consumers**
+  - Build: retarget FFI and diagnostics consumers away from legacy `save`, `read_api`, and `index_rebuild` facades before reducing those facades.
+  - Verify:
+    ```sh
+    rg -n "vault_engine::(save|read_api|index_rebuild|indexing_pipeline)" bench/vault-profiler/src
+    rg -n "crate::(save|read_api|index_rebuild)" vault-engine/src/ffi vault-engine/src/use_cases vault-engine/src/diagnostics
+    cargo test --manifest-path vault-engine/Cargo.toml save::
+    cargo test --manifest-path vault-engine/Cargo.toml read_api::
+    cargo test --manifest-path vault-engine/Cargo.toml index_rebuild::
+    cargo test --manifest-path vault-engine/Cargo.toml indexing_pipeline::
+    cargo test --manifest-path vault-engine/Cargo.toml
+    cargo test --manifest-path bench/vault-profiler/Cargo.toml
+    ```
+  - Evidence: FFI save error mapping imports `use_cases::save_note` directly; diagnostics profiler/ABI imports read DTOs from `use_cases::read_*`; diagnostics benchmarks import rebuild paths from `use_cases::index_rebuild`; `read_api` is now test-only in `lib.rs`. The listed scans returned no matches and all listed tests passed without warnings. `save`, `index_rebuild`, and `indexing_pipeline` remain public because closing them now exposes dead-code warnings in still-public use-case contracts.
+  - Stop condition: reducing `save`, `index_rebuild`, or `indexing_pipeline` visibility produces dead-code warnings that require a separate ownership cleanup.
+
 - [ ] **RA07.01b3 Make save/rebuild/indexing compatibility modules private**
   - Build: change only `save`, `read_api`, `index_rebuild`, and `indexing_pipeline` legacy modules after FFI and profiler consumers use use-case/diagnostics facades.
   - Verify:
