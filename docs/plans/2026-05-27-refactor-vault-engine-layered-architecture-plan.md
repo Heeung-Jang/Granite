@@ -684,7 +684,7 @@ Default stop conditions:
   - Build: expose only the crate-internal `MetadataStore` facade and intentionally shared record/projection types from `adapters::sqlite`.
   - Verify: `rg "crate::adapters::sqlite::.*row_to_|crate::adapters::sqlite::.*Connection" vault-engine/src/use_cases vault-engine/src/ffi` returns no matches.
 
-- [ ] **RA04.04 Add SQLite queue facade without moving logic**
+- [x] **RA04.04 Add SQLite queue facade without moving logic**
   - Build: add `adapters/sqlite/indexing_queue.rs` as a temporary re-export or shell around current `indexing_queue.rs`.
   - Verify: queue restart and lease tests pass.
 
