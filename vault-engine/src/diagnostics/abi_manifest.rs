@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use serde::Serialize;
 
 use crate::ENGINE_ABI_VERSION;
+use crate::adapters::sqlite::{FileIndexStatus, IndexPropertyValue, TagSource};
 use crate::attachments::{
     AttachmentReferenceSource, AttachmentRejectReason, AttachmentResolutionState,
 };
@@ -27,7 +28,6 @@ use crate::graph::{
     MAX_WHOLE_VAULT_GRAPH_NODES, MAX_WHOLE_VAULT_GRAPH_RULE_LENGTH,
     MAX_WHOLE_VAULT_GRAPH_TAGS_PER_NODE,
 };
-use crate::index::{FileIndexStatus, IndexPropertyValue, TagSource};
 use crate::read_api::{
     ENGINE_READ_INSPECTOR_PANEL_ATTACHMENTS, ENGINE_READ_INSPECTOR_PANEL_BACKLINKS,
     ENGINE_READ_INSPECTOR_PANEL_OUTGOING, ENGINE_READ_INSPECTOR_PANEL_PROPERTIES,
