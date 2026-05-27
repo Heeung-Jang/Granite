@@ -767,7 +767,7 @@ Default stop conditions:
   - Build: preserve `complete`, `partial`, `stale`, `cancelled`, `error`, and `index_unavailable` mapping.
   - Verify: read FFI tests and Swift read UI probe still interpret states correctly.
 
-- [ ] **RA05.02b Move read DTOs before read behavior**
+- [x] **RA05.02b Move read DTOs before read behavior**
   - Build: move `PageRequest`, `ReadPage`, `ReadValue`, `ReadState`, and read open errors into `use_cases/read_vault.rs` or `use_cases/read_types.rs`.
   - Verify: read state ABI constants and read open error-code tests pass.
 

@@ -2,9 +2,9 @@ use std::path::Path;
 
 use crate::adapters::sqlite::{IndexSchemaMetadata, MetadataStore};
 use crate::adapters::tantivy::TantivySearchIndex;
-use crate::read_api::{
-    READ_BACKEND_NAME, READ_BACKEND_VERSION, READ_TOKENIZER_CONFIG, ReadOpenError, ReadOpenResult,
-};
+use crate::read_api::{READ_BACKEND_NAME, READ_BACKEND_VERSION, READ_TOKENIZER_CONFIG};
+
+use super::read_types::{ReadOpenError, ReadOpenResult};
 
 pub struct VaultReadApi {
     pub(crate) metadata: MetadataStore,
