@@ -755,7 +755,7 @@ Default stop conditions:
 
 ### Phase 5: Extract Use Cases
 
-- [ ] **RA05.01 Create use-case module skeleton**
+- [x] **RA05.01 Create use-case module skeleton**
   - Build: add `vault-engine/src/use_cases/mod.rs`.
   - Verify: no behavior changes.
 

@@ -20,6 +20,7 @@ pub mod scanner;
 pub mod sqlite_fts;
 pub mod startup_reconciliation;
 pub mod tantivy_search;
+pub(crate) mod use_cases;
 pub mod watcher_burst;
 
 pub const ENGINE_ABI_VERSION: u32 = 1;
