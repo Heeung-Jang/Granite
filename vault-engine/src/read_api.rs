@@ -1,16 +1,16 @@
 use std::{collections::HashSet, fmt, path::Path};
 
-use crate::graph::{
-    WholeVaultGraphInputs, WholeVaultGraphRequest, WholeVaultGraphSnapshot,
-    build_whole_vault_graph_snapshot, whole_vault_graph_needs_tags,
-};
-use crate::graph_key::unresolved_target_key;
-use crate::index::{
+use crate::adapters::sqlite::{
     AttachmentProjection, AttachmentRecord, FileLookupProjection, FileRecord, FileTreeProjection,
     GraphFileRecord, GraphResolvedEdgeRecord, GraphUnresolvedEdgeRecord, HeadingRecord,
     IndexSchemaMetadata, LinkEdgeRecord, LinkProjection, MetadataStore, MetadataStoreError,
     PropertyProjection, PropertyRecord, TagRecord,
 };
+use crate::graph::{
+    WholeVaultGraphInputs, WholeVaultGraphRequest, WholeVaultGraphSnapshot,
+    build_whole_vault_graph_snapshot, whole_vault_graph_needs_tags,
+};
+use crate::graph_key::unresolved_target_key;
 use crate::parser::{MarkdownLink, PropertyValue, WikiLink, parse_markdown};
 use crate::scanner::{ScanEntryKind, classify_file};
 use crate::sqlite_fts::SearchResult;
@@ -1444,11 +1444,11 @@ mod tests {
     use super::*;
     use std::{fs, path::PathBuf};
 
-    use crate::attachments::{AttachmentReferenceSource, AttachmentResolutionState};
-    use crate::index::{
+    use crate::adapters::sqlite::{
         FileRecord, HeadingRecord, IndexSchemaMetadata, MetadataStore, PropertyRecord, TagRecord,
         TagSource, slugify_heading,
     };
+    use crate::attachments::{AttachmentReferenceSource, AttachmentResolutionState};
     use crate::parser::PropertyValue;
     use crate::paths::{VaultRoot, lookup_key};
     use crate::scanner::{ScanEntry, ScanEntryKind, scan_vault};
@@ -1653,16 +1653,21 @@ mod tests {
         let mut store = MetadataStore::open_in_memory(&metadata).expect("store");
         let mut search = TantivySearchIndex::open_in_ram().expect("search");
 
-        let mut home = crate::index::FileRecord::from_scan_entry(&fixture_entry("Home.md"), 1);
+        let mut home =
+            crate::adapters::sqlite::FileRecord::from_scan_entry(&fixture_entry("Home.md"), 1);
         home.mark_search_indexed();
-        let mut target =
-            crate::index::FileRecord::from_scan_entry(&fixture_entry("Folder/Target.md"), 1);
+        let mut target = crate::adapters::sqlite::FileRecord::from_scan_entry(
+            &fixture_entry("Folder/Target.md"),
+            1,
+        );
         target.mark_search_indexed();
-        let mut guide =
-            crate::index::FileRecord::from_scan_entry(&fixture_entry("Docs/Guide.md"), 1);
+        let mut guide = crate::adapters::sqlite::FileRecord::from_scan_entry(
+            &fixture_entry("Docs/Guide.md"),
+            1,
+        );
         guide.mark_search_indexed();
 
-        let link = crate::index::LinkEdgeRecord {
+        let link = crate::adapters::sqlite::LinkEdgeRecord {
             source_file_id: home.file_id.clone(),
             target_text: "Folder/Target".to_string(),
             resolved_target_file_id: Some(target.file_id.clone()),
@@ -1670,7 +1675,7 @@ mod tests {
             alias: None,
             is_embed: false,
         };
-        let unresolved_link = crate::index::LinkEdgeRecord {
+        let unresolved_link = crate::adapters::sqlite::LinkEdgeRecord {
             source_file_id: home.file_id.clone(),
             target_text: "Missing Note".to_string(),
             resolved_target_file_id: None,
@@ -1678,7 +1683,7 @@ mod tests {
             alias: None,
             is_embed: false,
         };
-        let backlink = crate::index::LinkEdgeRecord {
+        let backlink = crate::adapters::sqlite::LinkEdgeRecord {
             source_file_id: target.file_id.clone(),
             target_text: "Home".to_string(),
             resolved_target_file_id: Some(home.file_id.clone()),
@@ -1686,7 +1691,7 @@ mod tests {
             alias: Some("Home alias".to_string()),
             is_embed: true,
         };
-        let deep_link = crate::index::LinkEdgeRecord {
+        let deep_link = crate::adapters::sqlite::LinkEdgeRecord {
             source_file_id: target.file_id.clone(),
             target_text: "Docs/Guide".to_string(),
             resolved_target_file_id: Some(guide.file_id.clone()),
