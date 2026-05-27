@@ -37,11 +37,11 @@ use crate::adapters::sqlite::{
     GraphQueryPlanSummary, GraphResolvedEdgeRecord, GraphTagRecord, GraphUnresolvedEdgeRecord,
     IndexSchemaMetadata, LinkProjection, PropertyProjection, TagNoteProjection,
 };
+use crate::core::links::unresolved_target_key;
 use crate::core::metadata::{
     AttachmentRecord, FileMetadataRecords, FileRecord, HeadingRecord, IndexedFileRecords,
     LinkEdgeRecord, PropertyRecord, TagRecord,
 };
-use crate::graph_key::unresolved_target_key;
 
 pub struct MetadataStore {
     pub(crate) connection: Connection,

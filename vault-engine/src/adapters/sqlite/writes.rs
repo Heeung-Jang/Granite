@@ -6,10 +6,10 @@ use crate::adapters::sqlite::storage_values::{
     path_to_string, property_value_to_storage, scan_kind_to_str, system_time_to_unix_ms,
     tag_source_to_str,
 };
+use crate::core::links::unresolved_target_key;
 use crate::core::metadata::{
     AttachmentRecord, FileRecord, HeadingRecord, LinkEdgeRecord, PropertyRecord, TagRecord,
 };
-use crate::graph_key::unresolved_target_key;
 
 pub(crate) fn upsert_file(connection: &Connection, file: &FileRecord) -> MetadataStoreResult<()> {
     connection.execute(

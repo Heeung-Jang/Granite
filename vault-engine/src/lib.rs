@@ -7,7 +7,6 @@ pub mod errors;
 pub mod ffi;
 pub mod file_watcher;
 pub mod graph;
-pub(crate) mod graph_key;
 #[cfg(test)]
 pub(crate) mod index;
 pub mod index_rebuild;

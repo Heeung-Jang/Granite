@@ -1488,8 +1488,23 @@ Default stop conditions:
     cargo test --manifest-path vault-engine/Cargo.toml
     cargo test --manifest-path bench/vault-profiler/Cargo.toml
     ```
-  - Evidence: diagnostics ABI constants now import from `use_cases::build_graph`, diagnostics graph benchmark DTOs and `read_api` graph DTOs import from `core::graph`, the profiler legacy import scan returned no matches, and the exact `crate::graph` / `crate::startup_reconciliation` / `crate::watcher_burst` scan returned no matches. `crate::graph_key` still has three internal consumers in SQLite and local-graph use-case code, so `graph`, `graph_key`, `startup_reconciliation`, and `watcher_burst` remain public until that ownership cleanup avoids dead-code warning noise. All listed tests passed without warnings.
+  - Evidence: diagnostics ABI constants now import from `use_cases::build_graph`, diagnostics graph benchmark DTOs and `read_api` graph DTOs import from `core::graph`, the profiler legacy import scan returned no matches, and the exact `crate::graph` / `crate::startup_reconciliation` / `crate::watcher_burst` scan returned no matches. At this checkpoint, `crate::graph_key` still had three internal consumers in SQLite and local-graph use-case code, so `graph`, `graph_key`, `startup_reconciliation`, and `watcher_burst` remained public until the ownership cleanup avoided dead-code warning noise. All listed tests passed without warnings.
   - Stop condition: changing graph/startup/watcher module visibility reintroduces dead-code warnings in still-public use-case contracts.
+
+- [x] **RA07.01b4b Remove graph key compatibility shim**
+  - Build: retarget the remaining SQLite and local-graph users from `crate::graph_key::unresolved_target_key` to `core::links::unresolved_target_key`, then delete the shim module.
+  - Verify:
+    ```sh
+    rg -n "graph_key|crate::graph_key" vault-engine/src
+    cargo fmt --manifest-path vault-engine/Cargo.toml --check
+    cargo test --manifest-path vault-engine/Cargo.toml core::links::
+    cargo test --manifest-path vault-engine/Cargo.toml graph::
+    cargo test --manifest-path vault-engine/Cargo.toml read_api::tests::read_api_sql_query_counts_stay_bounded_for_ui_surfaces
+    cargo test --manifest-path vault-engine/Cargo.toml
+    cargo test --manifest-path bench/vault-profiler/Cargo.toml
+    ```
+  - Evidence: `graph_key.rs` was only a compatibility re-export of `core::links::unresolved_target_key`; the remaining consumers now import `core::links` directly, and the `graph_key` scan returns no code matches. The listed targeted and full test gates passed without warnings.
+  - Stop condition: unresolved-link key generation diverges between graph building, local graph reads, and SQLite link writes.
 
 - [ ] **RA07.01b4 Make graph/watcher compatibility modules private**
   - Build: change only `graph`, `graph_key`, `startup_reconciliation`, and `watcher_burst` legacy modules after graph FFI retargeting and watcher/startup use-case moves are verified.

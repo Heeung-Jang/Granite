@@ -1,4 +1,4 @@
-use crate::graph_key::unresolved_target_key;
+use crate::core::links::unresolved_target_key;
 
 const MAX_GRAPH_NODES: usize = 250;
 const MAX_GRAPH_EDGES: usize = 500;
