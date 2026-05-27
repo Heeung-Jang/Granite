@@ -93,11 +93,13 @@ struct LivePreviewStyleProbeReport: Codable, Equatable {
     var calloutVariantAccentColorsResolved: Bool
     var calloutBackgroundUsesAccentAlpha: Bool
     var calloutRenderPreservesSource: Bool
+    var appZoomCalloutGeometryScales: Bool
     var propertiesChromeApplied: Bool
     var propertiesTitleSpacingApplied: Bool
     var propertiesSectionSpacingApplied: Bool
     var propertiesRowSpacingApplied: Bool
     var propertiesHeaderGeometrySeparated: Bool
+    var appZoomMetadataSpacingScales: Bool
     var propertyYamlConcealedOutsideReveal: Bool
     var propertiesSourceStaysConcealedInsideBlock: Bool
     var propertiesRenderPreservesSource: Bool
@@ -118,6 +120,8 @@ struct LivePreviewStyleProbeReport: Codable, Equatable {
     var horizontalRuleAsteriskVariantRendered: Bool
     var horizontalRuleUnderscoreVariantRendered: Bool
     var horizontalRuleFalsePositivesRejected: Bool
+    var appZoomHorizontalRuleGeometryScales: Bool
+    var appZoomListMarkerGeometryScales: Bool
     var tableRenderedStateVisible: Bool
     var tableActiveCellEditStateVisible: Bool
     var tableRowAddControlVisibleWhenFocused: Bool
@@ -411,6 +415,7 @@ enum LivePreviewStyleProbe {
         let tableGeometryFields = probeTableGeometry()
         let tableActiveCellControls = probeTableActiveCellControls()
         let nestedListFields = probeNestedListHierarchy()
+        let appZoomOverlayFields = probeAppZoomOverlayFields()
 
         var report = LivePreviewStyleProbeReport(
             summary: .passed,
@@ -522,6 +527,7 @@ enum LivePreviewStyleProbe {
                 && LivePreviewTheme.calloutAccentColor(for: .callout(kind: "quote")) == NSColor.systemGray,
             calloutBackgroundUsesAccentAlpha: LivePreviewTheme.calloutBackgroundColor(for: .callout(kind: "warning")) == NSColor.systemOrange.withAlphaComponent(0.12),
             calloutRenderPreservesSource: textView.string.contains("> [!note] Callout body"),
+            appZoomCalloutGeometryScales: appZoomOverlayFields.calloutGeometryScales,
             propertiesChromeApplied: propertyKeyAttributes?[.foregroundColor] as? NSColor == LivePreviewTheme.concealedColor
                 && propertyValueAttributes?[.foregroundColor] as? NSColor == LivePreviewTheme.concealedColor
                 && propertyKeyAttributes?[.backgroundColor] as? NSColor == LivePreviewTheme.propertyBackgroundColor,
@@ -540,6 +546,7 @@ enum LivePreviewStyleProbe {
                 row: propertyRowLineRect,
                 body: propertyBodyLineRect
             ),
+            appZoomMetadataSpacingScales: appZoomOverlayFields.metadataSpacingScales,
             propertyYamlConcealedOutsideReveal: hiddenPropertyDelimiterColor == LivePreviewTheme.concealedColor
                 && hiddenPropertyColonColor == LivePreviewTheme.concealedColor,
             propertiesSourceStaysConcealedInsideBlock: revealedPropertyDelimiterColor == LivePreviewTheme.concealedColor
@@ -573,6 +580,8 @@ enum LivePreviewStyleProbe {
             horizontalRuleAsteriskVariantRendered: horizontalRuleFields.asteriskVariantRendered,
             horizontalRuleUnderscoreVariantRendered: horizontalRuleFields.underscoreVariantRendered,
             horizontalRuleFalsePositivesRejected: horizontalRuleFields.falsePositivesRejected,
+            appZoomHorizontalRuleGeometryScales: appZoomOverlayFields.horizontalRuleGeometryScales,
+            appZoomListMarkerGeometryScales: appZoomOverlayFields.listMarkerGeometryScales,
             tableRenderedStateVisible: tableHeaderAttributes?[.font] as? NSFont == LivePreviewTheme.strongFont
                 && tableBodyAttributes?[.backgroundColor] as? NSColor == LivePreviewTheme.tableCellBackgroundColor
                 && hiddenTablePipeColor == LivePreviewTheme.concealedColor
@@ -849,6 +858,64 @@ enum LivePreviewStyleProbe {
             unordered?.rect.width ?? 0 > 0,
             ordered?.rect.width ?? 0 > 0,
             task?.rect.width ?? 0 > 0
+        )
+    }
+
+    private static func probeAppZoomOverlayFields() -> (
+        metadataSpacingScales: Bool,
+        calloutGeometryScales: Bool,
+        horizontalRuleGeometryScales: Bool,
+        listMarkerGeometryScales: Bool
+    ) {
+        let metadataSpacingScales = LivePreviewTheme.propertyTitleParagraphStyle(scale: 1.25).minimumLineHeight
+            == LivePreviewTheme.propertyTitleLineHeight * 1.25
+            && LivePreviewTheme.propertySectionParagraphStyle(scale: 1.25).minimumLineHeight
+                == LivePreviewTheme.propertySectionLineHeight * 1.25
+            && LivePreviewTheme.propertyRowParagraphStyle(scale: 1.25).minimumLineHeight
+                == LivePreviewTheme.propertyRowLineHeight * 1.25
+
+        let calloutStyle = LivePreviewTheme.calloutParagraphStyle(scale: 1.25)
+        let calloutGeometryScales = calloutStyle.headIndent == 25
+            && calloutStyle.paragraphSpacingBefore == 5
+            && calloutStyle.paragraphSpacing == 7.5
+
+        let horizontalRuleStyle = LivePreviewTheme.horizontalRuleParagraphStyle(scale: 1.25)
+        let horizontalRuleGeometryScales = horizontalRuleStyle.minimumLineHeight == 30
+            && horizontalRuleStyle.paragraphSpacingBefore == 7.5
+            && horizontalRuleStyle.paragraphSpacing == 10
+
+        let source = "- Unordered\n  - Child\n"
+        let defaultTextView = MarkdownEditorTextViewFactory.makeTextView()
+        defaultTextView.string = source
+        defaultTextView.setSelectedRange(NSRange(location: (source as NSString).length, length: 0))
+        MarkdownVisibleRangeDecorator.decorateVisibleRange(
+            in: defaultTextView,
+            revealRange: defaultTextView.selectedRange(),
+            markerStyle: .obsidian
+        )
+
+        let zoomTextView = MarkdownEditorTextViewFactory.makeTextView(scale: 1.25)
+        zoomTextView.string = source
+        zoomTextView.setSelectedRange(NSRange(location: (source as NSString).length, length: 0))
+        MarkdownVisibleRangeDecorator.decorateVisibleRange(
+            in: zoomTextView,
+            revealRange: zoomTextView.selectedRange(),
+            markerStyle: .obsidian,
+            scale: 1.25
+        )
+
+        let defaultMarker = LivePreviewOverlayRenderer.markerGeometries(in: defaultTextView)
+            .first { $0.kind == .unorderedListMarker }
+        let zoomMarker = LivePreviewOverlayRenderer.markerGeometries(in: zoomTextView)
+            .first { $0.kind == .unorderedListMarker }
+        let listMarkerGeometryScales = defaultMarker?.rect.width == LivePreviewTheme.listMarkerSlotWidth
+            && zoomMarker?.rect.width == LivePreviewTheme.listMarkerSlotWidth * 1.25
+
+        return (
+            metadataSpacingScales,
+            calloutGeometryScales,
+            horizontalRuleGeometryScales,
+            listMarkerGeometryScales
         )
     }
 

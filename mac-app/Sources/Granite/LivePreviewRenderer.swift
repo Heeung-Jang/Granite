@@ -341,7 +341,13 @@ enum LivePreviewRenderer {
             return
         }
 
-        applyPropertyLayoutAttributes(properties, source: source, plan: plan, visibleRange: visibleRange)
+        applyPropertyLayoutAttributes(
+            properties,
+            source: source,
+            plan: plan,
+            visibleRange: visibleRange,
+            scale: scale
+        )
 
         for row in properties.rows {
             let keyRange = NSIntersectionRange(row.keyRange.nsRange, visibleRange)
@@ -370,7 +376,8 @@ enum LivePreviewRenderer {
         _ properties: LivePreviewPropertyBlock,
         source: String,
         plan: LivePreviewAttributePlan,
-        visibleRange: NSRange
+        visibleRange: NSRange,
+        scale: Double
     ) {
         let lineRanges = propertyLineRanges(for: properties, source: source)
         guard let titleRange = lineRanges.first else {
@@ -378,7 +385,7 @@ enum LivePreviewRenderer {
         }
 
         addPropertyParagraphStyle(
-            LivePreviewTheme.propertyTitleParagraphStyle,
+            LivePreviewTheme.propertyTitleParagraphStyle(scale: scale),
             range: titleRange,
             plan: plan,
             visibleRange: visibleRange
@@ -386,7 +393,7 @@ enum LivePreviewRenderer {
 
         if lineRanges.indices.contains(1) {
             addPropertyParagraphStyle(
-                LivePreviewTheme.propertySectionParagraphStyle,
+                LivePreviewTheme.propertySectionParagraphStyle(scale: scale),
                 range: lineRanges[1],
                 plan: plan,
                 visibleRange: visibleRange
@@ -398,7 +405,7 @@ enum LivePreviewRenderer {
         }
         for lineRange in lineRanges.dropFirst(2) {
             addPropertyParagraphStyle(
-                LivePreviewTheme.propertyRowParagraphStyle,
+                LivePreviewTheme.propertyRowParagraphStyle(scale: scale),
                 range: lineRange,
                 plan: plan,
                 visibleRange: visibleRange

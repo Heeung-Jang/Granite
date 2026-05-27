@@ -179,16 +179,26 @@ enum LivePreviewTheme {
     }
 
     static func listMarkerSlotRect(depth: Int, lineRect: NSRect) -> NSRect {
+        listMarkerSlotRect(depth: depth, lineRect: lineRect, scale: 1.0)
+    }
+
+    static func listMarkerSlotRect(depth: Int, lineRect: NSRect, scale: Double) -> NSRect {
         NSRect(
-            x: lineRect.minX + CGFloat(max(0, depth)) * listDepthIndentStep,
+            x: lineRect.minX + CGFloat(max(0, depth)) * scaled(listDepthIndentStep, scale: scale),
             y: lineRect.minY,
-            width: listMarkerSlotWidth,
+            width: scaled(listMarkerSlotWidth, scale: scale),
             height: lineRect.height
         )
     }
 
     static func listGuideX(depth: Int, lineRect: NSRect) -> CGFloat {
-        lineRect.minX + CGFloat(max(0, depth)) * listDepthIndentStep - 10
+        listGuideX(depth: depth, lineRect: lineRect, scale: 1.0)
+    }
+
+    static func listGuideX(depth: Int, lineRect: NSRect, scale: Double) -> CGFloat {
+        lineRect.minX
+            + CGFloat(max(0, depth)) * scaled(listDepthIndentStep, scale: scale)
+            - scaled(10, scale: scale)
     }
 
     static var quoteParagraphStyle: NSParagraphStyle {
@@ -223,32 +233,51 @@ enum LivePreviewTheme {
     }
 
     static var propertyTitleParagraphStyle: NSParagraphStyle {
+        propertyTitleParagraphStyle(scale: 1.0)
+    }
+
+    static func propertyTitleParagraphStyle(scale: Double) -> NSParagraphStyle {
         fixedLineParagraphStyle(
-            lineHeight: propertyTitleLineHeight,
-            paragraphSpacing: propertyTitleParagraphSpacing
+            lineHeight: scaled(propertyTitleLineHeight, scale: scale),
+            paragraphSpacing: scaled(propertyTitleParagraphSpacing, scale: scale),
+            scale: scale
         )
     }
 
     static var propertySectionParagraphStyle: NSParagraphStyle {
+        propertySectionParagraphStyle(scale: 1.0)
+    }
+
+    static func propertySectionParagraphStyle(scale: Double) -> NSParagraphStyle {
         fixedLineParagraphStyle(
-            lineHeight: propertySectionLineHeight,
-            paragraphSpacing: propertySectionParagraphSpacing
+            lineHeight: scaled(propertySectionLineHeight, scale: scale),
+            paragraphSpacing: scaled(propertySectionParagraphSpacing, scale: scale),
+            scale: scale
         )
     }
 
     static var propertyRowParagraphStyle: NSParagraphStyle {
+        propertyRowParagraphStyle(scale: 1.0)
+    }
+
+    static func propertyRowParagraphStyle(scale: Double) -> NSParagraphStyle {
         fixedLineParagraphStyle(
-            lineHeight: propertyRowLineHeight,
-            paragraphSpacing: propertyRowParagraphSpacing
+            lineHeight: scaled(propertyRowLineHeight, scale: scale),
+            paragraphSpacing: scaled(propertyRowParagraphSpacing, scale: scale),
+            scale: scale
         )
     }
 
-    private static func fixedLineParagraphStyle(lineHeight: CGFloat, paragraphSpacing: CGFloat) -> NSParagraphStyle {
+    private static func fixedLineParagraphStyle(
+        lineHeight: CGFloat,
+        paragraphSpacing: CGFloat,
+        scale: Double = 1.0
+    ) -> NSParagraphStyle {
         let style = NSMutableParagraphStyle()
         style.minimumLineHeight = lineHeight
         style.maximumLineHeight = lineHeight
         style.firstLineHeadIndent = 0
-        style.headIndent = 18
+        style.headIndent = scaled(18, scale: scale)
         style.paragraphSpacingBefore = 0
         style.paragraphSpacing = paragraphSpacing
         return style.copy() as! NSParagraphStyle
