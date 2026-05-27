@@ -1,22 +1,24 @@
 use std::fmt;
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
 use serde::Serialize;
 
-use crate::adapters::sqlite::{IndexSchemaMetadata, MetadataStore, MetadataStoreError};
 use crate::adapters::sqlite::{
     IndexingQueue, IndexingQueueError, IndexingQueueReason, IndexingQueueSummary,
 };
+use crate::adapters::sqlite::{MetadataStore, MetadataStoreError};
 use crate::adapters::tantivy::{
     TantivyIndexingStageMetrics, TantivySearchError, TantivySearchIndex, TantivyWriterOptions,
 };
 pub use crate::core::search::SnippetStorageMode;
-use crate::index_rebuild::{IndexRebuildError, IndexRebuildPaths, commit_index_rebuild};
+use crate::index_rebuild::IndexRebuildError;
 use crate::paths::{FileIdentity, PathError, VaultRoot, lookup_key};
 use crate::scanner::{ScanEntryKind, scan_vault};
+pub use crate::use_cases::index_rebuild::{
+    run_full_rebuild_pipeline, run_full_rebuild_pipeline_and_commit,
+};
 pub use crate::use_cases::process_indexing_queue::{
     QueueBatchIndexOptions, QueueLeaseBatch, QueuePipelineItem, lease_queue_batch,
     process_indexing_queue_batch,
@@ -486,91 +488,6 @@ pub(crate) fn process_indexing_queue_batch_impl(
     ))
 }
 
-pub fn run_full_rebuild_pipeline(
-    paths: &IndexRebuildPaths,
-    sources: &[SearchDocumentSource],
-    metadata: &IndexSchemaMetadata,
-    pipeline_options: &IndexingPipelineOptions,
-) -> IndexingPipelineResult<ProductionIndexingPipelineResult> {
-    let started = Instant::now();
-    let mut tier_transitions = vec![tier_transition(
-        IndexingPipelineTier::Discovered,
-        started.elapsed(),
-    )];
-    fs::create_dir_all(&paths.rebuild_directory)?;
-    let options = pipeline_options.normalized();
-    let metadata_path = paths.rebuild_directory.join("metadata.sqlite");
-    remove_sqlite_files(&metadata_path)?;
-    let mut metadata_store = MetadataStore::open(&metadata_path, metadata)?;
-    let batch_size = options.metadata_batch_size;
-    let mut pending = Vec::with_capacity(batch_size);
-    let mut sqlite_metadata_write_micros = 0;
-
-    run_read_parse_pipeline(sources, &options, |timed| {
-        let mut records = timed.work_item.metadata_records;
-        records.file.generation = metadata.generation;
-        records.file.mark_search_indexed();
-        pending.push(records);
-        if pending.len() >= batch_size {
-            let start = Instant::now();
-            metadata_store.replace_file_records_batch(&pending)?;
-            sqlite_metadata_write_micros += duration_micros_nonzero(start.elapsed());
-            pending.clear();
-        }
-        Ok::<(), IndexingPipelineError>(())
-    })?;
-
-    if !pending.is_empty() {
-        let start = Instant::now();
-        metadata_store.replace_file_records_batch(&pending)?;
-        sqlite_metadata_write_micros += duration_micros_nonzero(start.elapsed());
-    }
-    tier_transitions.push(tier_transition(
-        IndexingPipelineTier::MetadataReady,
-        started.elapsed(),
-    ));
-
-    let tantivy_dir = paths.rebuild_directory.join("tantivy");
-    reset_directory(&tantivy_dir)?;
-    let mut tantivy = TantivySearchIndex::open_in_dir(&tantivy_dir)?;
-    tier_transitions.push(tier_transition(
-        IndexingPipelineTier::BodyIndexing,
-        started.elapsed(),
-    ));
-    let tantivy_run = run_tantivy_rebuild_pipeline(&mut tantivy, sources, &options)?;
-    let time_to_usable_micros = duration_micros_nonzero(started.elapsed());
-    tier_transitions.push(IndexingTierTransition {
-        tier: IndexingPipelineTier::FilenameReady,
-        elapsed_micros: time_to_usable_micros,
-    });
-    tier_transitions.push(IndexingTierTransition {
-        tier: IndexingPipelineTier::Complete,
-        elapsed_micros: time_to_usable_micros,
-    });
-
-    Ok(production_result_with_timing(
-        metadata.generation,
-        tantivy_run.stages.added_document_count,
-        tantivy_run.stages.failed_document_count,
-        tantivy_run.stats,
-        sqlite_metadata_write_micros,
-        tantivy_run.stages,
-        tier_transitions,
-        Some(time_to_usable_micros),
-    ))
-}
-
-pub fn run_full_rebuild_pipeline_and_commit(
-    paths: &IndexRebuildPaths,
-    sources: &[SearchDocumentSource],
-    metadata: &IndexSchemaMetadata,
-    pipeline_options: &IndexingPipelineOptions,
-) -> IndexingPipelineResult<ProductionIndexingPipelineResult> {
-    let result = run_full_rebuild_pipeline(paths, sources, metadata, pipeline_options)?;
-    commit_index_rebuild(paths)?;
-    Ok(result)
-}
-
 fn production_result(
     generation: u64,
     processed_count: usize,
@@ -591,39 +508,6 @@ fn production_result(
             tantivy,
         },
     )
-}
-
-fn production_result_with_timing(
-    generation: u64,
-    processed_count: usize,
-    failed_count: usize,
-    stats: PipelineCorpusStats,
-    sqlite_metadata_write_micros: u64,
-    tantivy: TantivyIndexingStageMetrics,
-    tier_transitions: Vec<IndexingTierTransition>,
-    time_to_usable_micros: Option<u64>,
-) -> ProductionIndexingPipelineResult {
-    ProductionIndexingPipelineResult::with_timing(
-        generation,
-        processed_count,
-        failed_count,
-        tier_transitions,
-        time_to_usable_micros,
-        ProductionIndexingStageMetrics {
-            read_parse_sample_count: stats.read_micros.len(),
-            read_parse_total_bytes: stats.read_parse_bytes,
-            read_parse_peak_in_flight_items: 0,
-            sqlite_metadata_write_micros,
-            tantivy,
-        },
-    )
-}
-
-fn tier_transition(tier: IndexingPipelineTier, elapsed: Duration) -> IndexingTierTransition {
-    IndexingTierTransition {
-        tier,
-        elapsed_micros: duration_micros_nonzero(elapsed),
-    }
 }
 
 impl fmt::Display for IndexingPipelineError {
@@ -680,27 +564,6 @@ impl From<TantivySearchError> for IndexingPipelineError {
     }
 }
 
-fn remove_file_if_exists(path: &Path) -> std::io::Result<()> {
-    if path.exists() {
-        fs::remove_file(path)?;
-    }
-    Ok(())
-}
-
-fn remove_sqlite_files(path: &Path) -> std::io::Result<()> {
-    remove_file_if_exists(path)?;
-    remove_file_if_exists(&path.with_extension("sqlite-wal"))?;
-    remove_file_if_exists(&path.with_extension("sqlite-shm"))?;
-    Ok(())
-}
-
-fn reset_directory(path: &Path) -> std::io::Result<()> {
-    if path.exists() {
-        fs::remove_dir_all(path)?;
-    }
-    fs::create_dir_all(path)
-}
-
 fn duration_micros(duration: Duration) -> u64 {
     duration.as_micros().min(u128::from(u64::MAX)) as u64
 }
@@ -714,6 +577,7 @@ mod tests {
     use super::*;
     use crate::adapters::sqlite::{FileIndexStatus, FileRecord, IndexSchemaMetadata};
     use crate::adapters::sqlite::{IndexingQueueReason, IndexingQueueStatus};
+    use crate::index_rebuild::IndexRebuildPaths;
     #[cfg(unix)]
     use std::os::unix::fs::symlink;
     use std::path::{Path, PathBuf};

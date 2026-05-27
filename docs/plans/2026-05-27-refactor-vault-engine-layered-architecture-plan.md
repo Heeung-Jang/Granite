@@ -905,7 +905,7 @@ Default stop conditions:
   - Build: move `run_tantivy_rebuild_pipeline` and stage metrics merge logic without changing writer memory or commit timing.
   - Verify: Tantivy rebuild pipeline tests pass.
 
-- [ ] **RA05.06e Move full rebuild commit orchestration**
+- [x] **RA05.06e Move full rebuild commit orchestration**
   - Build: move `run_full_rebuild_pipeline` and `run_full_rebuild_pipeline_and_commit` after read/parse and Tantivy rebuild pieces are green.
   - Verify: full rebuild tests and rebuild path safety tests pass.
 
@@ -1305,10 +1305,10 @@ Use this checklist for each PR or worktree batch:
 
 ## Next Step
 
-On the active `codex/refactor-vault-engine-layered-architecture` branch, Phase 0 through Phase 4 and RA05.01 through RA05.06d are green. Remaining follow-up gates and next work:
+On the active `codex/refactor-vault-engine-layered-architecture` branch, Phase 0 through Phase 4 and RA05.01 through RA05.06e are green. Remaining follow-up gates and next work:
 
 1. RA01.12 unsafe allowlist audit if it was not already covered by existing FFI/FSEvents tests.
 2. RA04.11 post-adapter performance gate, or document why it is deferred and keep it as a merge blocker.
-3. Continue RA05.06e full rebuild commit orchestration.
+3. Continue RA05.06f streaming rebuild memory gate.
 
 Do not start Phase 6 or Phase 7 until Phase 5 boundary scans and FFI retargeting are green.

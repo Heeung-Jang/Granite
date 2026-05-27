@@ -33,6 +33,26 @@ pub(crate) enum IndexDirectoryPathError {
 
 pub(crate) type IndexDirectoryResult<T> = Result<T, IndexDirectoryError>;
 
+pub(crate) fn ensure_directory(path: &Path) -> IndexDirectoryResult<()> {
+    fs::create_dir_all(path)?;
+    Ok(())
+}
+
+pub(crate) fn remove_sqlite_files(path: &Path) -> IndexDirectoryResult<()> {
+    remove_file_if_exists(path)?;
+    remove_file_if_exists(&path.with_extension("sqlite-wal"))?;
+    remove_file_if_exists(&path.with_extension("sqlite-shm"))?;
+    Ok(())
+}
+
+pub(crate) fn reset_directory(path: &Path) -> IndexDirectoryResult<()> {
+    if path.exists() {
+        fs::remove_dir_all(path)?;
+    }
+    fs::create_dir_all(path)?;
+    Ok(())
+}
+
 pub(crate) fn commit_index_rebuild(
     paths: &IndexDirectoryPaths,
 ) -> IndexDirectoryResult<IndexDirectoryCommit> {
@@ -166,6 +186,14 @@ fn remove_path(path: &Path) -> IndexDirectoryResult<()> {
         fs::remove_file(path)?;
     }
     Ok(())
+}
+
+fn remove_file_if_exists(path: &Path) -> IndexDirectoryResult<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(IndexDirectoryError::Io(error)),
+    }
 }
 
 fn normalize_path(path: &Path) -> IndexDirectoryResult<PathBuf> {

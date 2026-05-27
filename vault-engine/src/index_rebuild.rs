@@ -1,7 +1,8 @@
 pub use crate::use_cases::index_rebuild::{
     IndexRebuildCommit, IndexRebuildError, IndexRebuildPathError, IndexRebuildPaths,
     IndexRebuildReason, IndexRebuildResult, IndexRebuildStart, MetadataOpenRecovery,
-    abort_index_rebuild, commit_index_rebuild, open_metadata_or_start_rebuild, start_index_rebuild,
+    abort_index_rebuild, commit_index_rebuild, open_metadata_or_start_rebuild,
+    run_full_rebuild_pipeline, run_full_rebuild_pipeline_and_commit, start_index_rebuild,
 };
 
 #[cfg(test)]

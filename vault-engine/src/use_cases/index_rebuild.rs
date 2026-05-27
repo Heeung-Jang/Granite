@@ -1,24 +1,31 @@
 use std::{
     fmt,
     path::{Path, PathBuf},
+    time::{Duration, Instant},
 };
 
 use crate::adapters::fs::index_directory::{
     IndexDirectoryCommit, IndexDirectoryError, IndexDirectoryPathError, IndexDirectoryPaths,
     abort_index_rebuild as abort_index_rebuild_impl,
-    commit_index_rebuild as commit_index_rebuild_impl, reset_rebuild_directory, validate_paths,
+    commit_index_rebuild as commit_index_rebuild_impl, ensure_directory, remove_sqlite_files,
+    reset_directory, reset_rebuild_directory, validate_paths,
 };
 use crate::adapters::sqlite::{
     FileRecord, IndexSchemaMetadata, IndexingQueue, IndexingQueueError, IndexingQueueReason,
     MetadataStore, MetadataStoreError,
 };
+use crate::adapters::tantivy::{TantivyIndexingStageMetrics, TantivySearchIndex};
 use crate::indexing_pipeline::{
-    IndexingPipelineOptions, load_search_document_sources, run_full_rebuild_pipeline_and_commit,
+    IndexingPipelineError, IndexingPipelineOptions, IndexingPipelineResult, IndexingPipelineTier,
+    IndexingTierTransition, ProductionIndexingPipelineResult, ProductionIndexingStageMetrics,
+    SearchDocumentSource, load_search_document_sources,
 };
 use crate::paths::{PathError, VaultRoot};
 use crate::scanner::ScanSummary;
 
+use super::read_parse_documents::{PipelineCorpusStats, run_read_parse_pipeline};
 use super::read_vault::expected_read_schema_metadata;
+use super::rebuild_tantivy::run_tantivy_rebuild_pipeline;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IndexRebuildPaths {
@@ -168,6 +175,91 @@ pub fn abort_index_rebuild(paths: &IndexRebuildPaths) -> IndexRebuildResult<()> 
     abort_index_rebuild_impl(&paths.to_index_directory_paths()).map_err(Into::into)
 }
 
+pub fn run_full_rebuild_pipeline(
+    paths: &IndexRebuildPaths,
+    sources: &[SearchDocumentSource],
+    metadata: &IndexSchemaMetadata,
+    pipeline_options: &IndexingPipelineOptions,
+) -> IndexingPipelineResult<ProductionIndexingPipelineResult> {
+    let started = Instant::now();
+    let mut tier_transitions = vec![tier_transition(
+        IndexingPipelineTier::Discovered,
+        started.elapsed(),
+    )];
+    ensure_directory(&paths.rebuild_directory).map_err(index_directory_error_for_pipeline)?;
+    let options = pipeline_options.normalized();
+    let metadata_path = paths.rebuild_directory.join("metadata.sqlite");
+    remove_sqlite_files(&metadata_path).map_err(index_directory_error_for_pipeline)?;
+    let mut metadata_store = MetadataStore::open(&metadata_path, metadata)?;
+    let batch_size = options.metadata_batch_size;
+    let mut pending = Vec::with_capacity(batch_size);
+    let mut sqlite_metadata_write_micros = 0;
+
+    run_read_parse_pipeline(sources, &options, |timed| {
+        let mut records = timed.work_item.metadata_records;
+        records.file.generation = metadata.generation;
+        records.file.mark_search_indexed();
+        pending.push(records);
+        if pending.len() >= batch_size {
+            let start = Instant::now();
+            metadata_store.replace_file_records_batch(&pending)?;
+            sqlite_metadata_write_micros += duration_micros_nonzero(start.elapsed());
+            pending.clear();
+        }
+        Ok::<(), crate::indexing_pipeline::IndexingPipelineError>(())
+    })?;
+
+    if !pending.is_empty() {
+        let start = Instant::now();
+        metadata_store.replace_file_records_batch(&pending)?;
+        sqlite_metadata_write_micros += duration_micros_nonzero(start.elapsed());
+    }
+    tier_transitions.push(tier_transition(
+        IndexingPipelineTier::MetadataReady,
+        started.elapsed(),
+    ));
+
+    let tantivy_dir = paths.rebuild_directory.join("tantivy");
+    reset_directory(&tantivy_dir).map_err(index_directory_error_for_pipeline)?;
+    let mut tantivy = TantivySearchIndex::open_in_dir(&tantivy_dir)?;
+    tier_transitions.push(tier_transition(
+        IndexingPipelineTier::BodyIndexing,
+        started.elapsed(),
+    ));
+    let tantivy_run = run_tantivy_rebuild_pipeline(&mut tantivy, sources, &options)?;
+    let time_to_usable_micros = duration_micros_nonzero(started.elapsed());
+    tier_transitions.push(IndexingTierTransition {
+        tier: IndexingPipelineTier::FilenameReady,
+        elapsed_micros: time_to_usable_micros,
+    });
+    tier_transitions.push(IndexingTierTransition {
+        tier: IndexingPipelineTier::Complete,
+        elapsed_micros: time_to_usable_micros,
+    });
+
+    Ok(production_result_with_timing(
+        metadata.generation,
+        tantivy_run.stages.added_document_count,
+        tantivy_run.stages.failed_document_count,
+        tantivy_run.stats,
+        sqlite_metadata_write_micros,
+        tantivy_run.stages,
+        tier_transitions,
+        Some(time_to_usable_micros),
+    ))
+}
+
+pub fn run_full_rebuild_pipeline_and_commit(
+    paths: &IndexRebuildPaths,
+    sources: &[SearchDocumentSource],
+    metadata: &IndexSchemaMetadata,
+    pipeline_options: &IndexingPipelineOptions,
+) -> IndexingPipelineResult<ProductionIndexingPipelineResult> {
+    let result = run_full_rebuild_pipeline(paths, sources, metadata, pipeline_options)?;
+    commit_index_rebuild(paths)?;
+    Ok(result)
+}
+
 pub fn rebuild_read_index(
     vault_path: &Path,
     data_path: &Path,
@@ -190,6 +282,56 @@ pub fn rebuild_read_index(
     .map_err(|error| ReadIndexRebuildError::RebuildFailed(error.to_string()))?;
 
     Ok(result.generation)
+}
+
+fn production_result_with_timing(
+    generation: u64,
+    processed_count: usize,
+    failed_count: usize,
+    stats: PipelineCorpusStats,
+    sqlite_metadata_write_micros: u64,
+    tantivy: TantivyIndexingStageMetrics,
+    tier_transitions: Vec<IndexingTierTransition>,
+    time_to_usable_micros: Option<u64>,
+) -> ProductionIndexingPipelineResult {
+    ProductionIndexingPipelineResult::with_timing(
+        generation,
+        processed_count,
+        failed_count,
+        tier_transitions,
+        time_to_usable_micros,
+        ProductionIndexingStageMetrics {
+            read_parse_sample_count: stats.read_micros.len(),
+            read_parse_total_bytes: stats.read_parse_bytes,
+            read_parse_peak_in_flight_items: 0,
+            sqlite_metadata_write_micros,
+            tantivy,
+        },
+    )
+}
+
+fn tier_transition(tier: IndexingPipelineTier, elapsed: Duration) -> IndexingTierTransition {
+    IndexingTierTransition {
+        tier,
+        elapsed_micros: duration_micros_nonzero(elapsed),
+    }
+}
+
+fn duration_micros(duration: Duration) -> u64 {
+    duration.as_micros().min(u128::from(u64::MAX)) as u64
+}
+
+fn duration_micros_nonzero(duration: Duration) -> u64 {
+    duration_micros(duration).max(1)
+}
+
+fn index_directory_error_for_pipeline(error: IndexDirectoryError) -> IndexingPipelineError {
+    match error {
+        IndexDirectoryError::Io(error) => IndexingPipelineError::Io(error),
+        IndexDirectoryError::InvalidPath(error) => {
+            IndexingPipelineError::Rebuild(IndexRebuildError::InvalidPath(error.into()))
+        }
+    }
 }
 
 fn rebuild_reason_for_metadata_error(error: &MetadataStoreError) -> IndexRebuildReason {
