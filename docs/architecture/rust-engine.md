@@ -221,6 +221,26 @@ vault-engine/src/
 The target tree is a guide, not a license to create empty modules. Create a file
 only when existing code moves into it.
 
+## Placement Checklist
+
+Before adding or moving Rust code, choose the owner by behavior, not by the
+nearest current file:
+
+- Pure values, bounded labels, link keys, metadata DTOs, graph DTOs, search
+  DTOs, scan entry kinds, and parser output records belong in `core`.
+- Filesystem reads/writes, canonicalization, symlink checks, FSEvents, SQLite,
+  Tantivy, and index directory mutation belong in `adapters`.
+- User-visible workflows such as read pages, save conflict handling, rebuilds,
+  indexing batches, graph snapshots, startup reconciliation, and watcher burst
+  recovery belong in `use_cases`.
+- C ABI symbols, raw pointer handling, JSON/binary row envelopes, panic
+  containment, and Swift field-code mappings belong in `ffi`.
+- Benchmarks, profiler entry points, fixture probes, and aggregate-only
+  artifacts belong in `diagnostics`; production code must not import
+  `diagnostics`.
+- Compatibility modules at the crate root are temporary. Add one only when a
+  migration needs it, and remove it as soon as callers have moved to the owner.
+
 ## Import Boundary Checks
 
 Run these from the repository root after Phases 3, 4, 5, 6, and 7:

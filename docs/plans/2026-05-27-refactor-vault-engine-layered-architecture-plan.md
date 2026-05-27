@@ -1577,9 +1577,10 @@ Default stop conditions:
   - Evidence: the attachment resolver remains covered by compatibility tests, production attachment DTO/state consumers use `core::attachments`, profiler imports use diagnostics facades, and the listed tests passed without warnings.
   - Stop condition: production parsing starts resolving attachments through the root compatibility module.
 
-- [ ] **RA07.04 Add architecture placement checklist**
+- [x] **RA07.04 Add architecture placement checklist**
   - Build: add a short checklist to `docs/architecture/rust-engine.md` explaining where new parser, storage, FFI, and use-case code should go.
   - Verify: checklist covers future work for read API, save, graph, indexing, watcher, benchmarks, and profiler imports.
+  - Evidence: `docs/architecture/rust-engine.md` now includes a placement checklist for `core`, `adapters`, `use_cases`, `ffi`, `diagnostics`, and temporary root compatibility modules.
 
 - [ ] **RA07.05 Run public API grep**
   - Build: no code change after RA07.04.
