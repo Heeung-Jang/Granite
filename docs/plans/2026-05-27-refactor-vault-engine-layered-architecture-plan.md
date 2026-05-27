@@ -914,7 +914,7 @@ Default stop conditions:
   - Verify: bounded in-flight counts, unchanged pipeline config, no full-corpus `Vec<SearchDocument>`, preserved `time_to_usable_samples`, and no regression beyond the backend performance gate.
   - Evidence: `docs/benchmarks/artifacts/vault-engine-architecture-fixture-ra05-06f-2026-05-27.json` keeps workers `4`, channel `32`, metadata batch `256`, Tantivy memory `50MB`, time-to-usable samples `3`, read/parse peak in-flight `5/6`, and no private-token scan matches.
 
-- [ ] **RA05.06g Retarget rebuild FFI and finalize rebuild use case**
+- [x] **RA05.06g Retarget rebuild FFI and finalize rebuild use case**
   - Build: after full rebuild orchestration is under use cases, migrate rebuild FFI wiring away from legacy `index_rebuild` and `indexing_pipeline` entry points.
   - Verify: rebuild FFI tests, Swift engine smoke, and FFI direct-adapter scan pass.
 
@@ -1306,10 +1306,10 @@ Use this checklist for each PR or worktree batch:
 
 ## Next Step
 
-On the active `codex/refactor-vault-engine-layered-architecture` branch, Phase 0 through Phase 4 and RA05.01 through RA05.06f are green. Remaining follow-up gates and next work:
+On the active `codex/refactor-vault-engine-layered-architecture` branch, Phase 0 through Phase 4 and RA05.01 through RA05.06g are green. Remaining follow-up gates and next work:
 
 1. RA01.12 unsafe allowlist audit if it was not already covered by existing FFI/FSEvents tests.
 2. RA04.11 post-adapter performance gate, or document why it is deferred and keep it as a merge blocker.
-3. Continue RA05.06g rebuild FFI retargeting and final use-case scan.
+3. Continue RA05.07 startup reconciliation use case.
 
 Do not start Phase 6 or Phase 7 until Phase 5 boundary scans and FFI retargeting are green.
