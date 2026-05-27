@@ -773,7 +773,7 @@ Default stop conditions:
 - [x] **RA04.09 Run adapter boundary scan**
   - Build: no code change after RA04.08.
   - Verify: adapters do not import `crate::ffi`, and Tantivy/SQLite adapters do not import each other's private modules.
-  - Result: `core` denylist scan is clean. Adapter scan has two pre-Phase-5 transitional exceptions: `adapters/fs/index_directory.rs` still uses `index_rebuild` path/result types, and `adapters/fs/note_writer.rs` still uses `save` baseline/error types. `SnippetStorageMode` was moved to core to remove the Tantivy-to-pipeline reverse dependency.
+  - Result: `core` denylist scan is clean. Adapter scan has one remaining transitional exception: `adapters/fs/note_writer.rs` still uses `save` baseline/error types. `adapters/fs/index_directory.rs` now owns adapter-local path/result types. `SnippetStorageMode` was moved to core to remove the Tantivy-to-pipeline reverse dependency.
 
 - [x] **RA04.10 Add rebuild adversarial path tests**
   - Build: cover `index_root` inside vault, `data_directory`/`rebuild_directory` outside index root, `data == rebuild`, symlinked data/rebuild/previous-data paths pointing into the vault, validation-then-symlink-swap before destructive mutation, missing engine-owned marker files, and failed commit/abort/reset paths.
@@ -881,7 +881,7 @@ Default stop conditions:
   - Build: migrate `ffi/save.rs` so it decodes FFI input, calls `use_cases::save_note`, and encodes the response. It must not open `IndexingQueue`, open `VaultRoot`, or call `crate::save::*_impl` directly after this step.
   - Verify: save FFI unit tests, conflict payload JSON tests, and FFI direct-adapter scan pass.
 
-- [ ] **RA05.05 Create index rebuild use-case shell**
+- [x] **RA05.05 Create index rebuild use-case shell**
   - Build: create `use_cases/index_rebuild.rs` and move rebuild DTO ownership and non-pipeline entry-point shell only. Do not finalize FFI wiring until full rebuild pipeline orchestration moves in RA05.06c through RA05.06e.
   - Verify: rebuild path safety and recovery tests pass without changing full rebuild pipeline behavior.
 
@@ -1305,10 +1305,10 @@ Use this checklist for each PR or worktree batch:
 
 ## Next Step
 
-On the active `codex/refactor-vault-engine-layered-architecture` branch, Phase 0 through Phase 4 and RA05.01 through RA05.04e are green. Remaining follow-up gates and next work:
+On the active `codex/refactor-vault-engine-layered-architecture` branch, Phase 0 through Phase 4 and RA05.01 through RA05.05 are green. Remaining follow-up gates and next work:
 
 1. RA01.12 unsafe allowlist audit if it was not already covered by existing FFI/FSEvents tests.
 2. RA04.11 post-adapter performance gate, or document why it is deferred and keep it as a merge blocker.
-3. Continue RA05.05 index rebuild shell cleanup and RA05.06 indexing use-case extraction.
+3. Continue RA05.06 indexing use-case extraction.
 
 Do not start Phase 6 or Phase 7 until Phase 5 boundary scans and FFI retargeting are green.

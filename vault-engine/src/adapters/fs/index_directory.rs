@@ -1,22 +1,49 @@
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-use crate::index_rebuild::{
-    IndexRebuildCommit, IndexRebuildError, IndexRebuildPathError, IndexRebuildPaths,
-    IndexRebuildReason, IndexRebuildResult,
-};
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct IndexDirectoryPaths {
+    pub(crate) vault_root: PathBuf,
+    pub(crate) index_root: PathBuf,
+    pub(crate) data_directory: PathBuf,
+    pub(crate) rebuild_directory: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct IndexDirectoryCommit {
+    pub(crate) data_directory: PathBuf,
+    pub(crate) previous_data_removed: bool,
+}
+
+#[derive(Debug)]
+pub(crate) enum IndexDirectoryError {
+    Io(std::io::Error),
+    InvalidPath(IndexDirectoryPathError),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum IndexDirectoryPathError {
+    IndexRootInsideVault,
+    DataOutsideIndexRoot,
+    RebuildOutsideIndexRoot,
+    DataOverlapsVault,
+    RebuildOverlapsVault,
+    DataEqualsRebuild,
+}
+
+pub(crate) type IndexDirectoryResult<T> = Result<T, IndexDirectoryError>;
 
 pub(crate) fn commit_index_rebuild(
-    paths: &IndexRebuildPaths,
-) -> IndexRebuildResult<IndexRebuildCommit> {
+    paths: &IndexDirectoryPaths,
+) -> IndexDirectoryResult<IndexDirectoryCommit> {
     let paths = validate_paths(paths)?;
     let previous_directory = paths.index_root.join("previous-data");
     ensure_no_vault_overlap(&previous_directory, &paths.vault_root)
-        .map_err(IndexRebuildError::InvalidPath)?;
+        .map_err(IndexDirectoryError::InvalidPath)?;
     ensure_existing_path_does_not_resolve_into_vault(
         &previous_directory,
         &paths.vault_root,
-        IndexRebuildPathError::DataOverlapsVault,
+        IndexDirectoryPathError::DataOverlapsVault,
     )?;
 
     if previous_directory.exists() {
@@ -36,7 +63,7 @@ pub(crate) fn commit_index_rebuild(
             if previous_directory.exists() && !paths.data_directory.exists() {
                 let _ = fs::rename(&previous_directory, &paths.data_directory);
             }
-            return Err(IndexRebuildError::Io(error));
+            return Err(IndexDirectoryError::Io(error));
         }
     }
 
@@ -44,13 +71,13 @@ pub(crate) fn commit_index_rebuild(
         remove_path(&previous_directory)?;
     }
 
-    Ok(IndexRebuildCommit {
+    Ok(IndexDirectoryCommit {
         data_directory: paths.data_directory,
         previous_data_removed,
     })
 }
 
-pub(crate) fn abort_index_rebuild(paths: &IndexRebuildPaths) -> IndexRebuildResult<()> {
+pub(crate) fn abort_index_rebuild(paths: &IndexDirectoryPaths) -> IndexDirectoryResult<()> {
     let paths = validate_paths(paths)?;
     if paths.rebuild_directory.exists() {
         remove_path(&paths.rebuild_directory)?;
@@ -61,70 +88,69 @@ pub(crate) fn abort_index_rebuild(paths: &IndexRebuildPaths) -> IndexRebuildResu
 pub(crate) fn reset_rebuild_directory(
     rebuild_directory: &Path,
     generation: u64,
-    reason: IndexRebuildReason,
-) -> IndexRebuildResult<()> {
+    reason: &str,
+) -> IndexDirectoryResult<()> {
     if rebuild_directory.exists() {
         remove_path(rebuild_directory)?;
     }
     fs::create_dir_all(rebuild_directory)?;
     fs::write(
         rebuild_directory.join("rebuild.json"),
-        format!(
-            "{{\"generation\":{generation},\"reason\":\"{}\"}}\n",
-            reason.as_str()
-        ),
+        format!("{{\"generation\":{generation},\"reason\":\"{reason}\"}}\n"),
     )?;
     Ok(())
 }
 
-pub(crate) fn validate_paths(paths: &IndexRebuildPaths) -> IndexRebuildResult<IndexRebuildPaths> {
+pub(crate) fn validate_paths(
+    paths: &IndexDirectoryPaths,
+) -> IndexDirectoryResult<IndexDirectoryPaths> {
     let vault_root = normalize_path(&paths.vault_root)?;
     let index_root = normalize_path(&paths.index_root)?;
     let data_directory = normalize_path(&paths.data_directory)?;
     let rebuild_directory = normalize_path(&paths.rebuild_directory)?;
 
     if index_root == vault_root || index_root.starts_with(&vault_root) {
-        return Err(IndexRebuildError::InvalidPath(
-            IndexRebuildPathError::IndexRootInsideVault,
+        return Err(IndexDirectoryError::InvalidPath(
+            IndexDirectoryPathError::IndexRootInsideVault,
         ));
     }
     if !data_directory.starts_with(&index_root) {
-        return Err(IndexRebuildError::InvalidPath(
-            IndexRebuildPathError::DataOutsideIndexRoot,
+        return Err(IndexDirectoryError::InvalidPath(
+            IndexDirectoryPathError::DataOutsideIndexRoot,
         ));
     }
     if !rebuild_directory.starts_with(&index_root) {
-        return Err(IndexRebuildError::InvalidPath(
-            IndexRebuildPathError::RebuildOutsideIndexRoot,
+        return Err(IndexDirectoryError::InvalidPath(
+            IndexDirectoryPathError::RebuildOutsideIndexRoot,
         ));
     }
     if paths_overlap(&data_directory, &vault_root) {
-        return Err(IndexRebuildError::InvalidPath(
-            IndexRebuildPathError::DataOverlapsVault,
+        return Err(IndexDirectoryError::InvalidPath(
+            IndexDirectoryPathError::DataOverlapsVault,
         ));
     }
     if paths_overlap(&rebuild_directory, &vault_root) {
-        return Err(IndexRebuildError::InvalidPath(
-            IndexRebuildPathError::RebuildOverlapsVault,
+        return Err(IndexDirectoryError::InvalidPath(
+            IndexDirectoryPathError::RebuildOverlapsVault,
         ));
     }
     ensure_existing_path_does_not_resolve_into_vault(
         &data_directory,
         &vault_root,
-        IndexRebuildPathError::DataOverlapsVault,
+        IndexDirectoryPathError::DataOverlapsVault,
     )?;
     ensure_existing_path_does_not_resolve_into_vault(
         &rebuild_directory,
         &vault_root,
-        IndexRebuildPathError::RebuildOverlapsVault,
+        IndexDirectoryPathError::RebuildOverlapsVault,
     )?;
     if data_directory == rebuild_directory {
-        return Err(IndexRebuildError::InvalidPath(
-            IndexRebuildPathError::DataEqualsRebuild,
+        return Err(IndexDirectoryError::InvalidPath(
+            IndexDirectoryPathError::DataEqualsRebuild,
         ));
     }
 
-    Ok(IndexRebuildPaths {
+    Ok(IndexDirectoryPaths {
         vault_root,
         index_root,
         data_directory,
@@ -132,7 +158,7 @@ pub(crate) fn validate_paths(paths: &IndexRebuildPaths) -> IndexRebuildResult<In
     })
 }
 
-fn remove_path(path: &Path) -> IndexRebuildResult<()> {
+fn remove_path(path: &Path) -> IndexDirectoryResult<()> {
     let metadata = fs::symlink_metadata(path)?;
     if metadata.is_dir() {
         fs::remove_dir_all(path)?;
@@ -142,7 +168,7 @@ fn remove_path(path: &Path) -> IndexRebuildResult<()> {
     Ok(())
 }
 
-fn normalize_path(path: &Path) -> IndexRebuildResult<PathBuf> {
+fn normalize_path(path: &Path) -> IndexDirectoryResult<PathBuf> {
     let absolute = if path.is_absolute() {
         path.to_path_buf()
     } else {
@@ -167,9 +193,9 @@ fn paths_overlap(left: &Path, right: &Path) -> bool {
     left == right || left.starts_with(right) || right.starts_with(left)
 }
 
-fn ensure_no_vault_overlap(path: &Path, vault_root: &Path) -> Result<(), IndexRebuildPathError> {
+fn ensure_no_vault_overlap(path: &Path, vault_root: &Path) -> Result<(), IndexDirectoryPathError> {
     if paths_overlap(path, vault_root) {
-        return Err(IndexRebuildPathError::DataOverlapsVault);
+        return Err(IndexDirectoryPathError::DataOverlapsVault);
     }
     Ok(())
 }
@@ -177,12 +203,12 @@ fn ensure_no_vault_overlap(path: &Path, vault_root: &Path) -> Result<(), IndexRe
 fn ensure_existing_path_does_not_resolve_into_vault(
     path: &Path,
     vault_root: &Path,
-    error: IndexRebuildPathError,
-) -> IndexRebuildResult<()> {
+    error: IndexDirectoryPathError,
+) -> IndexDirectoryResult<()> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(IndexRebuildError::Io(error)),
+        Err(error) => return Err(IndexDirectoryError::Io(error)),
     };
     if !metadata.file_type().is_symlink() {
         return Ok(());
@@ -191,7 +217,13 @@ fn ensure_existing_path_does_not_resolve_into_vault(
     let canonical = fs::canonicalize(path)?;
     let canonical_vault_root = fs::canonicalize(vault_root)?;
     if paths_overlap(&canonical, &canonical_vault_root) {
-        return Err(IndexRebuildError::InvalidPath(error));
+        return Err(IndexDirectoryError::InvalidPath(error));
     }
     Ok(())
+}
+
+impl From<std::io::Error> for IndexDirectoryError {
+    fn from(error: std::io::Error) -> Self {
+        Self::Io(error)
+    }
 }
