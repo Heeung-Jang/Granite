@@ -607,7 +607,7 @@ Default stop conditions:
   - Build: move parser output structs/enums that are pure domain types into `core/document.rs`, while leaving parsing implementation in place until a later phase.
   - Verify: parser fixture tests pass.
 
-- [ ] **RA03.07 Move path value types only where safe**
+- [x] **RA03.07 Move path value types only where safe**
   - Build: move pure path identity/value types into `core/paths.rs` only if they do not perform filesystem resolution.
   - Verify: `core` does not import `std::fs`.
 
