@@ -1,6 +1,8 @@
-use std::{fmt, path::PathBuf, time::SystemTime};
-
-use std::path::Path;
+use std::{
+    fmt,
+    path::{Path, PathBuf},
+    time::SystemTime,
+};
 
 use crate::adapters::fs::note_writer::{
     FileSnapshot, capture_snapshot, read_snapshot_contents, rename_temp_file, sync_parent,
@@ -140,6 +142,57 @@ impl<'a> SaveRequest<'a> {
     pub fn new(baseline: &'a SaveBaseline, contents: &'a [u8]) -> Self {
         Self { baseline, contents }
     }
+}
+
+pub fn capture_baseline_for_path(
+    vault_path: impl AsRef<Path>,
+    relative_path: &str,
+) -> SafeSaveResult<SaveBaseline> {
+    let root = open_root(vault_path)?;
+    SaveBaseline::capture(&root, relative_path)
+}
+
+pub fn safe_save_for_path(
+    vault_path: impl AsRef<Path>,
+    request: SaveRequest<'_>,
+) -> SafeSaveResult<SaveOutcome> {
+    let root = open_root(vault_path)?;
+    safe_save(&root, request)
+}
+
+pub fn reload_after_conflict_for_paths(
+    vault_path: impl AsRef<Path>,
+    queue_path: impl AsRef<Path>,
+    conflict: &SaveConflict,
+    generation: u64,
+) -> SaveConflictChoiceResult<SaveReloadOutcome> {
+    let root = open_root(vault_path)?;
+    let mut queue = IndexingQueue::open(queue_path)?;
+    reload_after_conflict(&root, &mut queue, conflict, generation)
+}
+
+pub fn keep_conflicted_buffer_as_new_note_for_paths(
+    vault_path: impl AsRef<Path>,
+    queue_path: impl AsRef<Path>,
+    relative_path: &str,
+    contents: &[u8],
+    generation: u64,
+) -> SaveConflictChoiceResult<SaveChoiceOutcome> {
+    let root = open_root(vault_path)?;
+    let mut queue = IndexingQueue::open(queue_path)?;
+    keep_conflicted_buffer_as_new_note(&root, &mut queue, relative_path, contents, generation)
+}
+
+pub fn overwrite_after_conflict_for_paths(
+    vault_path: impl AsRef<Path>,
+    queue_path: impl AsRef<Path>,
+    conflict: &SaveConflict,
+    contents: &[u8],
+    generation: u64,
+) -> SaveConflictChoiceResult<SaveChoiceOutcome> {
+    let root = open_root(vault_path)?;
+    let mut queue = IndexingQueue::open(queue_path)?;
+    overwrite_after_conflict(&root, &mut queue, conflict, contents, generation)
 }
 
 pub fn safe_save(root: &VaultRoot, request: SaveRequest<'_>) -> SafeSaveResult<SaveOutcome> {
@@ -409,4 +462,8 @@ pub(crate) fn enqueue_saved_file(
     };
     let file = FileRecord::from_scan_entry(&entry, generation);
     queue.enqueue_file(&file, reason)
+}
+
+fn open_root(path: impl AsRef<Path>) -> SafeSaveResult<VaultRoot> {
+    VaultRoot::open(path).map_err(SafeSaveError::Path)
 }

@@ -3,7 +3,6 @@ use std::os::raw::c_char;
 
 use serde::{Deserialize, Serialize};
 
-use crate::paths::PathError;
 use crate::save::{SafeSaveError, SaveConflictChoiceError};
 
 use super::panic::catch_ffi_unwind;
@@ -92,15 +91,6 @@ impl FfiError {
         Self {
             code: "oversized_response".to_string(),
             message: "graph response exceeded byte cap".to_string(),
-            conflict_kind: None,
-            conflict: None,
-        }
-    }
-
-    pub(super) fn from_path(error: PathError) -> Self {
-        Self {
-            code: "path_error".to_string(),
-            message: error.to_string(),
             conflict_kind: None,
             conflict: None,
         }

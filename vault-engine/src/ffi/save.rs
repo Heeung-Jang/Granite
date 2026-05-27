@@ -3,12 +3,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::adapters::sqlite::{IndexingQueue, IndexingQueueItem};
-use crate::paths::{FileIdentity, VaultRoot};
-use crate::save::{
+use crate::core::files::FileIdentity;
+use crate::use_cases::save_note::{
     SaveBaseline, SaveChoiceOutcome, SaveConflict, SaveConflictKind, SaveConflictSnapshot,
-    SaveOutcome, SaveReloadOutcome, SaveRequest, keep_conflicted_buffer_as_new_note,
-    overwrite_after_conflict, reload_after_conflict, safe_save,
+    SaveOutcome, SaveReloadOutcome, SaveRequest, capture_baseline_for_path,
+    keep_conflicted_buffer_as_new_note_for_paths, overwrite_after_conflict_for_paths,
+    reload_after_conflict_for_paths, safe_save_for_path,
 };
 
 use super::json::{FfiError, ffi_response, read_json};
@@ -22,8 +22,8 @@ pub unsafe extern "C" fn engine_save_capture_baseline(
     ffi_response(|| {
         let vault_path = unsafe { read_c_string(vault_path, "vault_path") }?;
         let relative_path = unsafe { read_c_string(relative_path, "relative_path") }?;
-        let root = VaultRoot::open(&vault_path).map_err(FfiError::from_path)?;
-        let baseline = SaveBaseline::capture(&root, &relative_path).map_err(FfiError::from_save)?;
+        let baseline =
+            capture_baseline_for_path(&vault_path, &relative_path).map_err(FfiError::from_save)?;
         Ok(FfiSaveBaseline::from(&baseline))
     })
 }
@@ -41,9 +41,8 @@ pub unsafe extern "C" fn engine_save_write(
         let contents = unsafe { read_bytes(contents, contents_len, "contents") }?;
         let baseline: FfiSaveBaseline = read_json(&baseline_json, "baseline_json")?;
         let baseline = SaveBaseline::from(baseline);
-        let root = VaultRoot::open(&vault_path).map_err(FfiError::from_path)?;
-        let outcome =
-            safe_save(&root, SaveRequest::new(&baseline, contents)).map_err(FfiError::from_save)?;
+        let outcome = safe_save_for_path(&vault_path, SaveRequest::new(&baseline, contents))
+            .map_err(FfiError::from_save)?;
         Ok(FfiSaveOutcome::from(&outcome))
     })
 }
@@ -61,10 +60,9 @@ pub unsafe extern "C" fn engine_save_reload_after_conflict(
         let conflict_json = unsafe { read_c_string(conflict_json, "conflict_json") }?;
         let conflict: FfiSaveConflict = read_json(&conflict_json, "conflict_json")?;
         let conflict = SaveConflict::try_from(conflict)?;
-        let root = VaultRoot::open(&vault_path).map_err(FfiError::from_path)?;
-        let mut queue = IndexingQueue::open(&queue_path).map_err(FfiError::from_queue)?;
-        let outcome = reload_after_conflict(&root, &mut queue, &conflict, generation)
-            .map_err(FfiError::from_choice)?;
+        let outcome =
+            reload_after_conflict_for_paths(&vault_path, &queue_path, &conflict, generation)
+                .map_err(FfiError::from_choice)?;
         FfiSaveReloadOutcome::try_from(&outcome)
     })
 }
@@ -83,11 +81,9 @@ pub unsafe extern "C" fn engine_save_keep_conflict_as_new_note(
         let queue_path = unsafe { read_c_string(queue_path, "queue_path") }?;
         let new_relative_path = unsafe { read_c_string(new_relative_path, "new_relative_path") }?;
         let contents = unsafe { read_bytes(contents, contents_len, "contents") }?;
-        let root = VaultRoot::open(&vault_path).map_err(FfiError::from_path)?;
-        let mut queue = IndexingQueue::open(&queue_path).map_err(FfiError::from_queue)?;
-        let outcome = keep_conflicted_buffer_as_new_note(
-            &root,
-            &mut queue,
+        let outcome = keep_conflicted_buffer_as_new_note_for_paths(
+            &vault_path,
+            &queue_path,
             &new_relative_path,
             contents,
             generation,
@@ -113,10 +109,14 @@ pub unsafe extern "C" fn engine_save_overwrite_after_conflict(
         let contents = unsafe { read_bytes(contents, contents_len, "contents") }?;
         let conflict: FfiSaveConflict = read_json(&conflict_json, "conflict_json")?;
         let conflict = SaveConflict::try_from(conflict)?;
-        let root = VaultRoot::open(&vault_path).map_err(FfiError::from_path)?;
-        let mut queue = IndexingQueue::open(&queue_path).map_err(FfiError::from_queue)?;
-        let outcome = overwrite_after_conflict(&root, &mut queue, &conflict, contents, generation)
-            .map_err(FfiError::from_choice)?;
+        let outcome = overwrite_after_conflict_for_paths(
+            &vault_path,
+            &queue_path,
+            &conflict,
+            contents,
+            generation,
+        )
+        .map_err(FfiError::from_choice)?;
         Ok(FfiSaveChoiceOutcome::from(&outcome))
     })
 }
@@ -286,17 +286,6 @@ impl From<&SaveOutcome> for FfiSaveOutcome {
     }
 }
 
-impl From<&IndexingQueueItem> for FfiQueuedItem {
-    fn from(item: &IndexingQueueItem) -> Self {
-        Self {
-            relative_path: item.relative_path.to_string_lossy().into_owned(),
-            generation: item.generation,
-            reason: format!("{:?}", item.reason),
-            status: format!("{:?}", item.status),
-        }
-    }
-}
-
 impl TryFrom<&SaveReloadOutcome> for FfiSaveReloadOutcome {
     type Error = FfiError;
 
@@ -306,7 +295,16 @@ impl TryFrom<&SaveReloadOutcome> for FfiSaveReloadOutcome {
         Ok(Self {
             baseline: FfiSaveBaseline::from(&outcome.baseline),
             contents,
-            queued_item: FfiQueuedItem::from(&outcome.queued_item),
+            queued_item: FfiQueuedItem {
+                relative_path: outcome
+                    .queued_item
+                    .relative_path
+                    .to_string_lossy()
+                    .into_owned(),
+                generation: outcome.queued_item.generation,
+                reason: format!("{:?}", outcome.queued_item.reason),
+                status: format!("{:?}", outcome.queued_item.status),
+            },
             dirty: outcome.dirty,
         })
     }
@@ -318,7 +316,16 @@ impl From<&SaveChoiceOutcome> for FfiSaveChoiceOutcome {
             choice: format!("{:?}", outcome.choice),
             baseline: FfiSaveBaseline::from(&outcome.baseline),
             bytes_written: outcome.bytes_written,
-            queued_item: FfiQueuedItem::from(&outcome.queued_item),
+            queued_item: FfiQueuedItem {
+                relative_path: outcome
+                    .queued_item
+                    .relative_path
+                    .to_string_lossy()
+                    .into_owned(),
+                generation: outcome.queued_item.generation,
+                reason: format!("{:?}", outcome.queued_item.reason),
+                status: format!("{:?}", outcome.queued_item.status),
+            },
             dirty: outcome.dirty,
         }
     }

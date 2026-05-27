@@ -877,7 +877,7 @@ Default stop conditions:
   - Build: no behavior change; ensure mutation-time path revalidation remains next to filesystem write primitives.
   - Verify: adversarial save path tests still pass and `use_cases/save_note.rs` does not import `std::fs`.
 
-- [ ] **RA05.04e Retarget save FFI to use cases**
+- [x] **RA05.04e Retarget save FFI to use cases**
   - Build: migrate `ffi/save.rs` so it decodes FFI input, calls `use_cases::save_note`, and encodes the response. It must not open `IndexingQueue`, open `VaultRoot`, or call `crate::save::*_impl` directly after this step.
   - Verify: save FFI unit tests, conflict payload JSON tests, and FFI direct-adapter scan pass.
 
