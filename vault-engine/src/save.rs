@@ -4,8 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use crate::adapters::fs::note_writer::{
-    FileSnapshot, capture_snapshot, rename_temp_file, stable_content_hash, sync_parent,
-    write_new_note, write_temp_file,
+    FileSnapshot, capture_snapshot, rename_temp_file, sync_parent, write_new_note, write_temp_file,
 };
 use crate::index::FileRecord;
 use crate::indexing_queue::{
@@ -417,6 +416,7 @@ impl From<IndexingQueueError> for SaveConflictChoiceError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapters::fs::note_writer::stable_content_hash;
     use crate::indexing_queue::{IndexingQueue, IndexingQueueReason};
     use std::fs;
     #[cfg(unix)]

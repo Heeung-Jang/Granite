@@ -668,7 +668,7 @@ Default stop conditions:
   - Build: move `MetadataStore`, `IndexedFileRecords`, `MetadataStoreError`, and constructor/open methods to `adapters/sqlite/metadata_store.rs` after helpers are already under the SQLite adapter.
   - Verify: full `index::tests` filter or new `adapters::sqlite` test filter passes.
 
-- [ ] **RA04.02g Keep old `crate::index` compatibility path**
+- [x] **RA04.02g Keep old `crate::index` compatibility path**
   - Build: turn `index.rs` into a temporary compatibility module that re-exports `adapters::sqlite` symbols still used by unmigrated callers.
   - Verify: `cargo test --manifest-path vault-engine/Cargo.toml` passes and `rg "crate::index::" vault-engine/src` shows only expected temporary callers.
 
