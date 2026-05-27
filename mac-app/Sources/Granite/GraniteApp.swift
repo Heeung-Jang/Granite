@@ -205,6 +205,15 @@ struct GraniteApp: App {
             }
             dispatchMain()
         }
+
+        if CommandLine.arguments.contains("--foundation-models-performance-probe") {
+            Task.detached {
+                let report = await FoundationModelsSummaryPerformanceProbe.run(arguments: CommandLine.arguments)
+                print(FoundationModelsSummaryPerformanceProbe.encodedReport(report))
+                Foundation.exit(report.summary.passed ? 0 : 2)
+            }
+            dispatchMain()
+        }
     }
 
     var body: some Scene {
