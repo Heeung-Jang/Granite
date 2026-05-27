@@ -763,7 +763,7 @@ Default stop conditions:
   - Build: move `VaultReadApi` type, constructor, generation getter, and open lifecycle into `use_cases/read_vault.rs`.
   - Verify: Rust read API constructor/open tests and Swift engine smoke pass.
 
-- [ ] **RA05.02a Keep read state semantics stable**
+- [x] **RA05.02a Keep read state semantics stable**
   - Build: preserve `complete`, `partial`, `stale`, `cancelled`, `error`, and `index_unavailable` mapping.
   - Verify: read FFI tests and Swift read UI probe still interpret states correctly.
 

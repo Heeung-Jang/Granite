@@ -366,8 +366,10 @@ mod tests {
         ENGINE_READ_INSPECTOR_PANEL_OUTGOING, ENGINE_READ_INSPECTOR_PANEL_PROPERTIES,
         ENGINE_READ_INSPECTOR_PANEL_TAGS, ENGINE_READ_LOCAL_GRAPH_DEPTH_ONE_HOP,
         ENGINE_READ_LOCAL_GRAPH_DEPTH_TWO_HOP, ENGINE_READ_SEARCH_MODE_BODY,
-        ENGINE_READ_SEARCH_MODE_FILE_NAME, ENGINE_READ_STATE_COMPLETE, ENGINE_READ_STATE_ERROR,
-        ENGINE_READ_STATE_PARTIAL, READ_BACKEND_NAME, READ_BACKEND_VERSION, READ_TOKENIZER_CONFIG,
+        ENGINE_READ_SEARCH_MODE_FILE_NAME, ENGINE_READ_STATE_CANCELLED, ENGINE_READ_STATE_COMPLETE,
+        ENGINE_READ_STATE_ERROR, ENGINE_READ_STATE_INDEX_UNAVAILABLE, ENGINE_READ_STATE_PARTIAL,
+        ENGINE_READ_STATE_STALE, READ_BACKEND_NAME, READ_BACKEND_VERSION, READ_TOKENIZER_CONFIG,
+        ReadState,
     };
     use crate::scanner::{ScanEntry, ScanEntryKind};
     use crate::sqlite_fts::SearchDocument;
@@ -417,6 +419,40 @@ mod tests {
         assert!(response.handle.is_null());
         assert_eq!(header.state, crate::read_api::ENGINE_READ_STATE_ERROR);
         assert_eq!(error_code, "invalid_input");
+    }
+
+    #[test]
+    fn engine_read_open_missing_index_returns_index_unavailable() {
+        let dir = tempdir().expect("tempdir");
+        let metadata_path = dir.path().join("missing-metadata.sqlite");
+        let tantivy_path = dir.path().join("missing-tantivy");
+        let metadata = CString::new(metadata_path.to_string_lossy().as_bytes()).expect("metadata");
+        let tantivy = CString::new(tantivy_path.to_string_lossy().as_bytes()).expect("tantivy");
+
+        let response = unsafe { engine_read_open(metadata.as_ptr(), tantivy.as_ptr()) };
+        let (header, error_code) = unsafe { take_open_error(response.result) };
+
+        assert!(response.handle.is_null());
+        assert_eq!(header.state, ENGINE_READ_STATE_INDEX_UNAVAILABLE);
+        assert_eq!(error_code, "missing_metadata");
+    }
+
+    #[test]
+    fn read_state_codes_match_swift_abi_contract() {
+        assert_eq!(
+            read_state_code(ReadState::Complete),
+            ENGINE_READ_STATE_COMPLETE
+        );
+        assert_eq!(
+            read_state_code(ReadState::Partial),
+            ENGINE_READ_STATE_PARTIAL
+        );
+        assert_eq!(read_state_code(ReadState::Stale), ENGINE_READ_STATE_STALE);
+        assert_eq!(
+            read_state_code(ReadState::Cancelled),
+            ENGINE_READ_STATE_CANCELLED
+        );
+        assert_eq!(read_state_code(ReadState::Error), ENGINE_READ_STATE_ERROR);
     }
 
     #[test]
