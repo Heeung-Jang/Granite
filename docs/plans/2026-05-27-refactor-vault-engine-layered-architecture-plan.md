@@ -712,7 +712,7 @@ Default stop conditions:
   - Build: move `safe_tantivy_query`, first-term extraction, and snippet helpers into `adapters/tantivy/query.rs`.
   - Verify: query sanitization and snippet tests pass.
 
-- [ ] **RA04.05c Move Tantivy metrics helpers**
+- [x] **RA04.05c Move Tantivy metrics helpers**
   - Build: move percentile/duration/directory-size helpers and indexing-stage metrics types only after search behavior is green.
   - Verify: indexing/search metrics tests pass.
 

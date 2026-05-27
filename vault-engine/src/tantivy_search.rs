@@ -1,7 +1,7 @@
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use tantivy::collector::TopDocs;
 use tantivy::query::{QueryParser, QueryParserError};
@@ -10,8 +10,8 @@ use tantivy::snippet::SnippetGenerator;
 use tantivy::{Index, IndexReader, TantivyError, Term, doc};
 
 use crate::adapters::tantivy::{
-    TantivyFields, first_query_term, safe_tantivy_query, search_schema,
-    search_schema_for_snippet_mode,
+    TantivyFields, directory_size, duration_micros_nonzero, first_query_term, percentile_duration,
+    safe_tantivy_query, search_schema, search_schema_for_snippet_mode,
 };
 use crate::core::search::{SearchDocument, SearchMeasurement, SearchResult};
 use crate::indexing_pipeline::SnippetStorageMode;
@@ -384,7 +384,7 @@ impl TantivySearchIndex {
         let Some(path) = &self.index_dir else {
             return Ok(0);
         };
-        directory_size(path)
+        Ok(directory_size(path)?)
     }
 }
 
@@ -471,32 +471,6 @@ fn stored_text(document: &TantivyDocument, field: Field) -> String {
         .and_then(|value| value.as_str())
         .unwrap_or("")
         .to_string()
-}
-
-fn percentile_duration(values: &[Duration], percentile: usize) -> Duration {
-    if values.is_empty() {
-        return Duration::ZERO;
-    }
-    let index = ((values.len() * percentile).div_ceil(100)).saturating_sub(1);
-    values[index.min(values.len() - 1)]
-}
-
-fn duration_micros_nonzero(duration: Duration) -> u64 {
-    (duration.as_micros().min(u128::from(u64::MAX)) as u64).max(1)
-}
-
-fn directory_size(path: &Path) -> TantivySearchResult<u64> {
-    let mut size = 0;
-    for entry in fs::read_dir(path)? {
-        let path = entry?.path();
-        let metadata = fs::metadata(&path)?;
-        if metadata.is_dir() {
-            size += directory_size(&path)?;
-        } else {
-            size += metadata.len();
-        }
-    }
-    Ok(size)
 }
 
 #[cfg(test)]
