@@ -5,6 +5,11 @@ public protocol DocumentSummaryGenerating: Sendable {
     func contextSize() async -> Int?
     func tokenCount(_ text: String) async throws -> Int
     func generate(prompt: String, maxTokens: Int) async throws -> String
+    func stream(
+        prompt: String,
+        maxTokens: Int,
+        onSnapshot: @Sendable (String) async -> Void
+    ) async throws -> String
 }
 
 public struct DocumentSummaryRequestKey: Hashable, Sendable {

@@ -23,4 +23,12 @@ struct UnavailableSummaryGenerator: DocumentSummaryGenerating {
     func generate(prompt: String, maxTokens: Int) async throws -> String {
         throw SummaryGenerationError.unavailable(reason)
     }
+
+    func stream(
+        prompt: String,
+        maxTokens: Int,
+        onSnapshot: @Sendable (String) async -> Void
+    ) async throws -> String {
+        throw SummaryGenerationError.unavailable(reason)
+    }
 }

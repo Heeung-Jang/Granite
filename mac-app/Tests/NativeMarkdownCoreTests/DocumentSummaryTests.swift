@@ -287,6 +287,19 @@ func emptySummaryDoesNotCallGenerator() async throws {
     #expect(await generator.generateCount == 0)
 }
 
+@Test
+func summaryStreamSnapshotsReplaceRenderedText() async throws {
+    let generator = SnapshotSummaryGenerator(snapshots: ["A", "AB"])
+    let recorder = StreamSnapshotRecorder()
+
+    let final = try await generator.stream(prompt: "prompt", maxTokens: 10) { snapshot in
+        await recorder.apply(snapshot)
+    }
+
+    #expect(final == "AB")
+    #expect(await recorder.text == "AB")
+}
+
 private actor FakeSummaryGenerator: DocumentSummaryGenerating {
     private(set) var generateCount = 0
 
@@ -311,6 +324,64 @@ private actor FakeSummaryGenerator: DocumentSummaryGenerating {
         액션/결정 사항:
         - 없음
         """
+    }
+
+    func stream(
+        prompt: String,
+        maxTokens: Int,
+        onSnapshot: @Sendable (String) async -> Void
+    ) async throws -> String {
+        let response = try await generate(prompt: prompt, maxTokens: maxTokens)
+        await onSnapshot(response)
+        return response
+    }
+}
+
+private actor SnapshotSummaryGenerator: DocumentSummaryGenerating {
+    private let snapshots: [String]
+
+    init(snapshots: [String]) {
+        self.snapshots = snapshots
+    }
+
+    func availability() async -> SummaryModelAvailability {
+        .available
+    }
+
+    func contextSize() async -> Int? {
+        8_000
+    }
+
+    func tokenCount(_ text: String) async throws -> Int {
+        max(1, text.count / 4)
+    }
+
+    func generate(prompt: String, maxTokens: Int) async throws -> String {
+        snapshots.last ?? ""
+    }
+
+    func stream(
+        prompt: String,
+        maxTokens: Int,
+        onSnapshot: @Sendable (String) async -> Void
+    ) async throws -> String {
+        var latest = ""
+        for snapshot in snapshots {
+            latest = snapshot
+            await onSnapshot(snapshot)
+        }
+        return latest
+    }
+}
+
+private actor StreamSnapshotRecorder {
+    private(set) var text = ""
+
+    func apply(_ snapshot: String) {
+        text = DocumentSummaryStreamSnapshotNormalizer.renderedText(
+            current: text,
+            snapshot: snapshot
+        )
     }
 }
 

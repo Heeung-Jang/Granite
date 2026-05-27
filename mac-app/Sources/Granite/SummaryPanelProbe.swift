@@ -213,4 +213,14 @@ private actor ProbeSummaryGenerator: DocumentSummaryGenerating {
         - 없음
         """
     }
+
+    func stream(
+        prompt: String,
+        maxTokens: Int,
+        onSnapshot: @Sendable (String) async -> Void
+    ) async throws -> String {
+        let response = try await generate(prompt: prompt, maxTokens: maxTokens)
+        await onSnapshot(response)
+        return response
+    }
 }
