@@ -7,6 +7,7 @@ pub use crate::adapters::sqlite::{
 mod tests {
     use super::*;
     use crate::adapters::sqlite::FileRecord;
+    use crate::adapters::sqlite::MAX_INDEX_ERROR_CHARS;
     use crate::paths::VaultRoot;
     use crate::scanner::{ScanEntry, scan_vault};
     use std::path::PathBuf;
@@ -89,6 +90,27 @@ mod tests {
         assert_eq!(failed.status, IndexingQueueStatus::Failed);
         assert_eq!(failed.attempts, 2);
         assert_eq!(queue.lease_batch(1).expect("no lease").len(), 0);
+    }
+
+    #[test]
+    fn record_failure_truncates_long_errors() {
+        let mut queue = IndexingQueue::open_in_memory().expect("queue");
+        queue
+            .enqueue_file(
+                &fixture_file("Home.md", 1),
+                IndexingQueueReason::InitialScan,
+            )
+            .expect("enqueue");
+        let item_id = queue.lease_batch(1).expect("lease")[0].item_id;
+        let error = "오류".repeat(MAX_INDEX_ERROR_CHARS + 20);
+
+        let failed = queue.record_failure(item_id, error, 1).expect("failed");
+
+        assert_eq!(failed.status, IndexingQueueStatus::Failed);
+        assert_eq!(
+            failed.last_error.expect("error").chars().count(),
+            MAX_INDEX_ERROR_CHARS
+        );
     }
 
     #[test]

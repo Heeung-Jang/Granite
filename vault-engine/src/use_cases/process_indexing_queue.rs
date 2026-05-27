@@ -1,3 +1,5 @@
+use std::fmt;
+
 use crate::adapters::sqlite::{
     IndexingQueue, IndexingQueueItem, IndexingQueueReason, MetadataStore,
 };
@@ -79,4 +81,26 @@ pub(crate) fn source_for_queue_item(
         modified: queue_item.modified,
         file_identity: resolved.file_identity,
     }))
+}
+
+pub(crate) fn record_queue_failure(
+    queue: &mut IndexingQueue,
+    item_id: i64,
+    error: &impl fmt::Display,
+    max_attempts: u32,
+) -> IndexingPipelineResult<()> {
+    queue.record_failure(item_id, error.to_string(), max_attempts)?;
+    Ok(())
+}
+
+pub(crate) fn record_queue_failures(
+    queue: &mut IndexingQueue,
+    item_ids: &[i64],
+    error: &impl fmt::Display,
+    max_attempts: u32,
+) -> IndexingPipelineResult<()> {
+    for item_id in item_ids {
+        record_queue_failure(queue, *item_id, error, max_attempts)?;
+    }
+    Ok(())
 }

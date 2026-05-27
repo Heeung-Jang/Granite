@@ -27,10 +27,12 @@ use crate::parser::{ParsedMarkdown, PropertyValue, parse_markdown};
 use crate::paths::{FileIdentity, PathError, VaultRoot, lookup_key};
 use crate::scanner::{ScanEntryKind, scan_vault};
 use crate::sqlite_fts::SearchDocument;
-use crate::use_cases::process_indexing_queue::source_for_queue_item;
 pub use crate::use_cases::process_indexing_queue::{
     QueueBatchIndexOptions, QueueLeaseBatch, QueuePipelineItem, lease_queue_batch,
     process_indexing_queue_batch,
+};
+use crate::use_cases::process_indexing_queue::{
+    record_queue_failure, record_queue_failures, source_for_queue_item,
 };
 
 pub const MAX_DEFAULT_READ_PARSE_WORKERS: usize = 4;
@@ -830,28 +832,6 @@ pub fn run_tantivy_rebuild_pipeline(
         peak_in_flight_items: peak_in_flight.load(Ordering::Acquire),
         stages,
     })
-}
-
-fn record_queue_failure(
-    queue: &mut IndexingQueue,
-    item_id: i64,
-    error: &impl fmt::Display,
-    max_attempts: u32,
-) -> IndexingPipelineResult<()> {
-    queue.record_failure(item_id, error.to_string(), max_attempts)?;
-    Ok(())
-}
-
-fn record_queue_failures(
-    queue: &mut IndexingQueue,
-    item_ids: &[i64],
-    error: &impl fmt::Display,
-    max_attempts: u32,
-) -> IndexingPipelineResult<()> {
-    for item_id in item_ids {
-        record_queue_failure(queue, *item_id, error, max_attempts)?;
-    }
-    Ok(())
 }
 
 fn production_result(
