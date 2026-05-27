@@ -5,20 +5,31 @@ final class FontPanelCoordinator: NSObject {
     weak var editorFontSettings: EditorFontSettings?
     var activeRole: (() -> FontPreferenceRole?)?
     private static weak var currentOwner: FontPanelCoordinator?
+    private weak var previousTarget: AnyObject?
+    private var previousAction: Selector?
 
     func beginOwningFontPanel() {
+        let manager = NSFontManager.shared
+        previousTarget = manager.target
+        previousAction = manager.action
         Self.currentOwner = self
-        NSFontManager.shared.target = self
-        NSFontManager.shared.action = #selector(changeFont(_:))
+        manager.target = self
+        manager.action = #selector(changeFont(_:))
     }
 
     func clearFontPanelOwnershipIfCurrent() {
         guard Self.currentOwner === self else {
             return
         }
-        if NSFontManager.shared.target === self {
-            NSFontManager.shared.target = nil
+        let manager = NSFontManager.shared
+        if manager.target === self && manager.action == #selector(changeFont(_:)) {
+            manager.target = previousTarget
+            if let previousAction {
+                manager.action = previousAction
+            }
         }
+        previousTarget = nil
+        previousAction = nil
         Self.currentOwner = nil
     }
 

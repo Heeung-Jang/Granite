@@ -43,7 +43,8 @@ enum FontSettingsProbe {
             fixedWidthDiscoveryScenario(candidates.fixedWidth),
             customTextFamilyScenario(candidates.proportional),
             customMonospaceFamilyScenario(candidates.fixedWidth),
-            invalidMonospaceFallbackScenario(candidates.proportional)
+            invalidMonospaceFallbackScenario(candidates.proportional),
+            fontPanelOwnershipScenario()
         ]
         return FontSettingsProbeReport(
             summary: summary(for: scenarios),
@@ -165,6 +166,49 @@ enum FontSettingsProbe {
                 "code": resolved.codeFont.familyName ?? resolved.codeFont.fontName
             ]
         )
+    }
+
+    private static func fontPanelOwnershipScenario() -> FontSettingsProbeScenario {
+        let manager = NSFontManager.shared
+        let previousTarget = manager.target
+        let previousAction = manager.action
+        let owner = FontPanelCoordinator()
+        let other = FontPanelCoordinator()
+        let action = #selector(FontPanelCoordinator.changeFont(_:))
+        defer {
+            manager.target = previousTarget
+            manager.action = previousAction
+        }
+
+        owner.beginOwningFontPanel()
+        let ownershipStarted = manager.target === owner && manager.action == action
+
+        other.clearFontPanelOwnershipIfCurrent()
+        let nonOwnerDidNotClear = manager.target === owner && manager.action == action
+
+        owner.clearFontPanelOwnershipIfCurrent()
+        let ownerCleared = target(manager.target, matches: previousTarget) && manager.action == previousAction
+
+        return scenario(
+            "font-panel-target-action-lifecycle",
+            passed: ownershipStarted && nonOwnerDidNotClear && ownerCleared,
+            details: [
+                "ownershipStarted": String(ownershipStarted),
+                "nonOwnerDidNotClear": String(nonOwnerDidNotClear),
+                "ownerCleared": String(ownerCleared)
+            ]
+        )
+    }
+
+    private static func target(_ lhs: AnyObject?, matches rhs: AnyObject?) -> Bool {
+        switch (lhs, rhs) {
+        case (nil, nil):
+            return true
+        case let (lhs?, rhs?):
+            return lhs === rhs
+        default:
+            return false
+        }
     }
 
     private static func installedCandidates() -> (proportional: FontCandidate?, fixedWidth: FontCandidate?) {
