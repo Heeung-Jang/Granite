@@ -621,7 +621,7 @@ Default stop conditions:
 
 ### Phase 4: Extract Storage And Platform Adapters
 
-- [ ] **RA04.01 Create adapter module skeleton**
+- [x] **RA04.01 Create adapter module skeleton**
   - Build: add `vault-engine/src/adapters/mod.rs`, `sqlite/mod.rs`, `tantivy/mod.rs`, and `fs/mod.rs`.
   - Verify: no behavior changes.
 

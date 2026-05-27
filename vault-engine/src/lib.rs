@@ -1,3 +1,4 @@
+pub(crate) mod adapters;
 pub mod attachments;
 pub mod benchmarks;
 pub(crate) mod core;
