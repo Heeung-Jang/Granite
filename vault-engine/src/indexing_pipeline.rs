@@ -21,6 +21,7 @@ use crate::adapters::tantivy::{
     TantivyIndexingStageMetrics, TantivySearchError, TantivySearchIndex, TantivyWriterOptions,
 };
 use crate::attachments::{AttachmentReferenceSource, AttachmentResolutionState};
+pub use crate::core::search::SnippetStorageMode;
 use crate::index_rebuild::{IndexRebuildError, IndexRebuildPaths, commit_index_rebuild};
 use crate::parser::{ParsedMarkdown, PropertyValue, parse_markdown};
 use crate::paths::{FileIdentity, PathError, VaultRoot, lookup_key};
@@ -82,22 +83,6 @@ impl IndexingPipelineOptions {
             writer_options: self.writer_options,
             metadata_batch_size: self.metadata_batch_size.max(1),
             snippet_storage_mode: self.snippet_storage_mode,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum SnippetStorageMode {
-    StoredBody,
-    LazySourceExperiment,
-}
-
-impl SnippetStorageMode {
-    pub fn config_name(self) -> &'static str {
-        match self {
-            Self::StoredBody => "stored_body",
-            Self::LazySourceExperiment => "lazy_source_experiment",
         }
     }
 }

@@ -1,6 +1,6 @@
 use tantivy::schema::{Field, STORED, STRING, Schema, TEXT};
 
-use crate::indexing_pipeline::SnippetStorageMode;
+use crate::core::search::SnippetStorageMode;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct TantivyFields {

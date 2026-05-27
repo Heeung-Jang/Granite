@@ -13,8 +13,8 @@ use super::{
     TantivyFields, directory_size, duration_micros_nonzero, first_query_term, percentile_duration,
     safe_tantivy_query, search_schema, search_schema_for_snippet_mode,
 };
+use crate::core::search::SnippetStorageMode;
 use crate::core::search::{SearchDocument, SearchMeasurement, SearchResult};
-use crate::indexing_pipeline::SnippetStorageMode;
 use crate::paths::{FileIdentity, PathError, VaultRoot};
 
 pub const DEFAULT_TANTIVY_WRITER_MEMORY_BUDGET_BYTES: usize = 50_000_000;
