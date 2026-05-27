@@ -949,7 +949,7 @@ Default stop conditions:
   - Verify: `cargo test --manifest-path vault-engine/Cargo.toml startup_reconciliation::`.
   - Stop condition: adding the module changes public exports or test behavior.
 
-- [ ] **RA05.07b Move startup reconciliation production code**
+- [x] **RA05.07b Move startup reconciliation production code**
   - Build: mechanically move `StartupReconciliationSummary`, `StartupReconciliationError`, `StartupReconciliationResult`, `reconcile_startup`, and private helpers into `use_cases/reconcile_startup.rs`.
   - Verify:
     ```sh
