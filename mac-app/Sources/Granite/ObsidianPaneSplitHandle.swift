@@ -14,17 +14,18 @@ enum ObsidianPaneSplitSide {
         }
     }
 
-    func proposedWidth(startWidth: Double, translationWidth: Double) -> Double {
+    func proposedWidth(startWidth: Double, translationWidth: Double, appContentZoomScale: Double = 1.0) -> Double {
+        let logicalTranslationWidth = translationWidth / Double(ObsidianUI.normalizedScale(appContentZoomScale))
         switch self {
         case .left:
             return WorkspacePaneLayout.proposedLeftSidebarWidth(
                 startWidth: startWidth,
-                translationWidth: translationWidth
+                translationWidth: logicalTranslationWidth
             )
         case .right:
             return WorkspacePaneLayout.proposedRightSidebarWidth(
                 startWidth: startWidth,
-                translationWidth: translationWidth
+                translationWidth: logicalTranslationWidth
             )
         }
     }
@@ -33,6 +34,7 @@ enum ObsidianPaneSplitSide {
 struct ObsidianPaneSplitHandle: View {
     let side: ObsidianPaneSplitSide
     let currentWidth: Double
+    var appContentZoomScale = AppContentZoom.defaultScale
     let onResize: (Double) -> Void
 
     @State private var isHovering = false
@@ -60,7 +62,8 @@ struct ObsidianPaneSplitHandle: View {
                         }
                         onResize(side.proposedWidth(
                             startWidth: startWidth,
-                            translationWidth: value.translation.width
+                            translationWidth: value.translation.width,
+                            appContentZoomScale: appContentZoomScale
                         ))
                     }
                     .onEnded { _ in
@@ -68,6 +71,10 @@ struct ObsidianPaneSplitHandle: View {
                     }
             )
             .accessibilityLabel(side.accessibilityLabel)
-            .accessibilityValue("\(Int(currentWidth.rounded())) points")
+            .accessibilityValue("\(Int(displayedCurrentWidth.rounded())) points")
+    }
+
+    private var displayedCurrentWidth: CGFloat {
+        ObsidianUI.displayedPaneWidth(logicalWidth: currentWidth, scale: appContentZoomScale)
     }
 }

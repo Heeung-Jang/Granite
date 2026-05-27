@@ -27,8 +27,11 @@ enum LivePreviewRenderer {
         linkStyleMap: LivePreviewLinkStyleMap = LivePreviewLinkStyleMap(),
         embedPreviewMap: LivePreviewEmbedPreviewMap = LivePreviewEmbedPreviewMap(),
         markerStyle: LivePreviewMarkerStyle = .defaultValue,
-        fontSet: LivePreviewFontSet = LivePreviewTheme.defaultFontSet
+        fontSet: LivePreviewFontSet = LivePreviewTheme.defaultFontSet,
+        scale: Double = AppContentZoom.defaultScale
     ) -> MarkdownDecorationResult {
+        let scale = AppContentZoom(rawScale: scale).scale
+        let fontSet = fontSet.scaled(by: scale)
         let start = DispatchTime.now().uptimeNanoseconds
         if textView.hasMarkedText() {
             return MarkdownDecorationResult(
@@ -65,7 +68,7 @@ enum LivePreviewRenderer {
         let plan = LivePreviewAttributePlan(
             source: textView.string,
             visibleRange: visibleRange,
-            baseAttributes: baseAttributes(fontSet: fontSet)
+            baseAttributes: baseAttributes(fontSet: fontSet, scale: scale)
         )
         renderBlocks(
             source: textView.string,
@@ -75,7 +78,8 @@ enum LivePreviewRenderer {
             linkStyleMap: linkStyleMap,
             embedPreviewMap: embedPreviewMap,
             markerStyle: markerStyle,
-            fontSet: fontSet
+            fontSet: fontSet,
+            scale: scale
         )
         let result = storage.withPreservedSelection(textView: textView, textLength: text.length) {
             var changes = AttributeChangeCounter()
@@ -141,7 +145,8 @@ enum LivePreviewRenderer {
         linkStyleMap: LivePreviewLinkStyleMap,
         embedPreviewMap: LivePreviewEmbedPreviewMap,
         markerStyle: LivePreviewMarkerStyle,
-        fontSet: LivePreviewFontSet
+        fontSet: LivePreviewFontSet,
+        scale: Double
     ) {
         let parseWindow = LivePreviewVisibleParseWindow.window(
             in: source,
@@ -170,9 +175,10 @@ enum LivePreviewRenderer {
                 plan: plan,
                 range: blockRange,
                 listParagraphStyle: listContext.map {
-                    cachedListParagraphStyle(depth: $0.depth, in: &listParagraphStylesByDepth)
+                    cachedListParagraphStyle(depth: $0.depth, scale: scale, in: &listParagraphStylesByDepth)
                 },
-                fontSet: fontSet
+                fontSet: fontSet,
+                scale: scale
             )
             applyBlockTokenAttributes(
                 block,
@@ -181,7 +187,7 @@ enum LivePreviewRenderer {
                 visibleRange: visibleRange,
                 markerStyle: markerStyle
             )
-            applyPropertyAttributes(properties, source: source, plan: plan, visibleRange: visibleRange, fontSet: fontSet)
+            applyPropertyAttributes(properties, source: source, plan: plan, visibleRange: visibleRange, fontSet: fontSet, scale: scale)
             applyTableAttributes(table, plan: plan, visibleRange: visibleRange, fontSet: fontSet)
             applyEmbedAttributes(embedPreview, plan: plan, visibleRange: visibleRange, fontSet: fontSet)
             applyInlineAttributes(
@@ -211,47 +217,48 @@ enum LivePreviewRenderer {
         plan: LivePreviewAttributePlan,
         range: NSRange,
         listParagraphStyle: NSParagraphStyle?,
-        fontSet: LivePreviewFontSet
+        fontSet: LivePreviewFontSet,
+        scale: Double
     ) {
         switch block.kind {
         case .heading(let level):
             plan.addAttributes([
                 .font: fontSet.headingFont(level: level),
                 .foregroundColor: LivePreviewTheme.textColor,
-                .paragraphStyle: LivePreviewTheme.headingParagraphStyle(level: level)
+                .paragraphStyle: LivePreviewTheme.headingParagraphStyle(level: level, scale: scale)
             ], range: range)
         case .blockquote:
             plan.addAttributes([
                 .foregroundColor: LivePreviewTheme.quoteColor,
-                .paragraphStyle: LivePreviewTheme.quoteParagraphStyle
+                .paragraphStyle: LivePreviewTheme.quoteParagraphStyle(scale: scale)
             ], range: range)
         case .callout:
             plan.addAttributes([
                 .foregroundColor: LivePreviewTheme.textColor,
-                .paragraphStyle: LivePreviewTheme.calloutParagraphStyle
+                .paragraphStyle: LivePreviewTheme.calloutParagraphStyle(scale: scale)
             ], range: range)
         case .fencedCode:
             plan.addAttributes([
                 .font: fontSet.codeFont,
                 .foregroundColor: LivePreviewTheme.codeColor,
                 .backgroundColor: LivePreviewTheme.codeBlockBackgroundColor,
-                .paragraphStyle: LivePreviewTheme.codeBlockParagraphStyle
+                .paragraphStyle: LivePreviewTheme.codeBlockParagraphStyle(scale: scale)
             ], range: range)
         case .table:
             plan.addAttributes([
                 .font: fontSet.baseFont,
-                .paragraphStyle: LivePreviewTheme.tableParagraphStyle
+                .paragraphStyle: LivePreviewTheme.tableParagraphStyle(scale: scale)
             ], range: range)
         case .horizontalRule:
             plan.addAttributes([
                 .foregroundColor: LivePreviewTheme.secondaryTextColor,
-                .paragraphStyle: LivePreviewTheme.horizontalRuleParagraphStyle
+                .paragraphStyle: LivePreviewTheme.horizontalRuleParagraphStyle(scale: scale)
             ], range: range)
         case .embed:
             plan.addAttributes([
                 .foregroundColor: LivePreviewTheme.embedFallbackColor,
                 .backgroundColor: LivePreviewTheme.embedBackgroundColor,
-                .paragraphStyle: LivePreviewTheme.embedParagraphStyle
+                .paragraphStyle: LivePreviewTheme.embedParagraphStyle(scale: scale)
             ], range: range)
         case .unorderedList, .orderedList, .taskList:
             plan.addAttributes([
@@ -272,14 +279,15 @@ enum LivePreviewRenderer {
 
     private static func cachedListParagraphStyle(
         depth: Int,
+        scale: Double,
         in cache: inout [Int: NSParagraphStyle]
     ) -> NSParagraphStyle {
-        let normalizedDepth = max(0, depth)
-        if let style = cache[normalizedDepth] {
+        let cacheKey = max(0, depth)
+        if let style = cache[cacheKey] {
             return style
         }
-        let style = LivePreviewTheme.listParagraphStyle(depth: normalizedDepth)
-        cache[normalizedDepth] = style
+        let style = LivePreviewTheme.listParagraphStyle(depth: cacheKey, scale: scale)
+        cache[cacheKey] = style
         return style
     }
 
@@ -333,13 +341,20 @@ enum LivePreviewRenderer {
         source: String,
         plan: LivePreviewAttributePlan,
         visibleRange: NSRange,
-        fontSet: LivePreviewFontSet
+        fontSet: LivePreviewFontSet,
+        scale: Double
     ) {
         guard let properties else {
             return
         }
 
-        applyPropertyLayoutAttributes(properties, source: source, plan: plan, visibleRange: visibleRange)
+        applyPropertyLayoutAttributes(
+            properties,
+            source: source,
+            plan: plan,
+            visibleRange: visibleRange,
+            scale: scale
+        )
 
         for row in properties.rows {
             let keyRange = NSIntersectionRange(row.keyRange.nsRange, visibleRange)
@@ -368,7 +383,8 @@ enum LivePreviewRenderer {
         _ properties: LivePreviewPropertyBlock,
         source: String,
         plan: LivePreviewAttributePlan,
-        visibleRange: NSRange
+        visibleRange: NSRange,
+        scale: Double
     ) {
         let lineRanges = propertyLineRanges(for: properties, source: source)
         guard let titleRange = lineRanges.first else {
@@ -376,7 +392,7 @@ enum LivePreviewRenderer {
         }
 
         addPropertyParagraphStyle(
-            LivePreviewTheme.propertyTitleParagraphStyle,
+            LivePreviewTheme.propertyTitleParagraphStyle(scale: scale),
             range: titleRange,
             plan: plan,
             visibleRange: visibleRange
@@ -384,7 +400,7 @@ enum LivePreviewRenderer {
 
         if lineRanges.indices.contains(1) {
             addPropertyParagraphStyle(
-                LivePreviewTheme.propertySectionParagraphStyle,
+                LivePreviewTheme.propertySectionParagraphStyle(scale: scale),
                 range: lineRanges[1],
                 plan: plan,
                 visibleRange: visibleRange
@@ -396,7 +412,7 @@ enum LivePreviewRenderer {
         }
         for lineRange in lineRanges.dropFirst(2) {
             addPropertyParagraphStyle(
-                LivePreviewTheme.propertyRowParagraphStyle,
+                LivePreviewTheme.propertyRowParagraphStyle(scale: scale),
                 range: lineRange,
                 plan: plan,
                 visibleRange: visibleRange
@@ -1056,11 +1072,11 @@ enum LivePreviewRenderer {
         }
     }
 
-    private static func baseAttributes(fontSet: LivePreviewFontSet) -> [NSAttributedString.Key: Any] {
+    private static func baseAttributes(fontSet: LivePreviewFontSet, scale: Double) -> [NSAttributedString.Key: Any] {
         [
             .font: fontSet.baseFont,
             .foregroundColor: LivePreviewTheme.textColor,
-            .paragraphStyle: LivePreviewTheme.baseParagraphStyle
+            .paragraphStyle: LivePreviewTheme.baseParagraphStyle(scale: scale)
         ]
     }
 

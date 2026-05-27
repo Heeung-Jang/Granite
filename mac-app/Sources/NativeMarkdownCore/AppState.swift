@@ -181,7 +181,7 @@ public final class AppState: ObservableObject {
     private let recentVaultStorage: any RecentVaultStoring
     private let startupVaultRestoreStorage: any StartupVaultRestoreStoring
     private let workspaceTabSessionStore: any WorkspaceTabSessionStoring
-    private let workspacePaneLayoutStore: any WorkspacePaneLayoutStoring
+    private let paneLayoutStore: PaneLayoutStore
     private let readClientFactory: ReadClientFactory
     private let readIndexRebuilder: any ReadIndexRebuilding
     private let maxRecentVaults: Int
@@ -205,6 +205,11 @@ public final class AppState: ObservableObject {
         readIndexRebuilder: any ReadIndexRebuilding = EngineReadIndexRebuilder(),
         maxRecentVaults: Int = 10
     ) {
+        let paneLayoutStore = PaneLayoutStore(
+            initialVaultURL: vaultSelection.url,
+            storage: workspacePaneLayoutStore
+        )
+
         self.vaultSelection = vaultSelection
         self.engineHealth = engineHealth
         self.indexDirectoryResolver = indexDirectoryResolver
@@ -212,7 +217,7 @@ public final class AppState: ObservableObject {
         self.recentVaultStorage = recentVaultStorage
         self.startupVaultRestoreStorage = startupVaultRestoreStorage
         self.workspaceTabSessionStore = workspaceTabSessionStore
-        self.workspacePaneLayoutStore = workspacePaneLayoutStore
+        self.paneLayoutStore = paneLayoutStore
         self.readClientFactory = readClientFactory
         self.readIndexRebuilder = readIndexRebuilder
         self.maxRecentVaults = max(1, maxRecentVaults)
@@ -222,9 +227,7 @@ public final class AppState: ObservableObject {
         self.workspaceTabs = []
         self.activeTabID = nil
         self.recentlyClosedTabs = []
-        self.workspacePaneLayout = vaultSelection.url
-            .flatMap { workspacePaneLayoutStore.loadLayout(forVaultAt: $0) }
-            ?? .default
+        self.workspacePaneLayout = paneLayoutStore.layout
         self.recentVaults = Self.normalizedRecentVaults(
             from: recentVaultStorage.loadRecentVaultURLs(),
             limit: self.maxRecentVaults
@@ -301,7 +304,7 @@ public final class AppState: ObservableObject {
         vaultSelection = .noVault
         indexLocation = nil
         resetWorkspaceState()
-        workspacePaneLayout = .default
+        workspacePaneLayout = paneLayoutStore.resetToDefault()
         clearAllDirtyWarnings()
     }
 
@@ -315,7 +318,7 @@ public final class AppState: ObservableObject {
         recentVaults.removeAll { $0.id == key }
         persistRecentVaults()
         workspaceTabSessionStore.clearSession(forVaultAt: url)
-        workspacePaneLayoutStore.clearLayout(forVaultAt: url)
+        paneLayoutStore.clearStoredLayout(forVaultAt: url)
 
         if removedCurrentVault {
             startupVaultRestoreStorage.saveSuppressesLastVaultRestore(true)
@@ -324,34 +327,35 @@ public final class AppState: ObservableObject {
     }
 
     public func setWorkspacePaneLayout(_ layout: WorkspacePaneLayout, availableWidth: Double? = nil) {
-        workspacePaneLayout = layout.clampedToAvailableWidth(availableWidth)
-        persistWorkspacePaneLayout()
+        workspacePaneLayout = paneLayoutStore.setLayout(
+            layout,
+            availableWidth: availableWidth,
+            vaultURL: vaultSelection.url
+        )
     }
 
     public func setLeftSidebarWidth(_ width: Double, availableWidth: Double) {
-        workspacePaneLayout = workspacePaneLayout.settingLeftSidebarWidth(
+        workspacePaneLayout = paneLayoutStore.setLeftSidebarWidth(
             width,
-            availableWidth: availableWidth
+            availableWidth: availableWidth,
+            vaultURL: vaultSelection.url
         )
-        persistWorkspacePaneLayout()
     }
 
     public func setRightSidebarWidth(_ width: Double, availableWidth: Double) {
-        workspacePaneLayout = workspacePaneLayout.settingRightSidebarWidth(
+        workspacePaneLayout = paneLayoutStore.setRightSidebarWidth(
             width,
-            availableWidth: availableWidth
+            availableWidth: availableWidth,
+            vaultURL: vaultSelection.url
         )
-        persistWorkspacePaneLayout()
     }
 
     public func toggleLeftSidebarCollapsed() {
-        workspacePaneLayout = workspacePaneLayout.togglingLeftSidebarCollapsed()
-        persistWorkspacePaneLayout()
+        workspacePaneLayout = paneLayoutStore.toggleLeftSidebarCollapsed(vaultURL: vaultSelection.url)
     }
 
     public func toggleRightSidebarCollapsed() {
-        workspacePaneLayout = workspacePaneLayout.togglingRightSidebarCollapsed()
-        persistWorkspacePaneLayout()
+        workspacePaneLayout = paneLayoutStore.toggleRightSidebarCollapsed(vaultURL: vaultSelection.url)
     }
 
     public func refreshEngineHealth(using loader: EngineHealthLoading = EngineHealthClient()) {
@@ -1027,14 +1031,7 @@ public final class AppState: ObservableObject {
     }
 
     private func restoreWorkspacePaneLayout(for vaultURL: URL) {
-        workspacePaneLayout = workspacePaneLayoutStore.loadLayout(forVaultAt: vaultURL) ?? .default
-    }
-
-    private func persistWorkspacePaneLayout() {
-        guard let vaultURL = vaultSelection.url else {
-            return
-        }
-        workspacePaneLayoutStore.saveLayout(workspacePaneLayout, forVaultAt: vaultURL)
+        workspacePaneLayout = paneLayoutStore.restoreLayout(forVaultAt: vaultURL)
     }
 
     private func clearAllDirtyWarnings() {

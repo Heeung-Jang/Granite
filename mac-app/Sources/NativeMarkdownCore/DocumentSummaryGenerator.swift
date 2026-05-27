@@ -5,6 +5,11 @@ public protocol DocumentSummaryGenerating: Sendable {
     func contextSize() async -> Int?
     func tokenCount(_ text: String) async throws -> Int
     func generate(prompt: String, maxTokens: Int) async throws -> String
+    func stream(
+        prompt: String,
+        maxTokens: Int,
+        onSnapshot: @Sendable (String) async -> Void
+    ) async throws -> String
 }
 
 public struct DocumentSummaryRequestKey: Hashable, Sendable {
@@ -55,13 +60,30 @@ public struct DocumentSummaryRequest: Sendable {
     }
 
     public var cacheKey: SummaryCacheKey {
+        refinedCacheKey
+    }
+
+    public var fastCacheKey: SummaryCacheKey {
+        cacheKey(stage: .fast)
+    }
+
+    public var refinedCacheKey: SummaryCacheKey {
+        cacheKey(stage: .refined)
+    }
+
+    public var preferredCacheKeys: [SummaryCacheKey] {
+        [refinedCacheKey, fastCacheKey]
+    }
+
+    public func cacheKey(stage: SummaryStage) -> SummaryCacheKey {
         SummaryCacheKey(
             vaultID: snapshot.vaultID,
             fileID: snapshot.fileID,
             contentHash: snapshot.contentHash,
             promptVersion: promptVersion,
             summaryFormatVersion: summaryFormatVersion,
-            modelPolicyVersion: modelPolicyVersion
+            modelPolicyVersion: modelPolicyVersion,
+            stage: stage
         )
     }
 }

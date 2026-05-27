@@ -18,6 +18,7 @@ struct LivePreviewTableLayout {
     var rowRects: [NSRect]
     var columnRects: [NSRect]
     var cells: [Cell]
+    var scale: Double
 
     func cell(at point: NSPoint) -> LivePreviewTableCell? {
         cells.first { $0.textRect.contains(point) }?.tableCell
@@ -31,14 +32,24 @@ struct LivePreviewTableLayout {
         guard let layoutCell = layoutCell(for: cell) else {
             return nil
         }
-        return NSRect(x: outerRect.maxX + 6, y: layoutCell.rowRect.midY - 8, width: 16, height: 16)
+        return NSRect(
+            x: outerRect.maxX + Self.scaled(6, scale: scale),
+            y: layoutCell.rowRect.midY - Self.scaled(8, scale: scale),
+            width: Self.scaled(16, scale: scale),
+            height: Self.scaled(16, scale: scale)
+        )
     }
 
     func columnAddControlRect(for cell: LivePreviewTableCell) -> NSRect? {
         guard let layoutCell = layoutCell(for: cell) else {
             return nil
         }
-        return NSRect(x: layoutCell.columnRect.midX - 8, y: outerRect.minY - 22, width: 16, height: 16)
+        return NSRect(
+            x: layoutCell.columnRect.midX - Self.scaled(8, scale: scale),
+            y: outerRect.minY - Self.scaled(22, scale: scale),
+            width: Self.scaled(16, scale: scale),
+            height: Self.scaled(16, scale: scale)
+        )
     }
 
     static func tableCell(
@@ -76,12 +87,21 @@ struct LivePreviewTableLayout {
             return nil
         }
 
+        let scale = scale(for: textView)
+        let fontSet = fontSet.scaled(by: scale)
         let rowRects = rows.compactMap { row -> NSRect? in
             guard let range = unionRange(row.map(\.sourceRange.nsRange)) else {
                 return nil
             }
             return unionLineRect(for: range, in: textView)
-                .map { NSRect(x: $0.minX, y: $0.minY - 3, width: $0.width, height: max(30, $0.height + 6)) }
+                .map {
+                    NSRect(
+                        x: $0.minX,
+                        y: $0.minY - scaled(3, scale: scale),
+                        width: $0.width,
+                        height: max(scaled(30, scale: scale), $0.height + scaled(6, scale: scale))
+                    )
+                }
         }
         guard rowRects.count == rows.count,
               let first = rowRects.first
@@ -90,10 +110,11 @@ struct LivePreviewTableLayout {
         }
 
         let x = first.minX
-        let columnWidths = columnWidths(for: table, fontSet: fontSet)
+        let columnWidths = columnWidths(for: table, fontSet: fontSet, scale: scale)
         let naturalWidth = columnWidths.reduce(0, +)
-        let availableWidth = max(Metrics.minTableWidth, textView.bounds.width - x - Metrics.rightPadding)
-        let width = min(availableWidth, max(Metrics.minTableWidth, naturalWidth))
+        let minTableWidth = scaled(Metrics.minTableWidth, scale: scale)
+        let availableWidth = max(minTableWidth, textView.bounds.width - x - scaled(Metrics.rightPadding, scale: scale))
+        let width = min(availableWidth, max(minTableWidth, naturalWidth))
         let outer = rowRects.reduce(NSRect(x: x, y: first.minY, width: width, height: first.height)) {
             $0.union(NSRect(x: x, y: $1.minY, width: width, height: $1.height))
         }
@@ -102,14 +123,16 @@ struct LivePreviewTableLayout {
             rows: rows,
             alignments: table.alignments,
             rowRects: rowRects,
-            columnRects: columnRects
+            columnRects: columnRects,
+            scale: scale
         )
 
         return LivePreviewTableLayout(
             outerRect: outer,
             rowRects: rowRects,
             columnRects: columnRects,
-            cells: cells
+            cells: cells,
+            scale: scale
         )
     }
 
@@ -117,13 +140,16 @@ struct LivePreviewTableLayout {
         rows: [[LivePreviewTableCell]],
         alignments: [LivePreviewTableAlignment],
         rowRects: [NSRect],
-        columnRects: [NSRect]
+        columnRects: [NSRect],
+        scale: Double
     ) -> [Cell] {
         var cells: [Cell] = []
         for (rowIndex, row) in rows.enumerated() where rowIndex < rowRects.count {
             let rowRect = rowRects[rowIndex]
             for (columnIndex, tableCell) in row.enumerated() where columnIndex < columnRects.count {
                 let columnRect = columnRects[columnIndex]
+                let horizontalInset = scaled(8, scale: scale)
+                let verticalInset = scaled(6, scale: scale)
                 cells.append(Cell(
                     tableCell: tableCell,
                     rowIndex: rowIndex,
@@ -133,10 +159,10 @@ struct LivePreviewTableLayout {
                     rowRect: rowRect,
                     columnRect: columnRect,
                     textRect: NSRect(
-                        x: columnRect.minX + 8,
-                        y: rowRect.minY + 6,
-                        width: max(10, columnRect.width - 16),
-                        height: max(10, rowRect.height - 12)
+                        x: columnRect.minX + horizontalInset,
+                        y: rowRect.minY + verticalInset,
+                        width: max(scaled(10, scale: scale), columnRect.width - horizontalInset * 2),
+                        height: max(scaled(10, scale: scale), rowRect.height - verticalInset * 2)
                     )
                 ))
             }
@@ -164,7 +190,7 @@ struct LivePreviewTableLayout {
         return rects
     }
 
-    private static func columnWidths(for table: LivePreviewTable, fontSet: LivePreviewFontSet) -> [CGFloat] {
+    private static func columnWidths(for table: LivePreviewTable, fontSet: LivePreviewFontSet, scale: Double) -> [CGFloat] {
         let rows = [table.header] + table.bodyRows
         let columnCount = rows.map(\.count).max() ?? 0
         return (0..<columnCount).map { column in
@@ -175,10 +201,13 @@ struct LivePreviewTableLayout {
                     }
                     return textWidth(for: row[column].text, isHeader: rowIndex == 0, fontSet: fontSet)
                 }
-                .max() ?? Metrics.minTextWidth
+                .max() ?? scaled(Metrics.minTextWidth, scale: scale)
             return min(
-                Metrics.maxColumnWidth,
-                max(Metrics.minColumnWidth, ceil(measuredTextWidth + Metrics.cellHorizontalPadding))
+                scaled(Metrics.maxColumnWidth, scale: scale),
+                max(
+                    scaled(Metrics.minColumnWidth, scale: scale),
+                    ceil(measuredTextWidth + scaled(Metrics.cellHorizontalPadding, scale: scale))
+                )
             )
         }
     }
@@ -187,6 +216,14 @@ struct LivePreviewTableLayout {
         let font = isHeader ? fontSet.strongFont : fontSet.baseFont
         let measurementText = text.isEmpty ? " " : text
         return (measurementText as NSString).size(withAttributes: [.font: font]).width
+    }
+
+    private static func scale(for textView: NSTextView) -> Double {
+        AppContentZoom(rawScale: (textView as? MarkdownInteractionTextView)?.appContentZoomScale ?? AppContentZoom.defaultScale).scale
+    }
+
+    private static func scaled(_ value: CGFloat, scale: Double) -> CGFloat {
+        value * CGFloat(scale)
     }
 
     private static func unionLineRect(for range: NSRange, in textView: NSTextView) -> NSRect? {

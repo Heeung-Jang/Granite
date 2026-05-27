@@ -68,10 +68,55 @@ enum LivePreviewTheme {
         defaultFontSet.headingFont(level: level)
     }
 
+    static func baseFont(scale: Double) -> NSFont {
+        NSFont.systemFont(ofSize: scaled(16, scale: scale), weight: .regular)
+    }
+
+    static func sourceFont(scale: Double) -> NSFont {
+        NSFont.monospacedSystemFont(ofSize: scaled(14, scale: scale), weight: .regular)
+    }
+
+    static func codeFont(scale: Double) -> NSFont {
+        NSFont.monospacedSystemFont(ofSize: scaled(15, scale: scale), weight: .regular)
+    }
+
+    static func strongFont(scale: Double) -> NSFont {
+        NSFont.systemFont(ofSize: scaled(16, scale: scale), weight: .bold)
+    }
+
+    static func headingFont(level: Int, scale: Double) -> NSFont {
+        switch level {
+        case 1:
+            return NSFont.systemFont(ofSize: scaled(28, scale: scale), weight: .bold)
+        case 2:
+            return NSFont.systemFont(ofSize: scaled(23, scale: scale), weight: .bold)
+        case 3:
+            return NSFont.systemFont(ofSize: scaled(20, scale: scale), weight: .semibold)
+        case 4:
+            return NSFont.systemFont(ofSize: scaled(18, scale: scale), weight: .semibold)
+        case 5:
+            return NSFont.systemFont(ofSize: scaled(17, scale: scale), weight: .semibold)
+        default:
+            return NSFont.systemFont(ofSize: scaled(16, scale: scale), weight: .semibold)
+        }
+    }
+
+    private static func normalizedScale(_ scale: Double) -> CGFloat {
+        CGFloat(AppContentZoom(rawScale: scale).scale)
+    }
+
+    private static func scaled(_ value: CGFloat, scale: Double) -> CGFloat {
+        value * normalizedScale(scale)
+    }
+
     static var baseParagraphStyle: NSParagraphStyle {
+        baseParagraphStyle(scale: 1.0)
+    }
+
+    static func baseParagraphStyle(scale: Double) -> NSParagraphStyle {
         let style = NSMutableParagraphStyle()
         style.lineHeightMultiple = 1.28
-        style.paragraphSpacing = 6
+        style.paragraphSpacing = scaled(6, scale: scale)
         return style.copy() as! NSParagraphStyle
     }
 
@@ -85,18 +130,26 @@ enum LivePreviewTheme {
     }
 
     static func headingParagraphStyle(level: Int) -> NSParagraphStyle {
+        headingParagraphStyle(level: level, scale: 1.0)
+    }
+
+    static func headingParagraphStyle(level: Int, scale: Double) -> NSParagraphStyle {
         let style = NSMutableParagraphStyle()
         style.lineHeightMultiple = 1.12
-        style.paragraphSpacingBefore = level <= 2 ? 18 : 12
-        style.paragraphSpacing = level <= 2 ? 8 : 6
+        style.paragraphSpacingBefore = scaled(level <= 2 ? 18 : 12, scale: scale)
+        style.paragraphSpacing = scaled(level <= 2 ? 8 : 6, scale: scale)
         return style.copy() as! NSParagraphStyle
     }
 
     static var codeBlockParagraphStyle: NSParagraphStyle {
+        codeBlockParagraphStyle(scale: 1.0)
+    }
+
+    static func codeBlockParagraphStyle(scale: Double) -> NSParagraphStyle {
         let style = NSMutableParagraphStyle()
         style.lineHeightMultiple = 1.12
-        style.paragraphSpacingBefore = 6
-        style.paragraphSpacing = 6
+        style.paragraphSpacingBefore = scaled(6, scale: scale)
+        style.paragraphSpacing = scaled(6, scale: scale)
         return style.copy() as! NSParagraphStyle
     }
 
@@ -108,46 +161,69 @@ enum LivePreviewTheme {
     static let listMarkerSlotWidth: CGFloat = 18
 
     static func listParagraphStyle(depth: Int) -> NSParagraphStyle {
+        listParagraphStyle(depth: depth, scale: 1.0)
+    }
+
+    static func listParagraphStyle(depth: Int, scale: Double) -> NSParagraphStyle {
         let style = NSMutableParagraphStyle()
         style.lineHeightMultiple = 1.12
-        let indent = listMarkerSlotWidth + CGFloat(max(0, depth)) * listDepthIndentStep
+        let indent = scaled(listMarkerSlotWidth, scale: scale)
+            + CGFloat(max(0, depth)) * scaled(listDepthIndentStep, scale: scale)
         style.firstLineHeadIndent = indent
         style.headIndent = indent
         style.defaultTabInterval = 1
         style.tabStops = []
-        style.paragraphSpacing = 2
+        style.paragraphSpacing = scaled(2, scale: scale)
         return style.copy() as! NSParagraphStyle
     }
 
     static func listMarkerSlotRect(depth: Int, lineRect: NSRect) -> NSRect {
+        listMarkerSlotRect(depth: depth, lineRect: lineRect, scale: 1.0)
+    }
+
+    static func listMarkerSlotRect(depth: Int, lineRect: NSRect, scale: Double) -> NSRect {
         NSRect(
-            x: lineRect.minX + CGFloat(max(0, depth)) * listDepthIndentStep,
+            x: lineRect.minX + CGFloat(max(0, depth)) * scaled(listDepthIndentStep, scale: scale),
             y: lineRect.minY,
-            width: listMarkerSlotWidth,
+            width: scaled(listMarkerSlotWidth, scale: scale),
             height: lineRect.height
         )
     }
 
     static func listGuideX(depth: Int, lineRect: NSRect) -> CGFloat {
-        lineRect.minX + CGFloat(max(0, depth)) * listDepthIndentStep - 10
+        listGuideX(depth: depth, lineRect: lineRect, scale: 1.0)
+    }
+
+    static func listGuideX(depth: Int, lineRect: NSRect, scale: Double) -> CGFloat {
+        lineRect.minX
+            + CGFloat(max(0, depth)) * scaled(listDepthIndentStep, scale: scale)
+            - scaled(10, scale: scale)
     }
 
     static var quoteParagraphStyle: NSParagraphStyle {
+        quoteParagraphStyle(scale: 1.0)
+    }
+
+    static func quoteParagraphStyle(scale: Double) -> NSParagraphStyle {
         let style = NSMutableParagraphStyle()
         style.lineHeightMultiple = 1.12
         style.firstLineHeadIndent = 0
-        style.headIndent = 18
-        style.paragraphSpacing = 4
+        style.headIndent = scaled(18, scale: scale)
+        style.paragraphSpacing = scaled(4, scale: scale)
         return style.copy() as! NSParagraphStyle
     }
 
     static var calloutParagraphStyle: NSParagraphStyle {
+        calloutParagraphStyle(scale: 1.0)
+    }
+
+    static func calloutParagraphStyle(scale: Double) -> NSParagraphStyle {
         let style = NSMutableParagraphStyle()
         style.lineHeightMultiple = 1.12
         style.firstLineHeadIndent = 0
-        style.headIndent = 20
-        style.paragraphSpacingBefore = 4
-        style.paragraphSpacing = 6
+        style.headIndent = scaled(20, scale: scale)
+        style.paragraphSpacingBefore = scaled(4, scale: scale)
+        style.paragraphSpacing = scaled(6, scale: scale)
         return style.copy() as! NSParagraphStyle
     }
 
@@ -156,65 +232,96 @@ enum LivePreviewTheme {
     }
 
     static var propertyTitleParagraphStyle: NSParagraphStyle {
+        propertyTitleParagraphStyle(scale: 1.0)
+    }
+
+    static func propertyTitleParagraphStyle(scale: Double) -> NSParagraphStyle {
         fixedLineParagraphStyle(
-            lineHeight: propertyTitleLineHeight,
-            paragraphSpacing: propertyTitleParagraphSpacing
+            lineHeight: scaled(propertyTitleLineHeight, scale: scale),
+            paragraphSpacing: scaled(propertyTitleParagraphSpacing, scale: scale),
+            scale: scale
         )
     }
 
     static var propertySectionParagraphStyle: NSParagraphStyle {
+        propertySectionParagraphStyle(scale: 1.0)
+    }
+
+    static func propertySectionParagraphStyle(scale: Double) -> NSParagraphStyle {
         fixedLineParagraphStyle(
-            lineHeight: propertySectionLineHeight,
-            paragraphSpacing: propertySectionParagraphSpacing
+            lineHeight: scaled(propertySectionLineHeight, scale: scale),
+            paragraphSpacing: scaled(propertySectionParagraphSpacing, scale: scale),
+            scale: scale
         )
     }
 
     static var propertyRowParagraphStyle: NSParagraphStyle {
+        propertyRowParagraphStyle(scale: 1.0)
+    }
+
+    static func propertyRowParagraphStyle(scale: Double) -> NSParagraphStyle {
         fixedLineParagraphStyle(
-            lineHeight: propertyRowLineHeight,
-            paragraphSpacing: propertyRowParagraphSpacing
+            lineHeight: scaled(propertyRowLineHeight, scale: scale),
+            paragraphSpacing: scaled(propertyRowParagraphSpacing, scale: scale),
+            scale: scale
         )
     }
 
-    private static func fixedLineParagraphStyle(lineHeight: CGFloat, paragraphSpacing: CGFloat) -> NSParagraphStyle {
+    private static func fixedLineParagraphStyle(
+        lineHeight: CGFloat,
+        paragraphSpacing: CGFloat,
+        scale: Double = 1.0
+    ) -> NSParagraphStyle {
         let style = NSMutableParagraphStyle()
         style.minimumLineHeight = lineHeight
         style.maximumLineHeight = lineHeight
         style.firstLineHeadIndent = 0
-        style.headIndent = 18
+        style.headIndent = scaled(18, scale: scale)
         style.paragraphSpacingBefore = 0
         style.paragraphSpacing = paragraphSpacing
         return style.copy() as! NSParagraphStyle
     }
 
     static var embedParagraphStyle: NSParagraphStyle {
+        embedParagraphStyle(scale: 1.0)
+    }
+
+    static func embedParagraphStyle(scale: Double) -> NSParagraphStyle {
         let style = NSMutableParagraphStyle()
         style.lineHeightMultiple = 1.1
         style.firstLineHeadIndent = 0
-        style.headIndent = 18
-        style.paragraphSpacingBefore = 4
-        style.paragraphSpacing = 4
+        style.headIndent = scaled(18, scale: scale)
+        style.paragraphSpacingBefore = scaled(4, scale: scale)
+        style.paragraphSpacing = scaled(4, scale: scale)
         return style.copy() as! NSParagraphStyle
     }
 
     static var tableParagraphStyle: NSParagraphStyle {
+        tableParagraphStyle(scale: 1.0)
+    }
+
+    static func tableParagraphStyle(scale: Double) -> NSParagraphStyle {
         let style = NSMutableParagraphStyle()
         style.lineHeightMultiple = 1.08
         style.firstLineHeadIndent = 0
-        style.headIndent = 12
-        style.paragraphSpacingBefore = 3
-        style.paragraphSpacing = 3
+        style.headIndent = scaled(12, scale: scale)
+        style.paragraphSpacingBefore = scaled(3, scale: scale)
+        style.paragraphSpacing = scaled(3, scale: scale)
         return style.copy() as! NSParagraphStyle
     }
 
     static var horizontalRuleParagraphStyle: NSParagraphStyle {
+        horizontalRuleParagraphStyle(scale: 1.0)
+    }
+
+    static func horizontalRuleParagraphStyle(scale: Double) -> NSParagraphStyle {
         let style = NSMutableParagraphStyle()
-        style.minimumLineHeight = 24
-        style.maximumLineHeight = 24
+        style.minimumLineHeight = scaled(24, scale: scale)
+        style.maximumLineHeight = scaled(24, scale: scale)
         style.firstLineHeadIndent = 0
         style.headIndent = 0
-        style.paragraphSpacingBefore = 6
-        style.paragraphSpacing = 8
+        style.paragraphSpacingBefore = scaled(6, scale: scale)
+        style.paragraphSpacing = scaled(8, scale: scale)
         return style.copy() as! NSParagraphStyle
     }
 

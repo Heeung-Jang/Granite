@@ -49,6 +49,14 @@ enum LivePreviewOverlayRenderer {
         static let tagHorizontalPadding: CGFloat = 18
     }
 
+    fileprivate static func overlayScale(for textView: NSTextView) -> Double {
+        (textView as? MarkdownInteractionTextView)?.appContentZoomScale ?? AppContentZoom.defaultScale
+    }
+
+    private static func scaled(_ value: CGFloat, scale: Double) -> CGFloat {
+        value * CGFloat(AppContentZoom(rawScale: scale).scale)
+    }
+
     static func drawBackgrounds(
         in textView: MarkdownInteractionTextView,
         dirtyRect: NSRect,
@@ -106,7 +114,8 @@ enum LivePreviewOverlayRenderer {
                     .compactMap(\.listContext)
                     .sorted { $0.blockRange.location < $1.blockRange.location }
                     .guideSegments(in: textView),
-                dirtyRect: dirtyRect
+                dirtyRect: dirtyRect,
+                scale: overlayScale(for: textView)
             )
         }
     }
@@ -163,8 +172,9 @@ enum LivePreviewOverlayRenderer {
         in textView: NSTextView,
         dirtyRect: NSRect
     ) {
+        let scale = overlayScale(for: textView)
         guard let rect = unionLineRect(for: block.sourceRange.nsRange, in: textView)?
-            .insetBy(dx: -8, dy: -5),
+            .insetBy(dx: -scaled(8, scale: scale), dy: -scaled(5, scale: scale)),
             rect.intersects(dirtyRect)
         else {
             return
@@ -172,11 +182,17 @@ enum LivePreviewOverlayRenderer {
 
         let accent = LivePreviewTheme.calloutAccentColor(for: block.kind)
         LivePreviewTheme.calloutBackgroundColor(for: block.kind).setFill()
-        NSBezierPath(roundedRect: rect, xRadius: 4, yRadius: 4).fill()
+        let radius = scaled(4, scale: scale)
+        NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).fill()
 
-        let accentRect = NSRect(x: rect.minX, y: rect.minY, width: 3, height: rect.height)
+        let accentWidth = scaled(3, scale: scale)
+        let accentRect = NSRect(x: rect.minX, y: rect.minY, width: accentWidth, height: rect.height)
         accent.setFill()
-        NSBezierPath(roundedRect: accentRect, xRadius: 1.5, yRadius: 1.5).fill()
+        NSBezierPath(
+            roundedRect: accentRect,
+            xRadius: accentWidth / 2,
+            yRadius: accentWidth / 2
+        ).fill()
     }
 
     private static func drawProperties(
@@ -185,6 +201,7 @@ enum LivePreviewOverlayRenderer {
         in textView: NSTextView,
         dirtyRect: NSRect
     ) {
+        let scale = overlayScale(for: textView)
         let fragments = lineFragments(for: properties.sourceRange.nsRange, in: textView)
         guard fragments.count >= 2 else {
             return
@@ -192,20 +209,23 @@ enum LivePreviewOverlayRenderer {
 
         let x = fragments[0].lineRect.minX
         let width = min(
-            PropertyLayout.maxWidth,
-            max(PropertyLayout.minWidth, textView.bounds.width - x - PropertyLayout.rightPadding)
+            scaled(PropertyLayout.maxWidth, scale: scale),
+            max(
+                scaled(PropertyLayout.minWidth, scale: scale),
+                textView.bounds.width - x - scaled(PropertyLayout.rightPadding, scale: scale)
+            )
         )
         let titleText = normalizedTitle(title)
         drawString(
             titleText,
             in: NSRect(
                 x: x,
-                y: fragments[0].lineRect.minY + PropertyLayout.titleYOffset,
+                y: fragments[0].lineRect.minY + scaled(PropertyLayout.titleYOffset, scale: scale),
                 width: width,
-                height: PropertyLayout.titleHeight
+                height: scaled(PropertyLayout.titleHeight, scale: scale)
             ),
             attributes: [
-                .font: NSFont.systemFont(ofSize: 26, weight: .bold),
+                .font: NSFont.systemFont(ofSize: scaled(26, scale: scale), weight: .bold),
                 .foregroundColor: LivePreviewTheme.textColor
             ],
             dirtyRect: dirtyRect
@@ -215,12 +235,12 @@ enum LivePreviewOverlayRenderer {
             "속성",
             in: NSRect(
                 x: x,
-                y: fragments[1].lineRect.minY + PropertyLayout.sectionYOffset,
+                y: fragments[1].lineRect.minY + scaled(PropertyLayout.sectionYOffset, scale: scale),
                 width: width,
-                height: PropertyLayout.sectionHeight
+                height: scaled(PropertyLayout.sectionHeight, scale: scale)
             ),
             attributes: [
-                .font: NSFont.systemFont(ofSize: 15, weight: .semibold),
+                .font: NSFont.systemFont(ofSize: scaled(15, scale: scale), weight: .semibold),
                 .foregroundColor: LivePreviewTheme.textColor
             ],
             dirtyRect: dirtyRect
@@ -230,7 +250,7 @@ enum LivePreviewOverlayRenderer {
         var lineIndex = 2
         for group in groups where lineIndex < fragments.count {
             let rect = fragments[lineIndex].lineRect
-            drawPropertyRow(group, rect: rect, x: x, width: width, dirtyRect: dirtyRect)
+            drawPropertyRow(group, rect: rect, x: x, width: width, scale: scale, dirtyRect: dirtyRect)
             lineIndex += 1
         }
     }
@@ -240,32 +260,33 @@ enum LivePreviewOverlayRenderer {
         rect: NSRect,
         x: CGFloat,
         width: CGFloat,
+        scale: Double,
         dirtyRect: NSRect
     ) {
         guard rect.intersects(dirtyRect) else {
             return
         }
 
-        let rowY = rect.minY + PropertyLayout.rowYOffset
+        let rowY = rect.minY + scaled(PropertyLayout.rowYOffset, scale: scale)
         drawPropertyIcon(
             for: group.key,
             in: NSRect(
-                x: x + PropertyLayout.iconX,
-                y: rowY + PropertyLayout.iconYOffset,
-                width: PropertyLayout.iconSize,
-                height: PropertyLayout.iconSize
+                x: x + scaled(PropertyLayout.iconX, scale: scale),
+                y: rowY + scaled(PropertyLayout.iconYOffset, scale: scale),
+                width: scaled(PropertyLayout.iconSize, scale: scale),
+                height: scaled(PropertyLayout.iconSize, scale: scale)
             )
         )
         drawString(
             displayKey(group.key),
             in: NSRect(
-                x: x + PropertyLayout.keyX,
+                x: x + scaled(PropertyLayout.keyX, scale: scale),
                 y: rowY,
-                width: PropertyLayout.keyWidth,
-                height: PropertyLayout.rowTextHeight
+                width: scaled(PropertyLayout.keyWidth, scale: scale),
+                height: scaled(PropertyLayout.rowTextHeight, scale: scale)
             ),
             attributes: [
-                .font: NSFont.systemFont(ofSize: 14, weight: .regular),
+                .font: NSFont.systemFont(ofSize: scaled(14, scale: scale), weight: .regular),
                 .foregroundColor: LivePreviewTheme.propertyKeyColor
             ],
             dirtyRect: dirtyRect
@@ -274,9 +295,10 @@ enum LivePreviewOverlayRenderer {
         if group.key == "tags" {
             drawTagPills(
                 group.values.map { displayValue($0, key: group.key) },
-                x: x + PropertyLayout.valueX,
+                x: x + scaled(PropertyLayout.valueX, scale: scale),
                 y: rowY,
                 maxX: x + width,
+                scale: scale,
                 dirtyRect: dirtyRect
             )
             return
@@ -287,13 +309,13 @@ enum LivePreviewOverlayRenderer {
         drawString(
             value,
             in: NSRect(
-                x: x + PropertyLayout.valueX,
+                x: x + scaled(PropertyLayout.valueX, scale: scale),
                 y: rowY,
-                width: max(120, width - PropertyLayout.valueX),
-                height: PropertyLayout.rowTextHeight
+                width: max(scaled(120, scale: scale), width - scaled(PropertyLayout.valueX, scale: scale)),
+                height: scaled(PropertyLayout.rowTextHeight, scale: scale)
             ),
             attributes: [
-                .font: NSFont.systemFont(ofSize: 14, weight: .regular),
+                .font: NSFont.systemFont(ofSize: scaled(14, scale: scale), weight: .regular),
                 .foregroundColor: isLink ? LivePreviewTheme.linkColor : LivePreviewTheme.propertyValueColor
             ],
             dirtyRect: dirtyRect
@@ -338,7 +360,8 @@ enum LivePreviewOverlayRenderer {
             let text = NSMutableAttributedString(attributedString: markdownInlineString(
                 displayValue(cell.tableCell.text, key: nil),
                 isHeader: cell.isHeader,
-                fontSet: fontSet
+                fontSet: fontSet,
+                scale: layout.scale
             ))
             let paragraphStyle = NSMutableParagraphStyle()
             paragraphStyle.alignment = cell.alignment.textAlignment
@@ -371,20 +394,22 @@ enum LivePreviewOverlayRenderer {
         else {
             return
         }
+        let scale = CGFloat(layout.scale)
         [layout.rowAddControlRect(for: cell), layout.columnAddControlRect(for: cell)].compactMap { $0 }.forEach { rect in
             LivePreviewTheme.tableHeaderBackgroundColor.setFill()
             NSBezierPath(ovalIn: rect).fill()
             LivePreviewTheme.tableBorderColor.setStroke()
             let path = NSBezierPath(ovalIn: rect)
-            path.lineWidth = 1
+            path.lineWidth = 1 * scale
             path.stroke()
             LivePreviewTheme.textColor.setStroke()
             let plus = NSBezierPath()
-            plus.lineWidth = 1.2
-            plus.move(to: NSPoint(x: rect.midX - 4, y: rect.midY))
-            plus.line(to: NSPoint(x: rect.midX + 4, y: rect.midY))
-            plus.move(to: NSPoint(x: rect.midX, y: rect.midY - 4))
-            plus.line(to: NSPoint(x: rect.midX, y: rect.midY + 4))
+            plus.lineWidth = 1.2 * scale
+            let arm = 4 * scale
+            plus.move(to: NSPoint(x: rect.midX - arm, y: rect.midY))
+            plus.line(to: NSPoint(x: rect.midX + arm, y: rect.midY))
+            plus.move(to: NSPoint(x: rect.midX, y: rect.midY - arm))
+            plus.line(to: NSPoint(x: rect.midX, y: rect.midY + arm))
             plus.stroke()
         }
     }
@@ -461,16 +486,21 @@ enum LivePreviewOverlayRenderer {
             return
         }
 
+        let scale = overlayScale(for: textView)
         let x = lineRect.minX
-        let width = min(760, max(120, textView.bounds.width - x - 36))
+        let width = min(
+            scaled(760, scale: scale),
+            max(scaled(120, scale: scale), textView.bounds.width - x - scaled(36, scale: scale))
+        )
         let y = floor(lineRect.midY) + 0.5
-        let rect = NSRect(x: x, y: y - 1, width: width, height: 2)
+        let lineWidth = max(1, scaled(1, scale: scale))
+        let rect = NSRect(x: x, y: y - lineWidth, width: width, height: lineWidth * 2)
         guard rect.intersects(dirtyRect) else {
             return
         }
 
         let path = NSBezierPath()
-        path.lineWidth = 1
+        path.lineWidth = lineWidth
         LivePreviewTheme.horizontalRuleColor.setStroke()
         path.move(to: NSPoint(x: x, y: y))
         path.line(to: NSPoint(x: x + width, y: y))
@@ -502,9 +532,10 @@ enum LivePreviewOverlayRenderer {
     }
 
     private static func drawUnorderedBullet(_ geometry: LivePreviewMarkerGeometry, dirtyRect: NSRect) {
-        let diameter: CGFloat = 4.5
+        let markerScale = scale(for: geometry)
+        let diameter: CGFloat = 4.5 * markerScale
         let rect = NSRect(
-            x: geometry.rect.minX + 2,
+            x: geometry.rect.minX + 2 * markerScale,
             y: floor(geometry.lineRect.midY - diameter / 2),
             width: diameter,
             height: diameter
@@ -523,17 +554,18 @@ enum LivePreviewOverlayRenderer {
         fontSet: LivePreviewFontSet
     ) {
         let marker = markerText(geometry, source: source)
+        let markerScale = scale(for: geometry)
         let rect = NSRect(
             x: geometry.rect.minX,
             y: geometry.lineRect.minY,
-            width: max(28, geometry.rect.width),
+            width: max(28 * markerScale, geometry.rect.width),
             height: geometry.lineRect.height
         )
         drawString(
             marker,
             in: rect,
             attributes: [
-                .font: fontSet.baseFont,
+                .font: fontSet.scaled(by: Double(markerScale)).baseFont,
                 .foregroundColor: LivePreviewTheme.secondaryTextColor
             ],
             dirtyRect: dirtyRect
@@ -563,8 +595,13 @@ enum LivePreviewOverlayRenderer {
             return
         }
 
-        let path = NSBezierPath(roundedRect: rect, xRadius: 3, yRadius: 3)
-        path.lineWidth = 1.2
+        let markerScale = scale(for: geometry)
+        let path = NSBezierPath(
+            roundedRect: rect,
+            xRadius: 3 * markerScale,
+            yRadius: 3 * markerScale
+        )
+        path.lineWidth = 1.2 * markerScale
         LivePreviewTheme.secondaryTextColor.setStroke()
         path.stroke()
 
@@ -572,20 +609,21 @@ enum LivePreviewOverlayRenderer {
             return
         }
         let check = NSBezierPath()
-        check.lineWidth = 1.6
+        check.lineWidth = 1.6 * markerScale
         check.lineCapStyle = .round
         check.lineJoinStyle = .round
         LivePreviewTheme.secondaryTextColor.setStroke()
-        check.move(to: NSPoint(x: rect.minX + 3.5, y: rect.midY))
-        check.line(to: NSPoint(x: rect.midX - 0.5, y: rect.maxY - 3.5))
-        check.line(to: NSPoint(x: rect.maxX - 3, y: rect.minY + 3.5))
+        check.move(to: NSPoint(x: rect.minX + 3.5 * markerScale, y: rect.midY))
+        check.line(to: NSPoint(x: rect.midX - 0.5 * markerScale, y: rect.maxY - 3.5 * markerScale))
+        check.line(to: NSPoint(x: rect.maxX - 3 * markerScale, y: rect.minY + 3.5 * markerScale))
         check.stroke()
     }
 
     private static func taskCheckboxRect(_ geometry: LivePreviewMarkerGeometry) -> NSRect {
-        let side: CGFloat = 13
+        let markerScale = scale(for: geometry)
+        let side: CGFloat = 13 * markerScale
         return NSRect(
-            x: geometry.rect.minX + 1,
+            x: geometry.rect.minX + 1 * markerScale,
             y: floor(geometry.lineRect.midY - side / 2),
             width: side,
             height: side
@@ -604,7 +642,11 @@ enum LivePreviewOverlayRenderer {
         return LivePreviewMarkerGeometry(
             kind: markerKind(for: context),
             sourceRange: context.markerRange,
-            rect: LivePreviewTheme.listMarkerSlotRect(depth: context.depth, lineRect: lineRect),
+            rect: LivePreviewTheme.listMarkerSlotRect(
+                depth: context.depth,
+                lineRect: lineRect,
+                scale: overlayScale(for: textView)
+            ),
             lineRect: lineRect
         )
     }
@@ -620,12 +662,13 @@ enum LivePreviewOverlayRenderer {
         }
     }
 
-    private static func drawListGuideSegments(_ segments: [ListGuideSegment], dirtyRect: NSRect) {
+    private static func drawListGuideSegments(_ segments: [ListGuideSegment], dirtyRect: NSRect, scale: Double) {
+        let lineWidth = max(1, scaled(1, scale: scale))
         let visibleSegments = segments.filter {
             NSRect(
-                x: $0.x - 1,
+                x: $0.x - Double(lineWidth),
                 y: min($0.startY, $0.endY),
-                width: 2,
+                width: Double(lineWidth * 2),
                 height: abs($0.endY - $0.startY)
             ).intersects(dirtyRect)
         }
@@ -634,7 +677,7 @@ enum LivePreviewOverlayRenderer {
         }
 
         let path = NSBezierPath()
-        path.lineWidth = 1
+        path.lineWidth = lineWidth
         for segment in visibleSegments {
             let x = floor(segment.x) + 0.5
             let startY = max(min(segment.startY, segment.endY), Double(dirtyRect.minY))
@@ -670,12 +713,14 @@ enum LivePreviewOverlayRenderer {
         path.stroke()
     }
 
-    private static func markdownInlineString(
+    static func markdownInlineString(
         _ text: String,
         isHeader: Bool = false,
-        fontSet: LivePreviewFontSet = LivePreviewTheme.defaultFontSet
+        fontSet: LivePreviewFontSet = LivePreviewTheme.defaultFontSet,
+        scale: Double = AppContentZoom.defaultScale
     ) -> NSAttributedString {
         let output = NSMutableAttributedString()
+        let fontSet = fontSet.scaled(by: scale)
         let baseFont = isHeader ? fontSet.strongFont : fontSet.baseFont
         var index = text.startIndex
 
@@ -739,19 +784,26 @@ enum LivePreviewOverlayRenderer {
         return output
     }
 
-    private static func drawTagPills(_ values: [String], x: CGFloat, y: CGFloat, maxX: CGFloat, dirtyRect: NSRect) {
+    private static func drawTagPills(
+        _ values: [String],
+        x: CGFloat,
+        y: CGFloat,
+        maxX: CGFloat,
+        scale: Double,
+        dirtyRect: NSRect
+    ) {
         var cursor = x
         for value in values where !value.isEmpty {
             let attributes: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: 13, weight: .medium),
+                .font: NSFont.systemFont(ofSize: scaled(13, scale: scale), weight: .medium),
                 .foregroundColor: LivePreviewTheme.tagColor
             ]
             let textSize = (value as NSString).size(withAttributes: attributes)
             let rect = NSRect(
                 x: cursor,
-                y: y + 1,
-                width: textSize.width + PropertyLayout.tagHorizontalPadding,
-                height: PropertyLayout.tagHeight
+                y: y + scaled(1, scale: scale),
+                width: textSize.width + scaled(PropertyLayout.tagHorizontalPadding, scale: scale),
+                height: scaled(PropertyLayout.tagHeight, scale: scale)
             )
             guard rect.maxX <= maxX else {
                 return
@@ -760,15 +812,15 @@ enum LivePreviewOverlayRenderer {
                 LivePreviewTheme.tagBackgroundColor.setFill()
                 NSBezierPath(
                     roundedRect: rect,
-                    xRadius: PropertyLayout.tagHeight / 2,
-                    yRadius: PropertyLayout.tagHeight / 2
+                    xRadius: rect.height / 2,
+                    yRadius: rect.height / 2
                 ).fill()
                 (value as NSString).draw(
-                    in: rect.insetBy(dx: 9, dy: 2),
+                    in: rect.insetBy(dx: scaled(9, scale: scale), dy: scaled(2, scale: scale)),
                     withAttributes: attributes
                 )
             }
-            cursor = rect.maxX + PropertyLayout.tagGap
+            cursor = rect.maxX + scaled(PropertyLayout.tagGap, scale: scale)
         }
     }
 
@@ -850,6 +902,13 @@ enum LivePreviewOverlayRenderer {
             title.removeLast(3)
         }
         return title
+    }
+
+    private static func scale(for geometry: LivePreviewMarkerGeometry) -> CGFloat {
+        guard LivePreviewTheme.listMarkerSlotWidth > 0 else {
+            return 1
+        }
+        return max(0.1, geometry.rect.width / LivePreviewTheme.listMarkerSlotWidth)
     }
 
     private static func visibleCharacterRange(in textView: NSTextView) -> NSRange? {
@@ -1006,7 +1065,11 @@ private extension Array where Element == LivePreviewListMarkerContext {
             else {
                 continue
             }
-            let x = LivePreviewTheme.listGuideX(depth: parent.depth + 1, lineRect: firstChildLine)
+            let x = LivePreviewTheme.listGuideX(
+                depth: parent.depth + 1,
+                lineRect: firstChildLine,
+                scale: LivePreviewOverlayRenderer.overlayScale(for: textView)
+            )
             segments.append(LivePreviewOverlayRenderer.ListGuideSegment(
                 depth: parent.depth + 1,
                 x: Double(x),

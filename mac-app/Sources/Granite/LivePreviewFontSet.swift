@@ -1,4 +1,5 @@
 import AppKit
+import NativeMarkdownCore
 
 @MainActor
 struct LivePreviewFontSet {
@@ -28,5 +29,28 @@ struct LivePreviewFontSet {
         default:
             return h6Font
         }
+    }
+
+    func scaled(by scale: Double) -> LivePreviewFontSet {
+        let normalizedScale = AppContentZoom(rawScale: scale).scale
+        guard normalizedScale != AppContentZoom.defaultScale else {
+            return self
+        }
+        return LivePreviewFontSet(
+            baseFont: scaled(baseFont, by: normalizedScale),
+            sourceFont: scaled(sourceFont, by: normalizedScale),
+            codeFont: scaled(codeFont, by: normalizedScale),
+            strongFont: scaled(strongFont, by: normalizedScale),
+            h1Font: scaled(h1Font, by: normalizedScale),
+            h2Font: scaled(h2Font, by: normalizedScale),
+            h3Font: scaled(h3Font, by: normalizedScale),
+            h4Font: scaled(h4Font, by: normalizedScale),
+            h5Font: scaled(h5Font, by: normalizedScale),
+            h6Font: scaled(h6Font, by: normalizedScale)
+        )
+    }
+
+    private func scaled(_ font: NSFont, by scale: Double) -> NSFont {
+        NSFontManager.shared.convert(font, toSize: font.pointSize * CGFloat(scale))
     }
 }

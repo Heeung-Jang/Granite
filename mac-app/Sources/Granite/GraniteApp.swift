@@ -1,3 +1,4 @@
+import AppKit
 import NativeMarkdownCore
 import SwiftUI
 
@@ -195,6 +196,12 @@ struct GraniteApp: App {
             Foundation.exit(report.passed ? 0 : 2)
         }
 
+        if CommandLine.arguments.contains("--app-content-zoom-probe") {
+            let report = AppContentZoomProbe.run()
+            print(AppContentZoomProbe.encodedReport(report))
+            Foundation.exit(report.summary.passed ? 0 : 2)
+        }
+
         if CommandLine.arguments.contains("--summary-panel-probe") {
             Task.detached {
                 let report = await SummaryPanelProbe.run()
@@ -212,6 +219,17 @@ struct GraniteApp: App {
             }
             dispatchMain()
         }
+
+        if CommandLine.arguments.contains("--foundation-models-performance-probe") {
+            Task.detached {
+                let report = await FoundationModelsSummaryPerformanceProbe.run(arguments: CommandLine.arguments)
+                print(FoundationModelsSummaryPerformanceProbe.encodedReport(report))
+                Foundation.exit(report.summary.passed ? 0 : 2)
+            }
+            dispatchMain()
+        }
+
+        NSApplication.shared.setActivationPolicy(.regular)
     }
 
     var body: some Scene {
@@ -226,6 +244,7 @@ struct GraniteApp: App {
         .defaultSize(width: 1440, height: 900)
         .commands {
             EditorCommands()
+            AppContentZoomCommands()
             GraphCommands(appState: appState)
         }
 

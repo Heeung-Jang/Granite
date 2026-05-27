@@ -13,6 +13,7 @@ struct SourceNoteView: View {
 
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var editorFontSettings: EditorFontSettings
+    @Environment(\.appContentZoomScale) private var appContentZoomScale
     let vaultURL: URL
     let file: FileTreeItem
     let chrome: SourceNoteChrome
@@ -56,7 +57,7 @@ struct SourceNoteView: View {
     }
 
     var body: some View {
-        VStack(spacing: chrome.verticalSpacing) {
+        VStack(spacing: ObsidianUI.scaled(chrome.verticalSpacing, scale: appContentZoomScale)) {
             if chrome.showsHeader {
                 header
             }
@@ -76,13 +77,14 @@ struct SourceNoteView: View {
                     markerStyle: livePreviewMarkerStyle,
                     documentTitle: file.displayName,
                     fontSet: editorFontSettings.fontSet,
+                    appContentZoomScale: appContentZoomScale,
                     isActive: isActive,
                     focusRequestID: focusRequestID,
                     interactionHandler: handleEditorInteraction
                 )
-                    .frame(minHeight: 320)
-                    .padding(.horizontal, chrome.editorHorizontalPadding)
-                    .padding(.vertical, chrome.editorVerticalPadding)
+                    .frame(minHeight: ObsidianUI.scaled(320, scale: appContentZoomScale))
+                    .padding(.horizontal, ObsidianUI.scaled(chrome.editorHorizontalPadding, scale: appContentZoomScale))
+                    .padding(.vertical, ObsidianUI.scaled(chrome.editorVerticalPadding, scale: appContentZoomScale))
                     .accessibilityLabel("Markdown editor for \(file.displayName)")
 
                 if chrome == .native {
@@ -109,11 +111,12 @@ struct SourceNoteView: View {
                     )
                 }
             case .failed(let message):
-                VStack(spacing: 8) {
+                VStack(spacing: ObsidianUI.scaled(8, scale: appContentZoomScale)) {
                     Image(systemName: "exclamationmark.triangle")
+                        .font(.system(size: ObsidianUI.fontSize(16, scale: appContentZoomScale)))
                         .foregroundStyle(.secondary)
                     Text(message)
-                        .font(.caption)
+                        .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale)))
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                 }
@@ -121,7 +124,7 @@ struct SourceNoteView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(chrome.outerPadding)
+        .padding(ObsidianUI.scaled(chrome.outerPadding, scale: appContentZoomScale))
         .background(ObsidianUI.editorBackground)
         .task(id: file.id) {
             await load()
@@ -198,30 +201,34 @@ struct SourceNoteView: View {
     }
 
     private var header: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 8) {
+        HStack(alignment: .firstTextBaseline, spacing: ObsidianUI.scaled(12, scale: appContentZoomScale)) {
+            VStack(alignment: .leading, spacing: ObsidianUI.scaled(4, scale: appContentZoomScale)) {
+                HStack(spacing: ObsidianUI.scaled(8, scale: appContentZoomScale)) {
                     Text(file.displayName)
-                        .font(.headline)
+                        .font(.system(size: ObsidianUI.fontSize(13, scale: appContentZoomScale), weight: .semibold))
 
                     if saveSession?.isDirty == true {
                         Circle()
                             .fill(.secondary)
-                            .frame(width: 6, height: 6)
+                            .frame(
+                                width: ObsidianUI.scaled(6, scale: appContentZoomScale),
+                                height: ObsidianUI.scaled(6, scale: appContentZoomScale)
+                            )
                             .accessibilityLabel("Unsaved changes")
                     }
                 }
 
                 Text(file.relativePath)
-                    .font(.caption)
+                    .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale)))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             .accessibilityElement(children: .combine)
             .accessibilityLabel("Current note \(file.displayName)")
-            Spacer(minLength: 12)
+            Spacer(minLength: ObsidianUI.scaled(12, scale: appContentZoomScale))
             Button(action: toggleEditorMode) {
                 Label(modeToggleTitle, systemImage: livePreviewMode.rendersSourceOnly ? "eye" : "curlybraces")
+                    .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale)))
             }
             .keyboardShortcut("e", modifiers: [.command, .shift])
             .help("Toggle Live Preview and Source mode")
@@ -1043,6 +1050,7 @@ private struct SaveStatusStrip: View {
 }
 
 private struct ObsidianEditorStatusBar: View {
+    @Environment(\.appContentZoomScale) private var appContentZoomScale
     let mode: LivePreviewMode
     let session: EditorSaveSession?
     let save: () -> Void
@@ -1052,10 +1060,10 @@ private struct ObsidianEditorStatusBar: View {
     let overwriteAfterConflict: () -> Void
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: ObsidianUI.scaled(12, scale: appContentZoomScale)) {
             statusContent
 
-            Spacer(minLength: 12)
+            Spacer(minLength: ObsidianUI.scaled(12, scale: appContentZoomScale))
 
             if case .fallbackSource = mode {
                 Button(action: retryLivePreview) {
@@ -1075,15 +1083,16 @@ private struct ObsidianEditorStatusBar: View {
 
             Button(action: save) {
                 Image(systemName: "square.and.arrow.down")
+                    .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale)))
             }
             .buttonStyle(.borderless)
             .disabled(session?.canSave != true)
             .help("Save")
         }
-        .font(.caption)
+        .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale)))
         .foregroundStyle(.secondary)
-        .padding(.horizontal, 12)
-        .frame(height: ObsidianUI.statusBarHeight)
+        .padding(.horizontal, ObsidianUI.scaled(12, scale: appContentZoomScale))
+        .frame(height: ObsidianUI.statusBarHeight(scale: appContentZoomScale))
         .background(ObsidianUI.sidebarBackground.opacity(0.55))
         .overlay(alignment: .top) {
             ObsidianUI.border.frame(height: 1)

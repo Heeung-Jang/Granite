@@ -69,6 +69,9 @@ struct MarkdownEditorBridgeProbeReport: Codable, Equatable {
     var safeMarkdownLinkTargetsConcealed: Bool
     var embedPreviewMapUpdatePreservesSelection: Bool
     var selectionChangeDecorationDoesNotReenter: Bool
+    var zoomUpdateDoesNotMutateSource: Bool
+    var zoomUpdatePreservesSelection: Bool
+    var zoomRedecorationDoesNotReenter: Bool
     var unsafeMarkdownLinkTargetsRemainVisible: Bool
     var unsafeWikiLinkTargetsRemainVisible: Bool
     var plainTextPastePolicy: Bool
@@ -112,6 +115,9 @@ struct MarkdownEditorBridgeProbeReport: Codable, Equatable {
     var tableActiveCellStateClearsOnMiss: Bool
     var tableActiveCellStateClearsWhenDisabled: Bool
     var tableCellEditorFrameFollowsRenderedCell: Bool
+    var tableZoomedRenderedBodyCellHitTestResolvesCell: Bool
+    var tableZoomedCellEditorFrameFollowsRenderedCell: Bool
+    var tableZoomedCellEditorFontScales: Bool
     var tableCellEditorCleansUpOnModeChange: Bool
     var tableActiveCellOverlayTextSuppressed: Bool
     var tableCellEditorEnterCommitsCell: Bool
@@ -161,8 +167,11 @@ enum MarkdownEditorBridgeProbe {
         let overlayStateProbe = probeOverlayStateLifecycle()
         let markerStyleProbe = probeMarkerStyleStorageCompatibility()
         let selectionChangeProbe = probeSelectionChangeDecorationDoesNotReenter()
+        let zoomUpdateProbe = probeZoomUpdatePreservesSourceAndSelection()
+        let zoomRedecorationProbe = probeZoomRedecorationDoesNotReenter()
         let checkboxProbe = probeCheckboxToggle()
         let tableCellProbe = probeTableCellEdit()
+        let zoomedTableProbe = probeZoomedTableEditing()
         let tableMenuOperationProbe = probeTableMenuOperations()
         let tableMenuSafetyProbe = probeTableMenuSafety()
         let frontmatterBoundaryProbe = probeFrontmatterBoundaryDeleteUndo()
@@ -234,6 +243,9 @@ enum MarkdownEditorBridgeProbe {
             safeMarkdownLinkTargetsConcealed: renderProbe.safeMarkdownLinkTargetsConcealed,
             embedPreviewMapUpdatePreservesSelection: renderProbe.embedPreviewMapUpdatePreservesSelection,
             selectionChangeDecorationDoesNotReenter: selectionChangeProbe,
+            zoomUpdateDoesNotMutateSource: zoomUpdateProbe.sourcePreserved,
+            zoomUpdatePreservesSelection: zoomUpdateProbe.selectionPreserved,
+            zoomRedecorationDoesNotReenter: zoomRedecorationProbe,
             unsafeMarkdownLinkTargetsRemainVisible: renderProbe.unsafeMarkdownLinkTargetsRemainVisible,
             unsafeWikiLinkTargetsRemainVisible: renderProbe.unsafeWikiLinkTargetsRemainVisible,
             plainTextPastePolicy: renderProbe.plainTextPastePolicy,
@@ -277,6 +289,9 @@ enum MarkdownEditorBridgeProbe {
             tableActiveCellStateClearsOnMiss: tableCellProbe.activeCellStateClearsOnMiss,
             tableActiveCellStateClearsWhenDisabled: tableCellProbe.activeCellStateClearsWhenDisabled,
             tableCellEditorFrameFollowsRenderedCell: tableCellProbe.cellEditorFrameFollowsRenderedCell,
+            tableZoomedRenderedBodyCellHitTestResolvesCell: zoomedTableProbe.renderedBodyCellHitTestResolvesCell,
+            tableZoomedCellEditorFrameFollowsRenderedCell: zoomedTableProbe.cellEditorFrameFollowsRenderedCell,
+            tableZoomedCellEditorFontScales: zoomedTableProbe.cellEditorFontScales,
             tableCellEditorCleansUpOnModeChange: tableCellProbe.cellEditorCleansUpOnModeChange,
             tableActiveCellOverlayTextSuppressed: tableCellProbe.activeCellOverlayTextSuppressed,
             tableCellEditorEnterCommitsCell: tableCellProbe.cellEditorEnterCommitsCell,
@@ -811,6 +826,76 @@ enum MarkdownEditorBridgeProbe {
         )
 
         return applied && NSEqualRanges(textView.selectedRange(), NSRange(location: 2, length: 0))
+    }
+
+    private static func probeZoomUpdatePreservesSourceAndSelection() -> (
+        sourcePreserved: Bool,
+        selectionPreserved: Bool
+    ) {
+        let source = "# Heading\n\nBody with [[Link]] and `code`.\n"
+        let textView = MarkdownEditorTextViewFactory.makeTextView()
+        textView.string = source
+        let selection = NSRange(location: 12, length: 4)
+        textView.setSelectedRange(selection)
+
+        MarkdownVisibleRangeDecorator.decorateVisibleRange(
+            in: textView,
+            revealRange: selection,
+            markerStyle: .obsidian
+        )
+        MarkdownEditorTextViewFactory.applyAppContentZoomScale(1.25, to: textView)
+        MarkdownVisibleRangeDecorator.decorateVisibleRange(
+            in: textView,
+            revealRange: selection,
+            markerStyle: .obsidian,
+            scale: 1.25
+        )
+
+        return (
+            textView.string == source,
+            NSEqualRanges(textView.selectedRange(), selection)
+        )
+    }
+
+    private static func probeZoomRedecorationDoesNotReenter() -> Bool {
+        var modelText = "# Heading\n\nBody with [[Link]] and `code`.\n"
+        var bindingWriteCount = 0
+        let binding = Binding<String>(
+            get: { modelText },
+            set: {
+                modelText = $0
+                bindingWriteCount += 1
+            }
+        )
+        let coordinator = MarkdownEditorView.Coordinator(
+            text: binding,
+            appContentZoomScale: 1.0
+        )
+        let textView = MarkdownEditorTextViewFactory.makeTextView(scale: 1.0)
+        textView.delegate = coordinator
+        coordinator.textView = textView
+        textView.string = modelText
+        let selection = NSRange(location: 12, length: 4)
+        textView.setSelectedRange(selection)
+
+        coordinator.decorateVisibleRange(in: textView)
+        coordinator.update(
+            text: binding,
+            interactionHandler: nil,
+            livePreviewMode: .livePreview,
+            linkStyleMap: LivePreviewLinkStyleMap(),
+            embedPreviewMap: LivePreviewEmbedPreviewMap(),
+            markerStyle: .defaultValue,
+            documentTitle: nil,
+            appContentZoomScale: 1.25,
+            focusRequestID: nil
+        )
+        MarkdownEditorTextViewFactory.applyAppContentZoomScale(1.25, to: textView)
+        coordinator.decorateVisibleRange(in: textView)
+
+        return bindingWriteCount == 0
+            && textView.string == modelText
+            && NSEqualRanges(textView.selectedRange(), selection)
     }
 
     private static func probeAppKitChangeSkip() -> Bool {
@@ -1936,6 +2021,57 @@ enum MarkdownEditorBridgeProbe {
             undoRestoresCell,
             failurePreservesBuffer
         )
+    }
+
+    private static func probeZoomedTableEditing() -> (
+        renderedBodyCellHitTestResolvesCell: Bool,
+        cellEditorFrameFollowsRenderedCell: Bool,
+        cellEditorFontScales: Bool
+    ) {
+        let text = """
+        | Name | Status |
+        | --- | --- |
+        | Alpha | Draft |
+        """
+        let textView = MarkdownEditorTextViewFactory.makeTextView(scale: 1.25) as! MarkdownInteractionTextView
+        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 900, height: 700))
+        scrollView.documentView = textView
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 900, height: 700),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: true
+        )
+        window.contentView = scrollView
+        window.makeFirstResponder(textView)
+        textView.string = text
+        guard let table = LivePreviewTableParser.parse(text).first,
+              let layout = LivePreviewTableLayout.make(for: table, in: textView),
+              let bodyLayout = layout.cells.first(where: { !$0.isHeader && $0.tableCell.text == "Draft" })
+        else {
+            return (false, false, false)
+        }
+
+        let point = NSPoint(x: bodyLayout.textRect.midX, y: bodyLayout.textRect.midY)
+        let renderedBodyCellHitTestResolvesCell = textView.tableCellForEditing(at: point) == bodyLayout.tableCell
+        let activated = textView.setActiveTableCell(at: point)
+        let cellEditorFrameFollowsRenderedCell = activated
+            && textView.activeTableCellEditorFrame?.intersects(bodyLayout.textRect) == true
+        let cellEditorFontScales = approximately(
+            textView.tableCellEditor?.font?.pointSize ?? 0,
+            LivePreviewTheme.baseFont(scale: 1.25).pointSize,
+            tolerance: 0.1
+        )
+
+        return (
+            renderedBodyCellHitTestResolvesCell,
+            cellEditorFrameFollowsRenderedCell,
+            cellEditorFontScales
+        )
+    }
+
+    private static func approximately(_ lhs: CGFloat, _ rhs: CGFloat, tolerance: CGFloat) -> Bool {
+        abs(lhs - rhs) <= tolerance
     }
 
     private static func probeTableMenuOperations() -> (

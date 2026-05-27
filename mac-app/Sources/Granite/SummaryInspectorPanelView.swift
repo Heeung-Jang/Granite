@@ -8,24 +8,49 @@ enum SummaryPanelViewState: Equatable {
     case unavailable(SummaryUnavailableReason)
     case tooLarge(sourceByteCount: Int, maxSourceBytes: Int)
     case failed(SummaryFailureReason)
+    case streaming(String)
+    case fastComplete(DocumentSummary)
+    case refining(DocumentSummary)
+    case refinedComplete(DocumentSummary)
     case complete(DocumentSummary)
 
     var isComplete: Bool {
-        if case .complete = self {
+        switch self {
+        case .complete, .fastComplete, .refinedComplete:
             return true
+        default:
+            return false
         }
-        return false
+    }
+
+    var isWorking: Bool {
+        switch self {
+        case .loading, .streaming, .refining:
+            return true
+        default:
+            return false
+        }
+    }
+
+    var currentSummary: DocumentSummary? {
+        switch self {
+        case .fastComplete(let summary), .refining(let summary), .refinedComplete(let summary), .complete(let summary):
+            return summary
+        default:
+            return nil
+        }
     }
 }
 
 struct SummaryInspectorPanelView: View {
+    @Environment(\.appContentZoomScale) private var appContentZoomScale
     let state: SummaryPanelViewState
     let generate: () -> Void
     let cancel: () -> Void
 
     var body: some View {
         InspectorSection(title: "Summary") {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: ObsidianUI.scaled(10, scale: appContentZoomScale)) {
                 privacyNote
                 content
             }
@@ -50,6 +75,22 @@ struct SummaryInspectorPanelView: View {
         case .failed(let reason):
             EmptyInlineText(failureText(reason))
             generateButton
+        case .streaming(let snapshot):
+            stagedStatus("빠른 요약", isLoading: true)
+            streamingView(snapshot)
+            cancelButton
+        case .fastComplete(let summary):
+            stagedStatus("빠른 요약", isLoading: false)
+            summaryView(summary)
+            regenerateButton
+        case .refining(let summary):
+            stagedStatus("정교화 중", isLoading: true)
+            summaryView(summary)
+            cancelButton
+        case .refinedComplete(let summary):
+            stagedStatus("정교화 완료", isLoading: false)
+            summaryView(summary)
+            regenerateButton
         case .complete(let summary):
             summaryView(summary)
             regenerateButton
@@ -58,7 +99,7 @@ struct SummaryInspectorPanelView: View {
 
     private var privacyNote: some View {
         Text("현재 에디터 내용과 저장되지 않은 편집을 로컬 Apple 모델로 요약합니다. 원본 문서에는 저장하지 않습니다.")
-            .font(.caption)
+            .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale)))
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
     }
@@ -71,11 +112,24 @@ struct SummaryInspectorPanelView: View {
         summaryButton(title: "다시 생성", accessibilityLabel: "Regenerate summary")
     }
 
+    private var cancelButton: some View {
+        Button {
+            cancel()
+        } label: {
+            Label("취소", systemImage: "xmark")
+                .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale)))
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .accessibilityLabel("Cancel summary")
+    }
+
     private func summaryButton(title: String, accessibilityLabel: String) -> some View {
         Button {
             generate()
         } label: {
             Label(title, systemImage: "sparkles")
+                .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale)))
         }
         .buttonStyle(.bordered)
         .controlSize(.small)
@@ -83,41 +137,59 @@ struct SummaryInspectorPanelView: View {
     }
 
     private func loadingView(_ progress: SummaryProgressState) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: ObsidianUI.scaled(8, scale: appContentZoomScale)) {
+            HStack(spacing: ObsidianUI.scaled(6, scale: appContentZoomScale)) {
                 ProgressView()
                     .controlSize(.small)
                 Text(progressText(progress))
-                    .font(.caption)
+                    .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale)))
                     .foregroundStyle(.secondary)
             }
-            Button {
-                cancel()
-            } label: {
-                Label("취소", systemImage: "xmark")
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .accessibilityLabel("Cancel summary")
+            cancelButton
         }
     }
 
+    private func stagedStatus(_ title: String, isLoading: Bool) -> some View {
+        HStack(spacing: ObsidianUI.scaled(6, scale: appContentZoomScale)) {
+            if isLoading {
+                ProgressView()
+                    .controlSize(.small)
+            }
+            Text(title)
+                .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale), weight: .semibold))
+                .foregroundStyle(.secondary)
+        }
+        .accessibilityLabel(title)
+    }
+
+    private func streamingView(_ snapshot: String) -> some View {
+        Text(snapshot.isEmpty ? "요약을 준비하는 중입니다." : snapshot)
+            .font(.system(size: ObsidianUI.fontSize(13, scale: appContentZoomScale)))
+            .lineSpacing(ObsidianUI.scaled(2, scale: appContentZoomScale))
+            .textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityLabel("Summary body")
+    }
+
     private func summaryView(_ summary: DocumentSummary) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: ObsidianUI.scaled(14, scale: appContentZoomScale)) {
             summaryBlock(title: "핵심 요약", lines: [summary.overview])
             summaryBlock(title: "주요 포인트", lines: summary.keyPoints)
             summaryBlock(title: "액션/결정 사항", lines: summary.actionItems)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityLabel("Summary body")
     }
 
     private func summaryBlock(title: String, lines: [String]) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: ObsidianUI.scaled(6, scale: appContentZoomScale)) {
             Text(title)
-                .font(.callout.weight(.semibold))
+                .font(.system(size: ObsidianUI.fontSize(13, scale: appContentZoomScale), weight: .semibold))
             ForEach(lines.filter { !$0.isEmpty }, id: \.self) { line in
                 Text(line)
-                    .font(.callout)
-                    .lineSpacing(2)
+                    .font(.system(size: ObsidianUI.fontSize(13, scale: appContentZoomScale)))
+                    .lineSpacing(ObsidianUI.scaled(2, scale: appContentZoomScale))
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -132,6 +204,16 @@ struct SummaryInspectorPanelView: View {
             return "\(current)/\(total) 섹션 요약 중입니다."
         case .finalizing:
             return "최종 요약을 만드는 중입니다."
+        case .fastStreaming:
+            return "빠른 요약을 표시하는 중입니다."
+        case .fastComplete:
+            return "빠른 요약을 완료했습니다."
+        case .refining:
+            return "요약을 정교화하는 중입니다."
+        case .refinedComplete:
+            return "정교화 요약을 완료했습니다."
+        case .fallingBack:
+            return "기존 요약 경로로 전환하는 중입니다."
         default:
             return "요약 중입니다."
         }

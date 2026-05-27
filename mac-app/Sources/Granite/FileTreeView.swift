@@ -7,6 +7,7 @@ struct FileTreeView: View {
     var showsHeader = true
 
     @EnvironmentObject private var appState: AppState
+    @Environment(\.appContentZoomScale) private var appContentZoomScale
     @State private var state: FileTreeViewState = .idle
     @State private var selectedFileID: String?
     @State private var expandedFolderIDs: Set<String> = []
@@ -15,8 +16,8 @@ struct FileTreeView: View {
         VStack(spacing: 0) {
             if showsHeader {
                 header
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
+                    .padding(.horizontal, ObsidianUI.scaled(12, scale: appContentZoomScale))
+                    .padding(.vertical, ObsidianUI.scaled(8, scale: appContentZoomScale))
 
                 Divider()
             }
@@ -40,7 +41,7 @@ struct FileTreeView: View {
     private var header: some View {
         HStack {
             Text("Files")
-                .font(.headline)
+                .font(.system(size: ObsidianUI.fontSize(13, scale: appContentZoomScale), weight: .semibold))
 
             Spacer()
 
@@ -54,6 +55,7 @@ struct FileTreeView: View {
                     }
                 } label: {
                     Image(systemName: "arrow.clockwise")
+                        .font(.system(size: ObsidianUI.fontSize(13, scale: appContentZoomScale)))
                 }
                 .buttonStyle(.borderless)
                 .help("Refresh Files")
@@ -83,10 +85,10 @@ struct FileTreeView: View {
                         Text(loaded.snapshot.state == .stale ? "Stale" : "Partial")
                         Spacer()
                     }
-                    .font(.caption)
+                    .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale)))
                     .foregroundStyle(.secondary)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
+                    .padding(.horizontal, ObsidianUI.scaled(12, scale: appContentZoomScale))
+                    .padding(.vertical, ObsidianUI.scaled(6, scale: appContentZoomScale))
                     .accessibilityElement(children: .combine)
                     .accessibilityLabel(loaded.snapshot.state == .stale ? "File list is stale" : "File list is partial")
 
@@ -94,7 +96,7 @@ struct FileTreeView: View {
                 }
 
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 1) {
+                    LazyVStack(alignment: .leading, spacing: ObsidianUI.scaled(1, scale: appContentZoomScale)) {
                         ForEach(loaded.visibleRows) { row in
                             Button {
                                 handle(row)
@@ -102,10 +104,10 @@ struct FileTreeView: View {
                                 FileTreeRow(row: row, isSelected: isSelected(row))
                             }
                             .buttonStyle(.plain)
-                            .padding(.horizontal, 8)
+                            .padding(.horizontal, ObsidianUI.scaled(8, scale: appContentZoomScale))
                         }
                     }
-                    .padding(.vertical, 4)
+                    .padding(.vertical, ObsidianUI.scaled(4, scale: appContentZoomScale))
                 }
                 .accessibilityLabel("Markdown files")
             }
@@ -328,39 +330,41 @@ private struct FileTreeOutlineBuild: Sendable {
 }
 
 private struct FileTreeRow: View {
+    @Environment(\.appContentZoomScale) private var appContentZoomScale
     let row: FileTreeOutlineRow
     let isSelected: Bool
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: ObsidianUI.scaled(6, scale: appContentZoomScale)) {
             Color.clear
-                .frame(width: CGFloat(row.depth) * 16)
+                .frame(width: ObsidianUI.scaled(CGFloat(row.depth) * 16, scale: appContentZoomScale))
 
             if row.kind == .folder {
                 Image(systemName: row.isExpanded ? "chevron.down" : "chevron.right")
-                    .font(.caption)
+                    .font(.system(size: ObsidianUI.fontSize(11, scale: appContentZoomScale)))
                     .foregroundStyle(.secondary)
-                    .frame(width: 12)
+                    .frame(width: ObsidianUI.scaled(12, scale: appContentZoomScale))
             } else {
                 Color.clear
-                    .frame(width: 12)
+                    .frame(width: ObsidianUI.scaled(12, scale: appContentZoomScale))
             }
 
             Image(systemName: row.kind == .folder ? "folder" : "doc.text")
+                .font(.system(size: ObsidianUI.fontSize(14, scale: appContentZoomScale)))
                 .foregroundStyle(.secondary)
-                .frame(width: 16)
+                .frame(width: ObsidianUI.scaled(16, scale: appContentZoomScale))
 
             Text(row.title)
+                .font(.system(size: ObsidianUI.fontSize(14, scale: appContentZoomScale)))
                 .lineLimit(1)
                 .foregroundStyle(isSelected ? Color.primary : Color.primary.opacity(0.86))
 
             Spacer(minLength: 0)
         }
-        .font(.system(size: 14))
-        .padding(.horizontal, 6)
-        .frame(height: 28)
+        .padding(.horizontal, ObsidianUI.scaled(6, scale: appContentZoomScale))
+        .frame(height: ObsidianUI.scaled(28, scale: appContentZoomScale))
         .background(isSelected ? ObsidianUI.selectedFill : Color.clear)
-        .clipShape(RoundedRectangle(cornerRadius: 5))
+        .clipShape(RoundedRectangle(cornerRadius: ObsidianUI.scaled(5, scale: appContentZoomScale)))
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilityLabel)
     }
@@ -376,21 +380,23 @@ private struct FileTreeRow: View {
 }
 
 private struct EmptyFileTreeState: View {
+    @Environment(\.appContentZoomScale) private var appContentZoomScale
     let title: String
     let systemImage: String
 
     var body: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: ObsidianUI.scaled(8, scale: appContentZoomScale)) {
             Image(systemName: systemImage)
+                .font(.system(size: ObsidianUI.fontSize(16, scale: appContentZoomScale)))
                 .foregroundStyle(.secondary)
             Text(title)
-                .font(.caption)
+                .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale)))
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(16)
+        .padding(ObsidianUI.scaled(16, scale: appContentZoomScale))
         .accessibilityElement(children: .combine)
         .accessibilityLabel(title)
     }

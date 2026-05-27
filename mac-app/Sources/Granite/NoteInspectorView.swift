@@ -3,6 +3,7 @@ import NativeMarkdownCore
 import SwiftUI
 
 struct NoteInspectorView: View {
+    @Environment(\.appContentZoomScale) private var appContentZoomScale
     @EnvironmentObject private var appState: AppState
     let vaultURL: URL
     let file: FileTreeItem
@@ -19,14 +20,18 @@ struct NoteInspectorView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
+                .padding(.horizontal, ObsidianUI.scaled(12, scale: appContentZoomScale))
+                .padding(.vertical, ObsidianUI.scaled(8, scale: appContentZoomScale))
 
             Divider()
 
             content
         }
-        .frame(minWidth: 260, idealWidth: 300, maxWidth: 360)
+        .frame(
+            minWidth: ObsidianUI.scaled(260, scale: appContentZoomScale),
+            idealWidth: ObsidianUI.scaled(300, scale: appContentZoomScale),
+            maxWidth: ObsidianUI.scaled(360, scale: appContentZoomScale)
+        )
         .background(ObsidianUI.sidebarBackground)
         .task(id: "\(file.id)-\(appState.readGeneration)") {
             await resetAndLoadDefaultPanel()
@@ -47,7 +52,7 @@ struct NoteInspectorView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: ObsidianUI.scaled(8, scale: appContentZoomScale)) {
             ForEach(NoteInspectorPanel.allCases, id: \.self) { panel in
                 ObsidianIconButton(
                     systemName: panel.systemImage,
@@ -70,10 +75,10 @@ struct NoteInspectorView: View {
     @ViewBuilder
     private var content: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: ObsidianUI.scaled(14, scale: appContentZoomScale)) {
                 selectedPanelContent()
             }
-            .padding(12)
+            .padding(ObsidianUI.scaled(12, scale: appContentZoomScale))
         }
         .accessibilityLabel("Note inspector")
     }
@@ -93,11 +98,7 @@ struct NoteInspectorView: View {
         case .attachments:
             attachmentsState.isLoading
         case .summary:
-            if case .loading = summaryState {
-                true
-            } else {
-                false
-            }
+            summaryState.isWorking
         }
     }
 
@@ -312,17 +313,23 @@ struct NoteInspectorView: View {
             let request = try summaryCoordinator.request(appState: appState, file: file)
             summaryTask = Task {
                 do {
-                    let summary = try await summaryCoordinator.summarize(
+                    let summary = try await summaryCoordinator.summarizeStaged(
                         request: request,
                         appState: appState,
                         useCache: !shouldRegenerate
                     ) { progress in
-                        summaryState = .loading(progress)
+                        updateSummaryProgress(progress)
+                    } onSnapshot: { snapshot in
+                        summaryState = .streaming(snapshot)
+                    } onSummary: { summary in
+                        updateSummary(summary)
                     }
                     if Task.isCancelled {
                         return
                     }
-                    summaryState = .complete(summary)
+                    if summaryState.currentSummary == nil {
+                        updateSummary(summary)
+                    }
                 } catch let error as SummaryGenerationError {
                     if Task.isCancelled {
                         return
@@ -346,8 +353,45 @@ struct NoteInspectorView: View {
         summaryTask?.cancel()
         summaryTask = nil
         summaryCoordinator.cancel()
-        if case .loading = summaryState {
+        switch summaryState {
+        case .loading, .streaming:
             summaryState = .ready
+        case .refining(let summary):
+            summaryState = .fastComplete(summary)
+        default:
+            break
+        }
+    }
+
+    private func updateSummaryProgress(_ progress: SummaryProgressState) {
+        switch progress {
+        case .fastStreaming:
+            if case .loading = summaryState {
+                summaryState = .streaming("")
+            }
+        case .refining:
+            if let summary = summaryState.currentSummary {
+                summaryState = .refining(summary)
+            } else {
+                summaryState = .loading(progress)
+            }
+        case .fastComplete:
+            if case .refining(let summary) = summaryState {
+                summaryState = .fastComplete(summary)
+            }
+        case .refinedComplete:
+            break
+        default:
+            summaryState = .loading(progress)
+        }
+    }
+
+    private func updateSummary(_ summary: DocumentSummary) {
+        switch summary.metadata.stage {
+        case .fast:
+            summaryState = .fastComplete(summary)
+        case .refined:
+            summaryState = .refinedComplete(summary)
         }
     }
 
@@ -374,7 +418,7 @@ struct NoteInspectorView: View {
     ) -> some View {
         switch state {
         case .idle, .loading:
-            HStack(spacing: 6) {
+            HStack(spacing: ObsidianUI.scaled(6, scale: appContentZoomScale)) {
                 ProgressView()
                     .controlSize(.small)
                 EmptyInlineText(loadingText)
@@ -399,7 +443,7 @@ struct NoteInspectorView: View {
     }
 
     private func backlinksSection(_ backlinks: [BacklinkItem]) -> some View {
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: ObsidianUI.scaled(20, scale: appContentZoomScale)) {
             InspectorSection(title: "링크된 언급", count: backlinks.count) {
                 if backlinks.isEmpty {
                     EmptyInlineText("백링크를 찾지 못했습니다.")
@@ -408,11 +452,12 @@ struct NoteInspectorView: View {
                         Button {
                             appState.openFile(backlink.file)
                         } label: {
-                            VStack(alignment: .leading, spacing: 2) {
+                            VStack(alignment: .leading, spacing: ObsidianUI.scaled(2, scale: appContentZoomScale)) {
                                 Text((backlink.file.displayName as NSString).deletingPathExtension)
+                                    .font(.system(size: ObsidianUI.fontSize(13, scale: appContentZoomScale)))
                                     .lineLimit(1)
                                 Text(backlink.snippet)
-                                    .font(.caption)
+                                    .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale)))
                                     .foregroundStyle(.secondary)
                                     .lineLimit(2)
                             }
@@ -436,7 +481,7 @@ struct NoteInspectorView: View {
             } else {
                 ForEach(tags, id: \.self) { tag in
                     Text("#\(tag)")
-                        .font(.caption)
+                        .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale)))
                 }
             }
         }
@@ -448,13 +493,13 @@ struct NoteInspectorView: View {
                 EmptyInlineText("No properties")
             } else {
                 ForEach(properties) { property in
-                    HStack(alignment: .firstTextBaseline) {
+                    HStack(alignment: .firstTextBaseline, spacing: ObsidianUI.scaled(8, scale: appContentZoomScale)) {
                         Text(property.key)
-                            .font(.caption)
+                            .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale)))
                             .foregroundStyle(.secondary)
                         Spacer()
                         Text(property.value)
-                            .font(.caption)
+                            .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale)))
                             .lineLimit(2)
                     }
                 }
@@ -541,33 +586,35 @@ enum NoteInspectorPanel: CaseIterable {
 }
 
 private struct InspectorStateBanner: View {
+    @Environment(\.appContentZoomScale) private var appContentZoomScale
     let state: SearchResultState
 
     var body: some View {
         Label(state.rawValue.capitalized, systemImage: "ellipsis")
-            .font(.caption)
+            .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale)))
             .foregroundStyle(.secondary)
     }
 }
 
 struct InspectorSection<Content: View>: View {
+    @Environment(\.appContentZoomScale) private var appContentZoomScale
     let title: String
     var count: Int?
     @ViewBuilder let content: Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: ObsidianUI.scaled(6, scale: appContentZoomScale)) {
             HStack {
                 Text(title)
-                    .font(.body.weight(.semibold))
+                    .font(.system(size: ObsidianUI.fontSize(13, scale: appContentZoomScale), weight: .semibold))
                     .foregroundStyle(.primary)
                 Spacer()
                 if let count {
                     Text("\(count)")
+                        .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale)))
                         .foregroundStyle(.secondary)
                 }
             }
-            .font(.caption)
             content
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -577,6 +624,7 @@ struct InspectorSection<Content: View>: View {
 }
 
 private struct OutgoingLinkRow: View {
+    @Environment(\.appContentZoomScale) private var appContentZoomScale
     let link: OutgoingLinkItem
     let open: (FileTreeItem) -> Void
 
@@ -587,23 +635,26 @@ private struct OutgoingLinkRow: View {
                 open(file)
             } label: {
                 Label(link.label, systemImage: "arrow.up.right")
+                    .font(.system(size: ObsidianUI.fontSize(13, scale: appContentZoomScale)))
                     .lineLimit(1)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Open outgoing link \(link.label)")
         case .missing:
             Label("\(link.label) missing", systemImage: "questionmark")
+                .font(.system(size: ObsidianUI.fontSize(13, scale: appContentZoomScale)))
                 .foregroundStyle(.secondary)
         case .duplicate(let files):
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: ObsidianUI.scaled(3, scale: appContentZoomScale)) {
                 Label("\(link.label) duplicate", systemImage: "square.stack.3d.up")
+                    .font(.system(size: ObsidianUI.fontSize(13, scale: appContentZoomScale)))
                     .foregroundStyle(.secondary)
                 ForEach(files) { file in
                     Button {
                         open(file)
                     } label: {
                         Text(file.relativePath)
-                            .font(.caption)
+                            .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale)))
                             .lineLimit(1)
                     }
                     .buttonStyle(.plain)
@@ -615,6 +666,7 @@ private struct OutgoingLinkRow: View {
                 open(file)
             } label: {
                 Label("\(link.label) missing #\(heading)", systemImage: "number")
+                    .font(.system(size: ObsidianUI.fontSize(13, scale: appContentZoomScale)))
                     .lineLimit(2)
             }
             .buttonStyle(.plain)
@@ -625,24 +677,25 @@ private struct OutgoingLinkRow: View {
 }
 
 private struct AttachmentReferenceRow: View {
+    @Environment(\.appContentZoomScale) private var appContentZoomScale
     let vaultURL: URL
     let reference: AttachmentReferenceItem
     @State private var previewInfo: AttachmentPreviewInfo?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: ObsidianUI.scaled(3, scale: appContentZoomScale)) {
             Label(reference.rawTarget, systemImage: systemImage)
-                .font(.caption)
+                .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale)))
                 .lineLimit(1)
             Text("\(sourceText) - \(statusText)")
-                .font(.caption)
+                .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale)))
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
 
             if case .duplicate(let files) = reference.state {
                 ForEach(files) { file in
                     Text(file.relativePath)
-                        .font(.caption2)
+                        .font(.system(size: ObsidianUI.fontSize(11, scale: appContentZoomScale)))
                         .foregroundStyle(.tertiary)
                         .lineLimit(1)
                 }
@@ -726,19 +779,24 @@ private struct AttachmentReferenceRow: View {
 }
 
 private struct AttachmentImagePreview: View {
+    @Environment(\.appContentZoomScale) private var appContentZoomScale
     let info: AttachmentPreviewInfo
     @State private var image: NSImage?
     @State private var didFail = false
 
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: ObsidianUI.scaled(6, scale: appContentZoomScale))
                 .fill(.quaternary.opacity(0.4))
             previewContent
-                .padding(4)
+                .padding(ObsidianUI.scaled(4, scale: appContentZoomScale))
         }
-        .frame(maxWidth: .infinity, minHeight: 72, maxHeight: 120)
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .frame(
+            maxWidth: .infinity,
+            minHeight: ObsidianUI.scaled(72, scale: appContentZoomScale),
+            maxHeight: ObsidianUI.scaled(120, scale: appContentZoomScale)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: ObsidianUI.scaled(6, scale: appContentZoomScale)))
         .accessibilityLabel("Attachment image preview")
         .task(id: info.url) {
             await loadImage()
@@ -779,6 +837,7 @@ private struct AttachmentImagePreview: View {
 }
 
 struct EmptyInlineText: View {
+    @Environment(\.appContentZoomScale) private var appContentZoomScale
     let text: String
 
     init(_ text: String) {
@@ -787,28 +846,30 @@ struct EmptyInlineText: View {
 
     var body: some View {
         Text(text)
-            .font(.caption)
+            .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale)))
             .foregroundStyle(.tertiary)
             .accessibilityLabel(text)
     }
 }
 
 private struct EmptyInspectorState: View {
+    @Environment(\.appContentZoomScale) private var appContentZoomScale
     let title: String
     let systemImage: String
 
     var body: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: ObsidianUI.scaled(8, scale: appContentZoomScale)) {
             Image(systemName: systemImage)
+                .font(.system(size: ObsidianUI.fontSize(16, scale: appContentZoomScale)))
                 .foregroundStyle(.secondary)
             Text(title)
-                .font(.caption)
+                .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale)))
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(16)
+        .padding(ObsidianUI.scaled(16, scale: appContentZoomScale))
         .accessibilityElement(children: .combine)
         .accessibilityLabel(title)
     }

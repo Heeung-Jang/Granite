@@ -12,6 +12,7 @@ struct MarkdownEditorView: NSViewRepresentable {
     var markerStyle: LivePreviewMarkerStyle = .defaultValue
     var documentTitle: String?
     var fontSet: LivePreviewFontSet = LivePreviewTheme.defaultFontSet
+    var appContentZoomScale = AppContentZoom.defaultScale
     var isActive = true
     var focusRequestID: UUID?
     var interactionHandler: ((MarkdownEditorInteractionRequest) -> Void)?
@@ -26,12 +27,13 @@ struct MarkdownEditorView: NSViewRepresentable {
             markerStyle: markerStyle,
             documentTitle: documentTitle,
             fontSet: fontSet,
+            appContentZoomScale: appContentZoomScale,
             focusRequestID: focusRequestID
         )
     }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let textView = MarkdownEditorTextViewFactory.makeTextView(fontSet: fontSet)
+        let textView = MarkdownEditorTextViewFactory.makeTextView(fontSet: fontSet, scale: appContentZoomScale)
         textView.string = text
         textView.isEditable = isEditable
         if let textView = textView as? MarkdownInteractionTextView {
@@ -72,6 +74,7 @@ struct MarkdownEditorView: NSViewRepresentable {
             markerStyle: markerStyle,
             documentTitle: documentTitle,
             fontSet: fontSet,
+            appContentZoomScale: appContentZoomScale,
             focusRequestID: focusRequestID
         )
         guard let textView = scrollView.documentView as? NSTextView else {
@@ -83,10 +86,7 @@ struct MarkdownEditorView: NSViewRepresentable {
             to: textView,
             isApplyingAppKitChange: context.coordinator.isApplyingAppKitChange
         )
-        if fontSetDidChange {
-            textView.font = fontSet.baseFont
-            textView.typingAttributes[.font] = fontSet.baseFont
-        }
+        MarkdownEditorTextViewFactory.applyAppContentZoomScale(appContentZoomScale, to: textView, fontSet: fontSet)
         let decorationTimer = AppTelemetryTimer()
         context.coordinator.decorateVisibleRange(in: textView)
         AppTelemetry.editorDecorationCompleted(
@@ -132,6 +132,7 @@ struct MarkdownEditorView: NSViewRepresentable {
         private var markerStyle: LivePreviewMarkerStyle
         private var documentTitle: String?
         private var fontSet: LivePreviewFontSet
+        private var appContentZoomScale: Double
         private var focusRequestID: UUID?
         private var appliedFocusRequestID: UUID?
         private var isDecoratingLivePreview = false
@@ -148,6 +149,7 @@ struct MarkdownEditorView: NSViewRepresentable {
             markerStyle: LivePreviewMarkerStyle = .defaultValue,
             documentTitle: String? = nil,
             fontSet: LivePreviewFontSet = LivePreviewTheme.defaultFontSet,
+            appContentZoomScale: Double = AppContentZoom.defaultScale,
             focusRequestID: UUID? = nil
         ) {
             _text = text
@@ -158,6 +160,7 @@ struct MarkdownEditorView: NSViewRepresentable {
             self.markerStyle = markerStyle
             self.documentTitle = documentTitle
             self.fontSet = fontSet
+            self.appContentZoomScale = AppContentZoom(rawScale: appContentZoomScale).scale
             self.focusRequestID = focusRequestID
         }
 
@@ -170,10 +173,13 @@ struct MarkdownEditorView: NSViewRepresentable {
             embedPreviewMap: LivePreviewEmbedPreviewMap,
             markerStyle: LivePreviewMarkerStyle,
             documentTitle: String?,
-            fontSet: LivePreviewFontSet,
+            fontSet: LivePreviewFontSet = LivePreviewTheme.defaultFontSet,
+            appContentZoomScale: Double,
             focusRequestID: UUID?
         ) -> Bool {
-            let fontSetDidChange = !Self.fontSet(self.fontSet, matches: fontSet)
+            let previousScale = appContentZoomScale
+            let nextScale = AppContentZoom(rawScale: appContentZoomScale).scale
+            let fontSetDidChange = !Self.fontSet(self.fontSet.scaled(by: previousScale), matches: fontSet.scaled(by: nextScale))
             _text = text
             self.interactionHandler = interactionHandler
             self.livePreviewMode = livePreviewMode
@@ -182,6 +188,7 @@ struct MarkdownEditorView: NSViewRepresentable {
             self.markerStyle = markerStyle
             self.documentTitle = documentTitle
             self.fontSet = fontSet
+            self.appContentZoomScale = nextScale
             self.focusRequestID = focusRequestID
             if let textView = textView as? MarkdownInteractionTextView {
                 textView.livePreviewDocumentTitle = documentTitle
@@ -273,7 +280,8 @@ struct MarkdownEditorView: NSViewRepresentable {
                 linkStyleMap: linkStyleMap,
                 embedPreviewMap: embedPreviewMap,
                 markerStyle: markerStyle,
-                fontSet: fontSet
+                fontSet: fontSet,
+                scale: appContentZoomScale
             )
             if let textView = textView as? MarkdownInteractionTextView {
                 textView.livePreviewMarkerStyle = markerStyle
@@ -347,24 +355,51 @@ struct MarkdownEditorView: NSViewRepresentable {
 
 @MainActor
 enum MarkdownEditorTextViewFactory {
-    static func makeTextView(fontSet: LivePreviewFontSet = LivePreviewTheme.defaultFontSet) -> NSTextView {
+    static func makeTextView(
+        fontSet: LivePreviewFontSet = LivePreviewTheme.defaultFontSet,
+        scale: Double = AppContentZoom.defaultScale
+    ) -> NSTextView {
         let textView = MarkdownInteractionTextView(frame: NSRect(x: 0, y: 0, width: 900, height: 700))
         textView.isRichText = false
         textView.importsGraphics = false
         textView.allowsUndo = true
         textView.isEditable = true
         textView.isSelectable = true
-        textView.font = fontSet.baseFont
-        textView.typingAttributes[.font] = fontSet.baseFont
-        textView.livePreviewFontSet = fontSet
         textView.backgroundColor = .textBackgroundColor
         textView.drawsBackground = true
-        textView.textContainerInset = NSSize(width: 18, height: 18)
+        applyAppContentZoomScale(scale, to: textView, fontSet: fontSet)
         textView.textContainer?.widthTracksTextView = true
         textView.layoutManager?.allowsNonContiguousLayout = true
         MarkdownEditorAccessibility.apply(to: textView, isEditable: true, mode: .livePreview)
         textView.setAccessibilityIdentifier("markdown-editor")
         return textView
+    }
+
+    static func applyAppContentZoomScale(
+        _ scale: Double,
+        to textView: NSTextView,
+        fontSet: LivePreviewFontSet = LivePreviewTheme.defaultFontSet
+    ) {
+        let zoom = AppContentZoom(rawScale: scale).scale
+        let effectiveFontSet = fontSet.scaled(by: zoom)
+        let didChange = (textView as? MarkdownInteractionTextView)?.appContentZoomScale != zoom
+        if let textView = textView as? MarkdownInteractionTextView {
+            textView.appContentZoomScale = zoom
+            textView.livePreviewFontSet = fontSet
+            textView.tableCellEditor?.font = effectiveFontSet.baseFont
+        }
+        textView.font = effectiveFontSet.baseFont
+        textView.typingAttributes[.font] = effectiveFontSet.baseFont
+        let inset = 18 * CGFloat(zoom)
+        textView.textContainerInset = NSSize(width: inset, height: inset)
+        if didChange {
+            let textLength = (textView.string as NSString).length
+            textView.layoutManager?.invalidateLayout(
+                forCharacterRange: NSRange(location: 0, length: textLength),
+                actualCharacterRange: nil
+            )
+            textView.needsDisplay = true
+        }
     }
 }
 
@@ -397,6 +432,7 @@ protocol MarkdownInteractionTextViewDelegate: AnyObject {
 @MainActor
 final class MarkdownInteractionTextView: NSTextView, NSTextFieldDelegate {
     weak var interactionDelegate: MarkdownInteractionTextViewDelegate?
+    var appContentZoomScale = AppContentZoom.defaultScale
     var livePreviewMode: LivePreviewMode = .livePreview {
         didSet {
             refreshLivePreviewOverlayState()
@@ -853,7 +889,8 @@ final class MarkdownInteractionTextView: NSTextView, NSTextFieldDelegate {
             removeTableCellEditor()
             return
         }
-        updateTableCellEditor(for: cell, frame: layoutCell.textRect.insetBy(dx: -2, dy: -2))
+        let inset = 2 * CGFloat(appContentZoomScale)
+        updateTableCellEditor(for: cell, frame: layoutCell.textRect.insetBy(dx: -inset, dy: -inset))
     }
 
     private func updateTableCellEditor(for cell: LivePreviewTableCell, frame: NSRect) {
@@ -875,7 +912,7 @@ final class MarkdownInteractionTextView: NSTextView, NSTextFieldDelegate {
             tableCellEditor = field
         }
 
-        editor.font = livePreviewFontSet.baseFont
+        editor.font = livePreviewFontSet.scaled(by: appContentZoomScale).baseFont
         if tableCellEditorTarget != cell {
             editor.stringValue = cell.text
             tableCellEditorSelectionBeforeEdit = selectedRange()
