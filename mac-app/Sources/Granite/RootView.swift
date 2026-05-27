@@ -6,6 +6,7 @@ import UniformTypeIdentifiers
 struct RootView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.openSettings) private var openSettings
+    @AppStorage(AppContentZoom.storageKey) private var rawAppContentZoomScale = AppContentZoom.defaultScale
     @State private var leftPanel: ObsidianLeftPanel = .files
     @State private var selectedInspectorPanel: NoteInspectorPanel = .backlinks
     @State private var vaultSelectionError: String?
@@ -13,6 +14,7 @@ struct RootView: View {
 
     var body: some View {
         GeometryReader { geometry in
+            let appZoomScale = appContentZoomScale
             HStack(spacing: 0) {
                 ObsidianRibbonView(
                     selectedPanel: $leftPanel,
@@ -35,15 +37,19 @@ struct RootView: View {
                         collapseSidebar: appState.toggleLeftSidebarCollapsed,
                         vaultSelectionError: vaultSelectionError
                     )
-                    .frame(width: CGFloat(appState.workspacePaneLayout.leftSidebarWidth))
+                    .frame(width: ObsidianUI.displayedPaneWidth(
+                        logicalWidth: appState.workspacePaneLayout.leftSidebarWidth,
+                        scale: appZoomScale
+                    ))
 
                     ObsidianPaneSplitHandle(
                         side: .left,
-                        currentWidth: appState.workspacePaneLayout.leftSidebarWidth
+                        currentWidth: appState.workspacePaneLayout.leftSidebarWidth,
+                        appContentZoomScale: appZoomScale
                     ) { proposedWidth in
                         appState.setLeftSidebarWidth(
                             proposedWidth,
-                            availableWidth: workspaceAvailableWidth(in: geometry)
+                            availableWidth: workspaceAvailableWidth(in: geometry, scale: appZoomScale)
                         )
                     }
                 }
@@ -60,20 +66,25 @@ struct RootView: View {
                 if showsRightSidebar {
                     ObsidianPaneSplitHandle(
                         side: .right,
-                        currentWidth: appState.workspacePaneLayout.rightSidebarWidth
+                        currentWidth: appState.workspacePaneLayout.rightSidebarWidth,
+                        appContentZoomScale: appZoomScale
                     ) { proposedWidth in
                         appState.setRightSidebarWidth(
                             proposedWidth,
-                            availableWidth: workspaceAvailableWidth(in: geometry)
+                            availableWidth: workspaceAvailableWidth(in: geometry, scale: appZoomScale)
                         )
                     }
 
                     ObsidianRightSidebar(selectedPanel: $selectedInspectorPanel)
-                        .frame(width: CGFloat(appState.workspacePaneLayout.rightSidebarWidth))
+                        .frame(width: ObsidianUI.displayedPaneWidth(
+                            logicalWidth: appState.workspacePaneLayout.rightSidebarWidth,
+                            scale: appZoomScale
+                        ))
                 }
             }
             .background(ObsidianUI.editorBackground)
         }
+        .environment(\.appContentZoomScale, appContentZoomScale)
         .alert("Unsaved Changes", isPresented: dirtyNavigationAlertBinding) {
             Button("Stay", role: .cancel) {
                 appState.dismissDirtyNavigationWarning()
@@ -142,8 +153,12 @@ struct RootView: View {
         appState.workspaceSelection != .graph && !appState.workspacePaneLayout.isRightSidebarCollapsed
     }
 
-    private func workspaceAvailableWidth(in geometry: GeometryProxy) -> Double {
-        max(0, Double(geometry.size.width - ObsidianUI.ribbonWidth))
+    private var appContentZoomScale: Double {
+        AppContentZoom(rawScale: rawAppContentZoomScale).scale
+    }
+
+    private func workspaceAvailableWidth(in geometry: GeometryProxy, scale: Double) -> Double {
+        ObsidianUI.logicalWorkspaceAvailableWidth(displayedWidth: geometry.size.width, scale: scale)
     }
 
     private var dirtyNavigationAlertBinding: Binding<Bool> {
@@ -385,6 +400,7 @@ private enum RootSheet: Identifiable {
 }
 
 private struct ObsidianRibbonView: View {
+    @Environment(\.appContentZoomScale) private var appContentZoomScale
     @Binding var selectedPanel: ObsidianLeftPanel
     let graphIsActive: Bool
     let selectLeftPanel: (ObsidianLeftPanel) -> Void
@@ -394,7 +410,7 @@ private struct ObsidianRibbonView: View {
     let showSettings: () -> Void
 
     var body: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: ObsidianUI.scaled(8, scale: appContentZoomScale)) {
             ObsidianIconButton(
                 systemName: "folder",
                 accessibilityLabel: "Files",
@@ -446,9 +462,9 @@ private struct ObsidianRibbonView: View {
                 action: showSettings
             )
         }
-        .padding(.top, 10)
-        .padding(.bottom, 12)
-        .frame(width: ObsidianUI.ribbonWidth)
+        .padding(.top, ObsidianUI.scaled(10, scale: appContentZoomScale))
+        .padding(.bottom, ObsidianUI.scaled(12, scale: appContentZoomScale))
+        .frame(width: ObsidianUI.ribbonWidth(scale: appContentZoomScale))
         .background(ObsidianUI.ribbonBackground)
     }
 }
@@ -498,11 +514,12 @@ private struct ObsidianLeftSidebar: View {
 }
 
 private struct ObsidianSidebarToolbar: View {
+    @Environment(\.appContentZoomScale) private var appContentZoomScale
     let selectedPanel: ObsidianLeftPanel
     let collapseSidebar: () -> Void
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: ObsidianUI.scaled(8, scale: appContentZoomScale)) {
             switch selectedPanel {
             case .files:
                 ObsidianIconButton(systemName: "square.and.pencil", accessibilityLabel: "New note", action: {})
@@ -512,11 +529,11 @@ private struct ObsidianSidebarToolbar: View {
                 ObsidianIconButton(systemName: "rectangle.compress.vertical", accessibilityLabel: "Collapse all", action: {})
             case .search:
                 Text("Search")
-                    .font(.headline)
+                    .font(.system(size: ObsidianUI.fontSize(13, scale: appContentZoomScale), weight: .semibold))
                 Spacer()
             case .bookmarks:
                 Text("Bookmarks")
-                    .font(.headline)
+                    .font(.system(size: ObsidianUI.fontSize(13, scale: appContentZoomScale), weight: .semibold))
                 Spacer()
             }
 
@@ -526,18 +543,21 @@ private struct ObsidianSidebarToolbar: View {
                 action: collapseSidebar
             )
         }
-        .padding(.horizontal, 12)
-        .frame(height: ObsidianUI.noteToolbarHeight)
+        .padding(.horizontal, ObsidianUI.scaled(12, scale: appContentZoomScale))
+        .frame(height: ObsidianUI.noteToolbarHeight(scale: appContentZoomScale))
     }
 }
 
 private struct ObsidianBookmarksPlaceholder: View {
+    @Environment(\.appContentZoomScale) private var appContentZoomScale
+
     var body: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: ObsidianUI.scaled(10, scale: appContentZoomScale)) {
             Image(systemName: "bookmark")
+                .font(.system(size: ObsidianUI.fontSize(18, scale: appContentZoomScale)))
                 .foregroundStyle(.secondary)
             Text("No bookmarks")
-                .font(.caption)
+                .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale)))
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -545,6 +565,7 @@ private struct ObsidianBookmarksPlaceholder: View {
 }
 
 private struct ObsidianVaultFooter: View {
+    @Environment(\.appContentZoomScale) private var appContentZoomScale
     let vaultSelection: VaultSelectionState
     let error: String?
     let showVaultPicker: () -> Void
@@ -552,21 +573,21 @@ private struct ObsidianVaultFooter: View {
     let closeVault: () -> Void
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: ObsidianUI.scaled(10, scale: appContentZoomScale)) {
             Button(action: showVaultPicker) {
-                HStack(spacing: 10) {
+                HStack(spacing: ObsidianUI.scaled(10, scale: appContentZoomScale)) {
                     Image(systemName: "chevron.up.chevron.down")
-                        .font(.caption)
+                        .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale)))
                         .foregroundStyle(.secondary)
 
-                    VStack(alignment: .leading, spacing: 2) {
+                    VStack(alignment: .leading, spacing: ObsidianUI.scaled(2, scale: appContentZoomScale)) {
                         Text(title)
-                            .font(.body.weight(.semibold))
+                            .font(.system(size: ObsidianUI.fontSize(13, scale: appContentZoomScale), weight: .semibold))
                             .lineLimit(1)
 
                         if let error {
                             Text(error)
-                                .font(.caption2)
+                                .font(.system(size: ObsidianUI.fontSize(11, scale: appContentZoomScale)))
                                 .foregroundStyle(.red)
                                 .lineLimit(1)
                         }
@@ -589,14 +610,18 @@ private struct ObsidianVaultFooter: View {
                     .disabled(!canCloseVault)
             } label: {
                 Image(systemName: "gearshape")
-                    .frame(width: 24, height: 24)
+                    .font(.system(size: ObsidianUI.fontSize(13, scale: appContentZoomScale)))
+                    .frame(
+                        width: ObsidianUI.scaled(24, scale: appContentZoomScale),
+                        height: ObsidianUI.scaled(24, scale: appContentZoomScale)
+                    )
             }
             .buttonStyle(.plain)
             .help("Vault actions")
             .accessibilityLabel("Vault actions")
         }
-        .padding(.horizontal, 14)
-        .frame(height: 48)
+        .padding(.horizontal, ObsidianUI.scaled(14, scale: appContentZoomScale))
+        .frame(height: ObsidianUI.scaled(48, scale: appContentZoomScale))
     }
 
     private var title: String {
@@ -687,6 +712,7 @@ private struct ObsidianWorkspaceDetail: View {
 }
 
 private struct ObsidianTabBar: View {
+    @Environment(\.appContentZoomScale) private var appContentZoomScale
     let tabs: [WorkspaceTab]
     let activeTabID: WorkspaceTab.ID?
     let isDirty: (FileTreeItem) -> Bool
@@ -732,7 +758,7 @@ private struct ObsidianTabBar: View {
                             )
 
                             Divider()
-                                .frame(height: ObsidianUI.tabBarHeight)
+                                .frame(height: ObsidianUI.tabBarHeight(scale: appContentZoomScale))
                         }
                     }
                 }
@@ -761,14 +787,15 @@ private struct ObsidianTabBar: View {
                     isSelected: !isRightSidebarCollapsed,
                     action: toggleRightSidebar
                 )
-                .padding(.trailing, 4)
+                .padding(.trailing, ObsidianUI.scaled(4, scale: appContentZoomScale))
             }
 
             Image(systemName: "chevron.down")
+                .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale)))
                 .foregroundStyle(.secondary)
-                .padding(.trailing, 14)
+                .padding(.trailing, ObsidianUI.scaled(14, scale: appContentZoomScale))
         }
-        .frame(height: ObsidianUI.tabBarHeight)
+        .frame(height: ObsidianUI.tabBarHeight(scale: appContentZoomScale))
         .background(ObsidianUI.sidebarBackground.opacity(0.55))
     }
 }
@@ -797,6 +824,7 @@ private struct ObsidianTabDropDelegate: DropDelegate {
 }
 
 private struct ObsidianTabItem: View {
+    @Environment(\.appContentZoomScale) private var appContentZoomScale
     let tab: WorkspaceTab
     let isActive: Bool
     let isDirty: Bool
@@ -807,6 +835,7 @@ private struct ObsidianTabItem: View {
         HStack(spacing: 0) {
             Button(action: activate) {
                 Text(displayTitle)
+                    .font(.system(size: ObsidianUI.fontSize(13, scale: appContentZoomScale)))
                     .lineLimit(1)
                     .foregroundStyle(isActive ? .primary : .secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -817,25 +846,31 @@ private struct ObsidianTabItem: View {
             if isDirty {
                 Circle()
                     .fill(.secondary)
-                    .frame(width: 6, height: 6)
+                    .frame(
+                        width: ObsidianUI.scaled(6, scale: appContentZoomScale),
+                        height: ObsidianUI.scaled(6, scale: appContentZoomScale)
+                    )
                     .accessibilityLabel("Unsaved changes")
-                    .padding(.leading, 8)
+                    .padding(.leading, ObsidianUI.scaled(8, scale: appContentZoomScale))
             }
 
             Button(action: close) {
                 Image(systemName: "xmark")
-                    .font(.caption)
+                    .font(.system(size: ObsidianUI.fontSize(11, scale: appContentZoomScale)))
                     .foregroundStyle(.secondary)
-                    .frame(width: 18, height: 18)
+                    .frame(
+                        width: ObsidianUI.scaled(18, scale: appContentZoomScale),
+                        height: ObsidianUI.scaled(18, scale: appContentZoomScale)
+                    )
             }
             .buttonStyle(.plain)
             .help("Close tab")
             .accessibilityLabel("Close tab")
-            .padding(.leading, 8)
+            .padding(.leading, ObsidianUI.scaled(8, scale: appContentZoomScale))
         }
-        .padding(.horizontal, 14)
-        .frame(height: ObsidianUI.tabBarHeight)
-        .frame(width: 220, alignment: .leading)
+        .padding(.horizontal, ObsidianUI.scaled(14, scale: appContentZoomScale))
+        .frame(height: ObsidianUI.tabBarHeight(scale: appContentZoomScale))
+        .frame(width: ObsidianUI.scaled(220, scale: appContentZoomScale), alignment: .leading)
         .contentShape(Rectangle())
         .background(isActive ? ObsidianUI.editorBackground : Color.clear)
     }
@@ -935,15 +970,16 @@ private struct ObsidianEditorPane: View {
 }
 
 private struct ObsidianNoteToolbar: View {
+    @Environment(\.appContentZoomScale) private var appContentZoomScale
     let file: FileTreeItem
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: ObsidianUI.scaled(10, scale: appContentZoomScale)) {
             ObsidianIconButton(systemName: "chevron.left", accessibilityLabel: "Back", action: {})
             ObsidianIconButton(systemName: "chevron.right", accessibilityLabel: "Forward", action: {})
 
             Text(breadcrumb)
-                .font(.body)
+                .font(.system(size: ObsidianUI.fontSize(13, scale: appContentZoomScale)))
                 .lineLimit(1)
                 .foregroundStyle(.secondary)
 
@@ -952,8 +988,8 @@ private struct ObsidianNoteToolbar: View {
             ObsidianIconButton(systemName: "book", accessibilityLabel: "Reading view", action: {})
             ObsidianMarkerStyleMenu()
         }
-        .padding(.horizontal, 14)
-        .frame(height: ObsidianUI.noteToolbarHeight)
+        .padding(.horizontal, ObsidianUI.scaled(14, scale: appContentZoomScale))
+        .frame(height: ObsidianUI.noteToolbarHeight(scale: appContentZoomScale))
         .background(ObsidianUI.editorBackground)
     }
 
@@ -964,6 +1000,7 @@ private struct ObsidianNoteToolbar: View {
 }
 
 private struct ObsidianMarkerStyleMenu: View {
+    @Environment(\.appContentZoomScale) private var appContentZoomScale
     @AppStorage(LivePreviewMarkerStyle.storageKey) private var markerStyleRaw = LivePreviewMarkerStyle.defaultValue.rawValue
 
     var body: some View {
@@ -975,9 +1012,12 @@ private struct ObsidianMarkerStyleMenu: View {
             }
         } label: {
             Image(systemName: "ellipsis")
-                .font(.system(size: 16))
+                .font(.system(size: ObsidianUI.iconFontSize(scale: appContentZoomScale)))
                 .foregroundStyle(.secondary)
-                .frame(width: 30, height: 30)
+                .frame(
+                    width: ObsidianUI.iconButtonSize(scale: appContentZoomScale),
+                    height: ObsidianUI.iconButtonSize(scale: appContentZoomScale)
+                )
                 .contentShape(Rectangle())
         }
         .menuStyle(.borderlessButton)
@@ -1012,16 +1052,17 @@ private struct ObsidianRightSidebar: View {
 }
 
 private struct ObsidianEmptyWorkspace: View {
+    @Environment(\.appContentZoomScale) private var appContentZoomScale
     let title: String
     let systemImage: String
 
     var body: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: ObsidianUI.scaled(12, scale: appContentZoomScale)) {
             Image(systemName: systemImage)
-                .font(.system(size: 28))
+                .font(.system(size: ObsidianUI.fontSize(28, scale: appContentZoomScale)))
                 .foregroundStyle(.secondary)
             Text(title)
-                .font(.title3)
+                .font(.system(size: ObsidianUI.fontSize(20, scale: appContentZoomScale), weight: .regular))
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1029,14 +1070,16 @@ private struct ObsidianEmptyWorkspace: View {
 }
 
 private struct ObsidianEmptySidebar: View {
+    @Environment(\.appContentZoomScale) private var appContentZoomScale
     let title: String
 
     var body: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: ObsidianUI.scaled(8, scale: appContentZoomScale)) {
             Image(systemName: "sidebar.right")
+                .font(.system(size: ObsidianUI.fontSize(14, scale: appContentZoomScale)))
                 .foregroundStyle(.secondary)
             Text(title)
-                .font(.caption)
+                .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale)))
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

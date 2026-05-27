@@ -129,14 +129,22 @@ codesign --force --sign - --timestamp=none "${APP_DIR}"
 codesign --verify --deep --strict "${APP_DIR}"
 
 echo "Running packaged smoke tests..."
-"${MACOS_DIR}/${EXECUTABLE_NAME}" --smoke-test
-"${MACOS_DIR}/${EXECUTABLE_NAME}" --engine-smoke-test
-"${MACOS_DIR}/${EXECUTABLE_NAME}" --telemetry-smoke-test
-"${MACOS_DIR}/${EXECUTABLE_NAME}" --live-preview-probe >/dev/null
-"${MACOS_DIR}/${EXECUTABLE_NAME}" --workspace-tabs-probe >/dev/null
-"${MACOS_DIR}/${EXECUTABLE_NAME}" --startup-vault-restore-probe >/dev/null
-"${MACOS_DIR}/${EXECUTABLE_NAME}" --workspace-pane-layout-probe >/dev/null
-"${MACOS_DIR}/${EXECUTABLE_NAME}" --summary-panel-probe >/dev/null
-"${MACOS_DIR}/${EXECUTABLE_NAME}" --foundation-models-smoke-probe >/dev/null
+run_packaged_probe() {
+  local label="$1"
+  shift
+  echo "  - ${label}" >&2
+  "${MACOS_DIR}/${EXECUTABLE_NAME}" "$@"
+}
+
+run_packaged_probe "smoke-test" --smoke-test
+run_packaged_probe "engine-smoke-test" --engine-smoke-test
+run_packaged_probe "telemetry-smoke-test" --telemetry-smoke-test
+run_packaged_probe "live-preview-probe" --live-preview-probe >/dev/null
+run_packaged_probe "workspace-tabs-probe" --workspace-tabs-probe >/dev/null
+run_packaged_probe "startup-vault-restore-probe" --startup-vault-restore-probe >/dev/null
+run_packaged_probe "workspace-pane-layout-probe" --workspace-pane-layout-probe >/dev/null
+run_packaged_probe "app-content-zoom-probe" --app-content-zoom-probe >/dev/null
+run_packaged_probe "summary-panel-probe" --summary-panel-probe >/dev/null
+run_packaged_probe "foundation-models-smoke-probe" --foundation-models-smoke-probe >/dev/null
 
 echo "Packaged app: ${APP_DIR}"

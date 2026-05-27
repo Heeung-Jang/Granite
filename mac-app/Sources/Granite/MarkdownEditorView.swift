@@ -11,6 +11,7 @@ struct MarkdownEditorView: NSViewRepresentable {
     var embedPreviewMap = LivePreviewEmbedPreviewMap()
     var markerStyle: LivePreviewMarkerStyle = .defaultValue
     var documentTitle: String?
+    var appContentZoomScale = AppContentZoom.defaultScale
     var isActive = true
     var focusRequestID: UUID?
     var interactionHandler: ((MarkdownEditorInteractionRequest) -> Void)?
@@ -24,12 +25,13 @@ struct MarkdownEditorView: NSViewRepresentable {
             embedPreviewMap: embedPreviewMap,
             markerStyle: markerStyle,
             documentTitle: documentTitle,
+            appContentZoomScale: appContentZoomScale,
             focusRequestID: focusRequestID
         )
     }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let textView = MarkdownEditorTextViewFactory.makeTextView()
+        let textView = MarkdownEditorTextViewFactory.makeTextView(scale: appContentZoomScale)
         textView.string = text
         textView.isEditable = isEditable
         if let textView = textView as? MarkdownInteractionTextView {
@@ -68,6 +70,7 @@ struct MarkdownEditorView: NSViewRepresentable {
             embedPreviewMap: embedPreviewMap,
             markerStyle: markerStyle,
             documentTitle: documentTitle,
+            appContentZoomScale: appContentZoomScale,
             focusRequestID: focusRequestID
         )
         guard let textView = scrollView.documentView as? NSTextView else {
@@ -79,6 +82,7 @@ struct MarkdownEditorView: NSViewRepresentable {
             to: textView,
             isApplyingAppKitChange: context.coordinator.isApplyingAppKitChange
         )
+        MarkdownEditorTextViewFactory.applyAppContentZoomScale(appContentZoomScale, to: textView)
         let decorationTimer = AppTelemetryTimer()
         context.coordinator.decorateVisibleRange(in: textView)
         AppTelemetry.editorDecorationCompleted(
@@ -117,6 +121,7 @@ struct MarkdownEditorView: NSViewRepresentable {
         private var embedPreviewMap: LivePreviewEmbedPreviewMap
         private var markerStyle: LivePreviewMarkerStyle
         private var documentTitle: String?
+        private var appContentZoomScale: Double
         private var focusRequestID: UUID?
         private var appliedFocusRequestID: UUID?
         private var isDecoratingLivePreview = false
@@ -132,6 +137,7 @@ struct MarkdownEditorView: NSViewRepresentable {
             embedPreviewMap: LivePreviewEmbedPreviewMap = LivePreviewEmbedPreviewMap(),
             markerStyle: LivePreviewMarkerStyle = .defaultValue,
             documentTitle: String? = nil,
+            appContentZoomScale: Double = AppContentZoom.defaultScale,
             focusRequestID: UUID? = nil
         ) {
             _text = text
@@ -141,6 +147,7 @@ struct MarkdownEditorView: NSViewRepresentable {
             self.embedPreviewMap = embedPreviewMap
             self.markerStyle = markerStyle
             self.documentTitle = documentTitle
+            self.appContentZoomScale = AppContentZoom(rawScale: appContentZoomScale).scale
             self.focusRequestID = focusRequestID
         }
 
@@ -152,6 +159,7 @@ struct MarkdownEditorView: NSViewRepresentable {
             embedPreviewMap: LivePreviewEmbedPreviewMap,
             markerStyle: LivePreviewMarkerStyle,
             documentTitle: String?,
+            appContentZoomScale: Double,
             focusRequestID: UUID?
         ) {
             _text = text
@@ -161,6 +169,7 @@ struct MarkdownEditorView: NSViewRepresentable {
             self.embedPreviewMap = embedPreviewMap
             self.markerStyle = markerStyle
             self.documentTitle = documentTitle
+            self.appContentZoomScale = AppContentZoom(rawScale: appContentZoomScale).scale
             self.focusRequestID = focusRequestID
             if let textView = textView as? MarkdownInteractionTextView {
                 textView.livePreviewDocumentTitle = documentTitle
@@ -250,7 +259,8 @@ struct MarkdownEditorView: NSViewRepresentable {
                 revealRange: textView.selectedRange(),
                 linkStyleMap: linkStyleMap,
                 embedPreviewMap: embedPreviewMap,
-                markerStyle: markerStyle
+                markerStyle: markerStyle,
+                scale: appContentZoomScale
             )
             if let textView = textView as? MarkdownInteractionTextView {
                 textView.livePreviewMarkerStyle = markerStyle
@@ -307,22 +317,41 @@ struct MarkdownEditorView: NSViewRepresentable {
 
 @MainActor
 enum MarkdownEditorTextViewFactory {
-    static func makeTextView() -> NSTextView {
+    static func makeTextView(scale: Double = AppContentZoom.defaultScale) -> NSTextView {
         let textView = MarkdownInteractionTextView(frame: NSRect(x: 0, y: 0, width: 900, height: 700))
         textView.isRichText = false
         textView.importsGraphics = false
         textView.allowsUndo = true
         textView.isEditable = true
         textView.isSelectable = true
-        textView.font = LivePreviewTheme.baseFont
         textView.backgroundColor = .textBackgroundColor
         textView.drawsBackground = true
-        textView.textContainerInset = NSSize(width: 18, height: 18)
+        applyAppContentZoomScale(scale, to: textView)
         textView.textContainer?.widthTracksTextView = true
         textView.layoutManager?.allowsNonContiguousLayout = true
         MarkdownEditorAccessibility.apply(to: textView, isEditable: true, mode: .livePreview)
         textView.setAccessibilityIdentifier("markdown-editor")
         return textView
+    }
+
+    static func applyAppContentZoomScale(_ scale: Double, to textView: NSTextView) {
+        let zoom = AppContentZoom(rawScale: scale).scale
+        let didChange = (textView as? MarkdownInteractionTextView)?.appContentZoomScale != zoom
+        if let textView = textView as? MarkdownInteractionTextView {
+            textView.appContentZoomScale = zoom
+            textView.tableCellEditor?.font = LivePreviewTheme.baseFont(scale: zoom)
+        }
+        textView.font = LivePreviewTheme.baseFont(scale: zoom)
+        let inset = 18 * CGFloat(zoom)
+        textView.textContainerInset = NSSize(width: inset, height: inset)
+        if didChange {
+            let textLength = (textView.string as NSString).length
+            textView.layoutManager?.invalidateLayout(
+                forCharacterRange: NSRange(location: 0, length: textLength),
+                actualCharacterRange: nil
+            )
+            textView.needsDisplay = true
+        }
     }
 }
 
@@ -355,6 +384,7 @@ protocol MarkdownInteractionTextViewDelegate: AnyObject {
 @MainActor
 final class MarkdownInteractionTextView: NSTextView, NSTextFieldDelegate {
     weak var interactionDelegate: MarkdownInteractionTextViewDelegate?
+    var appContentZoomScale = AppContentZoom.defaultScale
     var livePreviewMode: LivePreviewMode = .livePreview {
         didSet {
             refreshLivePreviewOverlayState()
@@ -795,7 +825,8 @@ final class MarkdownInteractionTextView: NSTextView, NSTextFieldDelegate {
             removeTableCellEditor()
             return
         }
-        updateTableCellEditor(for: cell, frame: layoutCell.textRect.insetBy(dx: -2, dy: -2))
+        let inset = 2 * CGFloat(appContentZoomScale)
+        updateTableCellEditor(for: cell, frame: layoutCell.textRect.insetBy(dx: -inset, dy: -inset))
     }
 
     private func updateTableCellEditor(for cell: LivePreviewTableCell, frame: NSRect) {
@@ -808,7 +839,6 @@ final class MarkdownInteractionTextView: NSTextView, NSTextFieldDelegate {
             field.isBezeled = false
             field.drawsBackground = true
             field.backgroundColor = LivePreviewTheme.tableCellBackgroundColor
-            field.font = LivePreviewTheme.baseFont
             field.focusRingType = .none
             field.usesSingleLineMode = true
             field.lineBreakMode = .byTruncatingTail
@@ -818,6 +848,7 @@ final class MarkdownInteractionTextView: NSTextView, NSTextFieldDelegate {
             tableCellEditor = field
         }
 
+        editor.font = LivePreviewTheme.baseFont(scale: appContentZoomScale)
         if tableCellEditorTarget != cell {
             editor.stringValue = cell.text
             tableCellEditorSelectionBeforeEdit = selectedRange()

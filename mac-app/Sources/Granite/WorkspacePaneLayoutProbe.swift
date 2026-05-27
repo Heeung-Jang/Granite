@@ -7,6 +7,10 @@ struct WorkspacePaneLayoutProbeReport: Codable, Equatable {
     let unavailableVaultRestore: Bool
     let widthClamp: Bool
     let collapsePersistence: Bool
+    let zoomedDisplayedWidth: Bool
+    let zoomedDragConversion: Bool
+    let zoomedClamp: Bool
+    let collapsedPaneStateSurvivesZoom: Bool
     let graphRightPaneNonMutation: Bool
     let recentVaultRemovalCleanup: Bool
 
@@ -16,6 +20,10 @@ struct WorkspacePaneLayoutProbeReport: Codable, Equatable {
             && unavailableVaultRestore
             && widthClamp
             && collapsePersistence
+            && zoomedDisplayedWidth
+            && zoomedDragConversion
+            && zoomedClamp
+            && collapsedPaneStateSurvivesZoom
             && graphRightPaneNonMutation
             && recentVaultRemovalCleanup
     }
@@ -33,6 +41,10 @@ enum WorkspacePaneLayoutProbe {
             let unavailableVaultRestore = try probeUnavailableVaultRestore(root: root.appendingPathComponent("unavailable", isDirectory: true))
             let widthClamp = probeWidthClamp()
             let collapsePersistence = probeCollapsePersistence()
+            let zoomedDisplayedWidth = probeZoomedDisplayedWidth()
+            let zoomedDragConversion = probeZoomedDragConversion()
+            let zoomedClamp = probeZoomedClamp()
+            let collapsedPaneStateSurvivesZoom = probeCollapsedPaneStateSurvivesZoom()
             let graphRightPaneNonMutation = probeGraphRightPaneNonMutation()
             let recentVaultRemovalCleanup = probeRecentVaultRemovalCleanup()
             _ = cleanup(root)
@@ -42,6 +54,10 @@ enum WorkspacePaneLayoutProbe {
                 unavailableVaultRestore: unavailableVaultRestore,
                 widthClamp: widthClamp,
                 collapsePersistence: collapsePersistence,
+                zoomedDisplayedWidth: zoomedDisplayedWidth,
+                zoomedDragConversion: zoomedDragConversion,
+                zoomedClamp: zoomedClamp,
+                collapsedPaneStateSurvivesZoom: collapsedPaneStateSurvivesZoom,
                 graphRightPaneNonMutation: graphRightPaneNonMutation,
                 recentVaultRemovalCleanup: recentVaultRemovalCleanup
             )
@@ -53,6 +69,10 @@ enum WorkspacePaneLayoutProbe {
                 unavailableVaultRestore: false,
                 widthClamp: false,
                 collapsePersistence: false,
+                zoomedDisplayedWidth: false,
+                zoomedDragConversion: false,
+                zoomedClamp: false,
+                collapsedPaneStateSurvivesZoom: false,
                 graphRightPaneNonMutation: false,
                 recentVaultRemovalCleanup: false
             )
@@ -132,6 +152,79 @@ enum WorkspacePaneLayoutProbe {
             && state.workspacePaneLayout.isLeftSidebarCollapsed
             && state.workspacePaneLayout.isRightSidebarCollapsed
             && store.loadLayout(forVaultAt: vaultURL) == state.workspacePaneLayout
+    }
+
+    private static func probeZoomedDisplayedWidth() -> Bool {
+        let layout = WorkspacePaneLayout(leftSidebarWidth: 272, rightSidebarWidth: 300)
+
+        return ObsidianUI.displayedPaneWidth(logicalWidth: layout.leftSidebarWidth, scale: 1.25) == 340
+            && ObsidianUI.displayedPaneWidth(logicalWidth: layout.rightSidebarWidth, scale: 1.25) == 375
+            && ObsidianUI.logicalPaneWidth(displayedWidth: 340, scale: 1.25) == layout.leftSidebarWidth
+            && layout == WorkspacePaneLayout(leftSidebarWidth: 272, rightSidebarWidth: 300)
+    }
+
+    private static func probeZoomedDragConversion() -> Bool {
+        ObsidianPaneSplitSide.left.proposedWidth(
+            startWidth: 272,
+            translationWidth: 25,
+            appContentZoomScale: 1.25
+        ) == 292
+            && ObsidianPaneSplitSide.right.proposedWidth(
+                startWidth: 300,
+                translationWidth: 25,
+                appContentZoomScale: 1.25
+            ) == 280
+    }
+
+    private static func probeZoomedClamp() -> Bool {
+        let vaultURL = URL(fileURLWithPath: "/tmp/probe-pane-zoom-clamp", isDirectory: true)
+        let store = ProbePaneLayoutStore()
+        let state = AppState(vaultSelection: .selected(vaultURL), workspacePaneLayoutStore: store)
+        let scale = 1.25
+        let displayedAvailableWidth = 1_440.0
+        let logicalAvailableWidth = ObsidianUI.logicalWorkspaceAvailableWidth(
+            displayedWidth: displayedAvailableWidth,
+            scale: scale
+        )
+
+        state.setWorkspacePaneLayout(WorkspacePaneLayout(leftSidebarWidth: 272, rightSidebarWidth: 300))
+        state.setLeftSidebarWidth(
+            ObsidianPaneSplitSide.left.proposedWidth(
+                startWidth: state.workspacePaneLayout.leftSidebarWidth,
+                translationWidth: 1_000,
+                appContentZoomScale: scale
+            ),
+            availableWidth: logicalAvailableWidth
+        )
+
+        return logicalAvailableWidth == 1_104
+            && state.workspacePaneLayout.leftSidebarWidth == 444
+            && state.workspacePaneLayout.rightSidebarWidth == 300
+            && store.saveCount == 2
+    }
+
+    private static func probeCollapsedPaneStateSurvivesZoom() -> Bool {
+        let layout = WorkspacePaneLayout(
+            leftSidebarWidth: 333,
+            rightSidebarWidth: 444,
+            isLeftSidebarCollapsed: true,
+            isRightSidebarCollapsed: true
+        )
+        let displayedLeft = ObsidianUI.displayedPaneWidth(
+            logicalWidth: layout.leftSidebarWidth,
+            scale: 1.25
+        )
+        let displayedRight = ObsidianUI.displayedPaneWidth(
+            logicalWidth: layout.rightSidebarWidth,
+            scale: 0.75
+        )
+
+        return displayedLeft == 416.25
+            && displayedRight == 333
+            && layout.isLeftSidebarCollapsed
+            && layout.isRightSidebarCollapsed
+            && layout.leftSidebarWidth == 333
+            && layout.rightSidebarWidth == 444
     }
 
     private static func probeGraphRightPaneNonMutation() -> Bool {

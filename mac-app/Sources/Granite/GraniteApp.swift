@@ -188,6 +188,12 @@ struct GraniteApp: App {
             Foundation.exit(report.passed ? 0 : 2)
         }
 
+        if CommandLine.arguments.contains("--app-content-zoom-probe") {
+            let report = AppContentZoomProbe.run()
+            print(AppContentZoomProbe.encodedReport(report))
+            Foundation.exit(report.summary.passed ? 0 : 2)
+        }
+
         if CommandLine.arguments.contains("--summary-panel-probe") {
             Task.detached {
                 let report = await SummaryPanelProbe.run()
@@ -227,6 +233,7 @@ struct GraniteApp: App {
         .defaultSize(width: 1440, height: 900)
         .commands {
             EditorCommands()
+            AppContentZoomCommands()
             GraphCommands(appState: appState)
         }
 
