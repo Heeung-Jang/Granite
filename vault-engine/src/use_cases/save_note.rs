@@ -3,17 +3,14 @@ use std::{fmt, path::PathBuf, time::SystemTime};
 use std::path::Path;
 
 use crate::adapters::fs::note_writer::{
-    FileSnapshot, capture_snapshot, rename_temp_file, sync_parent, write_temp_file,
+    FileSnapshot, capture_snapshot, read_snapshot_contents, rename_temp_file, sync_parent,
+    write_new_note, write_temp_file,
 };
 use crate::adapters::sqlite::{
     FileRecord, IndexingQueue, IndexingQueueError, IndexingQueueItem, IndexingQueueReason,
 };
 use crate::core::scan::{ScanEntry, classify_file};
 use crate::paths::{FileIdentity, PathError, VaultRoot};
-use crate::save::{
-    keep_conflicted_buffer_as_new_note_impl, overwrite_after_conflict_impl,
-    reload_after_conflict_impl,
-};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SaveBaseline {
@@ -195,7 +192,21 @@ pub fn reload_after_conflict(
     conflict: &SaveConflict,
     generation: u64,
 ) -> SaveConflictChoiceResult<SaveReloadOutcome> {
-    reload_after_conflict_impl(root, queue, conflict, generation)
+    let current = current_snapshot(root, &conflict.expected)?;
+    let contents = read_snapshot_contents(&current)?;
+    let queued_item = enqueue_saved_file(
+        queue,
+        &current.baseline,
+        generation,
+        IndexingQueueReason::FileChanged,
+    )?;
+
+    Ok(SaveReloadOutcome {
+        baseline: current.baseline,
+        contents,
+        queued_item,
+        dirty: false,
+    })
 }
 
 pub fn keep_conflicted_buffer_as_new_note(
@@ -205,7 +216,18 @@ pub fn keep_conflicted_buffer_as_new_note(
     contents: &[u8],
     generation: u64,
 ) -> SaveConflictChoiceResult<SaveChoiceOutcome> {
-    keep_conflicted_buffer_as_new_note_impl(root, queue, relative_path, contents, generation)
+    write_new_note(root, relative_path, contents)?;
+    let baseline = SaveBaseline::capture(root, relative_path)?;
+    let queued_item =
+        enqueue_saved_file(queue, &baseline, generation, IndexingQueueReason::OwnSave)?;
+
+    Ok(SaveChoiceOutcome {
+        choice: SaveConflictChoice::KeepAsNewNote,
+        bytes_written: contents.len() as u64,
+        baseline,
+        queued_item,
+        dirty: false,
+    })
 }
 
 pub fn overwrite_after_conflict(
@@ -215,7 +237,30 @@ pub fn overwrite_after_conflict(
     contents: &[u8],
     generation: u64,
 ) -> SaveConflictChoiceResult<SaveChoiceOutcome> {
-    overwrite_after_conflict_impl(root, queue, conflict, contents, generation)
+    let current = current_snapshot(root, &conflict.expected)?;
+    if current.readonly {
+        return Err(SafeSaveError::ReadOnly {
+            relative_path: conflict.relative_path.clone(),
+        }
+        .into());
+    }
+
+    let temp_path = write_temp_file(&current, contents)?;
+    let display_path = Path::new(&current.baseline.relative_path);
+    rename_temp_file(&temp_path, &current.absolute_path, display_path)?;
+    sync_parent(&current.absolute_path, display_path)?;
+
+    let baseline = SaveBaseline::capture(root, &current.baseline.relative_path)?;
+    let queued_item =
+        enqueue_saved_file(queue, &baseline, generation, IndexingQueueReason::OwnSave)?;
+
+    Ok(SaveChoiceOutcome {
+        choice: SaveConflictChoice::Overwrite,
+        baseline,
+        bytes_written: contents.len() as u64,
+        queued_item,
+        dirty: false,
+    })
 }
 
 impl From<&SaveBaseline> for SaveConflictSnapshot {

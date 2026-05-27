@@ -133,6 +133,14 @@ pub(crate) fn write_new_note(
     }
 }
 
+pub(crate) fn read_snapshot_contents(snapshot: &FileSnapshot) -> SafeSaveResult<Vec<u8>> {
+    fs::read(&snapshot.absolute_path).map_err(|error| SafeSaveError::Io {
+        operation: SaveIoOperation::ReadFile,
+        path: PathBuf::from(&snapshot.baseline.relative_path),
+        kind: error.kind(),
+    })
+}
+
 pub(crate) fn write_temp_file(snapshot: &FileSnapshot, contents: &[u8]) -> SafeSaveResult<PathBuf> {
     let temp_path = temp_path_for(&snapshot.absolute_path);
     let display_path = Path::new(&snapshot.baseline.relative_path);

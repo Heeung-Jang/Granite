@@ -1,11 +1,3 @@
-use std::fs;
-use std::path::{Path, PathBuf};
-
-use crate::adapters::fs::note_writer::{
-    rename_temp_file, sync_parent, write_new_note, write_temp_file,
-};
-use crate::adapters::sqlite::{IndexingQueue, IndexingQueueReason};
-use crate::paths::VaultRoot;
 pub use crate::use_cases::save_note::{
     QueuedSaveOutcome, SafeSaveError, SafeSaveResult, SaveBaseline, SaveChoiceOutcome,
     SaveConflict, SaveConflictChoice, SaveConflictChoiceError, SaveConflictChoiceResult,
@@ -13,97 +5,18 @@ pub use crate::use_cases::save_note::{
     SaveRequest, keep_conflicted_buffer_as_new_note, overwrite_after_conflict,
     reload_after_conflict, safe_save, safe_save_and_enqueue_own_save,
 };
-use crate::use_cases::save_note::{current_snapshot, enqueue_saved_file};
-
-pub(crate) fn reload_after_conflict_impl(
-    root: &VaultRoot,
-    queue: &mut IndexingQueue,
-    conflict: &SaveConflict,
-    generation: u64,
-) -> SaveConflictChoiceResult<SaveReloadOutcome> {
-    let current = current_snapshot(root, &conflict.expected)?;
-    let contents = fs::read(&current.absolute_path).map_err(|error| SafeSaveError::Io {
-        operation: SaveIoOperation::ReadFile,
-        path: PathBuf::from(&current.baseline.relative_path),
-        kind: error.kind(),
-    })?;
-    let queued_item = enqueue_saved_file(
-        queue,
-        &current.baseline,
-        generation,
-        IndexingQueueReason::FileChanged,
-    )?;
-
-    Ok(SaveReloadOutcome {
-        baseline: current.baseline,
-        contents,
-        queued_item,
-        dirty: false,
-    })
-}
-
-pub(crate) fn keep_conflicted_buffer_as_new_note_impl(
-    root: &VaultRoot,
-    queue: &mut IndexingQueue,
-    relative_path: &str,
-    contents: &[u8],
-    generation: u64,
-) -> SaveConflictChoiceResult<SaveChoiceOutcome> {
-    write_new_note(root, relative_path, contents)?;
-    let baseline = SaveBaseline::capture(root, relative_path)?;
-    let queued_item =
-        enqueue_saved_file(queue, &baseline, generation, IndexingQueueReason::OwnSave)?;
-
-    Ok(SaveChoiceOutcome {
-        choice: SaveConflictChoice::KeepAsNewNote,
-        bytes_written: contents.len() as u64,
-        baseline,
-        queued_item,
-        dirty: false,
-    })
-}
-
-pub(crate) fn overwrite_after_conflict_impl(
-    root: &VaultRoot,
-    queue: &mut IndexingQueue,
-    conflict: &SaveConflict,
-    contents: &[u8],
-    generation: u64,
-) -> SaveConflictChoiceResult<SaveChoiceOutcome> {
-    let current = current_snapshot(root, &conflict.expected)?;
-    if current.readonly {
-        return Err(SafeSaveError::ReadOnly {
-            relative_path: conflict.relative_path.clone(),
-        }
-        .into());
-    }
-
-    let temp_path = write_temp_file(&current, contents)?;
-    let display_path = Path::new(&current.baseline.relative_path);
-    rename_temp_file(&temp_path, &current.absolute_path, display_path)?;
-    sync_parent(&current.absolute_path, display_path)?;
-
-    let baseline = SaveBaseline::capture(root, &current.baseline.relative_path)?;
-    let queued_item =
-        enqueue_saved_file(queue, &baseline, generation, IndexingQueueReason::OwnSave)?;
-
-    Ok(SaveChoiceOutcome {
-        choice: SaveConflictChoice::Overwrite,
-        baseline,
-        bytes_written: contents.len() as u64,
-        queued_item,
-        dirty: false,
-    })
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::fs::note_writer::stable_content_hash;
+    use crate::adapters::fs::note_writer::{rename_temp_file, stable_content_hash};
     use crate::adapters::sqlite::{IndexingQueue, IndexingQueueReason};
+    use crate::paths::VaultRoot;
+    use crate::use_cases::save_note::enqueue_saved_file;
     use std::fs;
     #[cfg(unix)]
     use std::os::unix::fs::{PermissionsExt, symlink};
+    use std::path::{Path, PathBuf};
     use tempfile::TempDir;
 
     const BENCHMARK_VAULT: &str = "/Users/heeung/Documents/Codex Vault";

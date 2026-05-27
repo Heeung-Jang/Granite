@@ -869,11 +869,11 @@ Default stop conditions:
   - Build: move save write decision flow, conflict detection, and queue enqueue call sites without moving temp write primitives.
   - Verify: external edit/delete/replace and queue enqueue tests pass.
 
-- [ ] **RA05.04c Move save conflict choice orchestration**
+- [x] **RA05.04c Move save conflict choice orchestration**
   - Build: move reload, keep-as-new, and overwrite choice flow after write orchestration is green.
   - Verify: conflict reload, keep-new, overwrite, and deleted-conflict tests pass.
 
-- [ ] **RA05.04d Keep save path mutation at adapter boundary**
+- [x] **RA05.04d Keep save path mutation at adapter boundary**
   - Build: no behavior change; ensure mutation-time path revalidation remains next to filesystem write primitives.
   - Verify: adversarial save path tests still pass and `use_cases/save_note.rs` does not import `std::fs`.
 
