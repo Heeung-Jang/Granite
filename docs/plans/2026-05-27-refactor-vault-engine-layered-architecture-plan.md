@@ -728,7 +728,7 @@ Default stop conditions:
   - Build: delete or reduce `tantivy_search.rs` after all callers use `adapters::tantivy`.
   - Verify: `rg "crate::tantivy_search" vault-engine/src bench` returns no production callers.
 
-- [ ] **RA04.05g Keep Tantivy lifecycle stable**
+- [x] **RA04.05g Keep Tantivy lifecycle stable**
   - Build: no code change after RA04.05f.
   - Verify: confirm searcher/writer/index directory lifetimes are unchanged and no adapter code reopens Tantivy per read/search call.
 
