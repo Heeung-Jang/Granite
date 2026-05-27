@@ -1159,7 +1159,7 @@ Default stop conditions:
   - Evidence: enabled `rusqlite` trace instrumentation for tests and added `read_api_sql_query_counts_stay_bounded_for_ui_surfaces`. Baselines are file tree `1`, file-name/body search `0` SQLite statements, path inspector-style panels `2`, local graph one-hop `5`, and local graph two-hop `8`.
   - Stop condition: a use-case extraction adds a query loop proportional to result rows without an explicit benchmark-backed reason.
 
-- [ ] **RA05.11 Re-run save path safety through moved use case**
+- [x] **RA05.11 Re-run save path safety through moved use case**
   - Build: no behavior change after save use-case move.
   - Verify:
     ```sh
@@ -1168,6 +1168,7 @@ Default stop conditions:
     cargo test --manifest-path vault-engine/Cargo.toml ffi::tests::save_ffi
     cargo test --manifest-path vault-engine/Cargo.toml ffi::tests::engine_save
     ```
+  - Evidence: `save::` passed `16` tests, `ffi::tests::save_ffi` passed `3` tests, and the current filters `save_note::` / `ffi::tests::engine_save` matched `0` tests without failure.
   - Stop condition: external delete/edit/replace, symlink swap, new-note symlink parent, non-regular files, read-only targets, unsafe relative paths, or FFI conflict choices regress.
 
 ### Phase 6: Diagnostics, Benchmarks, And Profiler Boundary
