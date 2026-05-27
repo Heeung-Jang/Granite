@@ -77,9 +77,11 @@ responsibilities:
 
 ## Metadata Projection Boundary
 
-RA03.02 moved domain-facing metadata records into `core::metadata`.
-SQL-facing read projections remain outside `core` until a non-storage caller
-needs them as domain records:
+RA03.02 moved domain-facing metadata records into `core::metadata`. RA07.07
+also moved read-facing projection DTOs into `core::metadata` after FFI/read row
+conversion became a non-storage caller. The SQLite adapter still owns SQL row
+decoding and query construction; `core` owns only the storage-neutral projection
+records:
 
 - `FileLookupProjection`
 - `FileTreeProjection`
@@ -88,8 +90,7 @@ needs them as domain records:
 - `PropertyProjection`
 - `AttachmentProjection`
 
-No SQL row decoder, SQL storage converter, or projection-only type is currently
-owned by `core`.
+No SQL row decoder, SQL storage converter, or query helper is owned by `core`.
 
 ## Parser Ownership
 
@@ -110,7 +111,7 @@ parser owner directly.
 | `file_watcher` | `adapters/fs/watcher.rs` | Root compatibility shim and FSEvents adapter are test-only until production watcher integration lands. |
 | `graph` | `core/graph.rs` and `use_cases/build_graph.rs` | Pure graph records in core; snapshot construction orchestration in use cases. |
 | `graph_key` | `core/links.rs` | Link key and unresolved target normalization are pure domain logic. |
-| `index` | `core/metadata.rs` and `adapters/sqlite/metadata_store.rs` | Domain records move inward; schema, row decoding, and SQL stay in SQLite adapter. |
+| `index` | `core/metadata.rs` and `adapters/sqlite/metadata_store.rs` | Domain records and read projection DTOs live in core; schema, row decoding, and SQL stay in SQLite adapter. |
 | `index_rebuild` | `adapters/fs/index_directory.rs` and `use_cases/index_rebuild.rs` | Root compatibility shim is test-only; production callers use the use-case owner. |
 | `indexing_pipeline` | `use_cases/indexing_pipeline.rs`, adapters | Implementation lives in use cases; crate-root compatibility facade was removed. Queue batch processing remains test-only until a production caller is wired. |
 | `indexing_queue` | `adapters/sqlite/indexing_queue.rs` plus core queue records if needed | SQL lease/update details stay in adapter. |

@@ -123,16 +123,12 @@ impl FfiError {
     pub(super) fn from_choice(error: SaveConflictChoiceError) -> Self {
         match error {
             SaveConflictChoiceError::Save(error) => Self::from_save(error),
-            SaveConflictChoiceError::Queue(error) => Self::from_queue(error),
-        }
-    }
-
-    pub(super) fn from_queue(error: crate::adapters::sqlite::IndexingQueueError) -> Self {
-        Self {
-            code: "queue_error".to_string(),
-            message: error.to_string(),
-            conflict_kind: None,
-            conflict: None,
+            SaveConflictChoiceError::Queue(error) => Self {
+                code: "queue_error".to_string(),
+                message: error.to_string(),
+                conflict_kind: None,
+                conflict: None,
+            },
         }
     }
 

@@ -1648,6 +1648,18 @@ Default stop conditions:
   - Verify: no layer imports a global error solely to avoid owning its local error mapping.
   - Evidence: `errors.rs` contained only the unused placeholder `EngineError::NotImplemented` and had no imports from engine or profiler code, so it was removed instead of preserved as a cross-layer contract. Full `vault-engine` and `vault-profiler` tests passed without warnings.
 
+- [x] **RA07.07 Move read projection DTO ownership out of SQLite adapter**
+  - Build: move storage-neutral read projection DTOs (`FileLookupProjection`, `FileTreeProjection`, `LinkProjection`, `TagNoteProjection`, `PropertyProjection`, `AttachmentProjection`) from `adapters::sqlite::types` into `core::metadata`; keep SQLite row decoding, schema, and query construction in the SQLite adapter.
+  - Verify:
+    ```sh
+    rg -n "crate::adapters::|MetadataStore|IndexingQueue|TantivySearchIndex|IndexRebuildPaths|run_full_rebuild|load_search_document_sources" vault-engine/src/ffi -g '!mod.rs'
+    cargo fmt --manifest-path vault-engine/Cargo.toml --check
+    cargo test --manifest-path vault-engine/Cargo.toml
+    cargo test --manifest-path bench/vault-profiler/Cargo.toml
+    ```
+  - Evidence: production FFI files no longer import SQLite projection DTOs or queue errors directly; only `ffi/mod.rs` test fixtures construct SQLite/Tantivy stores directly. Full Rust and profiler tests passed after the move, ABI symbol and layout diffs stayed empty, and packaged smoke probes passed.
+  - Stop condition: FFI production code imports SQL/Tantivy projection or storage types rather than core/read-use-case DTOs.
+
 ## Verification Plan
 
 ### Per-Task Gate

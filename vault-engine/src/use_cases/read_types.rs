@@ -1,7 +1,8 @@
 use std::fmt;
 
-use crate::adapters::sqlite::{FileRecord, MetadataStoreError};
+use crate::adapters::sqlite::MetadataStoreError;
 use crate::adapters::tantivy::TantivySearchError;
+use crate::core::metadata::FileRecord;
 use crate::core::search::SearchResult;
 
 pub const ENGINE_READ_STATE_COMPLETE: u32 = 0;

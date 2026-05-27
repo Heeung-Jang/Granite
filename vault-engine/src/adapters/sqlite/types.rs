@@ -1,7 +1,5 @@
 use std::path::PathBuf;
 
-use crate::core::attachments::{AttachmentReferenceSource, AttachmentResolutionState};
-
 use crate::core::paths::lookup_key;
 use crate::core::scan::ScanEntry;
 
@@ -9,9 +7,10 @@ pub const INDEX_SCHEMA_VERSION: u32 = 2;
 pub const MAX_INDEX_ERROR_CHARS: usize = 512;
 
 pub use crate::core::metadata::{
-    AttachmentRecord, FileIndexStatus, FileMetadataRecords, FileRecord, HeadingRecord,
-    IndexPropertyValue, IndexSchemaMetadata, IndexedFileRecords, LinkEdgeRecord, PropertyRecord,
-    TagRecord, TagSource,
+    AttachmentProjection, AttachmentRecord, FileIndexStatus, FileLookupProjection,
+    FileMetadataRecords, FileRecord, FileTreeProjection, HeadingRecord, IndexPropertyValue,
+    IndexSchemaMetadata, IndexedFileRecords, LinkEdgeRecord, LinkProjection, PropertyProjection,
+    PropertyRecord, TagNoteProjection, TagRecord, TagSource,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,56 +57,6 @@ pub enum GraphQueryStage {
 pub struct GraphQueryPlanSummary {
     pub stage: GraphQueryStage,
     pub detail: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FileLookupProjection {
-    pub file_id: String,
-    pub relative_path: PathBuf,
-    pub display_path: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FileTreeProjection {
-    pub file: FileRecord,
-    pub display_path: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LinkProjection {
-    pub source_file_id: String,
-    pub source_relative_path: Option<PathBuf>,
-    pub target_file_id: Option<String>,
-    pub target_relative_path: Option<PathBuf>,
-    pub target_text: String,
-    pub heading: Option<String>,
-    pub alias: Option<String>,
-    pub is_embed: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TagNoteProjection {
-    pub file_id: String,
-    pub relative_path: PathBuf,
-    pub tag: String,
-    pub source: TagSource,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PropertyProjection {
-    pub file_id: String,
-    pub key: String,
-    pub value: IndexPropertyValue,
-    pub display_value: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AttachmentProjection {
-    pub source_file_id: String,
-    pub raw_target: String,
-    pub source: AttachmentReferenceSource,
-    pub state: AttachmentResolutionState,
-    pub resolved_relative_path: Option<PathBuf>,
 }
 
 impl IndexSchemaMetadata {
