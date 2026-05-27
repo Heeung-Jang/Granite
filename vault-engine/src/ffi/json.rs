@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 use crate::paths::PathError;
 use crate::save::{SafeSaveError, SaveConflictChoiceError};
 
-use super::FfiSaveConflict;
 use super::panic::catch_ffi_unwind;
+use super::save::FfiSaveConflict;
 
 #[derive(Debug, Serialize)]
 struct FfiResponse<T> {

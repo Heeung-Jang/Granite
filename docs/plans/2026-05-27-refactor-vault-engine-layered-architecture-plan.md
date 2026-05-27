@@ -499,7 +499,7 @@ Default stop conditions:
   - Build: move `engine_string_free`, `engine_read_close`, and `engine_read_result_free` into the smallest appropriate FFI lifecycle module.
   - Verify: null-safe free/close tests still pass.
 
-- [ ] **RA01.07 Extract save FFI functions**
+- [x] **RA01.07 Extract save FFI functions**
   - Build: move save extern functions and save-specific FFI structs into `vault-engine/src/ffi/save.rs`.
   - Verify: save FFI unit tests pass and conflict payload JSON remains unchanged.
 
