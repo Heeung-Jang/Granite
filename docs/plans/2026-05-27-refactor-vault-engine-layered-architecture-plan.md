@@ -680,7 +680,7 @@ Default stop conditions:
   - Build: delete the temporary compatibility module after `rg "crate::index" vault-engine/src bench` returns no production callers.
   - Verify: full Rust tests pass.
 
-- [ ] **RA04.03 Keep metadata facade for use cases**
+- [x] **RA04.03 Keep metadata facade for use cases**
   - Build: expose only the crate-internal `MetadataStore` facade and intentionally shared record/projection types from `adapters::sqlite`.
   - Verify: `rg "crate::adapters::sqlite::.*row_to_|crate::adapters::sqlite::.*Connection" vault-engine/src/use_cases vault-engine/src/ffi` returns no matches.
 
