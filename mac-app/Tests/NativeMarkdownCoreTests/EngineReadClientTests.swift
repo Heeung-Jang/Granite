@@ -262,6 +262,9 @@ private enum EngineReadClientFakeFFI {
     nonisolated(unsafe) static var openData: () -> Data = {
         emptyBuffer(rowKind: EngineReadABI.RowKind.openStatus, rowStride: 0)
     }
+    nonisolated(unsafe) static var rebuildData: () -> Data = {
+        emptyBuffer(rowKind: EngineReadABI.RowKind.openStatus, rowStride: 0)
+    }
     nonisolated(unsafe) static var closeCount = 0
     nonisolated(unsafe) static var lastSearchMode: UInt32 = 0
     nonisolated(unsafe) static var lastGraphDepth: UInt32 = 0
@@ -277,6 +280,7 @@ private enum EngineReadClientFakeFFI {
     static func reset() {
         openHandle = handle
         openData = { emptyBuffer(rowKind: EngineReadABI.RowKind.openStatus, rowStride: 0) }
+        rebuildData = { emptyBuffer(rowKind: EngineReadABI.RowKind.openStatus, rowStride: 0) }
         closeCount = 0
         lastSearchMode = 0
         lastGraphDepth = 0
@@ -299,6 +303,9 @@ private enum EngineReadClientFakeFFI {
                 },
                 freeResult: { buffer in
                     EngineReadClientFakeFFI.free(buffer)
+                },
+                rebuildIndex: { vaultPath, dataPath, rebuildPath in
+                    EngineReadClientFakeFFI.rebuildIndex(vaultPath, dataPath, rebuildPath)
                 },
                 fileTree: { handle, requestID, offset, limit in
                     EngineReadClientFakeFFI.fileTree(handle, requestID, offset, limit)
@@ -331,6 +338,14 @@ private enum EngineReadClientFakeFFI {
 
     static func close(_ handle: UnsafeMutableRawPointer?) {
         closeCount += 1
+    }
+
+    static func rebuildIndex(
+        _ vaultPath: UnsafePointer<CChar>?,
+        _ dataPath: UnsafePointer<CChar>?,
+        _ rebuildPath: UnsafePointer<CChar>?
+    ) -> EngineReadResultBuffer {
+        ffiBuffer(rebuildData())
     }
 
     static func free(_ buffer: EngineReadResultBuffer) {

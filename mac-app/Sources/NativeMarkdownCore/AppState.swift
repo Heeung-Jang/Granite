@@ -39,6 +39,22 @@ public enum ReadAvailability: Equatable, Sendable {
 
 public typealias ReadClientFactory = @Sendable (URL, URL) throws -> any EngineReading
 
+public protocol ReadIndexRebuilding: Sendable {
+    func rebuildIndex(vaultURL: URL, location: AppOwnedIndexLocation) throws
+}
+
+public struct EngineReadIndexRebuilder: ReadIndexRebuilding {
+    public init() {}
+
+    public func rebuildIndex(vaultURL: URL, location: AppOwnedIndexLocation) throws {
+        try EngineReadClient.rebuildIndex(
+            vaultURL: vaultURL,
+            dataDirectory: location.dataDirectory,
+            rebuildDirectory: location.rebuildDirectory
+        )
+    }
+}
+
 public struct DirtyNavigationWarning: Equatable, Identifiable, Sendable {
     public let dirtyFile: FileTreeItem
     public let requestedFile: FileTreeItem
@@ -167,6 +183,7 @@ public final class AppState: ObservableObject {
     private let workspaceTabSessionStore: any WorkspaceTabSessionStoring
     private let workspacePaneLayoutStore: any WorkspacePaneLayoutStoring
     private let readClientFactory: ReadClientFactory
+    private let readIndexRebuilder: any ReadIndexRebuilding
     private let maxRecentVaults: Int
     private var nextSearchRequestID: UInt64 = 0
     private var didAttemptLastVaultAutoRestore = false
@@ -185,6 +202,7 @@ public final class AppState: ObservableObject {
         readClientFactory: @escaping ReadClientFactory = { metadataURL, tantivyURL in
             try EngineReadClient.open(metadataURL: metadataURL, tantivyURL: tantivyURL)
         },
+        readIndexRebuilder: any ReadIndexRebuilding = EngineReadIndexRebuilder(),
         maxRecentVaults: Int = 10
     ) {
         self.vaultSelection = vaultSelection
@@ -196,6 +214,7 @@ public final class AppState: ObservableObject {
         self.workspaceTabSessionStore = workspaceTabSessionStore
         self.workspacePaneLayoutStore = workspacePaneLayoutStore
         self.readClientFactory = readClientFactory
+        self.readIndexRebuilder = readIndexRebuilder
         self.maxRecentVaults = max(1, maxRecentVaults)
         self.readAvailability = .unavailable
         self.readGeneration = 0
@@ -229,15 +248,7 @@ public final class AppState: ObservableObject {
         let preparedIndexLocation = try indexDirectoryResolver.prepareIndexLocation(forVaultAt: vaultURL)
         resetReadClient(availability: .opening)
         indexLocation = preparedIndexLocation
-        do {
-            readClient = try readClientFactory(
-                preparedIndexLocation.metadataStoreFile,
-                preparedIndexLocation.tantivyIndexDirectory
-            )
-            readAvailability = .ready
-        } catch {
-            readAvailability = .error(Self.readErrorMessage(error))
-        }
+        openReadClient(vaultURL: vaultURL, location: preparedIndexLocation)
         vaultSelection = .selected(vaultURL)
         resetWorkspaceState()
         restoreWorkspacePaneLayout(for: vaultURL)
@@ -1068,6 +1079,33 @@ public final class AppState: ObservableObject {
         readAvailability = availability
     }
 
+    private func openReadClient(vaultURL: URL, location: AppOwnedIndexLocation) {
+        do {
+            readClient = try readClientFactory(
+                location.metadataStoreFile,
+                location.tantivyIndexDirectory
+            )
+            readAvailability = .ready
+        } catch {
+            guard Self.shouldRebuildReadIndex(after: error) else {
+                readAvailability = .error(Self.readErrorMessage(error))
+                return
+            }
+
+            do {
+                try readIndexRebuilder.rebuildIndex(vaultURL: vaultURL, location: location)
+                readClient = try readClientFactory(
+                    location.metadataStoreFile,
+                    location.tantivyIndexDirectory
+                )
+                readAvailability = .ready
+            } catch {
+                readClient = nil
+                readAvailability = .error(Self.readIndexRecoveryErrorMessage(error))
+            }
+        }
+    }
+
     private func readAvailability(for issue: VaultAccessIssue) -> ReadAvailability {
         if case .staleBookmark = issue {
             return .stale
@@ -1075,9 +1113,27 @@ public final class AppState: ObservableObject {
         return .unavailable
     }
 
+    private static func shouldRebuildReadIndex(after error: any Error) -> Bool {
+        guard case EngineReadClientError.engine(let payload) = error else {
+            return false
+        }
+        return recoverableReadOpenErrorCodes.contains(payload.code)
+    }
+
     private static func readErrorMessage(_ error: any Error) -> String {
         let description = String(describing: error)
         return description.isEmpty ? "read client unavailable" : description
+    }
+
+    private static func readIndexRecoveryErrorMessage(_ error: any Error) -> String {
+        if case EngineReadClientError.engine(let payload) = error {
+            return "read index rebuild failed: \(payload.message)"
+        }
+        let description = String(describing: error)
+        if description.isEmpty {
+            return "read index rebuild failed"
+        }
+        return "read index rebuild failed: \(description)"
     }
 
     private static func normalizedRecentVaults(from urls: [URL], limit: Int) -> [RecentVault] {
@@ -1098,6 +1154,12 @@ public final class AppState: ObservableObject {
 
     private static let maxRecentlyClosedTabs = 25
     private static let maxRestoredTabs = 25
+    private static let recoverableReadOpenErrorCodes: Set<String> = [
+        "missing_metadata",
+        "missing_tantivy_index",
+        "schema_mismatch",
+        "backend_mismatch"
+    ]
 }
 
 private struct ActiveEditorBufferProvider {

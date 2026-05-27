@@ -72,6 +72,11 @@ struct EngineReadSymbols: @unchecked Sendable {
     ) -> EngineReadOpenResult
     typealias CloseFunction = @convention(c) (UnsafeMutableRawPointer?) -> Void
     typealias FreeResultFunction = @convention(c) (EngineReadResultBuffer) -> Void
+    typealias RebuildIndexFunction = @convention(c) (
+        UnsafePointer<CChar>?,
+        UnsafePointer<CChar>?,
+        UnsafePointer<CChar>?
+    ) -> EngineReadResultBuffer
     typealias FileTreeFunction = @convention(c) (
         UnsafeMutableRawPointer?,
         UInt64,
@@ -113,6 +118,7 @@ struct EngineReadSymbols: @unchecked Sendable {
     let open: OpenFunction
     let close: CloseFunction
     let freeResult: FreeResultFunction
+    let rebuildIndex: RebuildIndexFunction
     let fileTree: FileTreeFunction
     let search: SearchFunction
     let inspectorPanel: InspectorPanelFunction
@@ -123,6 +129,7 @@ struct EngineReadSymbols: @unchecked Sendable {
         open: @escaping OpenFunction,
         close: @escaping CloseFunction,
         freeResult: @escaping FreeResultFunction,
+        rebuildIndex: @escaping RebuildIndexFunction,
         fileTree: @escaping FileTreeFunction,
         search: @escaping SearchFunction,
         inspectorPanel: @escaping InspectorPanelFunction,
@@ -132,6 +139,7 @@ struct EngineReadSymbols: @unchecked Sendable {
         self.open = open
         self.close = close
         self.freeResult = freeResult
+        self.rebuildIndex = rebuildIndex
         self.fileTree = fileTree
         self.search = search
         self.inspectorPanel = inspectorPanel
@@ -157,6 +165,47 @@ public final class EngineReadClient: EngineReading, @unchecked Sendable {
             tantivyURL: tantivyURL,
             libraryPath: EngineLibraryPath.defaultPath()
         )
+    }
+
+    public static func rebuildIndex(
+        vaultURL: URL,
+        dataDirectory: URL,
+        rebuildDirectory: URL
+    ) throws {
+        try rebuildIndex(
+            vaultURL: vaultURL,
+            dataDirectory: dataDirectory,
+            rebuildDirectory: rebuildDirectory,
+            libraryPath: EngineLibraryPath.defaultPath(),
+            symbolLoader: EngineReadClient.loadSymbols
+        )
+    }
+
+    static func rebuildIndex(
+        vaultURL: URL,
+        dataDirectory: URL,
+        rebuildDirectory: URL,
+        libraryPath: String?,
+        symbolLoader: SymbolLoader
+    ) throws {
+        let loaded = try symbolLoader(libraryPath)
+        defer {
+            if let libraryHandle = loaded.libraryHandle {
+                dlclose(libraryHandle)
+            }
+        }
+
+        let buffer = vaultURL.path.withCString { vaultPath in
+            dataDirectory.path.withCString { dataPath in
+                rebuildDirectory.path.withCString { rebuildPath in
+                    loaded.symbols.rebuildIndex(vaultPath, dataPath, rebuildPath)
+                }
+            }
+        }
+        let data = try data(from: buffer, free: loaded.symbols.freeResult)
+        if let error = try errorPayload(from: data) {
+            throw EngineReadClientError.engine(error)
+        }
     }
 
     public static func open(
@@ -434,6 +483,11 @@ public final class EngineReadClient: EngineReading, @unchecked Sendable {
                 open: loadSymbol(handle, "engine_read_open", as: EngineReadSymbols.OpenFunction.self),
                 close: loadSymbol(handle, "engine_read_close", as: EngineReadSymbols.CloseFunction.self),
                 freeResult: loadSymbol(handle, "engine_read_result_free", as: EngineReadSymbols.FreeResultFunction.self),
+                rebuildIndex: loadSymbol(
+                    handle,
+                    "engine_read_rebuild_index",
+                    as: EngineReadSymbols.RebuildIndexFunction.self
+                ),
                 fileTree: loadSymbol(handle, "engine_read_file_tree", as: EngineReadSymbols.FileTreeFunction.self),
                 search: loadSymbol(handle, "engine_read_search", as: EngineReadSymbols.SearchFunction.self),
                 inspectorPanel: loadSymbol(

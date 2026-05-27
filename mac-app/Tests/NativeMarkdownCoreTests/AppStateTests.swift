@@ -73,6 +73,88 @@ func appStatePublishesReadErrorWhenClientOpenFails() throws {
 }
 
 @Test
+func appStateRebuildsReadIndexForRecoverableOpenErrors() throws {
+    for code in ["missing_metadata", "missing_tantivy_index", "schema_mismatch", "backend_mismatch"] {
+        let supportRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let client = FakeReadClient()
+        let factory = FakeReadClientFactory(
+            clients: [client],
+            errors: [engineReadOpenError(code: code)]
+        )
+        let rebuilder = FakeReadIndexRebuilder()
+        let state = AppState(
+            engineHealth: EngineHealthStatus(state: .loaded, abiVersion: 1, message: "test"),
+            indexDirectoryResolver: AppOwnedIndexDirectoryResolver(applicationSupportRoot: supportRoot),
+            vaultAccessValidator: AllowingVaultAccessValidator(),
+            recentVaultStorage: MemoryRecentVaultStorage(),
+            readClientFactory: factory.make,
+            readIndexRebuilder: rebuilder
+        )
+        let vaultURL = URL(fileURLWithPath: "/tmp/read-rebuild-\(code)", isDirectory: true)
+
+        try state.selectVault(vaultURL)
+
+        let location = try #require(state.indexLocation)
+        #expect(factory.openedMetadataURLs == [location.metadataStoreFile, location.metadataStoreFile])
+        #expect(factory.openedTantivyURLs == [location.tantivyIndexDirectory, location.tantivyIndexDirectory])
+        #expect(rebuilder.rebuiltVaultURLs == [vaultURL.standardizedFileURL])
+        #expect(rebuilder.rebuiltLocations == [location])
+        #expect(state.readAvailability == .ready)
+        #expect((state.readClient as? FakeReadClient) === client)
+        #expect(state.readGeneration == 1)
+    }
+}
+
+@Test
+func appStateDoesNotRebuildReadIndexForNonrecoverableOpenErrors() throws {
+    let supportRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let factory = FakeReadClientFactory(error: engineReadOpenError(code: "tokenizer_mismatch"))
+    let rebuilder = FakeReadIndexRebuilder()
+    let state = AppState(
+        engineHealth: EngineHealthStatus(state: .loaded, abiVersion: 1, message: "test"),
+        indexDirectoryResolver: AppOwnedIndexDirectoryResolver(applicationSupportRoot: supportRoot),
+        vaultAccessValidator: AllowingVaultAccessValidator(),
+        recentVaultStorage: MemoryRecentVaultStorage(),
+        readClientFactory: factory.make,
+        readIndexRebuilder: rebuilder
+    )
+
+    try state.selectVault(URL(fileURLWithPath: "/tmp/read-nonrecoverable-vault", isDirectory: true))
+
+    #expect(state.readClient == nil)
+    #expect(rebuilder.rebuiltVaultURLs.isEmpty)
+    #expect(factory.openedMetadataURLs.count == 1)
+    if case .error(let message) = state.readAvailability {
+        #expect(message.contains("tokenizer_mismatch"))
+    } else {
+        #expect(Bool(false))
+    }
+}
+
+@Test
+func appStateSanitizesReadIndexRecoveryFailureMessage() throws {
+    let supportRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let factory = FakeReadClientFactory(errors: [engineReadOpenError(code: "missing_metadata")])
+    let rebuilder = FakeReadIndexRebuilder(error: engineReadOpenError(code: "missing_metadata"))
+    let state = AppState(
+        engineHealth: EngineHealthStatus(state: .loaded, abiVersion: 1, message: "test"),
+        indexDirectoryResolver: AppOwnedIndexDirectoryResolver(applicationSupportRoot: supportRoot),
+        vaultAccessValidator: AllowingVaultAccessValidator(),
+        recentVaultStorage: MemoryRecentVaultStorage(),
+        readClientFactory: factory.make,
+        readIndexRebuilder: rebuilder
+    )
+
+    try state.selectVault(URL(fileURLWithPath: "/tmp/read-recovery-fails-vault", isDirectory: true))
+
+    #expect(state.readClient == nil)
+    #expect(state.readAvailability == .error("read index rebuild failed: missing_metadata"))
+}
+
+@Test
 func appStateClosesReadClientOnClearUnavailableAndStaleVault() throws {
     let supportRoot = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -1965,22 +2047,53 @@ private enum FakeReadFactoryError: Error {
 private final class FakeReadClientFactory: @unchecked Sendable {
     var clients: [FakeReadClient]
     let error: (any Error)?
+    var errors: [any Error]
     private(set) var openedMetadataURLs: [URL] = []
     private(set) var openedTantivyURLs: [URL] = []
 
-    init(clients: [FakeReadClient] = [], error: (any Error)? = nil) {
+    init(clients: [FakeReadClient] = [], error: (any Error)? = nil, errors: [any Error] = []) {
         self.clients = clients
         self.error = error
+        self.errors = errors
     }
 
     func make(metadataURL: URL, tantivyURL: URL) throws -> any EngineReading {
         openedMetadataURLs.append(metadataURL)
         openedTantivyURLs.append(tantivyURL)
+        if !errors.isEmpty {
+            throw errors.removeFirst()
+        }
         if let error {
             throw error
         }
         return clients.removeFirst()
     }
+}
+
+private final class FakeReadIndexRebuilder: ReadIndexRebuilding, @unchecked Sendable {
+    let error: (any Error)?
+    private(set) var rebuiltVaultURLs: [URL] = []
+    private(set) var rebuiltLocations: [AppOwnedIndexLocation] = []
+
+    init(error: (any Error)? = nil) {
+        self.error = error
+    }
+
+    func rebuildIndex(vaultURL: URL, location: AppOwnedIndexLocation) throws {
+        rebuiltVaultURLs.append(vaultURL)
+        rebuiltLocations.append(location)
+        if let error {
+            throw error
+        }
+    }
+}
+
+private func engineReadOpenError(code: String) -> EngineReadClientError {
+    EngineReadClientError.engine(EngineReadErrorPayload(
+        code: code,
+        message: code,
+        state: EngineReadABI.State.error
+    ))
 }
 
 private final class FakeReadClient: EngineReading, @unchecked Sendable {

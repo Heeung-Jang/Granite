@@ -19,6 +19,10 @@ use crate::index::{
     GraphFileRecord, GraphResolvedEdgeRecord, GraphUnresolvedEdgeRecord, IndexSchemaMetadata,
     MetadataStore, MetadataStoreError,
 };
+use crate::index_rebuild::IndexRebuildPaths;
+use crate::indexing_pipeline::{
+    IndexingPipelineOptions, load_search_document_sources, run_full_rebuild_pipeline_and_commit,
+};
 use crate::indexing_queue::{IndexingQueue, IndexingQueueItem};
 use crate::paths::{FileIdentity, PathError, VaultRoot};
 use crate::read_api::{
@@ -28,17 +32,18 @@ use crate::read_api::{
     ENGINE_READ_LOCAL_GRAPH_DEPTH_TWO_HOP, ENGINE_READ_STATE_CANCELLED, ENGINE_READ_STATE_COMPLETE,
     ENGINE_READ_STATE_ERROR, ENGINE_READ_STATE_PARTIAL, ENGINE_READ_STATE_STALE, LocalGraphDepth,
     LocalGraphRequest, ReadApiError, ReadOpenError, ReadPage, ReadState, VaultReadApi,
-    open_vault_read_api,
+    expected_read_schema_metadata, open_vault_read_api,
 };
 use crate::read_ffi::{
     ENGINE_READ_ROW_KIND_ATTACHMENT, ENGINE_READ_ROW_KIND_BACKLINK, ENGINE_READ_ROW_KIND_FILE_TREE,
     ENGINE_READ_ROW_KIND_GRAPH_EDGE, ENGINE_READ_ROW_KIND_GRAPH_NODE,
-    ENGINE_READ_ROW_KIND_LIVE_PREVIEW_METADATA, ENGINE_READ_ROW_KIND_OUTGOING_LINK,
-    ENGINE_READ_ROW_KIND_PROPERTY, ENGINE_READ_ROW_KIND_SEARCH_HIT, ENGINE_READ_ROW_KIND_TAG,
-    EngineReadAttachmentRow, EngineReadFileTreeRow, EngineReadGraphEdgeRow, EngineReadGraphNodeRow,
-    EngineReadLinkRow, EngineReadLivePreviewMetadataRow, EngineReadPropertyRow,
-    EngineReadResultBuffer, EngineReadResultBuilder, EngineReadSearchHitRow, EngineReadTagRow,
-    error_result_buffer, open_error_buffer, open_status_buffer,
+    ENGINE_READ_ROW_KIND_LIVE_PREVIEW_METADATA, ENGINE_READ_ROW_KIND_OPEN_STATUS,
+    ENGINE_READ_ROW_KIND_OUTGOING_LINK, ENGINE_READ_ROW_KIND_PROPERTY,
+    ENGINE_READ_ROW_KIND_SEARCH_HIT, ENGINE_READ_ROW_KIND_TAG, EngineReadAttachmentRow,
+    EngineReadFileTreeRow, EngineReadGraphEdgeRow, EngineReadGraphNodeRow, EngineReadLinkRow,
+    EngineReadLivePreviewMetadataRow, EngineReadPropertyRow, EngineReadResultBuffer,
+    EngineReadResultBuilder, EngineReadSearchHitRow, EngineReadTagRow, error_result_buffer,
+    open_error_buffer, open_status_buffer,
 };
 use crate::save::{
     SafeSaveError, SaveBaseline, SaveChoiceOutcome, SaveConflict, SaveConflictChoiceError,
@@ -140,6 +145,24 @@ pub unsafe extern "C" fn engine_read_result_free(buffer: EngineReadResultBuffer)
             drop(Vec::from_raw_parts(buffer.ptr, buffer.len, buffer.capacity));
         }
     }));
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn engine_read_rebuild_index(
+    vault_path: *const c_char,
+    data_path: *const c_char,
+    rebuild_path: *const c_char,
+) -> EngineReadResultBuffer {
+    read_rebuild_response(|| {
+        let vault_path = unsafe { read_rebuild_c_string(vault_path, "vault_path")? };
+        let data_path = unsafe { read_rebuild_c_string(data_path, "data_path")? };
+        let rebuild_path = unsafe { read_rebuild_c_string(rebuild_path, "rebuild_path")? };
+        rebuild_read_index(
+            Path::new(&vault_path),
+            Path::new(&data_path),
+            Path::new(&rebuild_path),
+        )
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -1203,6 +1226,84 @@ where
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReadRebuildFfiError {
+    code: &'static str,
+    message: String,
+}
+
+impl ReadRebuildFfiError {
+    fn invalid_input(field: &'static str) -> Self {
+        Self {
+            code: "invalid_input",
+            message: format!("{field}: invalid path"),
+        }
+    }
+
+    fn rebuild_failed(error: impl std::fmt::Display) -> Self {
+        Self {
+            code: "rebuild_failed",
+            message: error.to_string(),
+        }
+    }
+
+    fn panic() -> Self {
+        Self {
+            code: "panic",
+            message: "vault engine FFI call panicked".to_string(),
+        }
+    }
+}
+
+unsafe fn read_rebuild_c_string(
+    ptr: *const c_char,
+    field: &'static str,
+) -> Result<String, ReadRebuildFfiError> {
+    unsafe { read_c_string(ptr, field) }.map_err(|_| ReadRebuildFfiError::invalid_input(field))
+}
+
+fn read_rebuild_response<F>(call: F) -> EngineReadResultBuffer
+where
+    F: FnOnce() -> Result<u64, ReadRebuildFfiError>,
+{
+    match catch_unwind(AssertUnwindSafe(call)).unwrap_or_else(|_| Err(ReadRebuildFfiError::panic()))
+    {
+        Ok(generation) => open_status_buffer(generation, ENGINE_READ_STATE_COMPLETE),
+        Err(error) => error_result_buffer(
+            ENGINE_READ_ROW_KIND_OPEN_STATUS,
+            0,
+            0,
+            ENGINE_READ_STATE_ERROR,
+            error.code,
+            &error.message,
+        ),
+    }
+}
+
+fn rebuild_read_index(
+    vault_path: &Path,
+    data_path: &Path,
+    rebuild_path: &Path,
+) -> Result<u64, ReadRebuildFfiError> {
+    let root = VaultRoot::open(vault_path).map_err(ReadRebuildFfiError::rebuild_failed)?;
+    let index_root = data_path
+        .parent()
+        .ok_or_else(|| ReadRebuildFfiError::invalid_input("data_path"))?;
+    let paths = IndexRebuildPaths::new(root.canonical_root(), index_root, data_path, rebuild_path);
+    let loaded =
+        load_search_document_sources(&root).map_err(ReadRebuildFfiError::rebuild_failed)?;
+    let metadata = expected_read_schema_metadata();
+    let result = run_full_rebuild_pipeline_and_commit(
+        &paths,
+        &loaded.sources,
+        &metadata,
+        &IndexingPipelineOptions::default(),
+    )
+    .map_err(ReadRebuildFfiError::rebuild_failed)?;
+
+    Ok(result.generation)
+}
+
 fn read_page_response<T, Row, Call, BuildRow>(
     handle: *mut EngineReadHandle,
     row_kind: u32,
@@ -1489,6 +1590,51 @@ mod tests {
         assert!(response.handle.is_null());
         assert_eq!(header.state, crate::read_api::ENGINE_READ_STATE_ERROR);
         assert_eq!(error_code, "invalid_input");
+    }
+
+    #[test]
+    fn engine_read_rebuild_index_materializes_missing_read_index() {
+        let dir = tempdir().expect("tempdir");
+        let vault_path = dir.path().join("vault");
+        fs::create_dir_all(&vault_path).expect("vault dir");
+        fs::write(
+            vault_path.join("Home.md"),
+            "# Home\n\nBody with [[Target]] and #tag",
+        )
+        .expect("home file");
+        fs::write(vault_path.join("Target.md"), "# Target\n\nLinked body").expect("target file");
+        let index_root = dir.path().join("support").join("Indexes").join("vault-id");
+        let data_path = index_root.join("data");
+        let rebuild_path = index_root.join("rebuild");
+        let vault = CString::new(vault_path.to_string_lossy().as_bytes()).expect("vault");
+        let data = CString::new(data_path.to_string_lossy().as_bytes()).expect("data");
+        let rebuild = CString::new(rebuild_path.to_string_lossy().as_bytes()).expect("rebuild");
+
+        let buffer =
+            unsafe { engine_read_rebuild_index(vault.as_ptr(), data.as_ptr(), rebuild.as_ptr()) };
+        let header = unsafe { take_open_header(buffer) };
+
+        assert_eq!(header.row_kind, ENGINE_READ_ROW_KIND_OPEN_STATUS);
+        assert_eq!(header.state, ENGINE_READ_STATE_COMPLETE);
+        assert!(data_path.join("metadata.sqlite").is_file());
+        assert!(data_path.join("tantivy").is_dir());
+        assert!(!rebuild_path.exists());
+
+        let metadata = CString::new(
+            data_path
+                .join("metadata.sqlite")
+                .to_string_lossy()
+                .as_bytes(),
+        )
+        .expect("metadata");
+        let tantivy =
+            CString::new(data_path.join("tantivy").to_string_lossy().as_bytes()).expect("tantivy");
+        let response = unsafe { engine_read_open(metadata.as_ptr(), tantivy.as_ptr()) };
+        assert!(!response.handle.is_null());
+        unsafe {
+            engine_read_result_free(response.result);
+            engine_read_close(response.handle);
+        }
     }
 
     #[test]
