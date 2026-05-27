@@ -807,7 +807,7 @@ Default stop conditions:
   - Build: move heading/attachment panel orchestration while attachment resolution remains in its current owner until explicitly moved.
   - Verify: inspector heading/attachment tests pass.
 
-- [ ] **RA05.02l Move local graph DTOs and candidate helpers**
+- [x] **RA05.02l Move local graph DTOs and candidate helpers**
   - Build: move `LocalGraphRequest`, depth enum, graph node/edge DTOs, and candidate helper functions that do not query storage.
   - Verify: local graph unit tests pass.
 

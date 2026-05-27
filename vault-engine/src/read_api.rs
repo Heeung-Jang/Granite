@@ -1,9 +1,6 @@
-use std::{collections::HashSet, fmt, path::Path};
+use std::{fmt, path::Path};
 
-use crate::adapters::sqlite::{
-    FileLookupProjection, FileRecord, GraphFileRecord, GraphResolvedEdgeRecord,
-    GraphUnresolvedEdgeRecord, MetadataStoreError,
-};
+use crate::adapters::sqlite::{FileLookupProjection, FileRecord, MetadataStoreError};
 use crate::adapters::tantivy::TantivySearchError;
 use crate::graph::{
     WholeVaultGraphInputs, WholeVaultGraphRequest, WholeVaultGraphSnapshot,
@@ -13,6 +10,11 @@ use crate::graph_key::unresolved_target_key;
 use crate::parser::{MarkdownLink, PropertyValue, WikiLink, parse_markdown};
 use crate::scanner::{ScanEntryKind, classify_file};
 use crate::sqlite_fts::SearchResult;
+use crate::use_cases::read_graph::graph_candidate_files;
+pub use crate::use_cases::read_graph::{
+    LocalGraph, LocalGraphDepth, LocalGraphEdge, LocalGraphEdgeDirection, LocalGraphNode,
+    LocalGraphNodeKind, LocalGraphRequest,
+};
 use crate::use_cases::read_types::MAX_PAGE_LIMIT;
 pub use crate::use_cases::read_types::{
     ENGINE_READ_STATE_CANCELLED, ENGINE_READ_STATE_COMPLETE, ENGINE_READ_STATE_ERROR,
@@ -24,8 +26,6 @@ pub use crate::use_cases::read_vault::{
     open_tantivy_index_for_read, open_vault_read_api,
 };
 
-const MAX_GRAPH_NODES: usize = 250;
-const MAX_GRAPH_EDGES: usize = 500;
 pub const READ_BACKEND_NAME: &str = "sqlite+tantivy";
 pub const READ_BACKEND_VERSION: &str = "metadata-v2";
 pub const READ_TOKENIZER_CONFIG: &str = "tantivy";
@@ -51,58 +51,6 @@ pub struct SearchHit {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileOpenMetadata {
     pub file: FileRecord,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LocalGraphRequest {
-    pub request_id: u64,
-    pub max_nodes: usize,
-    pub max_edges: usize,
-    pub depth: LocalGraphDepth,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LocalGraphDepth {
-    OneHop,
-    TwoHop,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LocalGraph {
-    pub center_node_id: String,
-    pub nodes: Vec<LocalGraphNode>,
-    pub edges: Vec<LocalGraphEdge>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LocalGraphNode {
-    pub node_id: String,
-    pub file_id: Option<String>,
-    pub label: String,
-    pub kind: LocalGraphNodeKind,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LocalGraphNodeKind {
-    Center,
-    Resolved,
-    Unresolved,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LocalGraphEdge {
-    pub source_node_id: String,
-    pub target_node_id: String,
-    pub target_text: String,
-    pub direction: LocalGraphEdgeDirection,
-    pub is_embed: bool,
-    pub hop: u8,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LocalGraphEdgeDirection {
-    Outgoing,
-    Backlink,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -155,38 +103,6 @@ pub enum ReadApiError {
 }
 
 pub type ReadApiResult<T> = Result<T, ReadApiError>;
-
-impl LocalGraphRequest {
-    pub fn new(max_nodes: usize, max_edges: usize) -> Self {
-        Self::with_request_id(0, max_nodes, max_edges)
-    }
-
-    pub fn with_request_id(request_id: u64, max_nodes: usize, max_edges: usize) -> Self {
-        Self::with_depth(request_id, max_nodes, max_edges, LocalGraphDepth::OneHop)
-    }
-
-    pub fn with_depth(
-        request_id: u64,
-        max_nodes: usize,
-        max_edges: usize,
-        depth: LocalGraphDepth,
-    ) -> Self {
-        Self {
-            request_id,
-            max_nodes,
-            max_edges,
-            depth,
-        }
-    }
-
-    fn node_limit(self) -> usize {
-        self.max_nodes.clamp(1, MAX_GRAPH_NODES)
-    }
-
-    fn edge_limit(self) -> usize {
-        self.max_edges.clamp(1, MAX_GRAPH_EDGES)
-    }
-}
 
 impl VaultReadApi {
     pub fn local_graph(
@@ -746,69 +662,6 @@ fn push_frontier_file(frontier: &mut Vec<String>, center_file_id: &str, file_id:
     if file_id != center_file_id {
         frontier.push(file_id.to_string());
     }
-}
-
-fn graph_candidate_files(
-    resolved_edges: &[GraphResolvedEdgeRecord],
-    unresolved_edges: &[GraphUnresolvedEdgeRecord],
-    orphan_files: &[GraphFileRecord],
-    limit: usize,
-) -> Vec<GraphFileRecord> {
-    let mut seen = HashSet::new();
-    let mut files = Vec::new();
-
-    for edge in resolved_edges {
-        push_graph_candidate_file(
-            &mut files,
-            &mut seen,
-            limit,
-            &edge.source_file_id,
-            &edge.source_relative_path,
-        );
-        push_graph_candidate_file(
-            &mut files,
-            &mut seen,
-            limit,
-            &edge.target_file_id,
-            &edge.target_relative_path,
-        );
-    }
-    for edge in unresolved_edges {
-        push_graph_candidate_file(
-            &mut files,
-            &mut seen,
-            limit,
-            &edge.source_file_id,
-            &edge.source_relative_path,
-        );
-    }
-    for file in orphan_files {
-        push_graph_candidate_file(
-            &mut files,
-            &mut seen,
-            limit,
-            &file.file_id,
-            &file.relative_path,
-        );
-    }
-
-    files
-}
-
-fn push_graph_candidate_file(
-    files: &mut Vec<GraphFileRecord>,
-    seen: &mut HashSet<String>,
-    limit: usize,
-    file_id: &str,
-    relative_path: &Path,
-) {
-    if files.len() >= limit || !seen.insert(file_id.to_string()) {
-        return;
-    }
-    files.push(GraphFileRecord {
-        file_id: file_id.to_string(),
-        relative_path: relative_path.to_path_buf(),
-    });
 }
 
 fn display_property_value(value: &PropertyValue) -> String {
