@@ -94,6 +94,9 @@ public enum SummaryProgressState: Equatable, Sendable {
     case editorNotReady
     case tooLarge(sourceByteCount: Int, maxSourceBytes: Int)
     case analyzing
+    case fastStreaming
+    case fastComplete
+    case fallingBack
     case summarizingChunk(current: Int, total: Int)
     case finalizing
     case complete

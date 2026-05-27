@@ -3,6 +3,7 @@ import Foundation
 public struct DocumentSummaryPipeline: Sendable {
     public typealias ProgressHandler = @Sendable (SummaryProgressState) async -> Void
     public typealias FreshnessCheck = @Sendable (DocumentSummaryRequestKey) async -> Bool
+    public typealias SnapshotHandler = @Sendable (String) async -> Void
 
     private let generator: any DocumentSummaryGenerating
     private let cache: DocumentSummaryCache
@@ -138,6 +139,120 @@ public struct DocumentSummaryPipeline: Sendable {
         return summary
     }
 
+    public func summarizeFast(
+        request: DocumentSummaryRequest,
+        useCache: Bool = true,
+        progress: ProgressHandler? = nil,
+        onSnapshot: SnapshotHandler? = nil,
+        isFresh: FreshnessCheck? = nil
+    ) async throws -> DocumentSummary {
+        do {
+            return try await summarizeFastOnly(
+                request: request,
+                useCache: useCache,
+                progress: progress,
+                onSnapshot: onSnapshot,
+                isFresh: isFresh
+            )
+        } catch {
+            guard shouldFallbackFromFastFailure(error) else {
+                throw error
+            }
+            await progress?(.fallingBack)
+            return try await summarize(
+                request: request,
+                useCache: useCache,
+                progress: progress,
+                isFresh: isFresh
+            )
+        }
+    }
+
+    private func summarizeFastOnly(
+        request: DocumentSummaryRequest,
+        useCache: Bool,
+        progress: ProgressHandler?,
+        onSnapshot: SnapshotHandler?,
+        isFresh: FreshnessCheck?
+    ) async throws -> DocumentSummary {
+        let timer = AppTelemetryTimer()
+        try await ensureFresh(request.key, isFresh: isFresh)
+        await progress?(.analyzing)
+
+        if useCache, let cached = await cache.value(for: request.fastCacheKey) {
+            await progress?(.fastComplete)
+            return cached.summary
+        }
+
+        let language = DocumentSummaryLanguageDetector.detect(request.snapshot.contents)
+        let trimmed = request.snapshot.contents.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            let summary = DocumentSummary.empty(metadata: SummaryMetadata(
+                sourceByteCount: request.snapshot.byteCount,
+                chunkCount: 0,
+                elapsedMilliseconds: timer.elapsedMilliseconds(),
+                language: language,
+                stage: .fast
+            ))
+            await cache.insert(cacheEntry(for: summary), for: request.fastCacheKey)
+            await progress?(.fastComplete)
+            return summary
+        }
+        if request.snapshot.byteCount > request.limits.maxSourceBytes {
+            throw SummaryGenerationError.tooLarge(
+                sourceByteCount: request.snapshot.byteCount,
+                maxSourceBytes: request.limits.maxSourceBytes
+            )
+        }
+
+        switch await generator.availability() {
+        case .available:
+            break
+        case .unavailable(let reason):
+            await progress?(.unavailable(reason))
+            throw SummaryGenerationError.unavailable(reason)
+        }
+
+        let compressed = DocumentSummaryCompressor().compress(request.snapshot.contents)
+        let prompt = DocumentSummaryPromptBuilder.fastPrompt(
+            compressedSource: compressed.text,
+            language: language
+        )
+        _ = try await generator.tokenCount(prompt)
+        try await ensureFresh(request.key, isFresh: isFresh)
+
+        let response = try await generator.stream(
+            prompt: prompt,
+            maxTokens: request.limits.fastOutputTokens
+        ) { snapshot in
+            guard await isSnapshotFresh(request.key, isFresh: isFresh) else {
+                return
+            }
+            let rendered = DocumentSummaryStreamSnapshotNormalizer.renderedText(
+                current: "",
+                snapshot: snapshot
+            )
+            await progress?(.fastStreaming)
+            await onSnapshot?(rendered)
+        }
+
+        try await ensureFresh(request.key, isFresh: isFresh)
+        let summary = try DocumentSummaryParser.parseFast(
+            response,
+            metadata: SummaryMetadata(
+                sourceByteCount: request.snapshot.byteCount,
+                chunkCount: 1,
+                elapsedMilliseconds: timer.elapsedMilliseconds(),
+                language: language,
+                stage: .fast
+            )
+        )
+        try await ensureFresh(request.key, isFresh: isFresh)
+        await cache.insert(cacheEntry(for: summary), for: request.fastCacheKey)
+        await progress?(.fastComplete)
+        return summary
+    }
+
     private func reducePartials(
         _ partials: [String],
         language: SummaryLanguage,
@@ -172,6 +287,31 @@ public struct DocumentSummaryPipeline: Sendable {
         }
         if await !isFresh(key) {
             throw SummaryGenerationError.staleRequest
+        }
+    }
+
+    private func isSnapshotFresh(
+        _ key: DocumentSummaryRequestKey,
+        isFresh: FreshnessCheck?
+    ) async -> Bool {
+        if Task.isCancelled {
+            return false
+        }
+        guard let isFresh else {
+            return true
+        }
+        return await isFresh(key)
+    }
+
+    private func shouldFallbackFromFastFailure(_ error: any Error) -> Bool {
+        guard let summaryError = error as? SummaryGenerationError else {
+            return true
+        }
+        switch summaryError {
+        case .cancelled, .editorNotReady, .staleRequest, .tooLarge, .unavailable:
+            return false
+        case .contextWindowExceeded, .rateLimited, .unsupportedLanguageOrLocale, .malformedResponse, .unknown:
+            return true
         }
     }
 

@@ -300,8 +300,123 @@ func summaryStreamSnapshotsReplaceRenderedText() async throws {
     #expect(await recorder.text == "AB")
 }
 
+@Test
+func summaryFastPipelineStreamsCompressedSourceOnce() async throws {
+    let generator = FakeSummaryGenerator()
+    let pipeline = DocumentSummaryPipeline(generator: generator, cache: DocumentSummaryCache())
+    let request = summaryRequestFixture(contents: longSummarySource())
+
+    let summary = try await pipeline.summarizeFast(request: request)
+
+    #expect(summary.metadata.stage == .fast)
+    #expect(await generator.streamCount == 1)
+    #expect(await generator.generateCount == 0)
+    #expect(await generator.lastStreamPrompt?.contains("Compressed source:") == true)
+}
+
+@Test
+func summaryFastPipelineUsesFastCache() async throws {
+    let generator = FakeSummaryGenerator()
+    let cache = DocumentSummaryCache()
+    let pipeline = DocumentSummaryPipeline(generator: generator, cache: cache)
+    let request = summaryRequestFixture(contents: longSummarySource())
+
+    let first = try await pipeline.summarizeFast(request: request)
+    let second = try await pipeline.summarizeFast(request: request)
+
+    #expect(first == second)
+    #expect(await generator.streamCount == 1)
+    #expect(await cache.value(for: request.fastCacheKey) != nil)
+}
+
+@Test
+func summaryFastPipelineEmitsStreamingProgress() async throws {
+    let generator = FakeSummaryGenerator()
+    let pipeline = DocumentSummaryPipeline(generator: generator, cache: DocumentSummaryCache())
+    let recorder = SummaryProgressRecorder()
+
+    _ = try await pipeline.summarizeFast(
+        request: summaryRequestFixture(contents: longSummarySource()),
+        progress: { state in
+            await recorder.append(state)
+        }
+    )
+
+    let states = await recorder.states
+    #expect(states.contains(.analyzing))
+    #expect(states.contains(.fastStreaming))
+    #expect(states.contains(.fastComplete))
+}
+
+@Test
+func summaryFastPipelineRejectsStaleStreamBeforeCacheWrite() async {
+    let generator = FakeSummaryGenerator(streamSnapshots: [
+        "핵심 요약: partial",
+        "핵심 요약: final"
+    ])
+    let cache = DocumentSummaryCache()
+    let pipeline = DocumentSummaryPipeline(generator: generator, cache: cache)
+    let request = summaryRequestFixture(contents: longSummarySource())
+    let freshness = FreshnessCounter(allowBeforeFailure: 3)
+
+    await #expect(throws: SummaryGenerationError.self) {
+        _ = try await pipeline.summarizeFast(request: request, isFresh: { _ in
+            await freshness.isFresh()
+        })
+    }
+
+    #expect(await cache.value(for: request.fastCacheKey) == nil)
+}
+
+@Test
+func summaryFastPipelineFallsBackToRefinedGenerateOnMalformedStream() async throws {
+    let generator = FakeSummaryGenerator(streamSnapshots: ["unstructured noise"])
+    let pipeline = DocumentSummaryPipeline(generator: generator, cache: DocumentSummaryCache())
+
+    let summary = try await pipeline.summarizeFast(request: summaryRequestFixture(contents: "# Title\nBody"))
+
+    #expect(summary.metadata.stage == .refined)
+    #expect(await generator.streamCount == 1)
+    #expect(await generator.generateCount == 1)
+}
+
+@Test
+func summaryFastPipelineUsesFastOutputTokenBudget() async throws {
+    let generator = FakeSummaryGenerator()
+    let pipeline = DocumentSummaryPipeline(generator: generator, cache: DocumentSummaryCache())
+    let request = DocumentSummaryRequest(
+        snapshot: summaryRequestFixture(contents: longSummarySource()).snapshot,
+        limits: DocumentSummaryLimits(fastOutputTokens: 123)
+    )
+
+    _ = try await pipeline.summarizeFast(request: request)
+
+    #expect(await generator.lastStreamMaxTokens == 123)
+}
+
 private actor FakeSummaryGenerator: DocumentSummaryGenerating {
+    private static let defaultResponse = """
+    핵심 요약: 테스트 요약입니다.
+    주요 포인트:
+    - 첫 번째
+    액션/결정 사항:
+    - 없음
+    """
+
     private(set) var generateCount = 0
+    private(set) var streamCount = 0
+    private(set) var lastStreamPrompt: String?
+    private(set) var lastStreamMaxTokens: Int?
+    private let response: String
+    private let streamSnapshots: [String]
+
+    init(
+        response: String = FakeSummaryGenerator.defaultResponse,
+        streamSnapshots: [String]? = nil
+    ) {
+        self.response = response
+        self.streamSnapshots = streamSnapshots ?? [response]
+    }
 
     func availability() async -> SummaryModelAvailability {
         .available
@@ -317,13 +432,7 @@ private actor FakeSummaryGenerator: DocumentSummaryGenerating {
 
     func generate(prompt: String, maxTokens: Int) async throws -> String {
         generateCount += 1
-        return """
-        핵심 요약: 테스트 요약입니다.
-        주요 포인트:
-        - 첫 번째
-        액션/결정 사항:
-        - 없음
-        """
+        return response
     }
 
     func stream(
@@ -331,9 +440,15 @@ private actor FakeSummaryGenerator: DocumentSummaryGenerating {
         maxTokens: Int,
         onSnapshot: @Sendable (String) async -> Void
     ) async throws -> String {
-        let response = try await generate(prompt: prompt, maxTokens: maxTokens)
-        await onSnapshot(response)
-        return response
+        streamCount += 1
+        lastStreamPrompt = prompt
+        lastStreamMaxTokens = maxTokens
+        var latest = ""
+        for snapshot in streamSnapshots {
+            latest = snapshot
+            await onSnapshot(snapshot)
+        }
+        return latest
     }
 }
 
@@ -385,6 +500,14 @@ private actor StreamSnapshotRecorder {
     }
 }
 
+private actor SummaryProgressRecorder {
+    private(set) var states: [SummaryProgressState] = []
+
+    func append(_ state: SummaryProgressState) {
+        states.append(state)
+    }
+}
+
 private actor FreshnessCounter {
     private var checks = 0
     private let allowBeforeFailure: Int
@@ -408,6 +531,18 @@ private func summaryRequestFixture(contents: String = "# Title\nBody") -> Docume
         revision: 1,
         contents: contents
     ))
+}
+
+private func longSummarySource() -> String {
+    (0..<80)
+        .map { index in
+            """
+            ## Section \(index)
+            This section explains implementation detail \(index).
+            - Decision \(index)
+            """
+        }
+        .joined(separator: "\n\n")
 }
 
 private func summaryFixture(
