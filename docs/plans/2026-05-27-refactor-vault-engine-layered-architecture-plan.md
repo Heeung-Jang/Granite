@@ -1549,9 +1549,10 @@ Default stop conditions:
   - Verify: health check unit test and Swift engine smoke pass.
   - Evidence: `health_check()` now reports capability groups (`ffi`, `diagnostics`, `read`, `save`, `indexing`, `graph`, `watcher`) instead of transitional file/module names. `cargo test --manifest-path vault-engine/Cargo.toml health_check_reports_expected_modules`, full `vault-engine` tests, and `swift test --package-path mac-app --filter engineHealthDetectsAbiMismatch` passed.
 
-- [ ] **RA07.03 Remove transitional re-exports**
+- [x] **RA07.03 Remove transitional re-exports**
   - Build: delete compatibility modules added only for incremental migration.
   - Verify: `rg "read_ffi|crate::index::MetadataStore|crate::tantivy_search|crate::indexing_queue|crate::paths|crate::scanner|crate::parser|crate::attachments|crate::graph|crate::graph_key|crate::save|crate::read_api|crate::index_rebuild|crate::indexing_pipeline|crate::startup_reconciliation|crate::watcher_burst" vault-engine/src` returns only intentional references or none.
+  - Evidence: the grep returned only `read_ffi_*` test-name false positives in `ffi/mod.rs`; no compatibility import or re-export path remains from that list. `parser`, `paths`, and `scanner` were removed, while the deliberate temporary `indexing_pipeline` public facade is a thin owner re-export documented in `docs/architecture/rust-engine.md`.
 
 - [ ] **RA07.03a Remove one compatibility module per commit**
   - Build: delete compatibility modules one at a time after the matching grep is clean.
