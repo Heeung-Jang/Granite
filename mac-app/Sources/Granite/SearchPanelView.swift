@@ -3,6 +3,7 @@ import SwiftUI
 
 struct SearchPanelView: View {
     @EnvironmentObject private var appState: AppState
+    @Environment(\.appContentZoomScale) private var appContentZoomScale
     @State private var query = ""
     @State private var mode: SearchMode = .fileName
     @State private var status: SearchPanelStatus = .idle
@@ -19,8 +20,8 @@ struct SearchPanelView: View {
     var body: some View {
         VStack(spacing: 0) {
             controls
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
+                .padding(.horizontal, ObsidianUI.scaled(12, scale: appContentZoomScale))
+                .padding(.vertical, ObsidianUI.scaled(8, scale: appContentZoomScale))
 
             Divider()
 
@@ -43,10 +44,10 @@ struct SearchPanelView: View {
     }
 
     private var controls: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: ObsidianUI.scaled(8, scale: appContentZoomScale)) {
             HStack {
                 Text("Search")
-                    .font(.headline)
+                    .font(.system(size: ObsidianUI.fontSize(13, scale: appContentZoomScale), weight: .semibold))
 
                 Spacer()
 
@@ -57,11 +58,12 @@ struct SearchPanelView: View {
                 }
                 .labelsHidden()
                 .pickerStyle(.segmented)
-                .frame(width: 120)
+                .frame(width: ObsidianUI.scaled(120, scale: appContentZoomScale))
                 .accessibilityLabel("Search mode")
             }
 
             TextField("Search vault", text: $query)
+                .font(.system(size: ObsidianUI.fontSize(13, scale: appContentZoomScale)))
                 .textFieldStyle(.roundedBorder)
                 .focused($isSearchFocused)
                 .accessibilityLabel("Search vault")
@@ -315,18 +317,19 @@ private enum SearchPanelStatus: Equatable {
 }
 
 private struct SearchStateBanner: View {
+    @Environment(\.appContentZoomScale) private var appContentZoomScale
     let state: SearchResultState
 
     var body: some View {
-        HStack {
+        HStack(spacing: ObsidianUI.scaled(6, scale: appContentZoomScale)) {
             Image(systemName: systemImage)
             Text(title)
             Spacer()
         }
-        .font(.caption)
+        .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale)))
         .foregroundStyle(.secondary)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
+        .padding(.horizontal, ObsidianUI.scaled(12, scale: appContentZoomScale))
+        .padding(.vertical, ObsidianUI.scaled(6, scale: appContentZoomScale))
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Search results state: \(title)")
     }
@@ -363,20 +366,23 @@ private struct SearchStateBanner: View {
 }
 
 private struct SearchResultRow: View {
+    @Environment(\.appContentZoomScale) private var appContentZoomScale
     let hit: SearchHitItem
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
+        HStack(alignment: .top, spacing: ObsidianUI.scaled(10, scale: appContentZoomScale)) {
             Image(systemName: "magnifyingglass")
+                .font(.system(size: ObsidianUI.fontSize(14, scale: appContentZoomScale)))
                 .foregroundStyle(.secondary)
-                .frame(width: 16)
+                .frame(width: ObsidianUI.scaled(16, scale: appContentZoomScale))
 
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: ObsidianUI.scaled(2, scale: appContentZoomScale)) {
                 Text(hit.title)
+                    .font(.system(size: ObsidianUI.fontSize(13, scale: appContentZoomScale)))
                     .lineLimit(1)
 
                 Text(hit.snippet)
-                    .font(.caption)
+                    .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale)))
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
             }
@@ -388,21 +394,23 @@ private struct SearchResultRow: View {
 }
 
 private struct EmptySearchState: View {
+    @Environment(\.appContentZoomScale) private var appContentZoomScale
     let title: String
     let systemImage: String
 
     var body: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: ObsidianUI.scaled(8, scale: appContentZoomScale)) {
             Image(systemName: systemImage)
+                .font(.system(size: ObsidianUI.fontSize(16, scale: appContentZoomScale)))
                 .foregroundStyle(.secondary)
             Text(title)
-                .font(.caption)
+                .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale)))
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(16)
+        .padding(ObsidianUI.scaled(16, scale: appContentZoomScale))
         .accessibilityElement(children: .combine)
         .accessibilityLabel(title)
     }
