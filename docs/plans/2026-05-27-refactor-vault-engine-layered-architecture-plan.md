@@ -375,27 +375,27 @@ Stop at the end of any phase if a gate fails. Do not proceed by compensating in 
 
 ### Phase 0: Baseline And Architecture Guardrails
 
-- [ ] **RA00.01 Add Rust engine architecture doc**
+- [x] **RA00.01 Add Rust engine architecture doc**
   - Build: create `docs/architecture/rust-engine.md` with layer definitions, dependency rules, visibility rules, and hot-path performance rules.
   - Verify: doc links to `docs/architecture/engine-boundary.md`, `save-safety.md`, and `graph-view.md`.
 
-- [ ] **RA00.02 Capture current module inventory**
+- [x] **RA00.02 Capture current module inventory**
   - Build: add a short table in `docs/architecture/rust-engine.md` mapping current modules to target layers.
   - Verify: table includes `attachments`, `benchmarks`, `errors`, `ffi`, `file_watcher`, `graph`, `graph_key`, `index`, `index_rebuild`, `indexing_pipeline`, `indexing_queue`, `parser`, `paths`, `read_api`, `read_ffi`, `save`, `scanner`, `sqlite_fts`, `startup_reconciliation`, `tantivy_search`, `watcher_burst`, and `bench/vault-profiler` imports.
 
-- [ ] **RA00.03 Run baseline Rust tests**
+- [x] **RA00.03 Run baseline Rust tests**
   - Build: no code changes.
   - Verify: `cargo test --manifest-path vault-engine/Cargo.toml`.
 
-- [ ] **RA00.04 Run baseline Swift engine smoke**
+- [x] **RA00.04 Run baseline Swift engine smoke**
   - Build: no code changes.
   - Verify: `swift run --package-path mac-app Granite --engine-smoke-test`.
 
-- [ ] **RA00.05 Record baseline ABI symbol list**
+- [x] **RA00.05 Record baseline ABI symbol list**
   - Build: capture current exported `engine_*` symbols from release dylib after a local Rust build.
   - Verify: symbol list includes health, string free, read open/close/free, read surfaces, save, graph, and rebuild functions.
 
-- [ ] **RA00.06 Add ABI symbol capture command to docs**
+- [x] **RA00.06 Add ABI symbol capture command to docs**
   - Build: document the exact command in `docs/architecture/rust-engine.md`.
   - Verify:
     ```sh
@@ -403,23 +403,23 @@ Stop at the end of any phase if a gate fails. Do not proceed by compensating in 
     nm -gU vault-engine/target/release/libvault_engine.dylib | awk '{print $3}' | grep '^_engine_' | sort
     ```
 
-- [ ] **RA00.07 Add boundary scan commands to docs**
+- [x] **RA00.07 Add boundary scan commands to docs**
   - Build: add import scan commands for `core`, `adapters`, `use_cases`, and `ffi` to `docs/architecture/rust-engine.md`.
   - Verify: commands are copy-paste runnable from repo root.
 
-- [ ] **RA00.08 Define rollback checkpoints**
+- [x] **RA00.08 Define rollback checkpoints**
   - Build: add a rollback note to `docs/architecture/rust-engine.md`: phase branches should be mergeable independently, and later phases must not be used to fix broken earlier moves.
   - Verify: every phase below has a test gate.
 
-- [ ] **RA00.09 Capture performance baseline**
+- [x] **RA00.09 Capture performance baseline**
   - Build: record fixture read API baseline and current indexed real-vault read UI baseline before code moves.
   - Verify: use budgets from `docs/benchmarks/read-api-ui-integration.md`; store only aggregate/redacted output.
 
-- [ ] **RA00.10 Capture indexing benchmark baseline**
+- [x] **RA00.10 Capture indexing benchmark baseline**
   - Build: record backend benchmark stage timings, peak RSS, query p95/p99, writer memory budget, and time-to-usable samples before adapter/use-case moves.
   - Verify: compare against `docs/benchmarks/vault-indexing-performance.md`; treat current peak RSS as a no-worse gate, not as passing the target.
 
-- [ ] **RA00.11 Capture ABI layout manifest**
+- [x] **RA00.11 Capture ABI layout manifest**
   - Build: record current `engine_*` symbols plus Rust-side `size_of`, `align_of`, field offsets, row-kind constants, state codes, and error-code strings for every Swift-decoded FFI struct.
   - Verify: manifest is generated from tests or a fixture command, not manually typed.
 

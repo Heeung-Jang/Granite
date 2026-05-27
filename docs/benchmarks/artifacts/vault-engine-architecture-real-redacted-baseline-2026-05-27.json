@@ -1,0 +1,96 @@
+{
+  "schema_version": 7,
+  "generated_at_unix_seconds": 1779861458,
+  "corpus_id": "real-vault-redacted-vault-engine-architecture-baseline",
+  "run_metadata": {
+    "build_mode": "release",
+    "run_condition": "streaming_vault",
+    "sample_count": 2,
+    "git_commit_hash": null,
+    "redaction_enabled": true
+  },
+  "pipeline_config": {
+    "read_parse_workers": 4,
+    "channel_capacity": 32,
+    "writer_memory_budget_bytes": 50000000,
+    "writer_thread_count": null,
+    "metadata_batch_size": 256,
+    "snippet_storage_mode": "stored_body"
+  },
+  "corpus_stages": {
+    "scan_micros": 4235329,
+    "source_collection_micros": 66985
+  },
+  "document_count": 64306,
+  "query_count": 2,
+  "total_document_bytes": 3182796819,
+  "time_to_usable_micros": 120902757,
+  "time_to_usable_samples": [
+    120902757,
+    159895639,
+    171501645
+  ],
+  "metadata_store": {
+    "sqlite_metadata_write_micros": 48776702,
+    "table_counts": {
+      "files": 64306,
+      "links": 1987481,
+      "tags": 280090,
+      "properties": 513468,
+      "headings": 5152200,
+      "attachments": 1409428
+    }
+  },
+  "backends": [
+    {
+      "backend": "tantivy",
+      "initial_index_micros": 67823741,
+      "docs_per_second": 948.1340637105626,
+      "mb_per_second": 44.75352578178307,
+      "fts_ingest_per_second": 948.1340637105626,
+      "query_p95_micros": 7849,
+      "query_p99_micros": 7849,
+      "query_result_count": 20,
+      "skipped_query_count": 0,
+      "snippet_result_count": 20,
+      "incremental_update_micros": 288740,
+      "index_size_bytes": 2241643335,
+      "peak_rss_bytes": 2075361280,
+      "stages": {
+        "read_parse": {
+          "sample_count": 64306,
+          "total_bytes": 3163100470,
+          "peak_in_flight_items": 36,
+          "read": {
+            "sample_count": 64306,
+            "p50_micros": 264,
+            "p95_micros": 1419,
+            "p99_micros": 1779,
+            "max_micros": 6637
+          },
+          "parse": {
+            "sample_count": 64306,
+            "p50_micros": 112,
+            "p95_micros": 920,
+            "p99_micros": 1455,
+            "max_micros": 27567
+          },
+          "combined": {
+            "sample_count": 64306,
+            "p50_micros": 488,
+            "p95_micros": 1804,
+            "p99_micros": 2769,
+            "max_micros": 32731
+          }
+        },
+        "tantivy_add_micros": 42333215,
+        "tantivy_commit_micros": 21273019,
+        "tantivy_reader_reload_micros": 11496,
+        "added_document_count": 64306,
+        "deleted_document_count": 0,
+        "skipped_document_count": 0,
+        "failed_document_count": 0
+      }
+    }
+  ]
+}

@@ -1,0 +1,196 @@
+{
+  "schema_version": 1,
+  "tool": "vault-profiler read-api-benchmark",
+  "vault": {
+    "root_name": "compatibility-vault",
+    "root_hash": "e1e9df128c396c1d"
+  },
+  "metadata_path_hash": "d7e9f184556c9f54",
+  "tantivy_path_hash": "1b8c4baa388637f0",
+  "result_limit": 25,
+  "summaries": [
+    {
+      "surface": "backlinks",
+      "sample_count": 2,
+      "measured_sample_count": 2,
+      "error_sample_count": 0,
+      "state_counts": {
+        "complete": 2
+      },
+      "p50_ms": 0.087,
+      "p95_ms": 0.172,
+      "p99_ms": 0.172
+    },
+    {
+      "surface": "body_search",
+      "sample_count": 2,
+      "measured_sample_count": 2,
+      "error_sample_count": 0,
+      "state_counts": {
+        "complete": 2
+      },
+      "p50_ms": 0.059,
+      "p95_ms": 0.07,
+      "p99_ms": 0.07
+    },
+    {
+      "surface": "file_name_search",
+      "sample_count": 2,
+      "measured_sample_count": 2,
+      "error_sample_count": 0,
+      "state_counts": {
+        "complete": 2
+      },
+      "p50_ms": 0.076,
+      "p95_ms": 0.645,
+      "p99_ms": 0.645
+    },
+    {
+      "surface": "file_tree",
+      "sample_count": 1,
+      "measured_sample_count": 1,
+      "error_sample_count": 0,
+      "state_counts": {
+        "complete": 1
+      },
+      "p50_ms": 0.248,
+      "p95_ms": 0.248,
+      "p99_ms": 0.248
+    },
+    {
+      "surface": "local_graph",
+      "sample_count": 2,
+      "measured_sample_count": 2,
+      "error_sample_count": 0,
+      "state_counts": {
+        "complete": 2
+      },
+      "p50_ms": 0.161,
+      "p95_ms": 0.21,
+      "p99_ms": 0.21
+    },
+    {
+      "surface": "properties",
+      "sample_count": 2,
+      "measured_sample_count": 2,
+      "error_sample_count": 0,
+      "state_counts": {
+        "complete": 2
+      },
+      "p50_ms": 0.041,
+      "p95_ms": 0.131,
+      "p99_ms": 0.131
+    }
+  ],
+  "samples": [
+    {
+      "sample_id": "file_tree-00666ba67102",
+      "surface": "file_tree",
+      "input_hash": "00666ba671029aa1",
+      "duration_ms": 0.248,
+      "result_count": 6,
+      "state": "complete",
+      "notes": []
+    },
+    {
+      "sample_id": "file_name_search-7bf3b283b3f2",
+      "surface": "file_name_search",
+      "input_hash": "7bf3b283b3f22c4b",
+      "duration_ms": 0.645,
+      "result_count": 2,
+      "state": "complete",
+      "notes": []
+    },
+    {
+      "sample_id": "body_search-7bf3b283b3f2",
+      "surface": "body_search",
+      "input_hash": "7bf3b283b3f22c4b",
+      "duration_ms": 0.07,
+      "result_count": 2,
+      "state": "complete",
+      "notes": []
+    },
+    {
+      "sample_id": "file_name_search-6abb1cd87fe0",
+      "surface": "file_name_search",
+      "input_hash": "6abb1cd87fe0114e",
+      "duration_ms": 0.076,
+      "result_count": 5,
+      "state": "complete",
+      "notes": []
+    },
+    {
+      "sample_id": "body_search-6abb1cd87fe0",
+      "surface": "body_search",
+      "input_hash": "6abb1cd87fe0114e",
+      "duration_ms": 0.059,
+      "result_count": 5,
+      "state": "complete",
+      "notes": []
+    },
+    {
+      "sample_id": "backlinks-27597be0ca6b",
+      "surface": "backlinks",
+      "input_hash": "27597be0ca6b6850",
+      "duration_ms": 0.172,
+      "result_count": 2,
+      "state": "complete",
+      "notes": []
+    },
+    {
+      "sample_id": "properties-27597be0ca6b",
+      "surface": "properties",
+      "input_hash": "27597be0ca6b6850",
+      "duration_ms": 0.131,
+      "result_count": 2,
+      "state": "complete",
+      "notes": []
+    },
+    {
+      "sample_id": "local_graph-27597be0ca6b",
+      "surface": "local_graph",
+      "input_hash": "27597be0ca6b6850",
+      "duration_ms": 0.161,
+      "result_count": 6,
+      "state": "complete",
+      "notes": []
+    },
+    {
+      "sample_id": "backlinks-7c47e0f2ea0a",
+      "surface": "backlinks",
+      "input_hash": "7c47e0f2ea0a8c29",
+      "duration_ms": 0.087,
+      "result_count": 5,
+      "state": "complete",
+      "notes": []
+    },
+    {
+      "sample_id": "properties-7c47e0f2ea0a",
+      "surface": "properties",
+      "input_hash": "7c47e0f2ea0a8c29",
+      "duration_ms": 0.041,
+      "result_count": 4,
+      "state": "complete",
+      "notes": []
+    },
+    {
+      "sample_id": "local_graph-7c47e0f2ea0a",
+      "surface": "local_graph",
+      "input_hash": "7c47e0f2ea0a8c29",
+      "duration_ms": 0.21,
+      "result_count": 21,
+      "state": "complete",
+      "notes": []
+    }
+  ],
+  "privacy": {
+    "raw_queries_committed": false,
+    "raw_note_bodies_committed": false,
+    "absolute_paths_committed": false,
+    "input_material": "Inputs are represented by hashes only; raw query text and relative paths are not written."
+  },
+  "notes": [
+    "Search queries may be read from private query files or sampled from indexed file names, but only hashes are persisted.",
+    "Read API timings use the existing SQLite metadata and Tantivy search artifacts without scanning note bodies."
+  ]
+}

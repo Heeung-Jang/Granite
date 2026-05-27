@@ -1,0 +1,51 @@
+{
+  "fileTree" : {
+    "iterationCount" : 5,
+    "p50Milliseconds" : 0.002,
+    "p95Milliseconds" : 0.186,
+    "p99Milliseconds" : 0.186,
+    "resultCounts" : [
+      2,
+      2,
+      2,
+      2,
+      2
+    ]
+  },
+  "hardCeilingPassed" : true,
+  "inspectorBacklinks" : {
+    "iterationCount" : 2,
+    "p50Milliseconds" : 0.354,
+    "p95Milliseconds" : 0.354,
+    "p99Milliseconds" : 0.354,
+    "resultCounts" : [
+      1,
+      1
+    ]
+  },
+  "mainThread" : {
+    "maxStallMilliseconds" : 0.041,
+    "sampleCount" : 24,
+    "stallCountOver50Milliseconds" : 0
+  },
+  "mode" : "fixture",
+  "notes" : [
+    "Placeholder timing measures the synchronous state transition before read calls.",
+    "Main-thread stall is sampled through DispatchQueue.main latency around async read operations."
+  ],
+  "placeholderLatencyMilliseconds" : 0.005,
+  "schemaVersion" : 1,
+  "search" : {
+    "iterationCount" : 5,
+    "p50Milliseconds" : 0.002,
+    "p95Milliseconds" : 0.031,
+    "p99Milliseconds" : 0.031,
+    "resultCounts" : [
+      1,
+      1,
+      1,
+      1,
+      1
+    ]
+  }
+}
