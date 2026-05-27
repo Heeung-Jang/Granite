@@ -1,9 +1,10 @@
 use std::path::Path;
 
 use crate::adapters::sqlite::{FileRecord, FileTreeProjection, IndexSchemaMetadata, MetadataStore};
-use crate::adapters::tantivy::TantivySearchIndex;
+use crate::adapters::tantivy::{TantivySearchError, TantivySearchIndex};
 use crate::read_api::{
-    FileOpenMetadata, READ_BACKEND_NAME, READ_BACKEND_VERSION, READ_TOKENIZER_CONFIG, ReadApiResult,
+    FileOpenMetadata, READ_BACKEND_NAME, READ_BACKEND_VERSION, READ_TOKENIZER_CONFIG,
+    ReadApiResult, SearchHit,
 };
 
 use super::read_types::{
@@ -80,6 +81,30 @@ impl VaultReadApi {
                 .map(|file| FileOpenMetadata { file }),
             state: ReadState::Complete,
         })
+    }
+
+    pub fn file_name_search(
+        &self,
+        query: &str,
+        page: PageRequest,
+    ) -> ReadApiResult<ReadPage<SearchHit>> {
+        let results = match self
+            .search
+            .search_page(query, page.offset, page.fetch_limit())
+        {
+            Ok(results) => results,
+            Err(TantivySearchError::EmptyQuery) => {
+                return Ok(ReadPage {
+                    request_id: page.request_id,
+                    generation: self.generation,
+                    items: Vec::new(),
+                    next_offset: None,
+                    state: ReadState::Error,
+                });
+            }
+            Err(error) => return Err(error.into()),
+        };
+        Ok(self.page_from_overfetch(results.into_iter().map(SearchHit::from).collect(), page))
     }
 
     pub(crate) fn page_from_overfetch<T>(&self, items: Vec<T>, page: PageRequest) -> ReadPage<T> {

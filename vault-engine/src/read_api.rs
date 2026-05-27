@@ -190,14 +190,6 @@ impl LocalGraphRequest {
 }
 
 impl VaultReadApi {
-    pub fn file_name_search(
-        &self,
-        query: &str,
-        page: PageRequest,
-    ) -> ReadApiResult<ReadPage<SearchHit>> {
-        self.search(query, page)
-    }
-
     pub fn body_search(
         &self,
         query: &str,

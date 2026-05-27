@@ -783,7 +783,7 @@ Default stop conditions:
   - Build: move only the method that returns metadata for opening a selected file.
   - Verify: read API metadata-open tests pass.
 
-- [ ] **RA05.02f Move file-name search method**
+- [x] **RA05.02f Move file-name search method**
   - Build: move filename search without moving Tantivy body search or search-mode dispatch.
   - Verify: search state tests pass for filename search.
 
