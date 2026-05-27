@@ -1,3 +1,4 @@
+import NativeMarkdownCore
 import SwiftUI
 
 enum ObsidianUI {
@@ -14,6 +15,55 @@ enum ObsidianUI {
     static let editorBackground = Color(nsColor: .textBackgroundColor)
     static let selectedFill = Color(nsColor: .selectedContentBackgroundColor).opacity(0.13)
     static let hoverFill = Color.primary.opacity(0.06)
+
+    static func normalizedScale(_ scale: Double) -> CGFloat {
+        CGFloat(AppContentZoom(rawScale: scale).scale)
+    }
+
+    static func scaled(_ value: CGFloat, scale: Double) -> CGFloat {
+        value * normalizedScale(scale)
+    }
+
+    static func ribbonWidth(scale: Double) -> CGFloat {
+        scaled(ribbonWidth, scale: scale)
+    }
+
+    static func tabBarHeight(scale: Double) -> CGFloat {
+        scaled(tabBarHeight, scale: scale)
+    }
+
+    static func noteToolbarHeight(scale: Double) -> CGFloat {
+        scaled(noteToolbarHeight, scale: scale)
+    }
+
+    static func statusBarHeight(scale: Double) -> CGFloat {
+        scaled(statusBarHeight, scale: scale)
+    }
+
+    static func iconButtonSize(scale: Double) -> CGFloat {
+        scaled(30, scale: scale)
+    }
+
+    static func iconFontSize(scale: Double) -> CGFloat {
+        scaled(16, scale: scale)
+    }
+
+    static func iconCornerRadius(scale: Double) -> CGFloat {
+        scaled(6, scale: scale)
+    }
+
+    static func displayedPaneWidth(logicalWidth: Double, scale: Double) -> CGFloat {
+        CGFloat(logicalWidth) * normalizedScale(scale)
+    }
+
+    static func logicalPaneWidth(displayedWidth: CGFloat, scale: Double) -> Double {
+        Double(displayedWidth / normalizedScale(scale))
+    }
+
+    static func logicalWorkspaceAvailableWidth(displayedWidth: CGFloat, scale: Double) -> Double {
+        let displayedWorkspaceWidth = max(0, displayedWidth - ribbonWidth(scale: scale))
+        return logicalPaneWidth(displayedWidth: displayedWorkspaceWidth, scale: scale)
+    }
 }
 struct ObsidianIconButton: View {
     let systemName: String

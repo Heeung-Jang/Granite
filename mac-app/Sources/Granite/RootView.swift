@@ -6,6 +6,7 @@ import UniformTypeIdentifiers
 struct RootView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.openSettings) private var openSettings
+    @AppStorage(AppContentZoom.storageKey) private var rawAppContentZoomScale = AppContentZoom.defaultScale
     @State private var leftPanel: ObsidianLeftPanel = .files
     @State private var selectedInspectorPanel: NoteInspectorPanel = .backlinks
     @State private var vaultSelectionError: String?
@@ -13,6 +14,7 @@ struct RootView: View {
 
     var body: some View {
         GeometryReader { geometry in
+            let appZoomScale = appContentZoomScale
             HStack(spacing: 0) {
                 ObsidianRibbonView(
                     selectedPanel: $leftPanel,
@@ -35,15 +37,19 @@ struct RootView: View {
                         collapseSidebar: appState.toggleLeftSidebarCollapsed,
                         vaultSelectionError: vaultSelectionError
                     )
-                    .frame(width: CGFloat(appState.workspacePaneLayout.leftSidebarWidth))
+                    .frame(width: ObsidianUI.displayedPaneWidth(
+                        logicalWidth: appState.workspacePaneLayout.leftSidebarWidth,
+                        scale: appZoomScale
+                    ))
 
                     ObsidianPaneSplitHandle(
                         side: .left,
-                        currentWidth: appState.workspacePaneLayout.leftSidebarWidth
+                        currentWidth: appState.workspacePaneLayout.leftSidebarWidth,
+                        appContentZoomScale: appZoomScale
                     ) { proposedWidth in
                         appState.setLeftSidebarWidth(
                             proposedWidth,
-                            availableWidth: workspaceAvailableWidth(in: geometry)
+                            availableWidth: workspaceAvailableWidth(in: geometry, scale: appZoomScale)
                         )
                     }
                 }
@@ -60,20 +66,25 @@ struct RootView: View {
                 if showsRightSidebar {
                     ObsidianPaneSplitHandle(
                         side: .right,
-                        currentWidth: appState.workspacePaneLayout.rightSidebarWidth
+                        currentWidth: appState.workspacePaneLayout.rightSidebarWidth,
+                        appContentZoomScale: appZoomScale
                     ) { proposedWidth in
                         appState.setRightSidebarWidth(
                             proposedWidth,
-                            availableWidth: workspaceAvailableWidth(in: geometry)
+                            availableWidth: workspaceAvailableWidth(in: geometry, scale: appZoomScale)
                         )
                     }
 
                     ObsidianRightSidebar(selectedPanel: $selectedInspectorPanel)
-                        .frame(width: CGFloat(appState.workspacePaneLayout.rightSidebarWidth))
+                        .frame(width: ObsidianUI.displayedPaneWidth(
+                            logicalWidth: appState.workspacePaneLayout.rightSidebarWidth,
+                            scale: appZoomScale
+                        ))
                 }
             }
             .background(ObsidianUI.editorBackground)
         }
+        .environment(\.appContentZoomScale, appContentZoomScale)
         .alert("Unsaved Changes", isPresented: dirtyNavigationAlertBinding) {
             Button("Stay", role: .cancel) {
                 appState.dismissDirtyNavigationWarning()
@@ -142,8 +153,12 @@ struct RootView: View {
         appState.workspaceSelection != .graph && !appState.workspacePaneLayout.isRightSidebarCollapsed
     }
 
-    private func workspaceAvailableWidth(in geometry: GeometryProxy) -> Double {
-        max(0, Double(geometry.size.width - ObsidianUI.ribbonWidth))
+    private var appContentZoomScale: Double {
+        AppContentZoom(rawScale: rawAppContentZoomScale).scale
+    }
+
+    private func workspaceAvailableWidth(in geometry: GeometryProxy, scale: Double) -> Double {
+        ObsidianUI.logicalWorkspaceAvailableWidth(displayedWidth: geometry.size.width, scale: scale)
     }
 
     private var dirtyNavigationAlertBinding: Binding<Bool> {
@@ -385,6 +400,7 @@ private enum RootSheet: Identifiable {
 }
 
 private struct ObsidianRibbonView: View {
+    @Environment(\.appContentZoomScale) private var appContentZoomScale
     @Binding var selectedPanel: ObsidianLeftPanel
     let graphIsActive: Bool
     let selectLeftPanel: (ObsidianLeftPanel) -> Void
@@ -448,7 +464,7 @@ private struct ObsidianRibbonView: View {
         }
         .padding(.top, 10)
         .padding(.bottom, 12)
-        .frame(width: ObsidianUI.ribbonWidth)
+        .frame(width: ObsidianUI.ribbonWidth(scale: appContentZoomScale))
         .background(ObsidianUI.ribbonBackground)
     }
 }
