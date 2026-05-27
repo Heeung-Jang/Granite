@@ -3,6 +3,7 @@ import NativeMarkdownCore
 import SwiftUI
 
 struct GraphWorkspaceView: View {
+    @Environment(\.appContentZoomScale) private var appContentZoomScale
     @EnvironmentObject private var appState: AppState
 
     let vaultSelection: VaultSelectionState
@@ -37,9 +38,9 @@ struct GraphWorkspaceView: View {
                     settings: $settings,
                     parityControlsEnabled: enablesParityControls
                 )
-                .frame(width: 280)
-                .padding(.top, 52)
-                .padding(.trailing, 52)
+                .frame(width: ObsidianUI.scaled(280, scale: appContentZoomScale))
+                .padding(.top, ObsidianUI.scaled(52, scale: appContentZoomScale))
+                .padding(.trailing, ObsidianUI.scaled(52, scale: appContentZoomScale))
             }
         }
         .background(ObsidianUI.editorBackground)
@@ -152,7 +153,13 @@ struct GraphWorkspaceView: View {
                                         searchQuery: $settings.searchQuery,
                                         close: closeGraphSearch
                                     )
-                                    .position(x: min(154, max(130, proxy.size.width / 2)), y: 24)
+                                    .position(
+                                        x: min(
+                                            ObsidianUI.scaled(154, scale: appContentZoomScale),
+                                            max(ObsidianUI.scaled(130, scale: appContentZoomScale), proxy.size.width / 2)
+                                        ),
+                                        y: ObsidianUI.scaled(24, scale: appContentZoomScale)
+                                    )
                                 }
 
                                 GraphFloatingControlStack(
@@ -172,8 +179,11 @@ struct GraphWorkspaceView: View {
                                     toggleSettings: { showsSettings.toggle() }
                                 )
                                 .position(
-                                    x: max(15, proxy.size.width - 29),
-                                    y: GraphFloatingControlStack.centerY
+                                    x: max(
+                                        ObsidianUI.scaled(15, scale: appContentZoomScale),
+                                        proxy.size.width - ObsidianUI.scaled(29, scale: appContentZoomScale)
+                                    ),
+                                    y: GraphFloatingControlStack.centerY(scale: appContentZoomScale)
                                 )
                             }
                         }
@@ -221,15 +231,15 @@ struct GraphWorkspaceView: View {
     }
 
     private func graphStatusPlaceholder(title: String, detail: String) -> some View {
-        VStack(spacing: 12) {
+        VStack(spacing: ObsidianUI.scaled(12, scale: appContentZoomScale)) {
             Image(systemName: "point.3.connected.trianglepath.dotted")
-                .font(.system(size: 32))
+                .font(.system(size: ObsidianUI.fontSize(32, scale: appContentZoomScale)))
                 .foregroundStyle(.secondary)
             Text(title)
-                .font(.title3)
+                .font(.system(size: ObsidianUI.fontSize(20, scale: appContentZoomScale), weight: .semibold))
                 .foregroundStyle(.primary)
             Text(detail)
-                .font(.caption)
+                .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale)))
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -848,35 +858,38 @@ private struct PendingGraphFirstRender {
 }
 
 private struct GraphCanvasHeader: View {
+    @Environment(\.appContentZoomScale) private var appContentZoomScale
     let title: String
 
     var body: some View {
         Text(title)
-            .font(.caption.weight(.semibold))
+            .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale), weight: .semibold))
             .foregroundStyle(.primary)
             .lineLimit(1)
             .frame(maxWidth: .infinity, alignment: .center)
-            .frame(height: 32)
+            .frame(height: ObsidianUI.scaled(32, scale: appContentZoomScale))
             .frame(maxWidth: .infinity)
-            .padding(.top, 8)
+            .padding(.top, ObsidianUI.scaled(8, scale: appContentZoomScale))
             .allowsHitTesting(false)
             .accessibilityHidden(true)
     }
 }
 
 private struct GraphSearchOverlay: View {
+    @Environment(\.appContentZoomScale) private var appContentZoomScale
     @Binding var searchQuery: String
     let close: () -> Void
 
     @FocusState private var searchFieldFocused: Bool
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: ObsidianUI.scaled(8, scale: appContentZoomScale)) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 13))
+                .font(.system(size: ObsidianUI.fontSize(13, scale: appContentZoomScale)))
                 .foregroundStyle(.secondary)
 
             TextField("Search", text: $searchQuery)
+                .font(.system(size: ObsidianUI.fontSize(13, scale: appContentZoomScale)))
                 .textFieldStyle(.plain)
                 .focused($searchFieldFocused)
                 .accessibilityLabel("Graph search")
@@ -886,7 +899,7 @@ private struct GraphSearchOverlay: View {
                     searchQuery = ""
                 } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 12))
+                        .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale)))
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
@@ -897,7 +910,7 @@ private struct GraphSearchOverlay: View {
 
             Button(action: close) {
                 Image(systemName: "xmark")
-                    .font(.system(size: 12))
+                    .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale)))
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
@@ -905,14 +918,17 @@ private struct GraphSearchOverlay: View {
             .accessibilityLabel("Close graph search")
             .accessibilityHint("Closes the search field and returns focus to the graph")
         }
-        .padding(.horizontal, 8)
-        .frame(width: 280, height: 32)
+        .padding(.horizontal, ObsidianUI.scaled(8, scale: appContentZoomScale))
+        .frame(
+            width: ObsidianUI.scaled(280, scale: appContentZoomScale),
+            height: ObsidianUI.scaled(32, scale: appContentZoomScale)
+        )
         .background(ObsidianUI.sidebarBackground.opacity(0.94))
         .overlay(
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: ObsidianUI.scaled(6, scale: appContentZoomScale))
                 .stroke(ObsidianUI.border)
         )
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .clipShape(RoundedRectangle(cornerRadius: ObsidianUI.scaled(6, scale: appContentZoomScale)))
         .onAppear {
             searchFieldFocused = true
         }
@@ -923,6 +939,11 @@ private struct GraphSearchOverlay: View {
 private struct GraphFloatingControlStack: View {
     static let centerY: CGFloat = 139
 
+    static func centerY(scale: Double) -> CGFloat {
+        ObsidianUI.scaled(centerY, scale: scale)
+    }
+
+    @Environment(\.appContentZoomScale) private var appContentZoomScale
     let searchIsPresented: Bool
     let searchAccessibilityLabel: String
     let searchAccessibilityHint: String
@@ -935,7 +956,7 @@ private struct GraphFloatingControlStack: View {
     let toggleSettings: () -> Void
 
     var body: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: ObsidianUI.scaled(6, scale: appContentZoomScale)) {
             ObsidianIconButton(
                 systemName: "magnifyingglass",
                 accessibilityLabel: searchAccessibilityLabel,
@@ -979,6 +1000,7 @@ private struct GraphFloatingControlStack: View {
 }
 
 private struct GraphKeyboardResultsList: View {
+    @Environment(\.appContentZoomScale) private var appContentZoomScale
     let nodes: [GraphLayoutNode]
     let searchIsActive: Bool
     let selectedNodeID: String?
@@ -986,14 +1008,14 @@ private struct GraphKeyboardResultsList: View {
     let openNode: (String) -> Void
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: ObsidianUI.scaled(8, scale: appContentZoomScale)) {
             Text(searchIsActive ? "Graph results" : "Selected node")
-                .font(.caption.weight(.semibold))
+                .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale), weight: .semibold))
                 .foregroundStyle(.secondary)
 
             if nodes.isEmpty {
                 Text("No graph matches")
-                    .font(.caption)
+                    .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale)))
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(nodes, id: \.nodeID) { node in
@@ -1002,6 +1024,7 @@ private struct GraphKeyboardResultsList: View {
                         openNode(node.nodeID)
                     } label: {
                         Text(node.label)
+                            .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale)))
                             .lineLimit(1)
                     }
                     .buttonStyle(.borderless)
@@ -1012,8 +1035,8 @@ private struct GraphKeyboardResultsList: View {
 
             Spacer()
         }
-        .padding(.horizontal, 14)
-        .frame(height: 34)
+        .padding(.horizontal, ObsidianUI.scaled(14, scale: appContentZoomScale))
+        .frame(height: ObsidianUI.scaled(34, scale: appContentZoomScale))
         .background(ObsidianUI.sidebarBackground.opacity(0.65))
     }
 
@@ -1023,21 +1046,22 @@ private struct GraphKeyboardResultsList: View {
 }
 
 private struct GraphStateBanner: View {
+    @Environment(\.appContentZoomScale) private var appContentZoomScale
     let text: String
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: ObsidianUI.scaled(8, scale: appContentZoomScale)) {
             Image(systemName: "exclamationmark.triangle")
-                .font(.caption)
+                .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale)))
                 .foregroundStyle(.secondary)
             Text(text)
-                .font(.caption)
+                .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale)))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
             Spacer()
         }
-        .padding(.horizontal, 14)
-        .frame(height: 30)
+        .padding(.horizontal, ObsidianUI.scaled(14, scale: appContentZoomScale))
+        .frame(height: ObsidianUI.scaled(30, scale: appContentZoomScale))
         .background(ObsidianUI.sidebarBackground.opacity(0.65))
         .accessibilityElement(children: .combine)
         .accessibilityLabel(text)
@@ -1045,6 +1069,7 @@ private struct GraphStateBanner: View {
 }
 
 private struct GraphSettingsPanel: View {
+    @Environment(\.appContentZoomScale) private var appContentZoomScale
     @Binding var settings: GraphSettings
     let parityControlsEnabled: Bool
 
@@ -1063,14 +1088,16 @@ private struct GraphSettingsPanel: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: ObsidianUI.scaled(14, scale: appContentZoomScale)) {
             Text("Graph settings")
-                .font(.headline)
+                .font(.system(size: ObsidianUI.fontSize(13, scale: appContentZoomScale), weight: .semibold))
 
             Toggle("Unresolved links", isOn: includeUnresolved)
+                .font(.system(size: ObsidianUI.fontSize(13, scale: appContentZoomScale)))
                 .disabled(!parityControlsEnabled)
 
             Toggle("Orphans", isOn: $settings.semantic.includeOrphans)
+                .font(.system(size: ObsidianUI.fontSize(13, scale: appContentZoomScale)))
                 .disabled(!parityControlsEnabled)
 
             Picker("Labels", selection: $settings.presentation.labelVisibility) {
@@ -1079,19 +1106,21 @@ private struct GraphSettingsPanel: View {
                 Text("Hidden").tag(GraphLabelVisibility.hidden)
             }
             .pickerStyle(.menu)
+            .font(.system(size: ObsidianUI.fontSize(13, scale: appContentZoomScale)))
 
             Toggle("Arrows", isOn: $settings.presentation.showArrows)
+                .font(.system(size: ObsidianUI.fontSize(13, scale: appContentZoomScale)))
 
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: ObsidianUI.scaled(6, scale: appContentZoomScale)) {
                 Text("Node size")
-                    .font(.caption.weight(.semibold))
+                    .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale), weight: .semibold))
                     .foregroundStyle(.secondary)
                 Slider(value: $settings.presentation.nodeSize, in: 0.6...1.8, step: 0.1)
             }
 
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: ObsidianUI.scaled(6, scale: appContentZoomScale)) {
                 Text("Link thickness")
-                    .font(.caption.weight(.semibold))
+                    .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale), weight: .semibold))
                     .foregroundStyle(.secondary)
                 Slider(
                     value: $settings.presentation.linkThickness,
@@ -1103,10 +1132,11 @@ private struct GraphSettingsPanel: View {
             if parityControlsEnabled {
                 Divider()
 
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: ObsidianUI.scaled(8, scale: appContentZoomScale)) {
                     Toggle("Forces", isOn: $settings.presentation.force.isEnabled)
+                        .font(.system(size: ObsidianUI.fontSize(13, scale: appContentZoomScale)))
 
-                    VStack(alignment: .leading, spacing: 8) {
+                    VStack(alignment: .leading, spacing: ObsidianUI.scaled(8, scale: appContentZoomScale)) {
                         forceSlider(
                             title: "Center",
                             value: $settings.presentation.force.centerStrength,
@@ -1133,12 +1163,13 @@ private struct GraphSettingsPanel: View {
 
                 Divider()
 
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: ObsidianUI.scaled(8, scale: appContentZoomScale)) {
                     Text("Groups")
-                        .font(.caption.weight(.semibold))
+                        .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale), weight: .semibold))
                         .foregroundStyle(.secondary)
 
                     TextField("Match", text: $groupQuery)
+                        .font(.system(size: ObsidianUI.fontSize(13, scale: appContentZoomScale)))
                         .textFieldStyle(.roundedBorder)
 
                     Picker("Color", selection: $groupColorHex) {
@@ -1146,19 +1177,24 @@ private struct GraphSettingsPanel: View {
                             HStack {
                                 Circle()
                                     .fill(Color(graphHex: color.hex))
-                                    .frame(width: 10, height: 10)
+                                    .frame(
+                                        width: ObsidianUI.scaled(10, scale: appContentZoomScale),
+                                        height: ObsidianUI.scaled(10, scale: appContentZoomScale)
+                                    )
                                 Text(color.name)
+                                    .font(.system(size: ObsidianUI.fontSize(13, scale: appContentZoomScale)))
                             }
                             .tag(color.hex)
                         }
                     }
                     .pickerStyle(.menu)
 
-                    HStack(spacing: 8) {
+                    HStack(spacing: ObsidianUI.scaled(8, scale: appContentZoomScale)) {
                         Button {
                             addGroupRule()
                         } label: {
                             Image(systemName: "plus")
+                                .font(.system(size: ObsidianUI.fontSize(13, scale: appContentZoomScale)))
                         }
                         .disabled(groupQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         .help("Add group")
@@ -1168,18 +1204,22 @@ private struct GraphSettingsPanel: View {
                     }
 
                     ForEach(settings.groupRules) { rule in
-                        HStack(spacing: 8) {
+                        HStack(spacing: ObsidianUI.scaled(8, scale: appContentZoomScale)) {
                             Circle()
                                 .fill(Color(graphHex: rule.colorHex))
-                                .frame(width: 10, height: 10)
+                                .frame(
+                                    width: ObsidianUI.scaled(10, scale: appContentZoomScale),
+                                    height: ObsidianUI.scaled(10, scale: appContentZoomScale)
+                                )
                             Text(rule.query)
                                 .lineLimit(1)
-                                .font(.caption)
+                                .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale)))
                             Spacer()
                             Button {
                                 removeGroupRule(rule)
                             } label: {
                                 Image(systemName: "trash")
+                                    .font(.system(size: ObsidianUI.fontSize(13, scale: appContentZoomScale)))
                             }
                             .buttonStyle(.borderless)
                             .help("Remove group")
@@ -1191,7 +1231,7 @@ private struct GraphSettingsPanel: View {
 
             Spacer()
         }
-        .padding(14)
+        .padding(ObsidianUI.scaled(14, scale: appContentZoomScale))
         .frame(maxHeight: .infinity, alignment: .top)
         .background(ObsidianUI.sidebarBackground)
     }
@@ -1218,9 +1258,9 @@ private struct GraphSettingsPanel: View {
         value: Binding<Double>,
         range: ClosedRange<Double>
     ) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: ObsidianUI.scaled(6, scale: appContentZoomScale)) {
             Text(title)
-                .font(.caption.weight(.semibold))
+                .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale), weight: .semibold))
                 .foregroundStyle(.secondary)
             Slider(value: value, in: range, step: 0.05)
         }

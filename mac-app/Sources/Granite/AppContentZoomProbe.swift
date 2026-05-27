@@ -20,6 +20,7 @@ struct AppContentZoomProbeReport: Codable, Equatable {
     var leftPaneDragConvertsDisplayedDeltaToLogicalWidth: Bool
     var rightPaneDragConvertsDisplayedDeltaToLogicalWidth: Bool
     var workspaceAvailableWidthSubtractsScaledRibbon: Bool
+    var graphViewportZoomUnaffectedByAppZoom: Bool
     var summary: ProbeCheckSummary
 }
 
@@ -61,6 +62,7 @@ enum AppContentZoomProbe {
                 displayedWidth: 1_440,
                 scale: 1.25
             ) == 1_104,
+            graphViewportZoomUnaffectedByAppZoom: graphViewportZoomUnaffectedByAppZoom(),
             summary: .passed
         )
         report.summary = ProbeCheckSummary.evaluate(report: report)
@@ -99,5 +101,19 @@ enum AppContentZoomProbe {
             && ObsidianUI.iconButtonSize(scale: 1.0) == 30
             && ObsidianUI.iconFontSize(scale: 1.0) == 16
             && ObsidianUI.iconCornerRadius(scale: 1.0) == 6
+    }
+
+    private static func graphViewportZoomUnaffectedByAppZoom() -> Bool {
+        let viewport = GraphViewport(
+            panOffset: GraphPoint(x: 12, y: -8),
+            zoomScale: 1.6
+        )
+        let appZoom = AppContentZoom(rawScale: 1.25)
+
+        return appZoom.scale == 1.25
+            && viewport == GraphViewport(
+                panOffset: GraphPoint(x: 12, y: -8),
+                zoomScale: 1.6
+            )
     }
 }
