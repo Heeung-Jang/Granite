@@ -449,15 +449,15 @@ Stop at the end of any phase if a gate fails. Do not proceed by compensating in 
   - Build: preserve serialized field names `ok`, `value`, `error`, `code`, and `message`.
   - Verify: existing JSON assertions pass without snapshot updates except module path changes.
 
-- [ ] **RA01.05 Extract read open and rebuild response helpers**
+- [x] **RA01.05 Extract read open and rebuild response helpers**
   - Build: move `read_open_response`, `read_rebuild_response`, and rebuild-specific error conversion into `vault-engine/src/ffi/read.rs`.
   - Verify: read open and rebuild FFI tests still pass.
 
-- [ ] **RA01.05a Extract read page buffer helpers**
+- [x] **RA01.05a Extract read page buffer helpers**
   - Build: move `read_page_response`, `read_items_buffer`, graph result buffer helpers, and read generation helpers into `vault-engine/src/ffi/read.rs`.
   - Verify: file tree, search, inspector, local graph, and live preview metadata FFI tests still pass.
 
-- [ ] **RA01.05b Extract read error/state mapping**
+- [x] **RA01.05b Extract read error/state mapping**
   - Build: move `read_api_error_buffer`, `read_api_error_payload`, and read state code mapping into `vault-engine/src/ffi/read.rs`.
   - Verify: read error tests preserve existing error codes and state values.
 

@@ -4,7 +4,8 @@ use std::slice;
 
 use crate::read_api::ReadApiError;
 
-use super::{FfiError, ReadRebuildFfiError};
+use super::json::FfiError;
+use super::read::ReadRebuildFfiError;
 
 pub(super) unsafe fn read_rebuild_c_string(
     ptr: *const c_char,
