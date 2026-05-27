@@ -1,5 +1,6 @@
 pub mod attachments;
 pub mod benchmarks;
+pub(crate) mod core;
 pub mod diagnostics;
 pub mod errors;
 pub mod ffi;

@@ -543,7 +543,7 @@ Default stop conditions:
 
 ### Phase 3: Extract Core Domain Records
 
-- [ ] **RA03.01 Create `core` module skeleton**
+- [x] **RA03.01 Create `core` module skeleton**
   - Build: add `vault-engine/src/core/mod.rs`.
   - Verify: no public behavior changes; `cargo test` passes.
 
