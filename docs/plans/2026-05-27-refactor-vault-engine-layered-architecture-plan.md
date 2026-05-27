@@ -700,7 +700,7 @@ Default stop conditions:
   - Build: update all callers away from `crate::indexing_queue`, then delete or narrow the old module path.
   - Verify: `rg "crate::indexing_queue" vault-engine/src` returns no production callers.
 
-- [ ] **RA04.05 Add Tantivy adapter facade without changing config**
+- [x] **RA04.05 Add Tantivy adapter facade without changing config**
   - Build: add `adapters/tantivy/mod.rs` that temporarily re-exports current `tantivy_search` symbols.
   - Verify: `cargo test --manifest-path vault-engine/Cargo.toml tantivy_search::tests::safe_tantivy_query_bounds_and_quotes_user_input`.
 
