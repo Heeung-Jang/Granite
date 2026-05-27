@@ -5,13 +5,13 @@ use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 
+use crate::adapters::sqlite::{
+    GraphFileRecord, GraphResolvedEdgeRecord, GraphUnresolvedEdgeRecord, IndexSchemaMetadata,
+    MetadataStore, MetadataStoreError,
+};
 use crate::graph::{
     WholeVaultGraphInputs, WholeVaultGraphRequest, WholeVaultGraphSnapshot,
     build_whole_vault_graph_snapshot, whole_vault_graph_needs_tags,
-};
-use crate::index::{
-    GraphFileRecord, GraphResolvedEdgeRecord, GraphUnresolvedEdgeRecord, IndexSchemaMetadata,
-    MetadataStore, MetadataStoreError,
 };
 
 use super::json::{FfiError, ffi_response, ffi_success_response_len, read_json};

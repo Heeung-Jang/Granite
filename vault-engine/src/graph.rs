@@ -1,14 +1,14 @@
 use std::collections::{HashMap, HashSet};
 
+use crate::adapters::sqlite::{
+    GraphFileRecord, GraphResolvedEdgeRecord, GraphTagRecord, GraphUnresolvedEdgeRecord,
+};
 pub use crate::core::graph::{
     WholeVaultGraphBuild, WholeVaultGraphEdge, WholeVaultGraphEdgeKind, WholeVaultGraphNode,
     WholeVaultGraphNodeKind, WholeVaultGraphPartialReason, WholeVaultGraphRequest,
     WholeVaultGraphSnapshot,
 };
 use crate::graph_key::unresolved_target_key;
-use crate::index::{
-    GraphFileRecord, GraphResolvedEdgeRecord, GraphTagRecord, GraphUnresolvedEdgeRecord,
-};
 
 pub const MAX_WHOLE_VAULT_GRAPH_NODES: usize = 100_000;
 pub const MAX_WHOLE_VAULT_GRAPH_EDGES: usize = 250_000;
