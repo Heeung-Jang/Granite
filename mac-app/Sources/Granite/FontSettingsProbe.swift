@@ -44,6 +44,7 @@ enum FontSettingsProbe {
             customTextFamilyScenario(candidates.proportional),
             customMonospaceFamilyScenario(candidates.fixedWidth),
             invalidMonospaceFallbackScenario(candidates.proportional),
+            rendererFontSetApplicationScenario(candidates.proportional, candidates.fixedWidth),
             editorFontSettingsPersistenceScenario(candidates.proportional, candidates.fixedWidth),
             invalidMonospaceSelectionScenario(candidates.proportional, candidates.fixedWidth),
             fontPanelSelectionRoutingScenario(candidates.proportional, candidates.fixedWidth),
@@ -167,6 +168,100 @@ enum FontSettingsProbe {
                 "requested": candidate.familyName,
                 "source": resolved.sourceFont.familyName ?? resolved.sourceFont.fontName,
                 "code": resolved.codeFont.familyName ?? resolved.codeFont.fontName
+            ]
+        )
+    }
+
+    private static func rendererFontSetApplicationScenario(
+        _ textCandidate: FontCandidate?,
+        _ monospaceCandidate: FontCandidate?
+    ) -> FontSettingsProbeScenario {
+        guard let textCandidate,
+              let monospaceCandidate
+        else {
+            return skip("renderer-font-set-application", reason: "No text or fixed-width family available.")
+        }
+        let source = """
+        # Heading
+
+        Paragraph with **strong** and `inline`.
+
+        ```swift
+        let value = 1
+        ```
+
+        | Name | Status |
+        | --- | --- |
+        | Alpha | Draft |
+        """
+        let fontSet = LivePreviewFontResolver.fontSet(
+            for: EditorFontPreferences(
+                textFamilyName: textCandidate.familyName,
+                monospaceFamilyName: monospaceCandidate.familyName
+            )
+        )
+        let textView = MarkdownEditorTextViewFactory.makeTextView(fontSet: fontSet)
+        textView.frame = NSRect(x: 0, y: 0, width: 900, height: 800)
+        textView.textContainer?.containerSize = NSSize(width: 900, height: CGFloat.greatestFiniteMagnitude)
+        textView.textContainer?.widthTracksTextView = true
+        textView.string = source
+        textView.setSelectedRange(NSRange(location: (source as NSString).length, length: 0))
+        let result = MarkdownVisibleRangeDecorator.decorateVisibleRange(
+            in: textView,
+            range: NSRange(location: 0, length: (source as NSString).length),
+            livePreviewMode: .livePreview,
+            revealRange: textView.selectedRange(),
+            fontSet: fontSet
+        )
+
+        let bodyUsesText = font(in: textView, source: source, marker: "Paragraph").map {
+            fontsMatch($0, fontSet.baseFont)
+        } ?? false
+        let headingUsesText = font(in: textView, source: source, marker: "Heading").map {
+            fontsMatch($0, fontSet.h1Font)
+        } ?? false
+        let strongUsesText = font(in: textView, source: source, marker: "strong").map {
+            fontsMatch($0, fontSet.strongFont)
+        } ?? false
+        let tableHeaderUsesText = font(in: textView, source: source, marker: "Name").map {
+            fontsMatch($0, fontSet.strongFont)
+        } ?? false
+        let tableBodyUsesText = font(in: textView, source: source, marker: "Alpha").map {
+            fontsMatch($0, fontSet.baseFont)
+        } ?? false
+        let inlineCodeUsesMonospace = font(in: textView, source: source, marker: "inline").map {
+            fontsMatch($0, fontSet.codeFont)
+        } ?? false
+        let fencedCodeUsesMonospace = font(in: textView, source: source, marker: "let value").map {
+            fontsMatch($0, fontSet.codeFont)
+        } ?? false
+        let typingFontUpdated = (textView.typingAttributes[.font] as? NSFont).map {
+            fontsMatch($0, fontSet.baseFont)
+        } ?? false
+
+        return scenario(
+            "renderer-font-set-application",
+            passed: result.changedRangeCount > 0
+                && bodyUsesText
+                && headingUsesText
+                && strongUsesText
+                && tableHeaderUsesText
+                && tableBodyUsesText
+                && inlineCodeUsesMonospace
+                && fencedCodeUsesMonospace
+                && typingFontUpdated,
+            details: [
+                "textFamily": textCandidate.familyName,
+                "monospaceFamily": monospaceCandidate.familyName,
+                "changedRangeCount": String(result.changedRangeCount),
+                "bodyUsesText": String(bodyUsesText),
+                "headingUsesText": String(headingUsesText),
+                "strongUsesText": String(strongUsesText),
+                "tableHeaderUsesText": String(tableHeaderUsesText),
+                "tableBodyUsesText": String(tableBodyUsesText),
+                "inlineCodeUsesMonospace": String(inlineCodeUsesMonospace),
+                "fencedCodeUsesMonospace": String(fencedCodeUsesMonospace),
+                "typingFontUpdated": String(typingFontUpdated)
             ]
         )
     }
@@ -466,6 +561,20 @@ enum FontSettingsProbe {
 
     private static func sizePair(_ lhs: NSFont, _ rhs: NSFont) -> String {
         "\(lhs.pointSize):\(rhs.pointSize)"
+    }
+
+    private static func font(in textView: NSTextView, source: String, marker: String) -> NSFont? {
+        guard let offset = utf16Offset(of: marker, in: source) else {
+            return nil
+        }
+        return textView.textStorage?.attribute(.font, at: offset, effectiveRange: nil) as? NSFont
+    }
+
+    private static func utf16Offset(of marker: String, in source: String) -> Int? {
+        guard let range = source.range(of: marker) else {
+            return nil
+        }
+        return NSRange(range, in: source).location
     }
 
     private static func normalizedFamilyName(_ familyName: String?) -> String? {
