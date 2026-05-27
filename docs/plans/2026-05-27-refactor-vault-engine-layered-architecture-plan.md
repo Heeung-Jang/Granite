@@ -944,7 +944,7 @@ Default stop conditions:
   - Build: after full rebuild orchestration is under use cases, migrate rebuild FFI wiring away from legacy `index_rebuild` and `indexing_pipeline` entry points.
   - Verify: rebuild FFI tests, Swift engine smoke, and FFI direct-adapter scan pass.
 
-- [ ] **RA05.07a Add startup reconciliation use-case module**
+- [x] **RA05.07a Add startup reconciliation use-case module**
   - Build: add `use_cases/reconcile_startup.rs` and `pub(crate) mod reconcile_startup;` without moving logic yet.
   - Verify: `cargo test --manifest-path vault-engine/Cargo.toml startup_reconciliation::`.
   - Stop condition: adding the module changes public exports or test behavior.

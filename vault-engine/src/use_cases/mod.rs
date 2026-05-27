@@ -5,5 +5,6 @@ pub(crate) mod read_graph;
 pub(crate) mod read_parse_documents;
 pub(crate) mod read_types;
 pub(crate) mod read_vault;
+pub(crate) mod reconcile_startup;
 pub(crate) mod rebuild_tantivy;
 pub(crate) mod save_note;
