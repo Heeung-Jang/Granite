@@ -1125,9 +1125,10 @@ Default stop conditions:
   - Evidence: `ffi_success_response_len` now measures the success envelope with a counting writer instead of `serde_json::to_vec`, so oversized graph responses fail before allocating the full success JSON buffer. The graph FFI test covers the `oversized_response` byte-cap path.
   - Stop condition: oversized graph responses allocate a large final response buffer before failing, or the extra sizing allocation is not covered by a graph memory benchmark.
 
-- [ ] **RA05.09f5 Add graph SQLite query-plan/count gate**
+- [x] **RA05.09f5 Add graph SQLite query-plan/count gate**
   - Build: no production behavior change; add diagnostics or fixture assertions for `graph_files`, resolved/unresolved edge queries, orphan queries, visible count queries, and tag chunk reads after graph storage orchestration is in the use case.
   - Verify: graph query plan output has no unexpected full scans on links/tags, tag reads are chunked by configured SQLite bind limits rather than one query per file, and node/edge count timings are measured separately from assembly time.
+  - Evidence: `metadata_store_returns_whole_vault_graph_bulk_records` now asserts expected graph query indexes, rejects unindexed `links`/`tags` scans, and fixes the tag file-id chunk size at `400`. `docs/benchmarks/artifacts/vault-engine-architecture-graph-query-gate-fixture-ra05-09f5-2026-05-27.json` proves benchmark artifacts include separate `nodeCount` and `edgeCount` diagnostic durations.
   - Stop condition: use-case movement adds an extra graph query per node/edge/tag or hides count-query cost inside assembly timing.
 
 - [ ] **RA05.10a Run focused use-case boundary scan**
