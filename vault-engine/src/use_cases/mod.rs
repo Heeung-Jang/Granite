@@ -1,3 +1,4 @@
+pub(crate) mod build_graph;
 pub(crate) mod index_rebuild;
 pub(crate) mod live_preview_metadata;
 pub(crate) mod process_indexing_queue;

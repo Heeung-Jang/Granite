@@ -990,7 +990,7 @@ Default stop conditions:
   - Build: leave `watcher_burst.rs` as a compatibility re-export only until Phase 7 removes transitional modules.
   - Verify: `rg -n "pub use crate::use_cases::watcher_burst" vault-engine/src/watcher_burst.rs` matches and no production logic remains in the compatibility file.
 
-- [ ] **RA05.09a Move pure whole-vault graph builder**
+- [x] **RA05.09a Move pure whole-vault graph builder**
   - Build: move graph builder constants, `WholeVaultGraphInputs`, `build_whole_vault_graph_snapshot`, candidate node/edge builders, and pure graph helper functions into `use_cases/build_graph.rs` while leaving DTOs in `core::graph`.
   - Verify: `cargo test --manifest-path vault-engine/Cargo.toml graph::`.
   - Stop condition: node IDs, unresolved target IDs, graph limits, partial reasons, labels, tags, or edge weights change.
