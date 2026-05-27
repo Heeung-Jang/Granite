@@ -724,7 +724,7 @@ Default stop conditions:
   - Build: migrate read API, indexing pipeline, diagnostics, and profiler imports one group at a time.
   - Verify: after each caller group, run the matching narrow test.
 
-- [ ] **RA04.05f Remove old Tantivy compatibility module**
+- [x] **RA04.05f Remove old Tantivy compatibility module**
   - Build: delete or reduce `tantivy_search.rs` after all callers use `adapters::tantivy`.
   - Verify: `rg "crate::tantivy_search" vault-engine/src bench` returns no production callers.
 
