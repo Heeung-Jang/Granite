@@ -655,7 +655,7 @@ Default stop conditions:
   - Verify: metadata projection, graph bulk-record, and attachment tests pass.
   - Stop condition: any row decoder starts returning an FFI/read-row type instead of a domain/storage projection.
 
-- [ ] **RA04.02d Move SQLite write helpers**
+- [x] **RA04.02d Move SQLite write helpers**
   - Build: move `upsert_file`, `delete_child_records`, `insert_link`, `insert_tag`, `insert_property`, `insert_heading`, and `insert_attachment` into `adapters/sqlite/writes.rs`.
   - Verify: metadata insert/update/delete, bulk replace, and atomic batch tests pass.
 
