@@ -7,13 +7,13 @@ use crate::adapters::sqlite::storage_values::{
     optional_path, path_to_string, property_value_from_storage, scan_kind_from_str,
     tag_source_from_str, unix_ms_to_system_time,
 };
+use crate::adapters::sqlite::{
+    FileLookupProjection, GraphFileRecord, GraphResolvedEdgeRecord, GraphTagRecord,
+    GraphUnresolvedEdgeRecord, LinkProjection, TagNoteProjection,
+};
 use crate::core::files::FileIdentity;
 use crate::core::metadata::{
     AttachmentRecord, FileRecord, HeadingRecord, LinkEdgeRecord, PropertyRecord, TagRecord,
-};
-use crate::index::{
-    FileLookupProjection, GraphFileRecord, GraphResolvedEdgeRecord, GraphTagRecord,
-    GraphUnresolvedEdgeRecord, LinkProjection, TagNoteProjection,
 };
 
 pub(crate) fn row_to_file_record(row: &Row<'_>) -> rusqlite::Result<FileRecord> {

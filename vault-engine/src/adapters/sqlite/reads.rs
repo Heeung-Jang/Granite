@@ -7,14 +7,14 @@ use crate::adapters::sqlite::rows::{
     row_to_link, row_to_link_projection, row_to_property, row_to_tag, row_to_tag_note_projection,
 };
 use crate::adapters::sqlite::storage_values::path_to_string;
-use crate::core::attachments::AttachmentResolutionState;
-use crate::core::metadata::{
-    AttachmentRecord, FileRecord, HeadingRecord, LinkEdgeRecord, PropertyRecord, TagRecord,
-};
-use crate::index::{
+use crate::adapters::sqlite::{
     AttachmentProjection, FileLookupProjection, FileTreeProjection, GraphFileRecord,
     GraphQueryPlanSummary, GraphQueryStage, GraphResolvedEdgeRecord, GraphTagRecord,
     GraphUnresolvedEdgeRecord, LinkProjection, PropertyProjection, TagNoteProjection,
+};
+use crate::core::attachments::AttachmentResolutionState;
+use crate::core::metadata::{
+    AttachmentRecord, FileRecord, HeadingRecord, LinkEdgeRecord, PropertyRecord, TagRecord,
 };
 
 pub(crate) fn get_file(

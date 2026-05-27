@@ -32,16 +32,16 @@ use crate::adapters::sqlite::writes::{
     delete_child_records, insert_attachment, insert_heading, insert_link, insert_property,
     insert_tag, upsert_file,
 };
+use crate::adapters::sqlite::{
+    AttachmentProjection, FileLookupProjection, FileTreeProjection, GraphFileRecord,
+    GraphQueryPlanSummary, GraphResolvedEdgeRecord, GraphTagRecord, GraphUnresolvedEdgeRecord,
+    IndexSchemaMetadata, LinkProjection, PropertyProjection, TagNoteProjection,
+};
 use crate::core::metadata::{
     AttachmentRecord, FileMetadataRecords, FileRecord, HeadingRecord, IndexedFileRecords,
     LinkEdgeRecord, PropertyRecord, TagRecord,
 };
 use crate::graph_key::unresolved_target_key;
-use crate::index::{
-    AttachmentProjection, FileLookupProjection, FileTreeProjection, GraphFileRecord,
-    GraphQueryPlanSummary, GraphResolvedEdgeRecord, GraphTagRecord, GraphUnresolvedEdgeRecord,
-    IndexSchemaMetadata, LinkProjection, PropertyProjection, TagNoteProjection,
-};
 
 pub struct MetadataStore {
     pub(crate) connection: Connection,

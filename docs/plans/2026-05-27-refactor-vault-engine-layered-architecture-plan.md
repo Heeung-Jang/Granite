@@ -676,7 +676,7 @@ Default stop conditions:
   - Build: migrate callers one group at a time: read API, save/index queue, graph, indexing pipeline, diagnostics/profiler.
   - Verify: after each caller group, run that group's narrow test filter.
 
-- [ ] **RA04.02i Remove `crate::index` compatibility module**
+- [x] **RA04.02i Remove `crate::index` compatibility module**
   - Build: delete the temporary compatibility module after `rg "crate::index" vault-engine/src bench` returns no production callers.
   - Verify: full Rust tests pass.
 
