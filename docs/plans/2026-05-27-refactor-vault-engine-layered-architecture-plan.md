@@ -972,7 +972,7 @@ Default stop conditions:
   - Build: add `use_cases/watcher_burst.rs` and `pub(crate) mod watcher_burst;` without moving logic yet.
   - Verify: `cargo test --manifest-path vault-engine/Cargo.toml watcher_burst::`.
 
-- [ ] **RA05.08b Move watcher burst coalescing logic**
+- [x] **RA05.08b Move watcher burst coalescing logic**
   - Build: mechanically move `WatcherBurstPlan`, `WatcherBurstState`, `coalesce_watcher_burst`, `event_requires_root_rescan`, and `parent_directory` into `use_cases/watcher_burst.rs`.
   - Verify: watcher coalescing tests pass, including duplicate paths, ambiguous events, root rescan events, and dropped events without paths.
   - Stop condition: sorted path output, rescan-directory output, or state classification changes.
