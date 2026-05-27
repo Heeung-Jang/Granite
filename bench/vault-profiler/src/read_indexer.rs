@@ -27,9 +27,11 @@ pub struct ReadIndexMaterializeOptions {
 pub struct ReadIndexMaterializeArtifact {
     pub schema_version: u32,
     pub tool: String,
+    pub diagnostic_only: bool,
     pub vault_root_hash: String,
     pub metadata_path_hash: String,
     pub tantivy_path_hash: String,
+    pub metadata_batch_size: usize,
     pub markdown_files: usize,
     pub attachment_files: usize,
     pub other_files: usize,
@@ -41,6 +43,7 @@ pub struct ReadIndexMaterializeArtifact {
     pub headings: usize,
     pub attachments: usize,
     pub duration_ms: f64,
+    pub peak_rss_bytes: Option<u64>,
     pub privacy: ReadIndexMaterializePrivacy,
 }
 
@@ -149,9 +152,11 @@ pub fn materialize_read_index(
     Ok(ReadIndexMaterializeArtifact {
         schema_version: 1,
         tool: "vault-profiler materialize-read-index".to_string(),
+        diagnostic_only: true,
         vault_root_hash: redacted_private_value(),
         metadata_path_hash: redacted_private_value(),
         tantivy_path_hash: redacted_private_value(),
+        metadata_batch_size: scan.entries.len(),
         markdown_files: scan.markdown_files,
         attachment_files: scan.attachment_files,
         other_files: scan.other_files,
@@ -163,6 +168,7 @@ pub fn materialize_read_index(
         headings: stats.headings,
         attachments: stats.attachments,
         duration_ms: rounded_ms(started.elapsed().as_secs_f64() * 1_000.0),
+        peak_rss_bytes: peak_rss_bytes(),
         privacy: ReadIndexMaterializePrivacy {
             raw_note_bodies_committed: false,
             raw_paths_committed: false,
@@ -546,6 +552,29 @@ fn rounded_ms(value: f64) -> f64 {
     (value * 1_000.0).round() / 1_000.0
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn peak_rss_bytes() -> Option<u64> {
+    let mut usage = std::mem::MaybeUninit::<libc::rusage>::zeroed();
+    let result = unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) };
+    if result != 0 {
+        return None;
+    }
+    let max_rss = unsafe { usage.assume_init().ru_maxrss as u64 };
+    #[cfg(target_os = "linux")]
+    {
+        Some(max_rss.saturating_mul(1024))
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Some(max_rss)
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn peak_rss_bytes() -> Option<u64> {
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -583,6 +612,9 @@ mod tests {
         assert_eq!(artifact.links, 2);
         assert_eq!(artifact.properties, 2);
         assert_eq!(artifact.attachments, 1);
+        assert!(artifact.diagnostic_only);
+        assert_eq!(artifact.metadata_batch_size, 3);
+        assert!(artifact.peak_rss_bytes.is_some());
         assert_eq!(artifact.vault_root_hash, "redacted");
         assert_eq!(artifact.metadata_path_hash, "redacted");
         assert_eq!(artifact.tantivy_path_hash, "redacted");

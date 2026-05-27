@@ -442,6 +442,7 @@ pub fn run_whole_vault_graph_snapshot_benchmark(
     options: &WholeVaultGraphBenchmarkOptions,
 ) -> BackendBenchmarkResultType<WholeVaultGraphBenchmarkArtifact> {
     let root = VaultRoot::open(&options.vault_root).map_err(BackendBenchmarkError::Path)?;
+    let setup_rss_before = current_rss_bytes();
     let scan = scan_vault(&root).map_err(scan_error_to_string)?;
     let markdown_entries = scan
         .entries
@@ -473,6 +474,10 @@ pub fn run_whole_vault_graph_snapshot_benchmark(
         store.replace_file_records(&file, &links, &tags, &[], &[], &[])?;
     }
 
+    let setup_rss_after = current_rss_bytes();
+    let setup_rss_delta = setup_rss_before
+        .zip(setup_rss_after)
+        .map(|(before, after)| after.saturating_sub(before));
     let request = WholeVaultGraphRequest::with_request_id(1, options.max_nodes, options.max_edges)
         .including_unresolved(options.include_unresolved)
         .including_orphans(options.include_orphans);
@@ -574,6 +579,10 @@ pub fn run_whole_vault_graph_snapshot_benchmark(
                     Some(memory_target),
                 ),
                 None => blocked_measurement("rustSnapshotMemory", "bytes", "unknown"),
+            },
+            match setup_rss_delta {
+                Some(value) => measurement("graphSetupMemory", "bytes", Some(value as f64), None),
+                None => blocked_measurement("graphSetupMemory", "bytes", "unknown"),
             },
         ],
         indexed_access_summary,

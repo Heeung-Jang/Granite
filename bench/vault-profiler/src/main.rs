@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use std::process;
 use std::time::Instant;
 use vault_engine::diagnostics::profiler::{
-    SearchDocument, SnippetStorageMode, TantivySearchError, TantivySearchIndex,
-    VaultBackendBenchmarkOptions, WholeVaultGraphBenchmarkOptions,
+    SnippetStorageMode, TantivySearchError, TantivySearchIndex, VaultBackendBenchmarkOptions,
+    WholeVaultGraphBenchmarkOptions,
     run_shared_backend_benchmark_from_vault, run_whole_vault_graph_snapshot_benchmark,
 };
 use vault_profiler::corpus::{QueryCorpusOptions, generate_query_corpus_bundle};
@@ -1305,6 +1305,7 @@ fn usage() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vault_engine::diagnostics::profiler::SearchDocument;
 
     #[test]
     fn parses_required_profile_args() {

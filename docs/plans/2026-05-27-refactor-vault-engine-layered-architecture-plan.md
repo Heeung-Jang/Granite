@@ -1339,27 +1339,31 @@ Default stop conditions:
   - Evidence: added facade-level sanitizer coverage for quotes, `OR`, `NEAR`, `*`, column selectors, parentheses, and malformed operator-only input; the targeted test passed.
   - Stop condition: any malformed query reaches SQLite MATCH unsanitized or user input is interpolated into SQL.
 
-- [ ] **RA06.08 Profiler artifact compatibility gate**
+- [x] **RA06.08 Profiler artifact compatibility gate**
   - Build: no code change after diagnostics/profiler import migration. Rerun profiler parse tests plus one fixture benchmark.
   - Verify: artifacts still include `peak_rss_bytes`, `time_to_usable_samples`, stage timings, pipeline config, writer memory budget, and privacy flags.
+  - Evidence: fixture `backend-benchmark` artifact in `/tmp/granite-ra06-08-gate/backend.json` retained `peak_rss_bytes`, `time_to_usable_samples`, backend `stages`, `pipeline_config.writer_memory_budget_bytes = 50000000`, and `run_metadata.redaction_enabled = true`.
 
-- [ ] **RA06.08a Add post-profiler Tantivy lifecycle scan**
+- [x] **RA06.08a Add post-profiler Tantivy lifecycle scan**
   - Build: no code change after profiler migration.
   - Verify:
     ```sh
     rg -n "open_existing_dir|Index::open_in_dir|reader\\(|writer\\(|commit\\(|reload\\(" vault-engine/src bench/vault-profiler/src
     ```
     Confirm open/create calls appear only in setup/open/rebuild paths, not inside per-query or per-sample loops. Tantivy `IndexReader::searcher()` remains per query while the reader itself is reused.
+  - Evidence: scan matches are setup/open/rebuild/index update paths: profiler opens Tantivy before runbook iteration, diagnostics opens before indexing, and writer/commit/reload are inside adapter indexing methods rather than query loops.
   - Stop condition: any read/search/profiler query loop reopens Tantivy, creates a writer, commits, or reloads the reader per sample.
 
-- [ ] **RA06.08b Isolate graph RSS measurement**
+- [x] **RA06.08b Isolate graph RSS measurement**
   - Build: measure graph snapshot RSS in a fresh process or against an already materialized metadata DB. Do not let scan/parse setup allocations contaminate `rss_before`.
   - Verify: graph benchmark artifact separates setup RSS from snapshot RSS, or the measured command does not call `scan_vault` / `fs::read_to_string` before `rss_before`.
+  - Evidence: graph benchmark now records `graphSetupMemory` separately from `rustSnapshotMemory`; `rss_before` remains after store allocator release and before the production graph snapshot use case call.
   - Stop condition: graph RSS gate measures setup memory rather than snapshot construction memory.
 
-- [ ] **RA06.08c Bound `materialize-read-index` memory**
+- [x] **RA06.08c Bound `materialize-read-index` memory**
   - Build: either batch metadata writes instead of accumulating all indexed file records, or mark `materialize-read-index` as diagnostic-only and exclude it from production memory acceptance gates.
   - Verify: artifact records batch size and peak RSS; RA04.11/RA06.08 memory acceptance uses the streaming backend benchmark as the primary production gate.
+  - Evidence: `materialize-read-index` artifact now includes `diagnostic_only`, `metadata_batch_size`, and `peak_rss_bytes`; production memory acceptance remains tied to streaming `backend-benchmark` artifact fields.
   - Stop condition: a diagnostic command's full-corpus materialization is used as evidence that the production indexing path is memory-safe.
 
 ### Phase 7: Reduce Public Surface
