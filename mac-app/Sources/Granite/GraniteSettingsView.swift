@@ -5,6 +5,8 @@ import SwiftUI
 struct GraniteSettingsView: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var editorFontSettings: EditorFontSettings
+    @State private var activeFontRole: FontPreferenceRole?
+    @State private var fontPanelCoordinator = FontPanelCoordinator()
 
     var body: some View {
         Form {
@@ -50,6 +52,10 @@ struct GraniteSettingsView: View {
         .formStyle(.grouped)
         .scenePadding()
         .frame(width: 560, height: 420)
+        .onDisappear {
+            activeFontRole = nil
+            fontPanelCoordinator.clearFontPanelOwnershipIfCurrent()
+        }
     }
 
     private var vaultState: String {
@@ -63,9 +69,23 @@ struct GraniteSettingsView: View {
         }
     }
 
-    private func chooseTextFont() {}
+    private func chooseTextFont() {
+        openFontPanel(role: .text, currentFont: editorFontSettings.textPreviewFont)
+    }
 
-    private func chooseMonospaceFont() {}
+    private func chooseMonospaceFont() {
+        openFontPanel(role: .monospace, currentFont: editorFontSettings.monospacePreviewFont)
+    }
+
+    private func openFontPanel(role: FontPreferenceRole, currentFont: NSFont) {
+        activeFontRole = role
+        fontPanelCoordinator.editorFontSettings = editorFontSettings
+        fontPanelCoordinator.activeRole = { activeFontRole }
+        fontPanelCoordinator.beginOwningFontPanel()
+
+        NSFontManager.shared.setSelectedFont(currentFont, isMultiple: false)
+        NSFontManager.shared.orderFrontFontPanel(nil)
+    }
 }
 
 private struct FontPreferenceRow: View {
