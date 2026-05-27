@@ -958,7 +958,7 @@ Default stop conditions:
     ```
   - Stop condition: startup reconciliation test expectations, enqueue counts, or rename/delete/create semantics change.
 
-- [ ] **RA05.07c Retarget startup reconciliation callers**
+- [x] **RA05.07c Retarget startup reconciliation callers**
   - Build: update internal callers such as watcher burst recovery to import `crate::use_cases::reconcile_startup`; keep `startup_reconciliation.rs` as a temporary compatibility re-export only.
   - Verify:
     ```sh

@@ -9,7 +9,7 @@ use crate::file_watcher::{
     WATCHER_FLAG_USER_DROPPED, WatcherEvent, WatcherEventKind,
 };
 use crate::scanner::ScanSummary;
-use crate::startup_reconciliation::{
+use crate::use_cases::reconcile_startup::{
     StartupReconciliationError, StartupReconciliationSummary, reconcile_startup,
 };
 
