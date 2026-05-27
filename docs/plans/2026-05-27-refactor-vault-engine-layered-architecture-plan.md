@@ -1098,9 +1098,11 @@ Default stop conditions:
     ```
   - Stop condition: benchmark code still mirrors production graph fetch/assembly instead of measuring the production path.
 
-- [ ] **RA05.09f2 Run privacy-safe real-vault graph snapshot gate**
+- [x] **RA05.09f2 Run privacy-safe real-vault graph snapshot gate**
   - Build: run the real-vault graph benchmark only after output is aggregate-only or written under an ignored private path.
   - Verify: enforce graph-view budgets from `docs/architecture/graph-view.md`, especially Rust snapshot duration `<= 2.5s`, Rust snapshot RSS delta `<= 250 MB`, and encoded payload `<= 64 MiB`.
+  - Evidence: `docs/benchmarks/artifacts/vault-engine-architecture-real-graph-snapshot-ra05-09f2-2026-05-27.json` records the production default graph request (`--exclude-unresolved --exclude-orphans`) against `real-vault-large`: Rust snapshot `868.212ms`, encoded payload `54,624,406` bytes, Rust snapshot RSS delta `203,538,432` bytes, Swift decode `315.433ms`, and Swift decode RSS delta `160,448,512` bytes. Private payloads were generated only under `docs/benchmarks/private/` for Swift decode measurement and removed after the aggregate artifact was written.
+  - Note: the conservative profiler default with unresolved links and orphan nodes enabled exceeded the bridge/memory budget (`69,385,498` bytes and `443,088,896` bytes RSS delta). Keep that as future graph option optimization work, not the shipped default gate.
   - Stop condition: graph artifact includes private note paths/content, stable private file identifiers, tags/frontmatter values, or exceeds the graph-view memory/bridge budget.
 
 - [ ] **RA05.09f3 Prove graph FFI does not add a second graph materialization**
