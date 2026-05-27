@@ -13,6 +13,11 @@ pub(crate) fn commit_index_rebuild(
     let previous_directory = paths.index_root.join("previous-data");
     ensure_no_vault_overlap(&previous_directory, &paths.vault_root)
         .map_err(IndexRebuildError::InvalidPath)?;
+    ensure_existing_path_does_not_resolve_into_vault(
+        &previous_directory,
+        &paths.vault_root,
+        IndexRebuildPathError::DataOverlapsVault,
+    )?;
 
     if previous_directory.exists() {
         remove_path(&previous_directory)?;
@@ -103,6 +108,16 @@ pub(crate) fn validate_paths(paths: &IndexRebuildPaths) -> IndexRebuildResult<In
             IndexRebuildPathError::RebuildOverlapsVault,
         ));
     }
+    ensure_existing_path_does_not_resolve_into_vault(
+        &data_directory,
+        &vault_root,
+        IndexRebuildPathError::DataOverlapsVault,
+    )?;
+    ensure_existing_path_does_not_resolve_into_vault(
+        &rebuild_directory,
+        &vault_root,
+        IndexRebuildPathError::RebuildOverlapsVault,
+    )?;
     if data_directory == rebuild_directory {
         return Err(IndexRebuildError::InvalidPath(
             IndexRebuildPathError::DataEqualsRebuild,
@@ -155,6 +170,28 @@ fn paths_overlap(left: &Path, right: &Path) -> bool {
 fn ensure_no_vault_overlap(path: &Path, vault_root: &Path) -> Result<(), IndexRebuildPathError> {
     if paths_overlap(path, vault_root) {
         return Err(IndexRebuildPathError::DataOverlapsVault);
+    }
+    Ok(())
+}
+
+fn ensure_existing_path_does_not_resolve_into_vault(
+    path: &Path,
+    vault_root: &Path,
+    error: IndexRebuildPathError,
+) -> IndexRebuildResult<()> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(IndexRebuildError::Io(error)),
+    };
+    if !metadata.file_type().is_symlink() {
+        return Ok(());
+    }
+
+    let canonical = fs::canonicalize(path)?;
+    let canonical_vault_root = fs::canonicalize(vault_root)?;
+    if paths_overlap(&canonical, &canonical_vault_root) {
+        return Err(IndexRebuildError::InvalidPath(error));
     }
     Ok(())
 }

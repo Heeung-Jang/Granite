@@ -199,6 +199,8 @@ mod tests {
     use crate::paths::FileIdentity;
     use crate::scanner::{ScanEntry, ScanEntryKind};
     use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::symlink;
     use std::time::{Duration, UNIX_EPOCH};
     use tempfile::TempDir;
 
@@ -310,6 +312,141 @@ mod tests {
             ))
         ));
         assert_eq!(fixture.read_vault_note(), "private");
+    }
+
+    #[test]
+    fn rejects_index_root_inside_vault_without_touching_vault() {
+        let fixture = RebuildFixture::new();
+        fixture.write_vault_note("private");
+        let bad_paths = IndexRebuildPaths::new(
+            &fixture.vault_root,
+            fixture.vault_root.join(".native-markdown-index"),
+            fixture
+                .vault_root
+                .join(".native-markdown-index")
+                .join("data"),
+            fixture
+                .vault_root
+                .join(".native-markdown-index")
+                .join("rebuild"),
+        );
+        let result = start_rebuild_with_paths(&bad_paths);
+
+        assert!(matches!(
+            result,
+            Err(IndexRebuildError::InvalidPath(
+                IndexRebuildPathError::IndexRootInsideVault
+            ))
+        ));
+        assert_eq!(fixture.read_vault_note(), "private");
+    }
+
+    #[test]
+    fn rejects_data_or_rebuild_outside_index_root_without_touching_vault() {
+        let fixture = RebuildFixture::new();
+        fixture.write_vault_note("private");
+        let data_outside = IndexRebuildPaths::new(
+            &fixture.vault_root,
+            &fixture.paths.index_root,
+            fixture.temp.path().join("outside-data"),
+            &fixture.paths.rebuild_directory,
+        );
+        let rebuild_outside = IndexRebuildPaths::new(
+            &fixture.vault_root,
+            &fixture.paths.index_root,
+            &fixture.paths.data_directory,
+            fixture.temp.path().join("outside-rebuild"),
+        );
+
+        assert!(matches!(
+            start_rebuild_with_paths(&data_outside),
+            Err(IndexRebuildError::InvalidPath(
+                IndexRebuildPathError::DataOutsideIndexRoot
+            ))
+        ));
+        assert!(matches!(
+            start_rebuild_with_paths(&rebuild_outside),
+            Err(IndexRebuildError::InvalidPath(
+                IndexRebuildPathError::RebuildOutsideIndexRoot
+            ))
+        ));
+        assert_eq!(fixture.read_vault_note(), "private");
+    }
+
+    #[test]
+    fn rejects_data_equal_rebuild_without_touching_vault() {
+        let fixture = RebuildFixture::new();
+        fixture.write_vault_note("private");
+        let bad_paths = IndexRebuildPaths::new(
+            &fixture.vault_root,
+            &fixture.paths.index_root,
+            &fixture.paths.data_directory,
+            &fixture.paths.data_directory,
+        );
+        let result = start_rebuild_with_paths(&bad_paths);
+
+        assert!(matches!(
+            result,
+            Err(IndexRebuildError::InvalidPath(
+                IndexRebuildPathError::DataEqualsRebuild
+            ))
+        ));
+        assert_eq!(fixture.read_vault_note(), "private");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_symlinked_data_and_rebuild_paths_into_vault_without_touching_vault() {
+        let fixture = RebuildFixture::new();
+        fixture.write_vault_note("private");
+        fs::create_dir_all(&fixture.paths.index_root).expect("index root");
+        symlink(&fixture.vault_root, &fixture.paths.data_directory).expect("data symlink");
+
+        assert!(matches!(
+            start_rebuild_with_paths(&fixture.paths),
+            Err(IndexRebuildError::InvalidPath(
+                IndexRebuildPathError::DataOverlapsVault
+            ))
+        ));
+        assert_eq!(fixture.read_vault_note(), "private");
+        fs::remove_file(&fixture.paths.data_directory).expect("remove data symlink");
+        symlink(&fixture.vault_root, &fixture.paths.rebuild_directory).expect("rebuild symlink");
+
+        assert!(matches!(
+            start_rebuild_with_paths(&fixture.paths),
+            Err(IndexRebuildError::InvalidPath(
+                IndexRebuildPathError::RebuildOverlapsVault
+            ))
+        ));
+        assert_eq!(fixture.read_vault_note(), "private");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_previous_data_symlink_into_vault_before_commit_without_touching_vault() {
+        let fixture = RebuildFixture::new();
+        fixture.write_vault_note("private");
+        fs::create_dir_all(&fixture.paths.data_directory).expect("data");
+        fs::write(fixture.paths.data_directory.join("old.index"), "old").expect("old index");
+        fs::create_dir_all(&fixture.paths.rebuild_directory).expect("rebuild");
+        fs::write(fixture.paths.rebuild_directory.join("new.index"), "new").expect("new index");
+        symlink(
+            &fixture.vault_root,
+            fixture.paths.index_root.join("previous-data"),
+        )
+        .expect("previous-data symlink");
+
+        let result = commit_index_rebuild(&fixture.paths);
+
+        assert!(matches!(
+            result,
+            Err(IndexRebuildError::InvalidPath(
+                IndexRebuildPathError::DataOverlapsVault
+            ))
+        ));
+        assert_eq!(fixture.read_vault_note(), "private");
+        assert!(fixture.paths.data_directory.join("old.index").exists());
+        assert!(fixture.paths.rebuild_directory.join("new.index").exists());
     }
 
     #[test]
@@ -495,6 +632,20 @@ mod tests {
         fn read_vault_note(&self) -> String {
             fs::read_to_string(self.vault_root.join("Note.md")).expect("vault note")
         }
+    }
+
+    fn start_rebuild_with_paths(
+        paths: &IndexRebuildPaths,
+    ) -> Result<IndexRebuildStart, IndexRebuildError> {
+        let scan = synthetic_scan(1, 1);
+        let mut queue = IndexingQueue::open_in_memory().expect("queue");
+        start_index_rebuild(
+            &mut queue,
+            &scan,
+            paths,
+            1,
+            IndexRebuildReason::UserRequested,
+        )
     }
 
     fn synthetic_scan(count: usize, generation_seed: u64) -> ScanSummary {
