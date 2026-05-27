@@ -80,7 +80,7 @@ public struct DocumentSummaryPipeline: Sendable {
             await progress?(.finalizing)
             let response = try await generator.generate(prompt: prompt, maxTokens: request.limits.finalOutputTokens)
             try await ensureFresh(request.key, isFresh: isFresh)
-            let summary = parseSummary(
+            let summary = DocumentSummaryParser.parse(
                 response,
                 metadata: SummaryMetadata(
                     sourceByteCount: request.snapshot.byteCount,
@@ -124,7 +124,7 @@ public struct DocumentSummaryPipeline: Sendable {
         try await ensureFresh(request.key, isFresh: isFresh)
         let response = try await generator.generate(prompt: finalPrompt, maxTokens: request.limits.finalOutputTokens)
         try await ensureFresh(request.key, isFresh: isFresh)
-        let summary = parseSummary(
+        let summary = DocumentSummaryParser.parse(
             response,
             metadata: SummaryMetadata(
                 sourceByteCount: request.snapshot.byteCount,
@@ -184,59 +184,6 @@ public struct DocumentSummaryPipeline: Sendable {
         )
     }
 
-    private func parseSummary(_ response: String, metadata: SummaryMetadata) -> DocumentSummary {
-        let lines = response
-            .split(separator: "\n", omittingEmptySubsequences: false)
-            .map { String($0).trimmingCharacters(in: .whitespaces) }
-
-        var overview: [String] = []
-        var keyPoints: [String] = []
-        var actions: [String] = []
-        var section = "overview"
-
-        for line in lines where !line.isEmpty {
-            if line.hasPrefix("핵심 요약") || line.localizedCaseInsensitiveContains("summary") {
-                section = "overview"
-                let value = valueAfterColon(line)
-                if !value.isEmpty { overview.append(value) }
-            } else if line.hasPrefix("주요 포인트") || line.localizedCaseInsensitiveContains("key point") {
-                section = "points"
-                let value = valueAfterColon(line)
-                if !value.isEmpty { keyPoints.append(cleanBullet(value)) }
-            } else if line.hasPrefix("액션") || line.localizedCaseInsensitiveContains("action") {
-                section = "actions"
-                let value = valueAfterColon(line)
-                if !value.isEmpty { actions.append(cleanBullet(value)) }
-            } else {
-                switch section {
-                case "points":
-                    keyPoints.append(cleanBullet(line))
-                case "actions":
-                    actions.append(cleanBullet(line))
-                default:
-                    overview.append(line)
-                }
-            }
-        }
-
-        return DocumentSummary(
-            overview: overview.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines),
-            keyPoints: keyPoints.filter { !$0.isEmpty },
-            actionItems: actions.isEmpty ? ["없음"] : actions.filter { !$0.isEmpty },
-            metadata: metadata
-        )
-    }
-
-    private func valueAfterColon(_ line: String) -> String {
-        guard let colon = line.firstIndex(of: ":") else {
-            return ""
-        }
-        return String(line[line.index(after: colon)...]).trimmingCharacters(in: .whitespaces)
-    }
-
-    private func cleanBullet(_ line: String) -> String {
-        line.trimmingCharacters(in: CharacterSet(charactersIn: "-•* \t"))
-    }
 }
 
 private extension Array {
