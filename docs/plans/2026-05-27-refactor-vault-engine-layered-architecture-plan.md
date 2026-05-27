@@ -537,7 +537,7 @@ Default stop conditions:
   - Build: delete temporary `read_ffi` re-export if no longer needed.
   - Verify: `cargo test --manifest-path vault-engine/Cargo.toml`.
 
-- [ ] **RA02.05 Re-run ABI symbol and layout gate**
+- [x] **RA02.05 Re-run ABI symbol and layout gate**
   - Build: no code change after RA02.04.
   - Verify: exported `engine_*` symbols match RA00.05, and ABI layout manifest from RA00.11 is unchanged.
 
