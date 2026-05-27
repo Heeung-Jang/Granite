@@ -6,6 +6,7 @@ import SwiftUI
 struct GraniteApp: App {
     @NSApplicationDelegateAdaptor(GraniteAppDelegate.self) private var appDelegate
     @StateObject private var appState = AppState()
+    @StateObject private var editorFontSettings = EditorFontSettings()
 
     init() {
         if CommandLine.arguments.contains("--help") {
@@ -211,6 +212,7 @@ struct GraniteApp: App {
         WindowGroup {
             RootView()
                 .environmentObject(appState)
+                .environmentObject(editorFontSettings)
                 .frame(minWidth: 1180, minHeight: 720)
                 .toolbar(removing: .title)
         }
@@ -224,6 +226,7 @@ struct GraniteApp: App {
         Settings {
             GraniteSettingsView()
                 .environmentObject(appState)
+                .environmentObject(editorFontSettings)
         }
     }
 }
