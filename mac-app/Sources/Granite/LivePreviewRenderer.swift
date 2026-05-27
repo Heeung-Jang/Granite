@@ -26,7 +26,8 @@ enum LivePreviewRenderer {
         revealRange: NSRange? = nil,
         linkStyleMap: LivePreviewLinkStyleMap = LivePreviewLinkStyleMap(),
         embedPreviewMap: LivePreviewEmbedPreviewMap = LivePreviewEmbedPreviewMap(),
-        markerStyle: LivePreviewMarkerStyle = .defaultValue
+        markerStyle: LivePreviewMarkerStyle = .defaultValue,
+        fontSet: LivePreviewFontSet = LivePreviewTheme.defaultFontSet
     ) -> MarkdownDecorationResult {
         let start = DispatchTime.now().uptimeNanoseconds
         if textView.hasMarkedText() {
@@ -42,7 +43,7 @@ enum LivePreviewRenderer {
         }
 
         if mode.rendersSourceOnly {
-            return applySourceMode(in: textView, range: requestedRange, mode: mode, start: start)
+            return applySourceMode(in: textView, range: requestedRange, mode: mode, fontSet: fontSet, start: start)
         }
 
         let text = textView.string as NSString
@@ -64,7 +65,7 @@ enum LivePreviewRenderer {
         let plan = LivePreviewAttributePlan(
             source: textView.string,
             visibleRange: visibleRange,
-            baseAttributes: baseAttributes()
+            baseAttributes: baseAttributes(fontSet: fontSet)
         )
         renderBlocks(
             source: textView.string,
@@ -73,7 +74,8 @@ enum LivePreviewRenderer {
             revealRange: resolvedRevealRange,
             linkStyleMap: linkStyleMap,
             embedPreviewMap: embedPreviewMap,
-            markerStyle: markerStyle
+            markerStyle: markerStyle,
+            fontSet: fontSet
         )
         let result = storage.withPreservedSelection(textView: textView, textLength: text.length) {
             var changes = AttributeChangeCounter()
@@ -97,6 +99,7 @@ enum LivePreviewRenderer {
         in textView: NSTextView,
         range requestedRange: NSRange?,
         mode: LivePreviewMode,
+        fontSet: LivePreviewFontSet,
         start: UInt64
     ) -> MarkdownDecorationResult {
         let text = textView.string as NSString
@@ -115,7 +118,7 @@ enum LivePreviewRenderer {
 
         let changes = storage.withPreservedSelection(textView: textView, textLength: text.length) {
             var changes = AttributeChangeCounter()
-            changes.replace(sourceAttributes(), to: storage, range: visibleRange)
+            changes.replace(sourceAttributes(fontSet: fontSet), to: storage, range: visibleRange)
             return changes
         }
 
@@ -137,7 +140,8 @@ enum LivePreviewRenderer {
         revealRange: NSRange,
         linkStyleMap: LivePreviewLinkStyleMap,
         embedPreviewMap: LivePreviewEmbedPreviewMap,
-        markerStyle: LivePreviewMarkerStyle
+        markerStyle: LivePreviewMarkerStyle,
+        fontSet: LivePreviewFontSet
     ) {
         let parseWindow = LivePreviewVisibleParseWindow.window(
             in: source,
@@ -167,7 +171,8 @@ enum LivePreviewRenderer {
                 range: blockRange,
                 listParagraphStyle: listContext.map {
                     cachedListParagraphStyle(depth: $0.depth, in: &listParagraphStylesByDepth)
-                }
+                },
+                fontSet: fontSet
             )
             applyBlockTokenAttributes(
                 block,
@@ -176,15 +181,16 @@ enum LivePreviewRenderer {
                 visibleRange: visibleRange,
                 markerStyle: markerStyle
             )
-            applyPropertyAttributes(properties, source: source, plan: plan, visibleRange: visibleRange)
-            applyTableAttributes(table, plan: plan, visibleRange: visibleRange)
-            applyEmbedAttributes(embedPreview, plan: plan, visibleRange: visibleRange)
+            applyPropertyAttributes(properties, source: source, plan: plan, visibleRange: visibleRange, fontSet: fontSet)
+            applyTableAttributes(table, plan: plan, visibleRange: visibleRange, fontSet: fontSet)
+            applyEmbedAttributes(embedPreview, plan: plan, visibleRange: visibleRange, fontSet: fontSet)
             applyInlineAttributes(
                 block,
                 source: source,
                 plan: plan,
                 visibleRange: visibleRange,
-                linkStyleMap: linkStyleMap
+                linkStyleMap: linkStyleMap,
+                fontSet: fontSet
             )
             concealTokens(
                 block,
@@ -204,12 +210,13 @@ enum LivePreviewRenderer {
         _ block: LivePreviewBlockSpan,
         plan: LivePreviewAttributePlan,
         range: NSRange,
-        listParagraphStyle: NSParagraphStyle?
+        listParagraphStyle: NSParagraphStyle?,
+        fontSet: LivePreviewFontSet
     ) {
         switch block.kind {
         case .heading(let level):
             plan.addAttributes([
-                .font: LivePreviewTheme.headingFont(level: level),
+                .font: fontSet.headingFont(level: level),
                 .foregroundColor: LivePreviewTheme.textColor,
                 .paragraphStyle: LivePreviewTheme.headingParagraphStyle(level: level)
             ], range: range)
@@ -225,14 +232,14 @@ enum LivePreviewRenderer {
             ], range: range)
         case .fencedCode:
             plan.addAttributes([
-                .font: LivePreviewTheme.codeFont,
+                .font: fontSet.codeFont,
                 .foregroundColor: LivePreviewTheme.codeColor,
                 .backgroundColor: LivePreviewTheme.codeBlockBackgroundColor,
                 .paragraphStyle: LivePreviewTheme.codeBlockParagraphStyle
             ], range: range)
         case .table:
             plan.addAttributes([
-                .font: LivePreviewTheme.baseFont,
+                .font: fontSet.baseFont,
                 .paragraphStyle: LivePreviewTheme.tableParagraphStyle
             ], range: range)
         case .horizontalRule:
@@ -253,7 +260,7 @@ enum LivePreviewRenderer {
             ], range: range)
         case .frontmatter:
             plan.addAttributes([
-                .font: LivePreviewTheme.baseFont,
+                .font: fontSet.baseFont,
                 .foregroundColor: LivePreviewTheme.propertyValueColor,
                 .backgroundColor: LivePreviewTheme.propertyBackgroundColor,
                 .paragraphStyle: LivePreviewTheme.propertyParagraphStyle
@@ -325,7 +332,8 @@ enum LivePreviewRenderer {
         _ properties: LivePreviewPropertyBlock?,
         source: String,
         plan: LivePreviewAttributePlan,
-        visibleRange: NSRange
+        visibleRange: NSRange,
+        fontSet: LivePreviewFontSet
     ) {
         guard let properties else {
             return
@@ -337,7 +345,7 @@ enum LivePreviewRenderer {
             let keyRange = NSIntersectionRange(row.keyRange.nsRange, visibleRange)
             if keyRange.length > 0 {
                 plan.addAttributes([
-                    .font: LivePreviewTheme.strongFont,
+                    .font: fontSet.strongFont,
                     .foregroundColor: LivePreviewTheme.propertyKeyColor,
                     .backgroundColor: LivePreviewTheme.propertyBackgroundColor
                 ], range: keyRange)
@@ -445,7 +453,8 @@ enum LivePreviewRenderer {
     private static func applyTableAttributes(
         _ table: LivePreviewTable?,
         plan: LivePreviewAttributePlan,
-        visibleRange: NSRange
+        visibleRange: NSRange,
+        fontSet: LivePreviewFontSet
     ) {
         guard let table else {
             return
@@ -457,7 +466,7 @@ enum LivePreviewRenderer {
                 continue
             }
             plan.addAttributes([
-                .font: LivePreviewTheme.strongFont,
+                .font: fontSet.strongFont,
                 .backgroundColor: LivePreviewTheme.tableHeaderBackgroundColor
             ], range: range)
         }
@@ -486,7 +495,8 @@ enum LivePreviewRenderer {
     private static func applyEmbedAttributes(
         _ preview: LivePreviewEmbedPreview?,
         plan: LivePreviewAttributePlan,
-        visibleRange: NSRange
+        visibleRange: NSRange,
+        fontSet: LivePreviewFontSet
     ) {
         guard let preview else {
             return
@@ -497,11 +507,12 @@ enum LivePreviewRenderer {
             return
         }
 
-        plan.addAttributes(embedAttributes(for: preview.status), range: targetRange)
+        plan.addAttributes(embedAttributes(for: preview.status, fontSet: fontSet), range: targetRange)
     }
 
     private static func embedAttributes(
-        for status: LivePreviewEmbedPreviewStatus
+        for status: LivePreviewEmbedPreviewStatus,
+        fontSet: LivePreviewFontSet
     ) -> [NSAttributedString.Key: Any] {
         let color: NSColor
         switch status {
@@ -515,7 +526,7 @@ enum LivePreviewRenderer {
             color = LivePreviewTheme.embedFallbackColor
         }
         return [
-            .font: LivePreviewTheme.strongFont,
+            .font: fontSet.strongFont,
             .foregroundColor: color,
             .backgroundColor: LivePreviewTheme.embedBackgroundColor
         ]
@@ -526,7 +537,8 @@ enum LivePreviewRenderer {
         source: String,
         plan: LivePreviewAttributePlan,
         visibleRange: NSRange,
-        linkStyleMap: LivePreviewLinkStyleMap
+        linkStyleMap: LivePreviewLinkStyleMap,
+        fontSet: LivePreviewFontSet
     ) {
         for inline in block.inlineSpans {
             let range = NSIntersectionRange(inline.sourceRange.nsRange, visibleRange)
@@ -535,12 +547,12 @@ enum LivePreviewRenderer {
             }
             switch inline.kind {
             case .strong:
-                plan.addAttributes([.font: LivePreviewTheme.strongFont], range: range)
+                plan.addAttributes([.font: fontSet.strongFont], range: range)
             case .emphasis:
                 plan.addAttributes([.obliqueness: 0.12], range: range)
             case .inlineCode:
                 plan.addAttributes([
-                    .font: LivePreviewTheme.codeFont,
+                    .font: fontSet.codeFont,
                     .foregroundColor: LivePreviewTheme.codeColor,
                     .backgroundColor: LivePreviewTheme.inlineCodeBackgroundColor
                 ], range: range)
@@ -1044,17 +1056,17 @@ enum LivePreviewRenderer {
         }
     }
 
-    private static func baseAttributes() -> [NSAttributedString.Key: Any] {
+    private static func baseAttributes(fontSet: LivePreviewFontSet) -> [NSAttributedString.Key: Any] {
         [
-            .font: LivePreviewTheme.baseFont,
+            .font: fontSet.baseFont,
             .foregroundColor: LivePreviewTheme.textColor,
             .paragraphStyle: LivePreviewTheme.baseParagraphStyle
         ]
     }
 
-    private static func sourceAttributes() -> [NSAttributedString.Key: Any] {
+    private static func sourceAttributes(fontSet: LivePreviewFontSet) -> [NSAttributedString.Key: Any] {
         [
-            .font: LivePreviewTheme.sourceFont,
+            .font: fontSet.sourceFont,
             .foregroundColor: LivePreviewTheme.textColor
         ]
     }

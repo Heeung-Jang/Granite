@@ -12,6 +12,7 @@ struct SourceNoteView: View {
     private static let fallbackProfileDebounceMilliseconds: UInt64 = 250
 
     @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var editorFontSettings: EditorFontSettings
     let vaultURL: URL
     let file: FileTreeItem
     let chrome: SourceNoteChrome
@@ -74,6 +75,7 @@ struct SourceNoteView: View {
                     embedPreviewMap: livePreviewEmbedPreviewMap,
                     markerStyle: livePreviewMarkerStyle,
                     documentTitle: file.displayName,
+                    fontSet: editorFontSettings.fontSet,
                     isActive: isActive,
                     focusRequestID: focusRequestID,
                     interactionHandler: handleEditorInteraction
