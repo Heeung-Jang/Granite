@@ -732,7 +732,7 @@ Default stop conditions:
   - Build: no code change after RA04.05f.
   - Verify: confirm searcher/writer/index directory lifetimes are unchanged and no adapter code reopens Tantivy per read/search call.
 
-- [ ] **RA04.06 Move filesystem scanner**
+- [x] **RA04.06 Move filesystem scanner**
   - Build: move `scanner.rs` to `adapters/fs/scanner.rs`.
   - Verify: scanner fixture tests pass and core does not import scanner.
 
