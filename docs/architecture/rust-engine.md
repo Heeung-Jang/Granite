@@ -54,6 +54,19 @@ deferred until the module boundaries are stable.
 - Remove compatibility re-exports in a separate cleanup step after all callers
   migrate.
 
+## Filesystem Resolution Boundary
+
+`core::paths` owns only path value types and pure string/path normalization.
+These operations remain outside `core` and are Phase 4 `adapters::fs`
+responsibilities:
+
+- `VaultRoot::open`
+- vault-root canonicalization
+- existing-relative-path resolution
+- symlink escape checks
+- `FileIdentity::from_metadata`
+- platform metadata extension usage such as `MetadataExt`
+
 ## Current Module Inventory
 
 | Current Module Or Consumer | Target Placement | Notes |

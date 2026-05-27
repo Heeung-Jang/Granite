@@ -555,7 +555,7 @@ Default stop conditions:
   - Build: move path/file identity value types that do not open or canonicalize filesystem paths into `core/paths.rs` or `core/files.rs`.
   - Verify: core denylist scan passes; path safety tests still pass through existing adapter code.
 
-- [ ] **RA03.01c Move filesystem resolution out of path domain**
+- [x] **RA03.01c Move filesystem resolution out of path domain**
   - Build: classify `VaultRoot::open`, canonicalization, symlink checks, `FileIdentity::from_metadata`, and metadata extension usage as Phase 4 adapter moves in `docs/architecture/rust-engine.md`.
   - Verify: no filesystem resolution code is moved into `core`.
 
