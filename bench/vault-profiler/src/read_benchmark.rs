@@ -9,8 +9,9 @@ use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
-use vault_engine::read_api::{
-    LocalGraphDepth, LocalGraphRequest, PageRequest, ReadApiError, ReadState, open_vault_read_api,
+use vault_engine::diagnostics::profiler::{
+    LocalGraphDepth, LocalGraphRequest, PageRequest, ReadApiError, ReadApiResult, ReadPage,
+    ReadState, SearchHit, VaultReadApi, open_vault_read_api,
 };
 
 #[derive(Debug, Clone)]
@@ -263,7 +264,7 @@ pub fn summaries_from_samples(samples: &[ReadApiBenchmarkSample]) -> Vec<ReadApi
 
 fn sampled_paths(
     options: &ReadApiBenchmarkOptions,
-    api: &vault_engine::read_api::VaultReadApi,
+    api: &VaultReadApi,
     result_limit: usize,
 ) -> Result<Vec<String>, Box<dyn Error>> {
     let mut paths = options.sampled_paths.clone();
@@ -286,7 +287,7 @@ fn sampled_paths(
 
 fn benchmark_queries(
     options: &ReadApiBenchmarkOptions,
-    api: &vault_engine::read_api::VaultReadApi,
+    api: &VaultReadApi,
     result_limit: usize,
 ) -> Result<Vec<String>, Box<dyn Error>> {
     let mut queries = options.queries.clone();
@@ -327,7 +328,7 @@ fn read_lines(path: &Path) -> Result<Vec<String>, Box<dyn Error>> {
 }
 
 fn measure_search_surface<F>(
-    _api: &vault_engine::read_api::VaultReadApi,
+    _api: &VaultReadApi,
     samples: &mut Vec<ReadApiBenchmarkSample>,
     input_redactor: &InputRedactor,
     surface: &str,
@@ -335,12 +336,7 @@ fn measure_search_surface<F>(
     result_limit: usize,
     mut read: F,
 ) where
-    F: FnMut(
-        &str,
-        PageRequest,
-    ) -> vault_engine::read_api::ReadApiResult<
-        vault_engine::read_api::ReadPage<vault_engine::read_api::SearchHit>,
-    >,
+    F: FnMut(&str, PageRequest) -> ReadApiResult<ReadPage<SearchHit>>,
 {
     let query_hash = input_redactor.hash(query.as_bytes());
     let start = Instant::now();

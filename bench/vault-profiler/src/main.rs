@@ -7,11 +7,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
 use std::time::Instant;
-use vault_engine::benchmarks::{
-    SnippetStorageMode, VaultBackendBenchmarkOptions, WholeVaultGraphBenchmarkOptions,
+use vault_engine::diagnostics::profiler::{
+    SearchDocument, SnippetStorageMode, TantivySearchError, TantivySearchIndex,
+    VaultBackendBenchmarkOptions, WholeVaultGraphBenchmarkOptions,
     run_shared_backend_benchmark_from_vault, run_whole_vault_graph_snapshot_benchmark,
 };
-use vault_engine::tantivy_search::{TantivySearchError, TantivySearchIndex};
 use vault_profiler::corpus::{QueryCorpusOptions, generate_query_corpus_bundle};
 use vault_profiler::read_benchmark::{ReadApiBenchmarkOptions, run_read_api_benchmark};
 use vault_profiler::read_indexer::{ReadIndexMaterializeOptions, materialize_read_index};
@@ -1697,13 +1697,13 @@ mod tests {
         let mut index = TantivySearchIndex::open_in_dir(&index_dir).expect("index");
         index
             .replace_documents(&[
-                vault_engine::sqlite_fts::SearchDocument {
+                SearchDocument {
                     file_id: "alpha".to_string(),
                     path: "Alpha.md".to_string(),
                     title: "Alpha".to_string(),
                     body: "body token".to_string(),
                 },
-                vault_engine::sqlite_fts::SearchDocument {
+                SearchDocument {
                     file_id: "beta".to_string(),
                     path: "Beta.md".to_string(),
                     title: "Beta".to_string(),

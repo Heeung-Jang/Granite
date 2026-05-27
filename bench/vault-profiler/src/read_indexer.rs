@@ -6,19 +6,14 @@ use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
-use vault_engine::attachments::{
+use vault_engine::diagnostics::profiler::{
     AttachmentReferenceSource, AttachmentRejectReason, AttachmentResolutionState,
-};
-use vault_engine::index::{
     AttachmentRecord, FileRecord, HeadingRecord, IndexedFileRecords, LinkEdgeRecord, MetadataStore,
-    PropertyRecord, TagRecord, TagSource, slugify_heading,
+    MarkdownLink, ParsedMarkdown, PropertyRecord, ScanEntry, ScanEntryKind, ScanSummary,
+    SearchDocument, TagRecord, TagSource, TantivySearchIndex, VaultRoot, WikiLink, classify_file,
+    expected_read_schema_metadata, lookup_key, normalize_relative_path, parse_markdown, scan_vault,
+    slugify_heading,
 };
-use vault_engine::parser::{MarkdownLink, ParsedMarkdown, WikiLink, parse_markdown};
-use vault_engine::paths::{VaultRoot, lookup_key, normalize_relative_path};
-use vault_engine::read_api::expected_read_schema_metadata;
-use vault_engine::scanner::{ScanEntry, ScanEntryKind, ScanSummary, classify_file, scan_vault};
-use vault_engine::sqlite_fts::SearchDocument;
-use vault_engine::tantivy_search::TantivySearchIndex;
 
 #[derive(Debug, Clone)]
 pub struct ReadIndexMaterializeOptions {
@@ -555,7 +550,7 @@ fn rounded_ms(value: f64) -> f64 {
 mod tests {
     use super::*;
     use tempfile::tempdir;
-    use vault_engine::read_api::{PageRequest, open_vault_read_api};
+    use vault_engine::diagnostics::profiler::{PageRequest, open_vault_read_api};
 
     #[test]
     fn materializes_fixture_read_index_for_read_api() {

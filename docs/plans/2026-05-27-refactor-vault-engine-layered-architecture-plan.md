@@ -1246,66 +1246,73 @@ Default stop conditions:
   - Evidence: existing artifact scan matched only allowed aggregate keys/labels such as `snippet_storage_mode`, `snippet_result_count`, and `tags`; no private paths, raw query text, relative path fields, or file IDs were present.
   - Stop condition: any matched token is not an aggregate field, redacted alias, or documented fixture-only value.
 
-- [ ] **RA06.06a Inventory profiler legacy imports**
+- [x] **RA06.06a Inventory profiler legacy imports**
   - Build: no code change; list every `bench/vault-profiler` import from old public modules before changing visibility.
   - Verify:
     ```sh
     rg -n "vault_engine::(attachments|index|parser|paths|scanner|sqlite_fts|tantivy_search|benchmarks|read_api)" bench/vault-profiler/src
     ```
+  - Evidence: inventory found legacy imports in `main.rs`, `synthetic.rs`, `read_indexer.rs`, and `read_benchmark.rs` before migration.
   - Stop condition: a legacy public module is made private before its profiler import is migrated.
 
-- [ ] **RA06.06b Create profiler-facing diagnostics facade**
+- [x] **RA06.06b Create profiler-facing diagnostics facade**
   - Build: expose intentional profiler APIs through `vault_engine::diagnostics`, including benchmark types, SQLite FTS benchmark support if retained, and any read-indexer helpers that otherwise force public access to internal modules.
   - Verify:
     ```sh
     cargo test --manifest-path bench/vault-profiler/Cargo.toml
     rg -n "vault_engine::(attachments|index|parser|paths|scanner|sqlite_fts|tantivy_search|benchmarks|read_api)" bench/vault-profiler/src
     ```
+  - Evidence: added `vault_engine::diagnostics::profiler` facade and moved profiler imports through it; profiler tests passed and legacy import scan returned no matches.
   - Stop condition: `bench/vault-profiler` still imports legacy internals directly after the facade migration.
 
-- [ ] **RA06.06c1 Migrate profiler benchmark imports**
+- [x] **RA06.06c1 Migrate profiler benchmark imports**
   - Build: update only `bench/vault-profiler` imports that point at `vault_engine::benchmarks` to the new diagnostics facade.
   - Verify:
     ```sh
     rg -n "vault_engine::benchmarks|crate::benchmarks" bench/vault-profiler/src vault-engine/src
     cargo test --manifest-path bench/vault-profiler/Cargo.toml
     ```
+  - Evidence: benchmark import scan returned no matches after `main.rs` and `synthetic.rs` moved to `vault_engine::diagnostics::profiler`.
   - Stop condition: benchmark type names or artifact fields must change to compile.
 
-- [ ] **RA06.06c2 Migrate profiler SQLite FTS/search DTO imports**
+- [x] **RA06.06c2 Migrate profiler SQLite FTS/search DTO imports**
   - Build: update only profiler imports that point at `sqlite_fts`, search documents, and search result DTOs to `core::search` or the diagnostics facade chosen in RA06.06b.
   - Verify:
     ```sh
     rg -n "vault_engine::sqlite_fts|crate::sqlite_fts|SearchDocument|SearchResult" bench/vault-profiler/src
     cargo test --manifest-path bench/vault-profiler/Cargo.toml
     ```
+  - Evidence: no `vault_engine::sqlite_fts`/`crate::sqlite_fts` imports remain; `SearchDocument` is imported only from the diagnostics facade and profiler tests passed.
   - Stop condition: production SQLite FTS ownership must be decided before imports can move cleanly.
 
-- [ ] **RA06.06c3 Migrate profiler read-indexer imports**
+- [x] **RA06.06c3 Migrate profiler read-indexer imports**
   - Build: update only imports needed to materialize/read the index for profiler scenarios; route them through diagnostics APIs rather than `read_api`, `indexing_pipeline`, `index_rebuild`, or adapter internals.
   - Verify:
     ```sh
     rg -n "vault_engine::(read_api|indexing_pipeline|index_rebuild|index|indexing_queue|tantivy_search)" bench/vault-profiler/src
     cargo test --manifest-path bench/vault-profiler/Cargo.toml
     ```
+  - Evidence: read-indexer and read-benchmark imports now come from `vault_engine::diagnostics::profiler`; scan returned no legacy read/index/search matches.
   - Stop condition: profiler still needs direct adapter/store constructors after the diagnostics facade is added.
 
-- [ ] **RA06.06c4 Migrate profiler parser/path/scanner helper imports**
+- [x] **RA06.06c4 Migrate profiler parser/path/scanner helper imports**
   - Build: update only imports from `parser`, `paths`, `scanner`, and `attachments` to intentional core or diagnostics facades.
   - Verify:
     ```sh
     rg -n "vault_engine::(attachments|parser|paths|scanner)" bench/vault-profiler/src
     cargo test --manifest-path bench/vault-profiler/Cargo.toml
     ```
+  - Evidence: parser/path/scanner/attachment helper imports are now routed through `vault_engine::diagnostics::profiler`; scan returned no matches.
   - Stop condition: a helper still performs filesystem resolution or parsing behind an accidental public module path.
 
-- [ ] **RA06.06c5 Run profiler legacy-import closure scan**
+- [x] **RA06.06c5 Run profiler legacy-import closure scan**
   - Build: no code change after RA06.06c1 through RA06.06c4.
   - Verify:
     ```sh
     rg -n "vault_engine::(attachments|index|parser|paths|scanner|sqlite_fts|tantivy_search|benchmarks|read_api|save|graph|index_rebuild|indexing_pipeline|startup_reconciliation|watcher_burst)" bench/vault-profiler/src
     cargo test --manifest-path bench/vault-profiler/Cargo.toml
     ```
+  - Evidence: closure scan returned no matches; `cargo test --manifest-path bench/vault-profiler/Cargo.toml` passed.
   - Stop condition: any profiler import still points at a legacy internal module before Phase 7 starts.
 
 - [ ] **RA06.07a Retarget SQLite FTS DTO imports**
