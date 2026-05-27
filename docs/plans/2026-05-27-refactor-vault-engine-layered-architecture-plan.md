@@ -563,7 +563,7 @@ Default stop conditions:
   - Build: move `ScanEntryKind`, `ScanEntry`, `ScanSummary`, and pure `classify_file` into `core/scan.rs` or `core/files.rs`.
   - Verify: scanner tests pass and filesystem walking stays outside `core`.
 
-- [ ] **RA03.01e Move parser output and property value types**
+- [x] **RA03.01e Move parser output and property value types**
   - Build: move parser output structs/enums and property value types before metadata conversion moves.
   - Verify: parser fixture tests and metadata property tests still pass.
 
