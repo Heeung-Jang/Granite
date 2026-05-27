@@ -7,35 +7,41 @@ use serde::Serialize;
 
 use crate::adapters::fs::path_resolver::VaultRoot;
 use crate::adapters::fs::scanner::scan_vault;
-use crate::adapters::sqlite::{
-    IndexingQueue, IndexingQueueError, IndexingQueueReason, IndexingQueueSummary,
-};
-use crate::adapters::sqlite::{MetadataStore, MetadataStoreError};
+#[cfg(test)]
+use crate::adapters::sqlite::IndexingQueueSummary;
+use crate::adapters::sqlite::{IndexingQueueError, MetadataStoreError};
+#[cfg(test)]
+use crate::adapters::sqlite::{IndexingQueueReason, MetadataStore};
+#[cfg(test)]
+use crate::adapters::tantivy::TantivySearchIndex;
 use crate::adapters::tantivy::{
-    TantivyIndexingStageMetrics, TantivySearchError, TantivySearchIndex, TantivyWriterOptions,
+    TantivyIndexingStageMetrics, TantivySearchError, TantivyWriterOptions,
 };
 use crate::core::files::FileIdentity;
 use crate::core::paths::{PathError, lookup_key};
 use crate::core::scan::ScanEntryKind;
 pub use crate::core::search::SnippetStorageMode;
 use crate::use_cases::index_rebuild::IndexRebuildError;
-pub use crate::use_cases::index_rebuild::{
-    run_full_rebuild_pipeline, run_full_rebuild_pipeline_and_commit,
-};
+pub use crate::use_cases::index_rebuild::run_full_rebuild_pipeline;
+#[cfg(test)]
+pub use crate::use_cases::index_rebuild::run_full_rebuild_pipeline_and_commit;
+#[cfg(test)]
 pub use crate::use_cases::process_indexing_queue::{
     QueueBatchIndexOptions, QueueLeaseBatch, QueuePipelineItem, lease_queue_batch,
     process_indexing_queue_batch,
 };
+#[cfg(test)]
 use crate::use_cases::process_indexing_queue::{
     record_queue_failure, record_queue_failures, source_for_queue_item,
 };
+#[cfg(test)]
+pub use crate::use_cases::read_parse_documents::read_parse_source;
 pub use crate::use_cases::read_parse_documents::{
-    ParsedMetadataCounts, ParsedSearchWorkItem, PipelineCorpusStats, ReadParsePipelineRun,
-    ReadParseTiming, TimedSearchDocument, read_parse_source, read_parse_source_at,
-    read_search_document, run_read_parse_pipeline,
+    PipelineCorpusStats, read_search_document, run_read_parse_pipeline,
 };
+#[cfg(test)]
 use crate::use_cases::rebuild_tantivy::merge_tantivy_metrics;
-pub use crate::use_cases::rebuild_tantivy::{TantivyPipelineRun, run_tantivy_rebuild_pipeline};
+pub use crate::use_cases::rebuild_tantivy::run_tantivy_rebuild_pipeline;
 
 pub const MAX_DEFAULT_READ_PARSE_WORKERS: usize = 4;
 const DEFAULT_CHANNEL_CAPACITY: usize = 32;
@@ -104,10 +110,12 @@ pub enum IndexingPipelineTier {
     FilenameReady,
     BodyIndexing,
     Complete,
+    #[cfg(test)]
     Stale,
     Error,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum IndexingProgressStage {
@@ -118,6 +126,7 @@ pub enum IndexingProgressStage {
     CommitRebuild,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct IndexingProgressSnapshot {
     pub generation: u64,
@@ -130,6 +139,7 @@ pub struct IndexingProgressSnapshot {
     pub cancelled_count: usize,
 }
 
+#[cfg(test)]
 impl IndexingProgressSnapshot {
     pub fn from_queue_summary(
         generation: u64,
@@ -177,6 +187,7 @@ pub struct IndexingTierTransition {
 }
 
 impl ProductionIndexingPipelineResult {
+    #[cfg(test)]
     pub fn new(
         generation: u64,
         processed_count: usize,
@@ -253,7 +264,6 @@ pub struct SearchDocumentSource {
 pub struct LoadedSearchDocumentSources {
     pub sources: Vec<SearchDocumentSource>,
     pub stages: PipelineCorpusStageMetrics,
-    pub tier: IndexingPipelineTier,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -296,12 +306,12 @@ pub fn load_search_document_sources(
             scan_micros,
             source_collection_micros,
         },
-        tier: IndexingPipelineTier::Discovered,
     })
 }
 
+#[cfg(test)]
 pub(crate) fn lease_queue_batch_impl(
-    queue: &mut IndexingQueue,
+    queue: &mut crate::adapters::sqlite::IndexingQueue,
     root: &VaultRoot,
     limit: usize,
 ) -> IndexingPipelineResult<QueueLeaseBatch> {
@@ -314,8 +324,9 @@ pub(crate) fn lease_queue_batch_impl(
     Ok(QueueLeaseBatch { items })
 }
 
+#[cfg(test)]
 pub(crate) fn process_indexing_queue_batch_impl(
-    queue: &mut IndexingQueue,
+    queue: &mut crate::adapters::sqlite::IndexingQueue,
     metadata_store: &mut MetadataStore,
     tantivy_index: &mut TantivySearchIndex,
     root: &VaultRoot,
@@ -491,6 +502,7 @@ pub(crate) fn process_indexing_queue_batch_impl(
     ))
 }
 
+#[cfg(test)]
 fn production_result(
     generation: u64,
     processed_count: usize,
@@ -579,7 +591,9 @@ fn duration_micros_nonzero(duration: Duration) -> u64 {
 mod tests {
     use super::*;
     use crate::adapters::fs::index_directory::mark_engine_owned_for_test;
-    use crate::adapters::sqlite::{FileIndexStatus, FileRecord, IndexSchemaMetadata};
+    use crate::adapters::sqlite::{
+        FileIndexStatus, FileRecord, IndexSchemaMetadata, IndexingQueue,
+    };
     use crate::adapters::sqlite::{IndexingQueueReason, IndexingQueueStatus};
     use crate::use_cases::index_rebuild::{
         IndexRebuildError, IndexRebuildPathError, IndexRebuildPaths,
@@ -1151,6 +1165,20 @@ mod tests {
         assert!(!json.contains(".md"));
         assert!(!json.contains("Home"));
         assert!(!json.contains("/"));
+
+        let stages = [
+            (IndexingProgressStage::LeaseQueue, "lease_queue"),
+            (IndexingProgressStage::ReadParse, "read_parse"),
+            (IndexingProgressStage::MetadataWrite, "metadata_write"),
+            (IndexingProgressStage::SearchIndex, "search_index"),
+            (IndexingProgressStage::CommitRebuild, "commit_rebuild"),
+        ];
+        for (stage, serialized) in stages {
+            assert_eq!(
+                serde_json::to_string(&stage).expect("stage json"),
+                format!("\"{serialized}\"")
+            );
+        }
     }
 
     fn metadata_store() -> MetadataStore {

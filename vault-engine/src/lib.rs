@@ -12,7 +12,6 @@ pub(crate) mod graph;
 pub(crate) mod index;
 #[cfg(test)]
 pub(crate) mod index_rebuild;
-pub mod indexing_pipeline;
 #[cfg(test)]
 pub(crate) mod indexing_queue;
 #[cfg(test)]

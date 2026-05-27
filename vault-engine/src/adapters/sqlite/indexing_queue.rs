@@ -4,7 +4,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rusqlite::{Connection, OptionalExtension, params};
 
-use crate::adapters::sqlite::{FileRecord, MAX_INDEX_ERROR_CHARS};
+use crate::adapters::sqlite::FileRecord;
+#[cfg(test)]
+use crate::adapters::sqlite::MAX_INDEX_ERROR_CHARS;
 use crate::core::scan::ScanEntryKind;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,6 +45,7 @@ pub enum IndexingQueueStatus {
     Cancelled,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct IndexingQueueSummary {
     pub pending: usize,
@@ -69,6 +72,7 @@ impl IndexingQueue {
         Self::from_connection(Connection::open(path)?)
     }
 
+    #[cfg(test)]
     pub fn open_in_memory() -> IndexingQueueResult<Self> {
         Self::from_connection(Connection::open_in_memory()?)
     }
@@ -126,6 +130,7 @@ impl IndexingQueue {
             ))
     }
 
+    #[cfg(test)]
     pub fn lease_batch(&mut self, limit: usize) -> IndexingQueueResult<Vec<IndexingQueueItem>> {
         if limit == 0 {
             return Ok(Vec::new());
@@ -163,10 +168,12 @@ impl IndexingQueue {
         Ok(leased)
     }
 
+    #[cfg(test)]
     pub fn complete(&mut self, item_id: i64) -> IndexingQueueResult<()> {
         self.update_terminal_status(item_id, IndexingQueueStatus::Completed, None)
     }
 
+    #[cfg(test)]
     pub fn record_failure(
         &mut self,
         item_id: i64,
@@ -207,6 +214,7 @@ impl IndexingQueue {
             ))
     }
 
+    #[cfg(test)]
     pub fn cancel_generation(&mut self, generation: u64) -> IndexingQueueResult<usize> {
         let now = system_time_to_unix_ms(Some(SystemTime::now()));
         let updated = self.connection.execute(
@@ -218,6 +226,7 @@ impl IndexingQueue {
         Ok(updated)
     }
 
+    #[cfg(test)]
     pub fn recover_interrupted(&mut self) -> IndexingQueueResult<usize> {
         let now = system_time_to_unix_ms(Some(SystemTime::now()));
         let updated = self.connection.execute(
@@ -229,6 +238,7 @@ impl IndexingQueue {
         Ok(updated)
     }
 
+    #[cfg(test)]
     pub fn summary(&self) -> IndexingQueueResult<IndexingQueueSummary> {
         let mut statement = self
             .connection
@@ -253,6 +263,7 @@ impl IndexingQueue {
         Ok(summary)
     }
 
+    #[cfg(test)]
     pub fn get(&self, item_id: i64) -> IndexingQueueResult<Option<IndexingQueueItem>> {
         self.connection
             .query_row(
@@ -290,6 +301,7 @@ impl IndexingQueue {
         Ok(())
     }
 
+    #[cfg(test)]
     fn update_terminal_status(
         &mut self,
         item_id: i64,
@@ -404,6 +416,7 @@ pub(crate) fn unix_ms_to_system_time(value: Option<i64>) -> Option<SystemTime> {
     value.map(|millis| UNIX_EPOCH + Duration::from_millis(millis as u64))
 }
 
+#[cfg(test)]
 pub(crate) fn truncate_queue_error(error: &str) -> String {
     let trimmed = error.trim();
     if trimmed.chars().count() <= MAX_INDEX_ERROR_CHARS {
@@ -453,6 +466,7 @@ pub(crate) fn queue_reason_from_str(reason: &str) -> Result<IndexingQueueReason,
     }
 }
 
+#[cfg(test)]
 pub(crate) fn queue_status_to_str(status: IndexingQueueStatus) -> &'static str {
     match status {
         IndexingQueueStatus::Pending => "pending",

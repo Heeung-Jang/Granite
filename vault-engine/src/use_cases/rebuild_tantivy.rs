@@ -75,6 +75,7 @@ pub fn run_tantivy_rebuild_pipeline(
     })
 }
 
+#[cfg(test)]
 pub(crate) fn merge_tantivy_metrics(
     left: TantivyIndexingStageMetrics,
     right: TantivyIndexingStageMetrics,

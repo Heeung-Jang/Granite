@@ -1396,7 +1396,7 @@ Default stop conditions:
     cargo test --manifest-path vault-engine/Cargo.toml
     ```
   - Stop condition: deleting a compatibility module would require changing production logic in the same commit.
-  - Evidence: internal imports now target `core`, `adapters`, or `use_cases` owners directly. `parser`, `paths`, and `scanner` root shims were removed after moving parser/scanner tests to owner modules; `indexing_pipeline` implementation moved to `use_cases::indexing_pipeline` with only a thin temporary public re-export. The legacy import scan returned no matches in `core`, `adapters`, `use_cases`, `ffi`, or `diagnostics`; full `vault-engine` and `vault-profiler` tests passed without warnings.
+  - Evidence: internal imports now target `core`, `adapters`, or `use_cases` owners directly. `parser`, `paths`, `scanner`, and `indexing_pipeline` root shims were removed after moving callers/tests to owner modules. The legacy import scan returned no matches in `core`, `adapters`, `use_cases`, `ffi`, or `diagnostics`; full `vault-engine` and `vault-profiler` tests passed without warnings.
 
 - [x] **RA07.00b Classify `errors.rs` before visibility reduction**
   - Build: decide whether `errors.rs` is a deliberate cross-layer contract or split layer-specific errors into owning modules before `lib.rs` public cleanup begins.
@@ -1411,7 +1411,7 @@ Default stop conditions:
 - [x] **RA07.01 Rewrite `lib.rs` module exports**
   - Build: expose `pub mod ffi` and intentional public facades only; make internals `pub(crate)` where possible.
   - Verify: Rust tests compile without relying on unintended public modules.
-  - Evidence: `lib.rs` now exposes stable `ffi` and `diagnostics` plus the documented temporary `indexing_pipeline` facade only. Parser/path/scanner are internal, legacy storage/search/read/save/rebuild/graph/watcher roots are test-only or removed, and full Rust/profiler tests pass.
+  - Evidence: `lib.rs` now exposes stable `ffi` and `diagnostics` only. Parser/path/scanner are internal, legacy storage/search/read/save/rebuild/graph/watcher roots are test-only or removed, and full Rust/profiler tests pass.
 
 - [x] **RA07.01a Reduce public surface in two passes**
   - Build: first change `pub mod` to `pub(crate) mod` only for modules with no external Rust consumers. Then remove transitional modules in a separate step.
@@ -1474,7 +1474,7 @@ Default stop conditions:
   - Evidence: FFI save error mapping imports `use_cases::save_note` directly; diagnostics profiler/ABI imports read DTOs from `use_cases::read_*`; diagnostics benchmarks import rebuild paths from `use_cases::index_rebuild`; `read_api`, `save`, and `index_rebuild` are now test-only in `lib.rs`. The listed scans returned no matches and all listed tests passed without warnings. `indexing_pipeline` remains public because closing it still exposes dead-code warnings in production queue/rebuild progress contracts that require a separate ownership cleanup.
   - Stop condition: reducing `indexing_pipeline` visibility produces dead-code warnings that require a separate ownership cleanup.
 
-- [ ] **RA07.01b3 Make save/rebuild/indexing compatibility modules private**
+- [x] **RA07.01b3 Make save/rebuild/indexing compatibility modules private**
   - Build: change only `save`, `read_api`, `index_rebuild`, and `indexing_pipeline` legacy modules after FFI and profiler consumers use use-case/diagnostics facades.
   - Verify:
     ```sh
@@ -1487,7 +1487,7 @@ Default stop conditions:
     cargo test --manifest-path vault-engine/Cargo.toml
     ```
   - Stop condition: FFI still calls one of these legacy modules directly.
-  - Progress: `save`, `read_api`, and `index_rebuild` are test-only; `indexing_pipeline` implementation now lives under `use_cases::indexing_pipeline`. The crate-root `indexing_pipeline` module remains as a thin public re-export to keep staged migration warning-free until queue/rebuild progress DTOs are split or connected to production callers.
+  - Evidence: `save`, `read_api`, and `index_rebuild` remain test-only compatibility modules, and the crate-root `indexing_pipeline` shim was deleted after queue processing was made test-only and diagnostics/profiler callers used `diagnostics` or `use_cases` owners. The legacy external and internal import scans returned no matches, `lib.rs` now exposes only `diagnostics` and `ffi`, `cargo fmt --manifest-path vault-engine/Cargo.toml --check`, full `vault-engine` tests, and `cargo test --manifest-path bench/vault-profiler/Cargo.toml` passed without warnings.
 
 - [x] **RA07.01b4a Retarget graph compatibility consumers**
   - Build: retarget remaining internal graph DTO/constant consumers away from the legacy `graph` facade before reducing graph/watcher public modules.
@@ -1546,7 +1546,7 @@ Default stop conditions:
     cargo test --manifest-path vault-engine/Cargo.toml
     cargo test --manifest-path bench/vault-profiler/Cargo.toml
     ```
-  - Evidence: `save`, `index_rebuild`, and `file_watcher` root compatibility shims are now test-only, so their production contracts live under owning modules or remain inactive until integration. The public API grep now shows only `diagnostics`, `ffi`, and the temporary `indexing_pipeline` facade. `docs/architecture/rust-engine.md` documents the stable public contracts, the temporary facade, and the removed/test-only compatibility modules.
+  - Evidence: `save`, `index_rebuild`, and `file_watcher` root compatibility shims are now test-only, so their production contracts live under owning modules or remain inactive until integration. The public API grep now shows only `diagnostics` and `ffi`. `docs/architecture/rust-engine.md` documents the stable public contracts and the removed/test-only compatibility modules.
   - Stop condition: any remaining public module lacks a documented reason in `docs/architecture/rust-engine.md`.
 
 - [x] **RA07.01c Keep diagnostics public by design if profiler still needs it**
@@ -1562,9 +1562,9 @@ Default stop conditions:
 - [x] **RA07.03 Remove transitional re-exports**
   - Build: delete compatibility modules added only for incremental migration.
   - Verify: `rg "read_ffi|crate::index::MetadataStore|crate::tantivy_search|crate::indexing_queue|crate::paths|crate::scanner|crate::parser|crate::attachments|crate::graph|crate::graph_key|crate::save|crate::read_api|crate::index_rebuild|crate::indexing_pipeline|crate::startup_reconciliation|crate::watcher_burst" vault-engine/src` returns only intentional references or none.
-  - Evidence: the grep returned only `read_ffi_*` test-name false positives in `ffi/mod.rs`; no compatibility import or re-export path remains from that list. `parser`, `paths`, and `scanner` were removed, while the deliberate temporary `indexing_pipeline` public facade is a thin owner re-export documented in `docs/architecture/rust-engine.md`.
+  - Evidence: the grep returned only `read_ffi_*` test-name false positives in `ffi/mod.rs`; no compatibility import or re-export path remains from that list. `parser`, `paths`, `scanner`, and `indexing_pipeline` were removed.
 
-- [ ] **RA07.03a Remove one compatibility module per commit**
+- [x] **RA07.03a Remove one compatibility module per commit**
   - Build: delete compatibility modules one at a time after the matching grep is clean.
   - Verify: run the narrow test for that module plus full Rust tests after each deletion.
   - Stop condition: deleting one shim requires changing unrelated behavior or public facade policy.
@@ -1620,6 +1620,19 @@ Default stop conditions:
   - Evidence: production code and profiler code no longer import `file_watcher`. The focused watcher tests and full Rust engine suite passed without warnings, and `docs/architecture/rust-engine.md` now records the watcher adapter as test-only until production integration lands.
   - Stop condition: a production watcher caller needs the crate-root compatibility path or adapter module before its use-case boundary is defined.
 
+- [x] **RA07.03a5 Remove indexing pipeline compatibility shim**
+  - Build: delete the crate-root `indexing_pipeline` compatibility re-export after all production, FFI, diagnostics, and profiler callers use owners directly. Gate inactive queue batch processing and progress DTO helpers to tests so removing the public facade does not preserve warning-only production API.
+  - Verify:
+    ```sh
+    rg -n "crate::indexing_pipeline|vault_engine::indexing_pipeline|^pub mod indexing_pipeline" vault-engine/src bench/vault-profiler/src
+    cargo fmt --manifest-path vault-engine/Cargo.toml --check
+    cargo test --manifest-path vault-engine/Cargo.toml indexing_pipeline::
+    cargo test --manifest-path vault-engine/Cargo.toml
+    cargo test --manifest-path bench/vault-profiler/Cargo.toml
+    ```
+  - Evidence: `vault-engine/src/indexing_pipeline.rs` was deleted and `lib.rs` no longer exposes the module. The exact grep returned no matches, focused indexing-pipeline tests passed, full engine tests passed without warnings, and profiler tests passed.
+  - Stop condition: diagnostics or profiler needs to re-import the crate-root shim.
+
 - [x] **RA07.04 Add architecture placement checklist**
   - Build: add a short checklist to `docs/architecture/rust-engine.md` explaining where new parser, storage, FFI, and use-case code should go.
   - Verify: checklist covers future work for read API, save, graph, indexing, watcher, benchmarks, and profiler imports.
@@ -1628,7 +1641,7 @@ Default stop conditions:
 - [x] **RA07.05 Run public API grep**
   - Build: no code change after RA07.04.
   - Verify: inspect remaining `pub mod` and `pub use` entries in `vault-engine/src/lib.rs`; each has a documented reason.
-  - Evidence: `rg -n "^pub mod|^pub use|^#\\[cfg\\(test\\)\\]|pub\\(crate\\) mod" vault-engine/src/lib.rs` shows stable public `diagnostics` and `ffi`, temporary public `indexing_pipeline`, and test-only compatibility modules for the remaining legacy roots. `docs/architecture/rust-engine.md` records the reason for each remaining public surface.
+  - Evidence: `rg -n "^pub mod|^pub use|^#\\[cfg\\(test\\)\\]|pub\\(crate\\) mod" vault-engine/src/lib.rs` shows stable public `diagnostics` and `ffi` plus test-only compatibility modules for the remaining legacy roots. `docs/architecture/rust-engine.md` records the reason for each remaining public surface.
 
 - [x] **RA07.06 Classify `errors.rs`**
   - Build: either reduce `errors.rs` to a deliberate cross-layer contract or move layer-specific errors into their owning modules before public-surface cleanup is accepted.

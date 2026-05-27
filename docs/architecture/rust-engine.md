@@ -112,7 +112,7 @@ parser owner directly.
 | `graph_key` | `core/links.rs` | Link key and unresolved target normalization are pure domain logic. |
 | `index` | `core/metadata.rs` and `adapters/sqlite/metadata_store.rs` | Domain records move inward; schema, row decoding, and SQL stay in SQLite adapter. |
 | `index_rebuild` | `adapters/fs/index_directory.rs` and `use_cases/index_rebuild.rs` | Root compatibility shim is test-only; production callers use the use-case owner. |
-| `indexing_pipeline` | `use_cases/indexing_pipeline.rs`, `use_cases/process_indexing_queue.rs`, adapters | Implementation lives in use cases; crate-root `indexing_pipeline` is a temporary public re-export facade until queue/rebuild progress DTOs are split by owner. |
+| `indexing_pipeline` | `use_cases/indexing_pipeline.rs`, adapters | Implementation lives in use cases; crate-root compatibility facade was removed. Queue batch processing remains test-only until a production caller is wired. |
 | `indexing_queue` | `adapters/sqlite/indexing_queue.rs` plus core queue records if needed | SQL lease/update details stay in adapter. |
 | `parser` | Removed; `core/markdown_parser.rs` owns parsing | Parser may only parse strings and use `core::document` records. |
 | `paths` | Removed; `core/paths.rs`, `core/files.rs`, and `adapters/fs/path_resolver.rs` own the split contracts | Pure value types live in core; canonicalization and metadata reads stay in adapter. |
@@ -120,7 +120,7 @@ parser owner directly.
 | `read_ffi` | `ffi/read_rows.rs` | Binary row layout and row-kind constants are FFI-owned. |
 | `save` | `use_cases/save_note.rs`, `adapters/fs/note_writer.rs`, `core` records where pure | Root compatibility shim is test-only; production callers use the use-case owner. |
 | `scanner` | Removed; `adapters/fs/scanner.rs` and `core/scan.rs` own the split contracts | Filesystem walking stays in adapter; pure scan records and file classification live in core. |
-| `sqlite_fts` | `adapters/sqlite/fts_index.rs` or `diagnostics/sqlite_fts.rs` | Decide explicitly before public-surface cleanup. |
+| `sqlite_fts` | `adapters/sqlite/fts_index.rs` | Root compatibility shim is test-only; production and diagnostics callers use adapter or diagnostics facades. |
 | `startup_reconciliation` | `use_cases/reconcile_startup.rs` | Startup orchestration depends on adapters. |
 | `tantivy_search` | `adapters/tantivy/search_index.rs` | Tantivy schema, writer, reader, query, tokenizer, and snippet code. |
 | `watcher_burst` | `use_cases/watcher_burst.rs` | Burst coalescing and recovery orchestration. |
@@ -142,22 +142,20 @@ only; profiler code must not import crate-root compatibility modules directly.
 ### Current Public Rust Surface
 
 After the public-surface audit, `vault-engine/src/lib.rs` intentionally exposes
-only stable Swift/diagnostic entry points plus one temporary compatibility
-facade:
+only stable Swift and diagnostic entry points:
 
 | Surface | Status | Reason / Next Cleanup |
 | --- | --- | --- |
 | `ENGINE_ABI_VERSION`, `EngineHealth`, `health_check()` | Stable public contract | Swift health checks need ABI and capability metadata without depending on internal module names. |
 | `ffi` | Public by design | Owns C ABI symbols, pointer handling, panic containment, and Swift field-code mappings. |
 | `diagnostics` | Public by design | `bench/vault-profiler` is a separate crate and must enter through a narrow diagnostic facade. |
-| `indexing_pipeline` | Temporary public facade | Thin re-export of `use_cases::indexing_pipeline` kept for warning-free staged migration. Diagnostics use the use-case owner internally; hide this facade after queue/rebuild progress DTOs are split or connected to production callers. |
 
 The following root compatibility modules are now test-only: `attachments`,
 `file_watcher`, `graph`, `index`, `index_rebuild`, `indexing_queue`,
 `read_api`, `save`, `sqlite_fts`, `startup_reconciliation`, `tantivy_search`,
 and `watcher_burst`. `parser`, `paths`, `scanner`, `benchmarks`, `errors`, and
-`graph_key` have been removed. `adapters`, `core`, and `use_cases` are internal
-crate modules.
+`graph_key`, and `indexing_pipeline` have been removed. `adapters`, `core`, and
+`use_cases` are internal crate modules.
 
 ## Target Module Shape
 
