@@ -93,11 +93,7 @@ struct NoteInspectorView: View {
         case .attachments:
             attachmentsState.isLoading
         case .summary:
-            if case .loading = summaryState {
-                true
-            } else {
-                false
-            }
+            summaryState.isWorking
         }
     }
 
@@ -312,17 +308,23 @@ struct NoteInspectorView: View {
             let request = try summaryCoordinator.request(appState: appState, file: file)
             summaryTask = Task {
                 do {
-                    let summary = try await summaryCoordinator.summarize(
+                    let summary = try await summaryCoordinator.summarizeStaged(
                         request: request,
                         appState: appState,
                         useCache: !shouldRegenerate
                     ) { progress in
-                        summaryState = .loading(progress)
+                        updateSummaryProgress(progress)
+                    } onSnapshot: { snapshot in
+                        summaryState = .streaming(snapshot)
+                    } onSummary: { summary in
+                        updateSummary(summary)
                     }
                     if Task.isCancelled {
                         return
                     }
-                    summaryState = .complete(summary)
+                    if summaryState.currentSummary == nil {
+                        updateSummary(summary)
+                    }
                 } catch let error as SummaryGenerationError {
                     if Task.isCancelled {
                         return
@@ -346,8 +348,41 @@ struct NoteInspectorView: View {
         summaryTask?.cancel()
         summaryTask = nil
         summaryCoordinator.cancel()
-        if case .loading = summaryState {
+        switch summaryState {
+        case .loading, .streaming:
             summaryState = .ready
+        case .refining(let summary):
+            summaryState = .fastComplete(summary)
+        default:
+            break
+        }
+    }
+
+    private func updateSummaryProgress(_ progress: SummaryProgressState) {
+        switch progress {
+        case .fastStreaming:
+            if case .loading = summaryState {
+                summaryState = .streaming("")
+            }
+        case .refining:
+            if let summary = summaryState.currentSummary {
+                summaryState = .refining(summary)
+            } else {
+                summaryState = .loading(progress)
+            }
+        case .fastComplete, .refinedComplete:
+            break
+        default:
+            summaryState = .loading(progress)
+        }
+    }
+
+    private func updateSummary(_ summary: DocumentSummary) {
+        switch summary.metadata.stage {
+        case .fast:
+            summaryState = .fastComplete(summary)
+        case .refined:
+            summaryState = .refinedComplete(summary)
         }
     }
 
