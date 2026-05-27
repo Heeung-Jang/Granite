@@ -137,3 +137,58 @@ fn url_scheme(input: &str) -> Option<&str> {
     )
     .then_some(scheme)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalizes_safe_relative_paths() {
+        assert_eq!(
+            normalize_relative_path("./Folder/../Home.md").expect("normalized"),
+            PathBuf::from("Home.md")
+        );
+        assert_eq!(
+            normalize_relative_path("Folder/Target.md").expect("normalized"),
+            PathBuf::from("Folder/Target.md")
+        );
+    }
+
+    #[test]
+    fn rejects_parent_escape() {
+        assert_eq!(
+            normalize_relative_path("../outside.md").expect_err("escape"),
+            PathError::OutsideVault(PathBuf::from("../outside.md"))
+        );
+    }
+
+    #[test]
+    fn rejects_tilde_absolute_nul_and_url_schemes() {
+        assert_eq!(
+            normalize_relative_path("~/vault.md").expect_err("tilde"),
+            PathError::TildePrefix
+        );
+        assert!(matches!(
+            normalize_relative_path("/etc/passwd").expect_err("absolute"),
+            PathError::AbsolutePath(_)
+        ));
+        assert_eq!(
+            normalize_relative_path("bad\0path.md").expect_err("nul"),
+            PathError::ContainsNul
+        );
+        assert_eq!(
+            normalize_relative_path("javascript:alert(1)").expect_err("url"),
+            PathError::UrlScheme("javascript".to_string())
+        );
+        assert_eq!(
+            normalize_relative_path("file:///etc/passwd").expect_err("url"),
+            PathError::UrlScheme("file".to_string())
+        );
+    }
+
+    #[test]
+    fn lookup_key_catches_case_and_unicode_collisions() {
+        assert_eq!(lookup_key("Folder/NOTE.md"), lookup_key("folder/note.md"));
+        assert_eq!(lookup_key("Résumé/INDEX.md"), lookup_key("résumé/index.md"));
+    }
+}

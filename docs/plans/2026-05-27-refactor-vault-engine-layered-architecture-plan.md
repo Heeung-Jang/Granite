@@ -625,7 +625,7 @@ Default stop conditions:
   - Build: add `vault-engine/src/adapters/mod.rs`, `sqlite/mod.rs`, `tantivy/mod.rs`, and `fs/mod.rs`.
   - Verify: no behavior changes.
 
-- [ ] **RA04.01a Move filesystem path resolver**
+- [x] **RA04.01a Move filesystem path resolver**
   - Build: move `VaultRoot::open`, canonicalization, symlink checks, `FileIdentity::from_metadata`, and metadata extension usage into `adapters/fs/path_resolver.rs`.
   - Verify: save path safety, scanner, startup reconciliation, and rebuild path tests still pass.
 
