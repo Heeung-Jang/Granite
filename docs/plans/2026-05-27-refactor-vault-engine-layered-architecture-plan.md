@@ -611,7 +611,7 @@ Default stop conditions:
   - Build: move pure path identity/value types into `core/paths.rs` only if they do not perform filesystem resolution.
   - Verify: `core` does not import `std::fs`.
 
-- [ ] **RA03.08 Run core purity scan**
+- [x] **RA03.08 Run core purity scan**
   - Build: no code change after RA03.07.
   - Verify:
     ```sh
