@@ -1,8 +1,8 @@
 use std::{collections::HashSet, fmt, path::Path};
 
 use crate::adapters::sqlite::{
-    AttachmentProjection, AttachmentRecord, FileLookupProjection, FileRecord, GraphFileRecord,
-    GraphResolvedEdgeRecord, GraphUnresolvedEdgeRecord, HeadingRecord, MetadataStoreError,
+    FileLookupProjection, FileRecord, GraphFileRecord, GraphResolvedEdgeRecord,
+    GraphUnresolvedEdgeRecord, MetadataStoreError,
 };
 use crate::adapters::tantivy::TantivySearchError;
 use crate::graph::{
@@ -189,43 +189,6 @@ impl LocalGraphRequest {
 }
 
 impl VaultReadApi {
-    pub fn attachments_for_path(
-        &self,
-        relative_path: &str,
-        page: PageRequest,
-    ) -> ReadApiResult<ReadPage<AttachmentProjection>> {
-        let file = self.require_file(relative_path)?;
-        Ok(self.page_from_overfetch(
-            self.metadata
-                .attachment_projections(&file.file_id, page.offset, page.fetch_limit())?,
-            page,
-        ))
-    }
-
-    pub fn headings(
-        &self,
-        file_id: &str,
-        page: PageRequest,
-    ) -> ReadApiResult<ReadPage<HeadingRecord>> {
-        Ok(self.page_from_overfetch(
-            self.metadata
-                .headings(file_id, page.offset, page.fetch_limit())?,
-            page,
-        ))
-    }
-
-    pub fn attachments(
-        &self,
-        file_id: &str,
-        page: PageRequest,
-    ) -> ReadApiResult<ReadPage<AttachmentRecord>> {
-        Ok(self.page_from_overfetch(
-            self.metadata
-                .attachments(file_id, page.offset, page.fetch_limit())?,
-            page,
-        ))
-    }
-
     pub fn local_graph(
         &self,
         file_id: &str,
@@ -958,8 +921,8 @@ mod tests {
     use std::{fs, path::PathBuf};
 
     use crate::adapters::sqlite::{
-        FileRecord, HeadingRecord, IndexSchemaMetadata, MetadataStore, PropertyRecord, TagRecord,
-        TagSource, slugify_heading,
+        AttachmentRecord, FileRecord, HeadingRecord, IndexSchemaMetadata, MetadataStore,
+        PropertyRecord, TagRecord, TagSource, slugify_heading,
     };
     use crate::adapters::tantivy::TantivySearchIndex;
     use crate::attachments::{AttachmentReferenceSource, AttachmentResolutionState};

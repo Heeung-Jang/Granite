@@ -1,8 +1,9 @@
 use std::path::Path;
 
 use crate::adapters::sqlite::{
-    FileLookupProjection, FileRecord, FileTreeProjection, IndexSchemaMetadata, LinkEdgeRecord,
-    LinkProjection, MetadataStore, PropertyProjection, PropertyRecord, TagRecord,
+    AttachmentProjection, AttachmentRecord, FileLookupProjection, FileRecord, FileTreeProjection,
+    HeadingRecord, IndexSchemaMetadata, LinkEdgeRecord, LinkProjection, MetadataStore,
+    PropertyProjection, PropertyRecord, TagRecord,
 };
 use crate::adapters::tantivy::{TantivySearchError, TantivySearchIndex};
 use crate::read_api::{
@@ -207,6 +208,43 @@ impl VaultReadApi {
         Ok(self.page_from_overfetch(
             self.metadata
                 .properties(file_id, page.offset, page.fetch_limit())?,
+            page,
+        ))
+    }
+
+    pub fn attachments_for_path(
+        &self,
+        relative_path: &str,
+        page: PageRequest,
+    ) -> ReadApiResult<ReadPage<AttachmentProjection>> {
+        let file = self.require_file(relative_path)?;
+        Ok(self.page_from_overfetch(
+            self.metadata
+                .attachment_projections(&file.file_id, page.offset, page.fetch_limit())?,
+            page,
+        ))
+    }
+
+    pub fn headings(
+        &self,
+        file_id: &str,
+        page: PageRequest,
+    ) -> ReadApiResult<ReadPage<HeadingRecord>> {
+        Ok(self.page_from_overfetch(
+            self.metadata
+                .headings(file_id, page.offset, page.fetch_limit())?,
+            page,
+        ))
+    }
+
+    pub fn attachments(
+        &self,
+        file_id: &str,
+        page: PageRequest,
+    ) -> ReadApiResult<ReadPage<AttachmentRecord>> {
+        Ok(self.page_from_overfetch(
+            self.metadata
+                .attachments(file_id, page.offset, page.fetch_limit())?,
             page,
         ))
     }

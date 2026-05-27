@@ -803,7 +803,7 @@ Default stop conditions:
   - Build: move tag/property panel orchestration and display-value conversion if it is domain-only.
   - Verify: inspector tag/property tests pass.
 
-- [ ] **RA05.02k Move headings and attachments panel methods**
+- [x] **RA05.02k Move headings and attachments panel methods**
   - Build: move heading/attachment panel orchestration while attachment resolution remains in its current owner until explicitly moved.
   - Verify: inspector heading/attachment tests pass.
 
