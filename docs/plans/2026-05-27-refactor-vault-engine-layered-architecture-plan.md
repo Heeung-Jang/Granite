@@ -533,7 +533,7 @@ Default stop conditions:
   - Build: change Rust imports from `crate::read_ffi::*` to `crate::ffi::read_rows::*`.
   - Verify: `rg "crate::read_ffi" vault-engine/src` returns only the temporary compatibility module, or no matches if removed.
 
-- [ ] **RA02.04 Remove compatibility module**
+- [x] **RA02.04 Remove compatibility module**
   - Build: delete temporary `read_ffi` re-export if no longer needed.
   - Verify: `cargo test --manifest-path vault-engine/Cargo.toml`.
 

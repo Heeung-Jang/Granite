@@ -13,7 +13,6 @@ pub mod indexing_queue;
 pub mod parser;
 pub mod paths;
 pub mod read_api;
-pub mod read_ffi;
 pub mod save;
 pub mod scanner;
 pub mod sqlite_fts;
