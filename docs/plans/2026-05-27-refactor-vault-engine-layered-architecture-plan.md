@@ -633,7 +633,7 @@ Default stop conditions:
   - Build: move temp write, permission preservation, atomic replacement, and mutation-time path revalidation into `adapters/fs/note_writer.rs` without changing save semantics.
   - Verify: save safety tests and FFI conflict choice tests pass.
 
-- [ ] **RA04.01c Move index directory operations**
+- [x] **RA04.01c Move index directory operations**
   - Build: move rebuild directory validation, swap, abort cleanup, and destructive directory operations into `adapters/fs/index_directory.rs`.
   - Verify: rebuild path safety and sentinel vault note tests pass.
 
