@@ -9,7 +9,10 @@ use tantivy::schema::{Field, TantivyDocument, Value};
 use tantivy::snippet::SnippetGenerator;
 use tantivy::{Index, IndexReader, TantivyError, Term, doc};
 
-use crate::adapters::tantivy::{TantivyFields, search_schema, search_schema_for_snippet_mode};
+use crate::adapters::tantivy::{
+    TantivyFields, first_query_term, safe_tantivy_query, search_schema,
+    search_schema_for_snippet_mode,
+};
 use crate::core::search::{SearchDocument, SearchMeasurement, SearchResult};
 use crate::indexing_pipeline::SnippetStorageMode;
 use crate::paths::{FileIdentity, PathError, VaultRoot};
@@ -445,25 +448,6 @@ impl From<PathError> for TantivySearchError {
     fn from(error: PathError) -> Self {
         Self::Path(error)
     }
-}
-
-pub fn safe_tantivy_query(input: &str) -> Option<String> {
-    let bounded = input.chars().take(128).collect::<String>();
-    let terms = bounded
-        .split(|ch: char| !ch.is_alphanumeric())
-        .filter(|term| !term.is_empty())
-        .take(8)
-        .map(|term| format!("\"{}\"", term.replace('"', "\\\"")))
-        .collect::<Vec<_>>();
-
-    (!terms.is_empty()).then(|| terms.join(" "))
-}
-
-fn first_query_term(input: &str) -> Option<String> {
-    input
-        .split(|ch: char| !ch.is_alphanumeric())
-        .find(|term| !term.is_empty())
-        .map(str::to_string)
 }
 
 fn snippet_around(body: &str, byte_index: usize, max_chars: usize) -> String {

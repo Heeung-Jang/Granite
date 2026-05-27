@@ -708,7 +708,7 @@ Default stop conditions:
   - Build: move schema construction, stored-text extraction, and field lookup helpers into `adapters/tantivy/schema.rs` without changing field names, storage flags, tokenizer, or snippet mode.
   - Verify: search tests pass without changing expected snippets, scores, or error states.
 
-- [ ] **RA04.05b Move Tantivy query sanitization helpers**
+- [x] **RA04.05b Move Tantivy query sanitization helpers**
   - Build: move `safe_tantivy_query`, first-term extraction, and snippet helpers into `adapters/tantivy/query.rs`.
   - Verify: query sanitization and snippet tests pass.
 
