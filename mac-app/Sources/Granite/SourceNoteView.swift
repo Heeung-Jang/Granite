@@ -109,11 +109,12 @@ struct SourceNoteView: View {
                     )
                 }
             case .failed(let message):
-                VStack(spacing: 8) {
+                VStack(spacing: ObsidianUI.scaled(8, scale: appContentZoomScale)) {
                     Image(systemName: "exclamationmark.triangle")
+                        .font(.system(size: ObsidianUI.fontSize(16, scale: appContentZoomScale)))
                         .foregroundStyle(.secondary)
                     Text(message)
-                        .font(.caption)
+                        .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale)))
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                 }
@@ -198,30 +199,34 @@ struct SourceNoteView: View {
     }
 
     private var header: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 8) {
+        HStack(alignment: .firstTextBaseline, spacing: ObsidianUI.scaled(12, scale: appContentZoomScale)) {
+            VStack(alignment: .leading, spacing: ObsidianUI.scaled(4, scale: appContentZoomScale)) {
+                HStack(spacing: ObsidianUI.scaled(8, scale: appContentZoomScale)) {
                     Text(file.displayName)
-                        .font(.headline)
+                        .font(.system(size: ObsidianUI.fontSize(13, scale: appContentZoomScale), weight: .semibold))
 
                     if saveSession?.isDirty == true {
                         Circle()
                             .fill(.secondary)
-                            .frame(width: 6, height: 6)
+                            .frame(
+                                width: ObsidianUI.scaled(6, scale: appContentZoomScale),
+                                height: ObsidianUI.scaled(6, scale: appContentZoomScale)
+                            )
                             .accessibilityLabel("Unsaved changes")
                     }
                 }
 
                 Text(file.relativePath)
-                    .font(.caption)
+                    .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale)))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             .accessibilityElement(children: .combine)
             .accessibilityLabel("Current note \(file.displayName)")
-            Spacer(minLength: 12)
+            Spacer(minLength: ObsidianUI.scaled(12, scale: appContentZoomScale))
             Button(action: toggleEditorMode) {
                 Label(modeToggleTitle, systemImage: livePreviewMode.rendersSourceOnly ? "eye" : "curlybraces")
+                    .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale)))
             }
             .keyboardShortcut("e", modifiers: [.command, .shift])
             .help("Toggle Live Preview and Source mode")

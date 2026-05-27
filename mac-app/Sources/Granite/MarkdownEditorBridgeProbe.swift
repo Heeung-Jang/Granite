@@ -69,6 +69,8 @@ struct MarkdownEditorBridgeProbeReport: Codable, Equatable {
     var safeMarkdownLinkTargetsConcealed: Bool
     var embedPreviewMapUpdatePreservesSelection: Bool
     var selectionChangeDecorationDoesNotReenter: Bool
+    var zoomUpdateDoesNotMutateSource: Bool
+    var zoomUpdatePreservesSelection: Bool
     var unsafeMarkdownLinkTargetsRemainVisible: Bool
     var unsafeWikiLinkTargetsRemainVisible: Bool
     var plainTextPastePolicy: Bool
@@ -161,6 +163,7 @@ enum MarkdownEditorBridgeProbe {
         let overlayStateProbe = probeOverlayStateLifecycle()
         let markerStyleProbe = probeMarkerStyleStorageCompatibility()
         let selectionChangeProbe = probeSelectionChangeDecorationDoesNotReenter()
+        let zoomUpdateProbe = probeZoomUpdatePreservesSourceAndSelection()
         let checkboxProbe = probeCheckboxToggle()
         let tableCellProbe = probeTableCellEdit()
         let tableMenuOperationProbe = probeTableMenuOperations()
@@ -234,6 +237,8 @@ enum MarkdownEditorBridgeProbe {
             safeMarkdownLinkTargetsConcealed: renderProbe.safeMarkdownLinkTargetsConcealed,
             embedPreviewMapUpdatePreservesSelection: renderProbe.embedPreviewMapUpdatePreservesSelection,
             selectionChangeDecorationDoesNotReenter: selectionChangeProbe,
+            zoomUpdateDoesNotMutateSource: zoomUpdateProbe.sourcePreserved,
+            zoomUpdatePreservesSelection: zoomUpdateProbe.selectionPreserved,
             unsafeMarkdownLinkTargetsRemainVisible: renderProbe.unsafeMarkdownLinkTargetsRemainVisible,
             unsafeWikiLinkTargetsRemainVisible: renderProbe.unsafeWikiLinkTargetsRemainVisible,
             plainTextPastePolicy: renderProbe.plainTextPastePolicy,
@@ -810,6 +815,35 @@ enum MarkdownEditorBridgeProbe {
         )
 
         return applied && NSEqualRanges(textView.selectedRange(), NSRange(location: 2, length: 0))
+    }
+
+    private static func probeZoomUpdatePreservesSourceAndSelection() -> (
+        sourcePreserved: Bool,
+        selectionPreserved: Bool
+    ) {
+        let source = "# Heading\n\nBody with [[Link]] and `code`.\n"
+        let textView = MarkdownEditorTextViewFactory.makeTextView()
+        textView.string = source
+        let selection = NSRange(location: 12, length: 4)
+        textView.setSelectedRange(selection)
+
+        MarkdownVisibleRangeDecorator.decorateVisibleRange(
+            in: textView,
+            revealRange: selection,
+            markerStyle: .obsidian
+        )
+        MarkdownEditorTextViewFactory.applyAppContentZoomScale(1.25, to: textView)
+        MarkdownVisibleRangeDecorator.decorateVisibleRange(
+            in: textView,
+            revealRange: selection,
+            markerStyle: .obsidian,
+            scale: 1.25
+        )
+
+        return (
+            textView.string == source,
+            NSEqualRanges(textView.selectedRange(), selection)
+        )
     }
 
     private static func probeAppKitChangeSkip() -> Bool {
