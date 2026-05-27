@@ -165,6 +165,12 @@ struct GraniteApp: App {
             Foundation.exit(report.summary.passed ? 0 : 2)
         }
 
+        if CommandLine.arguments.contains("--font-settings-probe") {
+            let report = FontSettingsProbe.run()
+            print(FontSettingsProbe.encodedReport(report))
+            Foundation.exit(report.summary.passed ? 0 : 2)
+        }
+
         if CommandLine.arguments.contains("--live-preview-probe") {
             let report = LivePreviewProbe.run()
             print(LivePreviewProbe.encodedReport(report))
