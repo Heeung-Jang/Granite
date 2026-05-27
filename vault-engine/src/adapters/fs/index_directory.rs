@@ -97,6 +97,7 @@ pub(crate) fn commit_index_rebuild(
     })
 }
 
+#[cfg(test)]
 pub(crate) fn abort_index_rebuild(paths: &IndexDirectoryPaths) -> IndexDirectoryResult<()> {
     let paths = validate_paths(paths)?;
     if paths.rebuild_directory.exists() {
@@ -105,6 +106,7 @@ pub(crate) fn abort_index_rebuild(paths: &IndexDirectoryPaths) -> IndexDirectory
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) fn reset_rebuild_directory(
     rebuild_directory: &Path,
     generation: u64,

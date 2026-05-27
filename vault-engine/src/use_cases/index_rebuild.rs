@@ -6,14 +6,16 @@ use std::{
 
 use crate::adapters::fs::index_directory::{
     IndexDirectoryCommit, IndexDirectoryError, IndexDirectoryPathError, IndexDirectoryPaths,
-    abort_index_rebuild as abort_index_rebuild_impl,
     commit_index_rebuild as commit_index_rebuild_impl, ensure_directory, remove_sqlite_files,
-    reset_directory, reset_rebuild_directory, validate_paths,
+    reset_directory,
 };
-use crate::adapters::sqlite::{
-    FileRecord, IndexSchemaMetadata, IndexingQueue, IndexingQueueError, IndexingQueueReason,
-    MetadataStore, MetadataStoreError,
+#[cfg(test)]
+use crate::adapters::fs::index_directory::{
+    abort_index_rebuild as abort_index_rebuild_impl, reset_rebuild_directory, validate_paths,
 };
+#[cfg(test)]
+use crate::adapters::sqlite::{FileRecord, IndexingQueue, IndexingQueueReason, MetadataStoreError};
+use crate::adapters::sqlite::{IndexSchemaMetadata, IndexingQueueError, MetadataStore};
 use crate::adapters::tantivy::{TantivyIndexingStageMetrics, TantivySearchIndex};
 use crate::indexing_pipeline::{
     IndexingPipelineError, IndexingPipelineOptions, IndexingPipelineResult, IndexingPipelineTier,
@@ -21,6 +23,7 @@ use crate::indexing_pipeline::{
     SearchDocumentSource, load_search_document_sources,
 };
 use crate::paths::{PathError, VaultRoot};
+#[cfg(test)]
 use crate::scanner::ScanSummary;
 
 use super::read_parse_documents::{PipelineCorpusStats, run_read_parse_pipeline};
@@ -36,6 +39,7 @@ pub struct IndexRebuildPaths {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(test)]
 pub struct IndexRebuildStart {
     pub reason: IndexRebuildReason,
     pub generation: u64,
@@ -51,6 +55,7 @@ pub struct IndexRebuildCommit {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(test)]
 pub enum IndexRebuildReason {
     UserRequested,
     CorruptIndex,
@@ -58,6 +63,7 @@ pub enum IndexRebuildReason {
     BackendMismatch,
 }
 
+#[cfg(test)]
 pub enum MetadataOpenRecovery {
     Opened(MetadataStore),
     RebuildStarted(IndexRebuildStart),
@@ -117,6 +123,7 @@ impl IndexRebuildPaths {
     }
 }
 
+#[cfg(test)]
 pub fn start_index_rebuild(
     queue: &mut IndexingQueue,
     scan: &ScanSummary,
@@ -148,6 +155,7 @@ pub fn start_index_rebuild(
     })
 }
 
+#[cfg(test)]
 pub fn open_metadata_or_start_rebuild(
     metadata_path: impl AsRef<Path>,
     expected: &IndexSchemaMetadata,
@@ -171,6 +179,7 @@ pub fn commit_index_rebuild(paths: &IndexRebuildPaths) -> IndexRebuildResult<Ind
     Ok(IndexRebuildCommit::from(commit))
 }
 
+#[cfg(test)]
 pub fn abort_index_rebuild(paths: &IndexRebuildPaths) -> IndexRebuildResult<()> {
     abort_index_rebuild_impl(&paths.to_index_directory_paths()).map_err(Into::into)
 }
@@ -334,6 +343,7 @@ fn index_directory_error_for_pipeline(error: IndexDirectoryError) -> IndexingPip
     }
 }
 
+#[cfg(test)]
 fn rebuild_reason_for_metadata_error(error: &MetadataStoreError) -> IndexRebuildReason {
     match error {
         MetadataStoreError::SchemaMismatch { stored, expected } => {
@@ -351,6 +361,7 @@ fn rebuild_reason_for_metadata_error(error: &MetadataStoreError) -> IndexRebuild
     }
 }
 
+#[cfg(test)]
 impl IndexRebuildReason {
     pub(crate) fn as_str(self) -> &'static str {
         match self {

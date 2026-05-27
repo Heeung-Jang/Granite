@@ -35,6 +35,7 @@ pub struct SaveOutcome {
     pub bytes_written: u64,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueuedSaveOutcome {
     pub baseline: SaveBaseline,
@@ -217,6 +218,7 @@ pub fn safe_save(root: &VaultRoot, request: SaveRequest<'_>) -> SafeSaveResult<S
     })
 }
 
+#[cfg(test)]
 pub fn safe_save_and_enqueue_own_save(
     root: &VaultRoot,
     queue: &mut IndexingQueue,

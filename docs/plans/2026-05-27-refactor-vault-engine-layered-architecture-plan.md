@@ -1522,7 +1522,7 @@ Default stop conditions:
   - Evidence: `graph`, `startup_reconciliation`, and `watcher_burst` are now test-only compatibility modules; `graph_key` was removed in RA07.01b4b. Graph tests import only the builder API they exercise, and the graph request builder methods used only by tests are `cfg(test)` to avoid keeping public-surface-only production API alive. Startup reconciliation and watcher burst use cases are also test-only because there is no production caller yet. The profiler import scan and internal legacy-module scan returned no matches, and all listed tests passed without warnings.
   - Stop condition: graph FFI or watcher recovery still depends on legacy module paths.
 
-- [ ] **RA07.01b5 Verify diagnostics and FFI are the only intentional public families**
+- [x] **RA07.01b5 Verify remaining public families are intentional or documented**
   - Build: no code change after RA07.01b1 through RA07.01b4.
   - Verify:
     ```sh
@@ -1531,11 +1531,13 @@ Default stop conditions:
     cargo test --manifest-path vault-engine/Cargo.toml
     cargo test --manifest-path bench/vault-profiler/Cargo.toml
     ```
+  - Evidence: `save` and `index_rebuild` root compatibility shims are now test-only, so their production contracts live under `use_cases`. The public API grep now shows only `diagnostics`, `ffi`, and the temporary `file_watcher`/`indexing_pipeline` facades. `docs/architecture/rust-engine.md` documents the stable public contracts, the two temporary facades, and the removed/test-only compatibility modules.
   - Stop condition: any remaining public module lacks a documented reason in `docs/architecture/rust-engine.md`.
 
-- [ ] **RA07.01c Keep diagnostics public by design if profiler still needs it**
+- [x] **RA07.01c Keep diagnostics public by design if profiler still needs it**
   - Build: if `bench/vault-profiler` remains a separate crate, expose only deliberate `diagnostics` facades and document why they are public.
   - Verify: `lib.rs` public modules are `ffi`, `diagnostics`, and any explicitly documented stable facade only.
+  - Evidence: `bench/vault-profiler` imports engine code through `vault_engine::diagnostics::profiler` only, and `docs/architecture/rust-engine.md` documents `diagnostics` as the intentional public profiler boundary.
 
 - [x] **RA07.02 Update health check module list**
   - Build: update `health_check()` to report architecture-level modules or intentional engine capabilities, not every internal file.
@@ -1577,14 +1579,27 @@ Default stop conditions:
   - Evidence: the attachment resolver remains covered by compatibility tests, production attachment DTO/state consumers use `core::attachments`, profiler imports use diagnostics facades, and the listed tests passed without warnings.
   - Stop condition: production parsing starts resolving attachments through the root compatibility module.
 
+- [x] **RA07.03a3 Make save and index rebuild compatibility shims test-only**
+  - Build: remove root-level re-exports from `save.rs` and `index_rebuild.rs`, then import the owning use-case contracts directly inside their compatibility tests.
+  - Verify:
+    ```sh
+    rg -n "crate::(save|index_rebuild)|vault_engine::(save|index_rebuild)" vault-engine/src bench/vault-profiler/src
+    cargo fmt --manifest-path vault-engine/Cargo.toml --check
+    cargo test --manifest-path vault-engine/Cargo.toml save::
+    cargo test --manifest-path vault-engine/Cargo.toml index_rebuild::
+    ```
+  - Evidence: production code and profiler code no longer import the root `save` or `index_rebuild` shims. The compatibility tests now depend on `use_cases::save_note` and `use_cases::index_rebuild` directly, and the focused save/index rebuild test gates passed without warnings.
+  - Stop condition: production save or rebuild callers need the crate-root compatibility paths again.
+
 - [x] **RA07.04 Add architecture placement checklist**
   - Build: add a short checklist to `docs/architecture/rust-engine.md` explaining where new parser, storage, FFI, and use-case code should go.
   - Verify: checklist covers future work for read API, save, graph, indexing, watcher, benchmarks, and profiler imports.
   - Evidence: `docs/architecture/rust-engine.md` now includes a placement checklist for `core`, `adapters`, `use_cases`, `ffi`, `diagnostics`, and temporary root compatibility modules.
 
-- [ ] **RA07.05 Run public API grep**
+- [x] **RA07.05 Run public API grep**
   - Build: no code change after RA07.04.
   - Verify: inspect remaining `pub mod` and `pub use` entries in `vault-engine/src/lib.rs`; each has a documented reason.
+  - Evidence: `rg -n "^pub mod|^pub use|^#\\[cfg\\(test\\)\\]|pub\\(crate\\) mod" vault-engine/src/lib.rs` shows stable public `diagnostics` and `ffi`, temporary public `file_watcher` and `indexing_pipeline`, and test-only compatibility modules for the remaining legacy roots. `docs/architecture/rust-engine.md` records the reason for each remaining public surface.
 
 - [x] **RA07.06 Classify `errors.rs`**
   - Build: either reduce `errors.rs` to a deliberate cross-layer contract or move layer-specific errors into their owning modules before public-surface cleanup is accepted.
