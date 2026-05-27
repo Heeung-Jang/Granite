@@ -599,7 +599,7 @@ Default stop conditions:
   - Build: leave `row_to_*`, `*_to_storage`, and `*_from_storage` helpers in the storage layer until Phase 4.
   - Verify: no `rusqlite` imports appear in `core/metadata.rs`.
 
-- [ ] **RA03.05 Move graph domain structs**
+- [x] **RA03.05 Move graph domain structs**
   - Build: move graph request/node/edge/snapshot domain structs from `graph.rs` into `core/graph.rs` if they have no storage dependency.
   - Verify: graph unit tests still pass.
 

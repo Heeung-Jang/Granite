@@ -1,10 +1,14 @@
 use std::collections::{HashMap, HashSet};
 
+pub use crate::core::graph::{
+    WholeVaultGraphBuild, WholeVaultGraphEdge, WholeVaultGraphEdgeKind, WholeVaultGraphNode,
+    WholeVaultGraphNodeKind, WholeVaultGraphPartialReason, WholeVaultGraphRequest,
+    WholeVaultGraphSnapshot,
+};
 use crate::graph_key::unresolved_target_key;
 use crate::index::{
     GraphFileRecord, GraphResolvedEdgeRecord, GraphTagRecord, GraphUnresolvedEdgeRecord,
 };
-use serde::Serialize;
 
 pub const MAX_WHOLE_VAULT_GRAPH_NODES: usize = 100_000;
 pub const MAX_WHOLE_VAULT_GRAPH_EDGES: usize = 250_000;
@@ -12,76 +16,6 @@ pub const MAX_WHOLE_VAULT_GRAPH_LABEL_BYTES: usize = 512;
 pub const MAX_WHOLE_VAULT_GRAPH_TAGS_PER_NODE: usize = 32;
 pub const MAX_WHOLE_VAULT_GRAPH_GROUPS: usize = 32;
 pub const MAX_WHOLE_VAULT_GRAPH_RULE_LENGTH: usize = 512;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct WholeVaultGraphRequest {
-    pub request_id: u64,
-    pub include_unresolved: bool,
-    pub include_orphans: bool,
-    pub max_nodes: usize,
-    pub max_edges: usize,
-    pub max_label_bytes: usize,
-    pub max_tags_per_node: usize,
-    pub max_groups: usize,
-    pub max_rule_length: usize,
-    pub group_rule_count: usize,
-    pub longest_group_rule_length: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct WholeVaultGraphSnapshot {
-    pub request_id: u64,
-    pub generation: u64,
-    pub partial_reasons: Vec<WholeVaultGraphPartialReason>,
-    pub node_count_total: usize,
-    pub edge_count_total: usize,
-    pub nodes: Vec<WholeVaultGraphNode>,
-    pub edges: Vec<WholeVaultGraphEdge>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct WholeVaultGraphNode {
-    pub node_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub file_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub relative_path: Option<String>,
-    pub label: String,
-    pub kind: WholeVaultGraphNodeKind,
-    pub degree: usize,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub tags: Vec<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub enum WholeVaultGraphNodeKind {
-    Resolved,
-    Unresolved,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct WholeVaultGraphEdge {
-    pub source_node_id: String,
-    pub target_node_id: String,
-    pub kind: WholeVaultGraphEdgeKind,
-    pub weight: usize,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub enum WholeVaultGraphEdgeKind {
-    Resolved,
-    Unresolved,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub enum WholeVaultGraphPartialReason {
-    MaxNodes,
-    MaxEdges,
-    MaxLabelBytes,
-    MaxTagsPerNode,
-    MaxGroups,
-    MaxRuleLength,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WholeVaultGraphInputs {
@@ -92,12 +26,6 @@ pub struct WholeVaultGraphInputs {
     pub unresolved_edges: Vec<GraphUnresolvedEdgeRecord>,
     pub orphan_files: Vec<GraphFileRecord>,
     pub tags: Vec<GraphTagRecord>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WholeVaultGraphBuild {
-    pub snapshot: WholeVaultGraphSnapshot,
-    pub partial: bool,
 }
 
 impl WholeVaultGraphRequest {
