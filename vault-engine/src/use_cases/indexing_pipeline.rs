@@ -578,9 +578,12 @@ fn duration_micros_nonzero(duration: Duration) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapters::fs::index_directory::mark_engine_owned_for_test;
     use crate::adapters::sqlite::{FileIndexStatus, FileRecord, IndexSchemaMetadata};
     use crate::adapters::sqlite::{IndexingQueueReason, IndexingQueueStatus};
-    use crate::use_cases::index_rebuild::IndexRebuildPaths;
+    use crate::use_cases::index_rebuild::{
+        IndexRebuildError, IndexRebuildPathError, IndexRebuildPaths,
+    };
     #[cfg(unix)]
     use std::os::unix::fs::symlink;
     use std::path::{Path, PathBuf};
@@ -971,7 +974,7 @@ mod tests {
         let temp = tempdir().expect("tempdir");
         let root = fixture_vault(temp.path(), &["Home.md"]);
         let paths = rebuild_paths(temp.path());
-        std::fs::create_dir_all(&paths.data_directory).expect("data");
+        mark_engine_owned_for_test(&paths.data_directory).expect("data");
         std::fs::write(paths.data_directory.join("old.index"), "old").expect("old data");
         let loaded = load_search_document_sources(&root).expect("sources");
 
@@ -995,9 +998,9 @@ mod tests {
         let temp = tempdir().expect("tempdir");
         let root = fixture_vault(temp.path(), &["Home.md"]);
         let paths = rebuild_paths(temp.path());
-        std::fs::create_dir_all(&paths.data_directory).expect("data");
+        mark_engine_owned_for_test(&paths.data_directory).expect("data");
         std::fs::write(paths.data_directory.join("old.index"), "old").expect("old data");
-        std::fs::create_dir_all(&paths.rebuild_directory).expect("rebuild");
+        mark_engine_owned_for_test(&paths.rebuild_directory).expect("rebuild");
         std::fs::write(paths.rebuild_directory.join("tantivy"), "not a directory")
             .expect("tantivy blocker");
         let loaded = load_search_document_sources(&root).expect("sources");
@@ -1009,9 +1012,53 @@ mod tests {
             &IndexingPipelineOptions::serial(),
         );
 
-        assert!(matches!(result, Err(IndexingPipelineError::Io(_))));
+        assert!(matches!(
+            result,
+            Err(IndexingPipelineError::Rebuild(
+                IndexRebuildError::InvalidPath(IndexRebuildPathError::MissingEngineOwnedMarker)
+            ))
+        ));
         assert!(paths.data_directory.join("old.index").exists());
         assert!(paths.rebuild_directory.exists());
+    }
+
+    #[test]
+    fn full_rebuild_rejects_unmarked_tantivy_directory_without_touching_data() {
+        let temp = tempdir().expect("tempdir");
+        let root = fixture_vault(temp.path(), &["Home.md"]);
+        let paths = rebuild_paths(temp.path());
+        mark_engine_owned_for_test(&paths.data_directory).expect("data");
+        std::fs::write(paths.data_directory.join("old.index"), "old").expect("old data");
+        mark_engine_owned_for_test(&paths.rebuild_directory).expect("rebuild");
+        std::fs::create_dir_all(paths.rebuild_directory.join("tantivy")).expect("tantivy");
+        std::fs::write(
+            paths.rebuild_directory.join("tantivy").join("stale"),
+            "stale",
+        )
+        .expect("stale tantivy");
+        let loaded = load_search_document_sources(&root).expect("sources");
+
+        let result = run_full_rebuild_pipeline_and_commit(
+            &paths,
+            &loaded.sources,
+            &IndexSchemaMetadata::new("sqlite+tantivy", "metadata-v1", "tantivy", 6),
+            &IndexingPipelineOptions::serial(),
+        );
+
+        assert!(matches!(
+            result,
+            Err(IndexingPipelineError::Rebuild(
+                IndexRebuildError::InvalidPath(IndexRebuildPathError::MissingEngineOwnedMarker)
+            ))
+        ));
+        assert!(paths.data_directory.join("old.index").exists());
+        assert!(
+            paths
+                .rebuild_directory
+                .join("tantivy")
+                .join("stale")
+                .exists()
+        );
     }
 
     #[test]

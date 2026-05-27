@@ -817,10 +817,11 @@ Default stop conditions:
   - Build: cover `index_root` inside vault, `data_directory`/`rebuild_directory` outside index root, `data == rebuild`, symlinked data/rebuild/previous-data paths pointing into the vault, validation-then-symlink-swap before destructive mutation, missing engine-owned marker files, and failed commit/abort/reset paths.
   - Verify: a sentinel vault note remains unchanged after each rejected destructive operation.
 
-- [ ] **RA04.10b Enforce marker files before destructive index deletion**
+- [x] **RA04.10b Enforce marker files before destructive index deletion**
   - Build: require an engine-owned marker file before `reset_directory`, `reset_rebuild_directory`, `abort_index_rebuild`, previous-data cleanup, and commit cleanup can remove directories.
   - Verify: tests create unmarked `data`, `rebuild`, and `previous-data` directories plus a sentinel vault note; every destructive operation rejects unmarked targets and leaves the sentinel unchanged.
   - Stop condition: any destructive operation relies only on path containment without proving the target is engine-owned.
+  - Evidence: index directory reset, rebuild reset, abort, commit data/rebuild/previous cleanup, and full rebuild Tantivy reset now require `.granite-engine-owned` before removal. `cargo test --manifest-path vault-engine/Cargo.toml index_rebuild::`, `cargo test --manifest-path vault-engine/Cargo.toml use_cases::indexing_pipeline::tests::`, full `cargo test --manifest-path vault-engine/Cargo.toml`, and the unsafe clippy gate passed.
 
 - [ ] **RA04.10c Decide and test hardlink policy**
   - Build: document whether hardlinked markdown files are supported. If unsupported, reject or skip regular files with link count `> 1` in scanner/read/save/indexing filesystem boundaries.

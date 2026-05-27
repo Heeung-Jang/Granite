@@ -86,6 +86,7 @@ pub enum IndexRebuildPathError {
     DataOverlapsVault,
     RebuildOverlapsVault,
     DataEqualsRebuild,
+    MissingEngineOwnedMarker,
 }
 
 pub type IndexRebuildResult<T> = Result<T, IndexRebuildError>;
@@ -401,6 +402,7 @@ impl From<IndexDirectoryPathError> for IndexRebuildPathError {
             IndexDirectoryPathError::DataOverlapsVault => Self::DataOverlapsVault,
             IndexDirectoryPathError::RebuildOverlapsVault => Self::RebuildOverlapsVault,
             IndexDirectoryPathError::DataEqualsRebuild => Self::DataEqualsRebuild,
+            IndexDirectoryPathError::MissingEngineOwnedMarker => Self::MissingEngineOwnedMarker,
         }
     }
 }

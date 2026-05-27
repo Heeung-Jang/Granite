@@ -1,6 +1,9 @@
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
+const ENGINE_OWNED_MARKER_FILE: &str = ".granite-engine-owned";
+const ENGINE_OWNED_MARKER_CONTENT: &str = "granite vault-engine owned directory\n";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct IndexDirectoryPaths {
     pub(crate) vault_root: PathBuf,
@@ -29,12 +32,15 @@ pub(crate) enum IndexDirectoryPathError {
     DataOverlapsVault,
     RebuildOverlapsVault,
     DataEqualsRebuild,
+    MissingEngineOwnedMarker,
 }
 
 pub(crate) type IndexDirectoryResult<T> = Result<T, IndexDirectoryError>;
 
 pub(crate) fn ensure_directory(path: &Path) -> IndexDirectoryResult<()> {
+    require_engine_owned_marker_if_exists(path)?;
     fs::create_dir_all(path)?;
+    write_engine_owned_marker(path)?;
     Ok(())
 }
 
@@ -47,9 +53,11 @@ pub(crate) fn remove_sqlite_files(path: &Path) -> IndexDirectoryResult<()> {
 
 pub(crate) fn reset_directory(path: &Path) -> IndexDirectoryResult<()> {
     if path.exists() {
-        fs::remove_dir_all(path)?;
+        require_engine_owned_marker(path)?;
+        remove_path(path)?;
     }
     fs::create_dir_all(path)?;
+    write_engine_owned_marker(path)?;
     Ok(())
 }
 
@@ -67,7 +75,15 @@ pub(crate) fn commit_index_rebuild(
     )?;
 
     if previous_directory.exists() {
+        require_engine_owned_marker(&previous_directory)?;
         remove_path(&previous_directory)?;
+    }
+
+    if paths.data_directory.exists() {
+        require_engine_owned_marker(&paths.data_directory)?;
+    }
+    if paths.rebuild_directory.exists() {
+        require_engine_owned_marker(&paths.rebuild_directory)?;
     }
 
     let previous_data_removed = if paths.data_directory.exists() {
@@ -88,6 +104,7 @@ pub(crate) fn commit_index_rebuild(
     }
 
     if previous_directory.exists() {
+        require_engine_owned_marker(&previous_directory)?;
         remove_path(&previous_directory)?;
     }
 
@@ -101,6 +118,7 @@ pub(crate) fn commit_index_rebuild(
 pub(crate) fn abort_index_rebuild(paths: &IndexDirectoryPaths) -> IndexDirectoryResult<()> {
     let paths = validate_paths(paths)?;
     if paths.rebuild_directory.exists() {
+        require_engine_owned_marker(&paths.rebuild_directory)?;
         remove_path(&paths.rebuild_directory)?;
     }
     Ok(())
@@ -113,14 +131,22 @@ pub(crate) fn reset_rebuild_directory(
     reason: &str,
 ) -> IndexDirectoryResult<()> {
     if rebuild_directory.exists() {
+        require_engine_owned_marker(rebuild_directory)?;
         remove_path(rebuild_directory)?;
     }
     fs::create_dir_all(rebuild_directory)?;
+    write_engine_owned_marker(rebuild_directory)?;
     fs::write(
         rebuild_directory.join("rebuild.json"),
         format!("{{\"generation\":{generation},\"reason\":\"{reason}\"}}\n"),
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+pub(crate) fn mark_engine_owned_for_test(path: &Path) -> IndexDirectoryResult<()> {
+    fs::create_dir_all(path)?;
+    write_engine_owned_marker(path)
 }
 
 pub(crate) fn validate_paths(
@@ -187,6 +213,46 @@ fn remove_path(path: &Path) -> IndexDirectoryResult<()> {
     } else {
         fs::remove_file(path)?;
     }
+    Ok(())
+}
+
+fn require_engine_owned_marker_if_exists(path: &Path) -> IndexDirectoryResult<()> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => require_engine_owned_marker(path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(IndexDirectoryError::Io(error)),
+    }
+}
+
+fn require_engine_owned_marker(path: &Path) -> IndexDirectoryResult<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.is_dir() {
+        return Err(IndexDirectoryError::InvalidPath(
+            IndexDirectoryPathError::MissingEngineOwnedMarker,
+        ));
+    }
+    let marker_metadata = match fs::symlink_metadata(path.join(ENGINE_OWNED_MARKER_FILE)) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(IndexDirectoryError::InvalidPath(
+                IndexDirectoryPathError::MissingEngineOwnedMarker,
+            ));
+        }
+        Err(error) => return Err(IndexDirectoryError::Io(error)),
+    };
+    if !marker_metadata.is_file() {
+        return Err(IndexDirectoryError::InvalidPath(
+            IndexDirectoryPathError::MissingEngineOwnedMarker,
+        ));
+    }
+    Ok(())
+}
+
+fn write_engine_owned_marker(path: &Path) -> IndexDirectoryResult<()> {
+    fs::write(
+        path.join(ENGINE_OWNED_MARKER_FILE),
+        ENGINE_OWNED_MARKER_CONTENT,
+    )?;
     Ok(())
 }
 
