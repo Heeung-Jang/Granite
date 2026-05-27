@@ -559,7 +559,7 @@ Default stop conditions:
   - Build: classify `VaultRoot::open`, canonicalization, symlink checks, `FileIdentity::from_metadata`, and metadata extension usage as Phase 4 adapter moves in `docs/architecture/rust-engine.md`.
   - Verify: no filesystem resolution code is moved into `core`.
 
-- [ ] **RA03.01d Move scan records and pure file classification**
+- [x] **RA03.01d Move scan records and pure file classification**
   - Build: move `ScanEntryKind`, `ScanEntry`, `ScanSummary`, and pure `classify_file` into `core/scan.rs` or `core/files.rs`.
   - Verify: scanner tests pass and filesystem walking stays outside `core`.
 
