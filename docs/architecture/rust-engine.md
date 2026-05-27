@@ -173,9 +173,9 @@ rg -n "crate::diagnostics" vault-engine/src/core vault-engine/src/use_cases vaul
 
 Any match must be removed or documented here as an explicit exception.
 
-Allowed exceptions at Phase 0:
+Allowed exceptions after Phase 1 FFI splitting:
 
-- `vault-engine/src/ffi.rs` owns raw C ABI and raw pointers.
+- `vault-engine/src/ffi/` owns Rust-owned C ABI entry points, C string decoding, response buffers, and free functions.
 - `vault-engine/src/file_watcher.rs` owns FSEvents until moved.
 - `vault-engine/src/read_ffi.rs` owns FFI row buffers until moved.
 

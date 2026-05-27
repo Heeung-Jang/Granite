@@ -507,11 +507,11 @@ Default stop conditions:
   - Build: move graph request/payload conversion and graph extern function into `vault-engine/src/ffi/graph.rs`.
   - Verify: graph FFI tests pass and no graph membership code moves into FFI.
 
-- [ ] **RA01.09 Keep module compatibility during transition**
+- [x] **RA01.09 Keep module compatibility during transition**
   - Build: keep `crate::ffi` as the public module path and avoid changing C symbols.
   - Verify: `cargo build --manifest-path vault-engine/Cargo.toml --release` and compare `engine_*` symbol list to RA00.05.
 
-- [ ] **RA01.10 Run FFI import boundary scan**
+- [x] **RA01.10 Run FFI import boundary scan**
   - Build: no code change after RA01.09.
   - Verify: C string and `extern "C"` usage is confined to `vault-engine/src/ffi`.
 
