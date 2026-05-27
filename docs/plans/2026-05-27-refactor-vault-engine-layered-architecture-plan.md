@@ -885,7 +885,7 @@ Default stop conditions:
   - Build: create `use_cases/index_rebuild.rs` and move rebuild DTO ownership and non-pipeline entry-point shell only. Do not finalize FFI wiring until full rebuild pipeline orchestration moves in RA05.06c through RA05.06e.
   - Verify: rebuild path safety and recovery tests pass without changing full rebuild pipeline behavior.
 
-- [ ] **RA05.06 Move indexing queue processing use case**
+- [x] **RA05.06 Move indexing queue processing use case**
   - Build: move queue lease/result DTOs and `process_indexing_queue_batch` shell into `use_cases/process_indexing_queue.rs`.
   - Verify: queue batch tests pass.
 
@@ -1305,10 +1305,10 @@ Use this checklist for each PR or worktree batch:
 
 ## Next Step
 
-On the active `codex/refactor-vault-engine-layered-architecture` branch, Phase 0 through Phase 4 and RA05.01 through RA05.05 are green. Remaining follow-up gates and next work:
+On the active `codex/refactor-vault-engine-layered-architecture` branch, Phase 0 through Phase 4 and RA05.01 through RA05.06 are green. Remaining follow-up gates and next work:
 
 1. RA01.12 unsafe allowlist audit if it was not already covered by existing FFI/FSEvents tests.
 2. RA04.11 post-adapter performance gate, or document why it is deferred and keep it as a merge blocker.
-3. Continue RA05.06 indexing use-case extraction.
+3. Continue RA05.06a queue item source resolution.
 
 Do not start Phase 6 or Phase 7 until Phase 5 boundary scans and FFI retargeting are green.

@@ -27,6 +27,10 @@ use crate::parser::{ParsedMarkdown, PropertyValue, parse_markdown};
 use crate::paths::{FileIdentity, PathError, VaultRoot, lookup_key};
 use crate::scanner::{ScanEntryKind, scan_vault};
 use crate::sqlite_fts::SearchDocument;
+pub use crate::use_cases::process_indexing_queue::{
+    QueueBatchIndexOptions, QueueLeaseBatch, QueuePipelineItem, lease_queue_batch,
+    process_indexing_queue_batch,
+};
 
 pub const MAX_DEFAULT_READ_PARSE_WORKERS: usize = 4;
 const DEFAULT_CHANNEL_CAPACITY: usize = 32;
@@ -217,32 +221,6 @@ impl ProductionIndexingPipelineResult {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct QueueBatchIndexOptions {
-    pub lease_limit: usize,
-    pub max_attempts: u32,
-}
-
-impl Default for QueueBatchIndexOptions {
-    fn default() -> Self {
-        Self {
-            lease_limit: 32,
-            max_attempts: 3,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct QueueLeaseBatch {
-    pub items: Vec<QueuePipelineItem>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct QueuePipelineItem {
-    pub queue_item: IndexingQueueItem,
-    pub source: Option<SearchDocumentSource>,
-}
-
 #[derive(Debug)]
 pub enum IndexingPipelineError {
     Io(std::io::Error),
@@ -404,7 +382,7 @@ pub fn load_search_document_sources(
     })
 }
 
-pub fn lease_queue_batch(
+pub(crate) fn lease_queue_batch_impl(
     queue: &mut IndexingQueue,
     root: &VaultRoot,
     limit: usize,
@@ -418,7 +396,7 @@ pub fn lease_queue_batch(
     Ok(QueueLeaseBatch { items })
 }
 
-pub fn process_indexing_queue_batch(
+pub(crate) fn process_indexing_queue_batch_impl(
     queue: &mut IndexingQueue,
     metadata_store: &mut MetadataStore,
     tantivy_index: &mut TantivySearchIndex,
