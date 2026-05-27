@@ -1,7 +1,5 @@
-use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
 
 use crate::adapters::fs::note_writer::{
     FileSnapshot, capture_snapshot, rename_temp_file, sync_parent, write_new_note, write_temp_file,
@@ -10,140 +8,20 @@ use crate::adapters::sqlite::FileRecord;
 use crate::adapters::sqlite::{
     IndexingQueue, IndexingQueueError, IndexingQueueItem, IndexingQueueReason,
 };
-use crate::paths::{FileIdentity, PathError, VaultRoot};
+use crate::paths::{PathError, VaultRoot};
 use crate::scanner::{ScanEntry, classify_file};
+pub use crate::use_cases::save_note::{
+    QueuedSaveOutcome, SafeSaveError, SafeSaveResult, SaveBaseline, SaveChoiceOutcome,
+    SaveConflict, SaveConflictChoice, SaveConflictChoiceError, SaveConflictChoiceResult,
+    SaveConflictKind, SaveConflictSnapshot, SaveIoOperation, SaveOutcome, SaveReloadOutcome,
+    SaveRequest, keep_conflicted_buffer_as_new_note, overwrite_after_conflict,
+    reload_after_conflict, safe_save, safe_save_and_enqueue_own_save,
+};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SaveBaseline {
-    pub relative_path: String,
-    pub file_identity: FileIdentity,
-    pub size_bytes: u64,
-    pub modified: Option<SystemTime>,
-    pub content_hash: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SaveRequest<'a> {
-    pub baseline: &'a SaveBaseline,
-    pub contents: &'a [u8],
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SaveOutcome {
-    pub baseline: SaveBaseline,
-    pub bytes_written: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct QueuedSaveOutcome {
-    pub baseline: SaveBaseline,
-    pub bytes_written: u64,
-    pub queued_item: IndexingQueueItem,
-    pub dirty: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SaveReloadOutcome {
-    pub baseline: SaveBaseline,
-    pub contents: Vec<u8>,
-    pub queued_item: IndexingQueueItem,
-    pub dirty: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SaveChoiceOutcome {
-    pub choice: SaveConflictChoice,
-    pub baseline: SaveBaseline,
-    pub bytes_written: u64,
-    pub queued_item: IndexingQueueItem,
-    pub dirty: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SaveConflict {
-    pub relative_path: String,
-    pub kind: SaveConflictKind,
-    pub expected: SaveBaseline,
-    pub actual: Option<SaveConflictSnapshot>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SaveConflictSnapshot {
-    pub file_identity: FileIdentity,
-    pub size_bytes: u64,
-    pub modified: Option<SystemTime>,
-    pub content_hash: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SaveConflictKind {
-    Deleted,
-    FileIdentityChanged,
-    ContentChanged,
-    MetadataChanged,
-    SymlinkChanged,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SaveConflictChoice {
-    KeepAsNewNote,
-    Overwrite,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SaveIoOperation {
-    CreateTemp,
-    WriteTemp,
-    SetTempPermissions,
-    SyncTemp,
-    RenameTemp,
-    SyncParent,
-    ReadFile,
-    ReadMetadata,
-    CreateNewNote,
-    LinkNewNote,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SafeSaveError {
-    Path(PathError),
-    Conflict(Box<SaveConflict>),
-    ReadOnly {
-        relative_path: String,
-    },
-    NotRegularFile {
-        relative_path: String,
-    },
-    Io {
-        operation: SaveIoOperation,
-        path: PathBuf,
-        kind: std::io::ErrorKind,
-    },
-}
-
-pub type SafeSaveResult<T> = Result<T, SafeSaveError>;
-
-#[derive(Debug)]
-pub enum SaveConflictChoiceError {
-    Save(SafeSaveError),
-    Queue(IndexingQueueError),
-}
-
-pub type SaveConflictChoiceResult<T> = Result<T, SaveConflictChoiceError>;
-
-impl SaveBaseline {
-    pub fn capture(root: &VaultRoot, relative_path: &str) -> SafeSaveResult<Self> {
-        Ok(capture_snapshot(root, relative_path)?.baseline)
-    }
-}
-
-impl<'a> SaveRequest<'a> {
-    pub fn new(baseline: &'a SaveBaseline, contents: &'a [u8]) -> Self {
-        Self { baseline, contents }
-    }
-}
-
-pub fn safe_save(root: &VaultRoot, request: SaveRequest<'_>) -> SafeSaveResult<SaveOutcome> {
+pub(crate) fn safe_save_impl(
+    root: &VaultRoot,
+    request: SaveRequest<'_>,
+) -> SafeSaveResult<SaveOutcome> {
     let current = current_snapshot(root, request.baseline)?;
     ensure_baseline_matches(request.baseline, &current)?;
 
@@ -165,13 +43,13 @@ pub fn safe_save(root: &VaultRoot, request: SaveRequest<'_>) -> SafeSaveResult<S
     })
 }
 
-pub fn safe_save_and_enqueue_own_save(
+pub(crate) fn safe_save_and_enqueue_own_save_impl(
     root: &VaultRoot,
     queue: &mut IndexingQueue,
     request: SaveRequest<'_>,
     generation: u64,
 ) -> SaveConflictChoiceResult<QueuedSaveOutcome> {
-    let outcome = safe_save(root, request)?;
+    let outcome = safe_save_impl(root, request)?;
     let queued_item = enqueue_saved_file(
         queue,
         &outcome.baseline,
@@ -187,7 +65,7 @@ pub fn safe_save_and_enqueue_own_save(
     })
 }
 
-pub fn reload_after_conflict(
+pub(crate) fn reload_after_conflict_impl(
     root: &VaultRoot,
     queue: &mut IndexingQueue,
     conflict: &SaveConflict,
@@ -214,7 +92,7 @@ pub fn reload_after_conflict(
     })
 }
 
-pub fn keep_conflicted_buffer_as_new_note(
+pub(crate) fn keep_conflicted_buffer_as_new_note_impl(
     root: &VaultRoot,
     queue: &mut IndexingQueue,
     relative_path: &str,
@@ -235,7 +113,7 @@ pub fn keep_conflicted_buffer_as_new_note(
     })
 }
 
-pub fn overwrite_after_conflict(
+pub(crate) fn overwrite_after_conflict_impl(
     root: &VaultRoot,
     queue: &mut IndexingQueue,
     conflict: &SaveConflict,
@@ -342,75 +220,6 @@ fn enqueue_saved_file(
     };
     let file = FileRecord::from_scan_entry(&entry, generation);
     queue.enqueue_file(&file, reason)
-}
-
-impl From<&SaveBaseline> for SaveConflictSnapshot {
-    fn from(baseline: &SaveBaseline) -> Self {
-        Self {
-            file_identity: baseline.file_identity.clone(),
-            size_bytes: baseline.size_bytes,
-            modified: baseline.modified,
-            content_hash: baseline.content_hash.clone(),
-        }
-    }
-}
-
-impl fmt::Display for SafeSaveError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Path(error) => write!(formatter, "safe save path error: {error}"),
-            Self::Conflict(conflict) => write!(
-                formatter,
-                "safe save conflict for {}: {:?}",
-                conflict.relative_path, conflict.kind
-            ),
-            Self::ReadOnly { relative_path } => {
-                write!(formatter, "safe save target is read-only: {relative_path}")
-            }
-            Self::NotRegularFile { relative_path } => {
-                write!(
-                    formatter,
-                    "safe save target is not a regular file: {relative_path}"
-                )
-            }
-            Self::Io {
-                operation,
-                path,
-                kind,
-            } => write!(
-                formatter,
-                "safe save io error during {:?} at {}: {:?}",
-                operation,
-                path.display(),
-                kind
-            ),
-        }
-    }
-}
-
-impl std::error::Error for SafeSaveError {}
-
-impl fmt::Display for SaveConflictChoiceError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Save(error) => write!(formatter, "save conflict choice error: {error}"),
-            Self::Queue(error) => write!(formatter, "save conflict queue error: {error}"),
-        }
-    }
-}
-
-impl std::error::Error for SaveConflictChoiceError {}
-
-impl From<SafeSaveError> for SaveConflictChoiceError {
-    fn from(error: SafeSaveError) -> Self {
-        Self::Save(error)
-    }
-}
-
-impl From<IndexingQueueError> for SaveConflictChoiceError {
-    fn from(error: IndexingQueueError) -> Self {
-        Self::Queue(error)
-    }
 }
 
 #[cfg(test)]

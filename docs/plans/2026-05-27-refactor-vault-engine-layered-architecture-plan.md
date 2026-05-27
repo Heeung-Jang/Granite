@@ -857,7 +857,7 @@ Default stop conditions:
   - Build: either move pure Markdown parser functions/types under `core/document.rs` or `core/parser.rs`, or document `parser` as an intentional pure-domain module in `docs/architecture/rust-engine.md`.
   - Verify: `use_cases` and `ffi` do not import legacy `crate::parser` unless the exception is documented and scheduled for cleanup.
 
-- [ ] **RA05.04 Move save use case**
+- [x] **RA05.04 Move save use case**
   - Build: create `use_cases/save_note.rs` and move only `SaveRequest`, `SaveOutcome`, conflict choice DTOs, and public orchestration entry points.
   - Verify: save safety and FFI conflict choice tests pass.
 
