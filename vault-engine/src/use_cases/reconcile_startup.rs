@@ -6,8 +6,8 @@ use crate::adapters::sqlite::{FileIndexStatus, FileRecord, MetadataStore, Metada
 use crate::adapters::sqlite::{
     IndexingQueue, IndexingQueueError, IndexingQueueReason, IndexingQueueResult,
 };
-use crate::paths::FileIdentity;
-use crate::scanner::ScanSummary;
+use crate::core::files::FileIdentity;
+use crate::core::scan::ScanSummary;
 
 const FILE_PAGE_SIZE: usize = 512;
 
