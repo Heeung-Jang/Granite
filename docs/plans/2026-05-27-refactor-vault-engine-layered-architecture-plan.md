@@ -1227,20 +1227,23 @@ Default stop conditions:
   - Evidence: read benchmark notes use `error_class=*`, Tantivy query benchmark notes use `tantivy_error_note`, and materialize-read-index stores `io:<kind>` instead of raw path-bearing IO errors.
   - Stop condition: SQLite/Tantivy/path/parser error strings can reach committed public artifacts.
 
-- [ ] **RA06.03 Run fixture read/index benchmark smoke**
+- [x] **RA06.03 Run fixture read/index benchmark smoke**
   - Build: run existing fixture benchmark or profiler command after diagnostics movement.
   - Verify: produced artifact remains aggregate-only and no private vault content is committed.
+  - Evidence: `/tmp/granite-ra06-03-smoke` fixture ran `materialize-read-index` and `read-api-benchmark`; outputs had redacted root/metadata/Tantivy fields and aggregate summaries only.
 
-- [ ] **RA06.04 Keep diagnostics out of production use cases**
+- [x] **RA06.04 Keep diagnostics out of production use cases**
   - Build: ensure production modules do not import `diagnostics`.
   - Verify: `rg "crate::diagnostics" vault-engine/src/core vault-engine/src/use_cases vault-engine/src/adapters vault-engine/src/ffi` returns no matches.
+  - Evidence: the diagnostics import scan returned no matches.
 
-- [ ] **RA06.05 Add privacy scan gate**
+- [x] **RA06.05 Add privacy scan gate**
   - Build: after generated benchmark/probe artifacts, scan only new or modified artifacts for private-path and content tokens before commit.
   - Verify:
     ```sh
     rg -n "/Users/|\\.md\"|raw_query|relative_path\"|snippet|frontmatter|tags|file_id" docs/benchmarks/artifacts
     ```
+  - Evidence: existing artifact scan matched only allowed aggregate keys/labels such as `snippet_storage_mode`, `snippet_result_count`, and `tags`; no private paths, raw query text, relative path fields, or file IDs were present.
   - Stop condition: any matched token is not an aggregate field, redacted alias, or documented fixture-only value.
 
 - [ ] **RA06.06a Inventory profiler legacy imports**
