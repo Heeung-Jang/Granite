@@ -485,6 +485,260 @@ mod tests {
     }
 
     #[test]
+    fn ffi_c_string_inputs_reject_null_and_invalid_utf8() {
+        let relative_path = CString::new("Home.md").expect("relative path");
+
+        let rebuild = unsafe {
+            engine_read_rebuild_index(std::ptr::null(), std::ptr::null(), std::ptr::null())
+        };
+        let (rebuild_header, rebuild_error) = unsafe { take_open_error(rebuild) };
+        assert_eq!(rebuild_header.row_kind, ENGINE_READ_ROW_KIND_OPEN_STATUS);
+        assert_eq!(rebuild_error, "invalid_input");
+
+        let graph_response =
+            unsafe { take_response(engine_graph_snapshot(std::ptr::null(), std::ptr::null())) };
+        assert_json_error_code(graph_response, "invalid_input");
+
+        let capture_response = unsafe {
+            take_response(engine_save_capture_baseline(
+                std::ptr::null(),
+                relative_path.as_ptr(),
+            ))
+        };
+        assert_json_error_code(capture_response, "invalid_input");
+
+        let save_response = unsafe {
+            take_response(engine_save_write(
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+            ))
+        };
+        assert_json_error_code(save_response, "invalid_input");
+
+        let reload_response = unsafe {
+            take_response(engine_save_reload_after_conflict(
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                1,
+            ))
+        };
+        assert_json_error_code(reload_response, "invalid_input");
+
+        let keep_response = unsafe {
+            take_response(engine_save_keep_conflict_as_new_note(
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                1,
+            ))
+        };
+        assert_json_error_code(keep_response, "invalid_input");
+
+        let overwrite_response = unsafe {
+            take_response(engine_save_overwrite_after_conflict(
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                1,
+            ))
+        };
+        assert_json_error_code(overwrite_response, "invalid_input");
+
+        let invalid_utf8 = [0xff_u8, 0];
+        let invalid_path = invalid_utf8.as_ptr().cast::<c_char>();
+        let response = unsafe { engine_read_open(invalid_path, invalid_path) };
+        let (_header, error_code) = unsafe { take_open_error(response.result) };
+        assert!(response.handle.is_null());
+        assert_eq!(error_code, "invalid_input");
+
+        let invalid_save_response = unsafe {
+            take_response(engine_save_capture_baseline(
+                invalid_path,
+                relative_path.as_ptr(),
+            ))
+        };
+        assert_json_error_code(invalid_save_response, "invalid_input");
+    }
+
+    #[test]
+    fn read_ffi_null_handles_return_error_buffers_for_each_surface() {
+        let query = CString::new("Home").expect("query");
+        let relative_path = CString::new("Home.md").expect("relative path");
+        let contents = b"# Home\n";
+
+        let file_tree = unsafe { engine_read_file_tree(std::ptr::null_mut(), 701, 0, 10) };
+        let (file_tree_header, file_tree_error) = unsafe { take_open_error(file_tree) };
+        assert_eq!(file_tree_header.row_kind, ENGINE_READ_ROW_KIND_FILE_TREE);
+        assert_eq!(file_tree_header.request_id, 701);
+        assert_eq!(file_tree_error, "invalid_input");
+
+        let search = unsafe {
+            engine_read_search(
+                std::ptr::null_mut(),
+                702,
+                ENGINE_READ_SEARCH_MODE_BODY,
+                query.as_ptr(),
+                0,
+                10,
+            )
+        };
+        let (search_header, search_error) = unsafe { take_open_error(search) };
+        assert_eq!(search_header.row_kind, ENGINE_READ_ROW_KIND_SEARCH_HIT);
+        assert_eq!(search_header.request_id, 702);
+        assert_eq!(search_error, "invalid_input");
+
+        let panel = unsafe {
+            engine_read_inspector_panel(
+                std::ptr::null_mut(),
+                703,
+                relative_path.as_ptr(),
+                ENGINE_READ_INSPECTOR_PANEL_BACKLINKS,
+                0,
+                10,
+            )
+        };
+        let (panel_header, panel_error) = unsafe { take_open_error(panel) };
+        assert_eq!(panel_header.row_kind, ENGINE_READ_ROW_KIND_BACKLINK);
+        assert_eq!(panel_header.request_id, 703);
+        assert_eq!(panel_error, "invalid_input");
+
+        let graph = unsafe {
+            engine_read_local_graph(
+                std::ptr::null_mut(),
+                704,
+                relative_path.as_ptr(),
+                ENGINE_READ_LOCAL_GRAPH_DEPTH_ONE_HOP,
+                10,
+                10,
+            )
+        };
+        let (node_header, node_error) = unsafe { take_open_error(graph.nodes) };
+        let (edge_header, edge_error) = unsafe { take_open_error(graph.edges) };
+        assert_eq!(node_header.row_kind, ENGINE_READ_ROW_KIND_GRAPH_NODE);
+        assert_eq!(edge_header.row_kind, ENGINE_READ_ROW_KIND_GRAPH_EDGE);
+        assert_eq!(node_header.request_id, 704);
+        assert_eq!(edge_header.request_id, 704);
+        assert_eq!(node_error, "invalid_input");
+        assert_eq!(edge_error, "invalid_input");
+
+        let live_preview = unsafe {
+            engine_read_live_preview_metadata(
+                std::ptr::null_mut(),
+                705,
+                relative_path.as_ptr(),
+                contents.as_ptr(),
+                contents.len(),
+            )
+        };
+        let (live_header, live_error) = unsafe { take_open_error(live_preview) };
+        assert_eq!(
+            live_header.row_kind,
+            ENGINE_READ_ROW_KIND_LIVE_PREVIEW_METADATA
+        );
+        assert_eq!(live_header.request_id, 705);
+        assert_eq!(live_error, "invalid_input");
+    }
+
+    #[test]
+    fn ffi_byte_inputs_distinguish_null_by_length() {
+        let fixture = read_fixture().expect("fixture");
+        let handle = open_fixture_handle(&fixture);
+        let relative_path = CString::new("Home.md").expect("relative path");
+
+        let rejected = unsafe {
+            engine_read_live_preview_metadata(
+                handle,
+                801,
+                relative_path.as_ptr(),
+                std::ptr::null(),
+                1,
+            )
+        };
+        let (rejected_header, rejected_error) = unsafe { take_open_error(rejected) };
+        assert_eq!(
+            rejected_header.row_kind,
+            ENGINE_READ_ROW_KIND_LIVE_PREVIEW_METADATA
+        );
+        assert_eq!(rejected_error, "invalid_input");
+
+        let accepted = unsafe {
+            engine_read_live_preview_metadata(
+                handle,
+                802,
+                relative_path.as_ptr(),
+                std::ptr::null(),
+                0,
+            )
+        };
+        let accepted_header = decode_header_for_test(&accepted);
+        assert_eq!(accepted_header.state, ENGINE_READ_STATE_COMPLETE);
+        unsafe {
+            engine_read_result_free(accepted);
+            engine_read_close(handle);
+        }
+
+        let dir = tempdir().expect("tempdir");
+        let note = dir.path().join("Home.md");
+        fs::write(&note, "# Home\n").expect("note");
+        let vault = CString::new(dir.path().to_string_lossy().as_bytes()).expect("vault");
+        let relative_path = CString::new("Home.md").expect("relative path");
+        let baseline_response = unsafe {
+            take_response(engine_save_capture_baseline(
+                vault.as_ptr(),
+                relative_path.as_ptr(),
+            ))
+        };
+        let baseline: Value = serde_json::from_str(&baseline_response).expect("baseline json");
+        let baseline_json = CString::new(baseline["value"].to_string()).expect("baseline payload");
+
+        let rejected_save = unsafe {
+            take_response(engine_save_write(
+                vault.as_ptr(),
+                baseline_json.as_ptr(),
+                std::ptr::null(),
+                1,
+            ))
+        };
+        assert_json_error_code(rejected_save, "invalid_input");
+
+        let empty_save = unsafe {
+            take_response(engine_save_write(
+                vault.as_ptr(),
+                baseline_json.as_ptr(),
+                std::ptr::null(),
+                0,
+            ))
+        };
+        let empty: Value = serde_json::from_str(&empty_save).expect("empty save json");
+        assert_eq!(empty["ok"], true);
+        assert_eq!(empty["value"]["bytes_written"], 0);
+        assert_eq!(fs::read(&note).expect("empty contents"), b"");
+    }
+
+    #[test]
+    fn ffi_panic_payloads_remain_structured() {
+        let json_response = unsafe {
+            take_response(json::ffi_response::<Value, _>(
+                || -> Result<Value, json::FfiError> { panic!("test panic") },
+            ))
+        };
+        assert_json_error_code(json_response, "panic");
+
+        let graph = graph_error_result(901, 0, &ReadApiError::InvalidInput("panic"));
+        let (_node_header, node_error) = unsafe { take_open_error(graph.nodes) };
+        let (_edge_header, edge_error) = unsafe { take_open_error(graph.edges) };
+        assert_eq!(node_error, "panic");
+        assert_eq!(edge_error, "panic");
+    }
+
+    #[test]
     fn engine_read_file_tree_decodes_complete_and_partial_buffers() {
         let fixture = read_fixture().expect("fixture");
         let handle = open_fixture_handle(&fixture);
@@ -1170,6 +1424,12 @@ mod tests {
             engine_string_free(ptr);
         }
         value
+    }
+
+    fn assert_json_error_code(response: String, expected_code: &str) {
+        let value: Value = serde_json::from_str(&response).expect("error json");
+        assert_eq!(value["ok"], false);
+        assert_eq!(value["error"]["code"], expected_code);
     }
 
     unsafe fn take_open_header(

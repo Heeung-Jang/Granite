@@ -515,7 +515,7 @@ Default stop conditions:
   - Build: no code change after RA01.09.
   - Verify: C string and `extern "C"` usage is confined to `vault-engine/src/ffi`.
 
-- [ ] **RA01.11 Add FFI boundary regression tests**
+- [x] **RA01.11 Add FFI boundary regression tests**
   - Build: cover null C strings for every entry point, invalid UTF-8, null bytes pointer with `len > 0`, null bytes pointer with `len == 0`, null read handle for each read function, null `engine_string_free`, null `engine_read_close`, null `engine_read_result_free`, and panic conversion for save JSON, read buffer, and local graph dual-buffer paths.
   - Verify: invalid inputs return structured errors or no-op frees; no test aborts the process.
 
