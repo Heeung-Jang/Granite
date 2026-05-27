@@ -853,7 +853,7 @@ Default stop conditions:
   - Build: migrate `ffi/read.rs` away from `crate::read_api`, `crate::indexing_pipeline`, `crate::index_rebuild`, and `crate::paths`; FFI should call read-vault and rebuild use-case entry points only.
   - Verify: read FFI tests, rebuild FFI tests, and Swift engine smoke pass; FFI direct-adapter scan shows only documented handle-construction exceptions.
 
-- [ ] **RA05.03b Classify parser ownership**
+- [x] **RA05.03b Classify parser ownership**
   - Build: either move pure Markdown parser functions/types under `core/document.rs` or `core/parser.rs`, or document `parser` as an intentional pure-domain module in `docs/architecture/rust-engine.md`.
   - Verify: `use_cases` and `ffi` do not import legacy `crate::parser` unless the exception is documented and scheduled for cleanup.
 
@@ -1305,10 +1305,10 @@ Use this checklist for each PR or worktree batch:
 
 ## Next Step
 
-On the active `codex/refactor-vault-engine-layered-architecture` branch, Phase 0 through Phase 4 and RA05.01 through RA05.04e are green. Before continuing deeper indexing moves, resolve the remaining newly added guard tasks:
+On the active `codex/refactor-vault-engine-layered-architecture` branch, Phase 0 through Phase 4 and RA05.01 through RA05.04e are green. Remaining follow-up gates and next work:
 
 1. RA01.12 unsafe allowlist audit if it was not already covered by existing FFI/FSEvents tests.
 2. RA04.11 post-adapter performance gate, or document why it is deferred and keep it as a merge blocker.
-3. RA05.03b parser ownership classification.
+3. Continue RA05.05 index rebuild shell cleanup and RA05.06 indexing use-case extraction.
 
-Then continue with RA05.05 and RA05.06 indexing use-case extraction. Do not start Phase 6 or Phase 7 until Phase 5 boundary scans and FFI retargeting are green.
+Do not start Phase 6 or Phase 7 until Phase 5 boundary scans and FFI retargeting are green.

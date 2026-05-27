@@ -83,6 +83,30 @@ needs them as domain records:
 No SQL row decoder, SQL storage converter, or projection-only type is currently
 owned by `core`.
 
+## Parser Ownership
+
+`parser` is an intentional pure-domain facade for the current migration phase.
+It owns Markdown string parsing only, re-exports output records from
+`core::document`, and must not import filesystem, SQLite, Tantivy, FFI, or
+platform APIs.
+
+Allowed production callers:
+
+- `use_cases/live_preview_metadata.rs`, because live-preview metadata resolves
+  the current editor buffer without rereading the vault.
+- Indexing/rebuild use cases while parse orchestration is being moved out of
+  legacy modules.
+
+Allowed non-production callers:
+
+- FFI and read API tests that build compatibility fixtures.
+- Diagnostics/benchmarks that intentionally exercise parser behavior.
+
+When `read_api`, indexing, and diagnostics imports have been migrated, the
+remaining parser implementation can move under `core/document.rs` or
+`core/parser.rs` as a mechanical cleanup. Until then, direct `crate::parser`
+imports are allowed only for the callers above.
+
 ## Current Module Inventory
 
 | Current Module Or Consumer | Target Placement | Notes |
@@ -98,7 +122,7 @@ owned by `core`.
 | `index_rebuild` | `adapters/fs/index_directory.rs` and `use_cases/index_rebuild.rs` | Path validation/mutation remains near filesystem operations. |
 | `indexing_pipeline` | `use_cases/process_indexing_queue.rs`, `use_cases/scan_vault.rs`, adapters | Preserve streaming rebuild and bounded worker/channel settings. |
 | `indexing_queue` | `adapters/sqlite/indexing_queue.rs` plus core queue records if needed | SQL lease/update details stay in adapter. |
-| `parser` | `core/document.rs` for output types; parser implementation remains outside core until classified | Do not move IO or storage concerns into core. |
+| `parser` | Pure-domain parser facade; eventual `core/document.rs` or `core/parser.rs` cleanup | Parser may only parse strings and re-export `core::document` records. |
 | `paths` | `core/paths.rs`, `core/files.rs`, `adapters/fs/path_resolver.rs` | Pure value types can move to core; canonicalization and metadata reads stay in adapter. |
 | `read_api` | `use_cases/read_vault.rs`, `use_cases/live_preview_metadata.rs` | Read orchestration leaves FFI and storage details behind. |
 | `read_ffi` | `ffi/read_rows.rs` | Binary row layout and row-kind constants are FFI-owned. |
