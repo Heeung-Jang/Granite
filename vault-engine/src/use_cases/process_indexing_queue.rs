@@ -1,4 +1,6 @@
-use crate::adapters::sqlite::{IndexingQueue, IndexingQueueItem, MetadataStore};
+use crate::adapters::sqlite::{
+    IndexingQueue, IndexingQueueItem, IndexingQueueReason, MetadataStore,
+};
 use crate::adapters::tantivy::TantivySearchIndex;
 use crate::indexing_pipeline::{
     IndexingPipelineOptions, IndexingPipelineResult, ProductionIndexingPipelineResult,
@@ -56,4 +58,25 @@ pub fn process_indexing_queue_batch(
         batch_options,
         pipeline_options,
     )
+}
+
+pub(crate) fn source_for_queue_item(
+    root: &VaultRoot,
+    queue_item: &IndexingQueueItem,
+) -> IndexingPipelineResult<Option<SearchDocumentSource>> {
+    if queue_item.reason == IndexingQueueReason::FileDeleted {
+        return Ok(None);
+    }
+    let relative_path = queue_item.relative_path.to_string_lossy();
+    let resolved = root.resolve_existing_relative(relative_path.as_ref())?;
+
+    Ok(Some(SearchDocumentSource {
+        relative_path: resolved.relative_path,
+        absolute_path: resolved.absolute_path,
+        file_id: queue_item.file_id.clone(),
+        kind: queue_item.kind,
+        size_bytes: queue_item.size_bytes,
+        modified: queue_item.modified,
+        file_identity: resolved.file_identity,
+    }))
 }

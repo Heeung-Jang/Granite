@@ -15,7 +15,7 @@ use crate::adapters::sqlite::{
     TagRecord, TagSource, slugify_heading,
 };
 use crate::adapters::sqlite::{
-    IndexingQueue, IndexingQueueError, IndexingQueueItem, IndexingQueueReason, IndexingQueueSummary,
+    IndexingQueue, IndexingQueueError, IndexingQueueReason, IndexingQueueSummary,
 };
 use crate::adapters::tantivy::{
     TantivyIndexingStageMetrics, TantivySearchError, TantivySearchIndex, TantivyWriterOptions,
@@ -27,6 +27,7 @@ use crate::parser::{ParsedMarkdown, PropertyValue, parse_markdown};
 use crate::paths::{FileIdentity, PathError, VaultRoot, lookup_key};
 use crate::scanner::{ScanEntryKind, scan_vault};
 use crate::sqlite_fts::SearchDocument;
+use crate::use_cases::process_indexing_queue::source_for_queue_item;
 pub use crate::use_cases::process_indexing_queue::{
     QueueBatchIndexOptions, QueueLeaseBatch, QueuePipelineItem, lease_queue_batch,
     process_indexing_queue_batch,
@@ -831,27 +832,6 @@ pub fn run_tantivy_rebuild_pipeline(
     })
 }
 
-fn source_for_queue_item(
-    root: &VaultRoot,
-    queue_item: &IndexingQueueItem,
-) -> IndexingPipelineResult<Option<SearchDocumentSource>> {
-    if queue_item.reason == IndexingQueueReason::FileDeleted {
-        return Ok(None);
-    }
-    let relative_path = queue_item.relative_path.to_string_lossy();
-    let resolved = root.resolve_existing_relative(relative_path.as_ref())?;
-
-    Ok(Some(SearchDocumentSource {
-        relative_path: resolved.relative_path,
-        absolute_path: resolved.absolute_path,
-        file_id: queue_item.file_id.clone(),
-        kind: queue_item.kind,
-        size_bytes: queue_item.size_bytes,
-        modified: queue_item.modified,
-        file_identity: resolved.file_identity,
-    }))
-}
-
 fn record_queue_failure(
     queue: &mut IndexingQueue,
     item_id: i64,
@@ -1202,6 +1182,8 @@ mod tests {
     use super::*;
     use crate::adapters::sqlite::{FileIndexStatus, IndexSchemaMetadata};
     use crate::adapters::sqlite::{IndexingQueueReason, IndexingQueueStatus};
+    #[cfg(unix)]
+    use std::os::unix::fs::symlink;
     use std::path::{Path, PathBuf};
     use tempfile::tempdir;
 
@@ -1301,6 +1283,66 @@ mod tests {
         );
         assert!(batch.items[0].source.is_some());
         assert_eq!(queue.summary().expect("summary").in_progress, 2);
+    }
+
+    #[test]
+    fn queue_item_source_rejects_db_tampered_paths_before_read_parse() {
+        let temp = tempdir().expect("tempdir");
+        let root = fixture_vault(temp.path(), &["Safe.md"]);
+        let absolute_path = root
+            .canonical_root()
+            .join("Safe.md")
+            .to_string_lossy()
+            .to_string();
+
+        assert_tampered_queue_path_matches(&root, &absolute_path, |error| {
+            matches!(error, PathError::AbsolutePath(_))
+        });
+        assert_tampered_queue_path_matches(&root, "../outside.md", |error| {
+            matches!(error, PathError::OutsideVault(_))
+        });
+        assert_tampered_queue_path_matches(&root, "bad\0path.md", |error| {
+            matches!(error, PathError::ContainsNul)
+        });
+        assert_tampered_queue_path_matches(
+            &root,
+            "file:///etc/passwd",
+            |error| matches!(error, PathError::UrlScheme(scheme) if scheme == "file"),
+        );
+        assert_tampered_queue_path_matches(
+            &root,
+            "https://example.com/Note.md",
+            |error| matches!(error, PathError::UrlScheme(scheme) if scheme == "https"),
+        );
+        assert_tampered_queue_path_matches(
+            &root,
+            "obsidian://open?vault=Codex",
+            |error| matches!(error, PathError::UrlScheme(scheme) if scheme == "obsidian"),
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn queue_item_source_rejects_symlinked_db_tampered_paths() {
+        let temp = tempdir().expect("tempdir");
+        let root = fixture_vault(temp.path(), &["Safe.md"]);
+        let outside = temp.path().join("outside");
+        std::fs::create_dir_all(&outside).expect("outside dir");
+        std::fs::write(outside.join("Secret.md"), "# Secret").expect("outside note");
+
+        symlink(&outside, root.canonical_root().join("LinkedParent")).expect("symlinked parent");
+        assert_tampered_queue_path_matches(&root, "LinkedParent/Secret.md", |error| {
+            matches!(error, PathError::SymlinkEscape { .. })
+        });
+
+        symlink(
+            outside.join("Secret.md"),
+            root.canonical_root().join("SecretLink.md"),
+        )
+        .expect("symlinked note");
+        assert_tampered_queue_path_matches(&root, "SecretLink.md", |error| {
+            matches!(error, PathError::SymlinkEscape { .. })
+        });
     }
 
     #[test]
@@ -1665,5 +1707,30 @@ mod tests {
             status: FileIndexStatus::SeenMetadata,
             last_error: None,
         }
+    }
+
+    fn assert_tampered_queue_path_matches(
+        root: &VaultRoot,
+        tampered_relative_path: &str,
+        predicate: impl FnOnce(&PathError) -> bool,
+    ) {
+        let mut queue = IndexingQueue::open_in_memory().expect("queue");
+        let file = file_record(root, "Safe.md", 1);
+        queue
+            .enqueue_file(&file, IndexingQueueReason::FileChanged)
+            .expect("enqueue safe file");
+        queue
+            .tamper_relative_path_for_test(&file.file_id, tampered_relative_path)
+            .expect("tamper path");
+
+        let error = lease_queue_batch(&mut queue, root, 1).expect_err("reject tampered path");
+
+        let IndexingPipelineError::Path(path_error) = error else {
+            panic!("expected path error for {tampered_relative_path:?}");
+        };
+        assert!(
+            predicate(&path_error),
+            "unexpected path error for {tampered_relative_path:?}: {path_error:?}"
+        );
     }
 }

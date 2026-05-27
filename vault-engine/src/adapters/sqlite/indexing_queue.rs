@@ -275,6 +275,21 @@ impl IndexingQueue {
             .map_err(Into::into)
     }
 
+    #[cfg(test)]
+    pub(crate) fn tamper_relative_path_for_test(
+        &mut self,
+        file_id: &str,
+        relative_path: &str,
+    ) -> IndexingQueueResult<()> {
+        self.connection.execute(
+            "UPDATE indexing_queue
+             SET relative_path = ?1
+             WHERE file_id = ?2",
+            params![relative_path, file_id],
+        )?;
+        Ok(())
+    }
+
     fn update_terminal_status(
         &mut self,
         item_id: i64,

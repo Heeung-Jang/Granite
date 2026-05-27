@@ -889,7 +889,7 @@ Default stop conditions:
   - Build: move queue lease/result DTOs and `process_indexing_queue_batch` shell into `use_cases/process_indexing_queue.rs`.
   - Verify: queue batch tests pass.
 
-- [ ] **RA05.06a Move queue item source resolution**
+- [x] **RA05.06a Move queue item source resolution**
   - Build: move `source_for_queue_item` and queue item path/source mapping, keeping filesystem reads in adapters.
   - Verify: queue adapter lease and missing-file queue tests pass. Add adversarial queued-path coverage for absolute paths, `..`, NUL, URL-like prefixes, symlinked parents, symlinked note files, and DB-tampered paths; reject or treat as missing before any filesystem read.
 
@@ -1305,10 +1305,10 @@ Use this checklist for each PR or worktree batch:
 
 ## Next Step
 
-On the active `codex/refactor-vault-engine-layered-architecture` branch, Phase 0 through Phase 4 and RA05.01 through RA05.06 are green. Remaining follow-up gates and next work:
+On the active `codex/refactor-vault-engine-layered-architecture` branch, Phase 0 through Phase 4 and RA05.01 through RA05.06a are green. Remaining follow-up gates and next work:
 
 1. RA01.12 unsafe allowlist audit if it was not already covered by existing FFI/FSEvents tests.
 2. RA04.11 post-adapter performance gate, or document why it is deferred and keep it as a merge blocker.
-3. Continue RA05.06a queue item source resolution.
+3. Continue RA05.06b queue failure recording flow.
 
 Do not start Phase 6 or Phase 7 until Phase 5 boundary scans and FFI retargeting are green.
