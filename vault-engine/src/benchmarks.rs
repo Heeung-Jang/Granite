@@ -7,13 +7,13 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 
+use crate::adapters::sqlite::{
+    FileRecord, GraphFileRecord, GraphQueryStage, IndexSchemaMetadata, LinkEdgeRecord,
+    MetadataStore, MetadataStoreError, MetadataTable, TagRecord, TagSource,
+};
 use crate::graph::{
     WholeVaultGraphInputs, WholeVaultGraphRequest, WholeVaultGraphSnapshot,
     build_whole_vault_graph_snapshot, whole_vault_graph_needs_tags,
-};
-use crate::index::{
-    FileRecord, GraphFileRecord, GraphQueryStage, IndexSchemaMetadata, LinkEdgeRecord,
-    MetadataStore, MetadataStoreError, MetadataTable, TagRecord, TagSource,
 };
 use crate::index_rebuild::IndexRebuildPaths;
 #[cfg(test)]
@@ -605,7 +605,7 @@ pub fn run_whole_vault_graph_snapshot_benchmark(
         artifact_kind: "stage".to_string(),
         stage: "snapshot".to_string(),
         backend_version: "metadata-v2".to_string(),
-        store_schema_version: crate::index::INDEX_SCHEMA_VERSION,
+        store_schema_version: crate::adapters::sqlite::INDEX_SCHEMA_VERSION,
         renderer_kind: "none".to_string(),
         graph_generation: 1,
         graph_state: if build.partial {
@@ -1432,8 +1432,8 @@ fn resolve_benchmark_target(
 }
 
 fn benchmark_graph_candidate_files(
-    resolved_edges: &[crate::index::GraphResolvedEdgeRecord],
-    unresolved_edges: &[crate::index::GraphUnresolvedEdgeRecord],
+    resolved_edges: &[crate::adapters::sqlite::GraphResolvedEdgeRecord],
+    unresolved_edges: &[crate::adapters::sqlite::GraphUnresolvedEdgeRecord],
     orphan_files: &[GraphFileRecord],
     limit: usize,
 ) -> Vec<GraphFileRecord> {
@@ -1587,7 +1587,7 @@ impl Write for CountingWriter {
 
 fn indexed_access(
     stage: &str,
-    plans: &[crate::index::GraphQueryPlanSummary],
+    plans: &[crate::adapters::sqlite::GraphQueryPlanSummary],
     query_stage: GraphQueryStage,
     duration: Duration,
 ) -> WholeVaultGraphIndexedAccess {
@@ -1609,7 +1609,7 @@ fn indexed_access(
 }
 
 fn indexed_access_for_orphans(
-    plans: &[crate::index::GraphQueryPlanSummary],
+    plans: &[crate::adapters::sqlite::GraphQueryPlanSummary],
     duration: Duration,
 ) -> WholeVaultGraphIndexedAccess {
     let uses_index = plans.iter().any(|plan| {
