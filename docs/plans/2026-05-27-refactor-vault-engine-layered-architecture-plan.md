@@ -1131,7 +1131,7 @@ Default stop conditions:
   - Evidence: `metadata_store_returns_whole_vault_graph_bulk_records` now asserts expected graph query indexes, rejects unindexed `links`/`tags` scans, and fixes the tag file-id chunk size at `400`. `docs/benchmarks/artifacts/vault-engine-architecture-graph-query-gate-fixture-ra05-09f5-2026-05-27.json` proves benchmark artifacts include separate `nodeCount` and `edgeCount` diagnostic durations.
   - Stop condition: use-case movement adds an extra graph query per node/edge/tag or hides count-query cost inside assembly timing.
 
-- [ ] **RA05.10a Run focused use-case boundary scan**
+- [x] **RA05.10a Run focused use-case boundary scan**
   - Build: no code change after RA05.09f.
   - Verify:
     ```sh
@@ -1140,6 +1140,7 @@ Default stop conditions:
     rg -n "crate::ffi" vault-engine/src/core vault-engine/src/use_cases vault-engine/src/adapters
     rg -n "crate::(startup_reconciliation|watcher_burst|graph)" vault-engine/src/use_cases vault-engine/src/ffi vault-engine/src/adapters
     ```
+  - Evidence: `use_cases` direct filesystem/SQL/Tantivy/FSEvents scan returned no matches, `crate::ffi` scan returned no matches, and the unsafe scan found only legacy `benchmarks.rs` RSS measurement plus test-name/string false positives outside `use_cases`. The `crate::graph` scan matched only `graph_key` imports, which are not the legacy `crate::graph` compatibility module and will be handled by the Phase 7 public-surface cleanup.
   - Stop condition: new matches are not documented as transitional exceptions. Existing legacy parser/scanner/path/indexing exceptions should be handled in their own cleanup tasks, not hidden inside RA05.10a. Avoid broad text scans for words like `tantivy` or `rename` because type names and helper names create false positives.
 
 - [ ] **RA05.10b Record hot-path allocation baseline**
