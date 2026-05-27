@@ -40,10 +40,6 @@ final class AppLifecycleController {
 
 @MainActor
 final class GraniteAppDelegate: NSObject, NSApplicationDelegate {
-    func applicationDidFinishLaunching(_ notification: Notification) {
-        AppContentZoomMenuController.shared.installWhenMainMenuIsReady()
-    }
-
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         AppLifecycleController.shared.requestAppQuit() ? .terminateNow : .terminateCancel
     }
