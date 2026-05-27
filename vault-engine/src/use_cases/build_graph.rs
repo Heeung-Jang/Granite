@@ -51,6 +51,7 @@ pub(crate) enum WholeVaultGraphSnapshotError {
 }
 
 impl WholeVaultGraphRequest {
+    #[cfg(test)]
     pub fn new(max_nodes: usize, max_edges: usize) -> Self {
         Self::with_request_id(0, max_nodes, max_edges)
     }
@@ -81,16 +82,19 @@ impl WholeVaultGraphRequest {
         self
     }
 
+    #[cfg(test)]
     pub fn with_label_limit(mut self, max_label_bytes: usize) -> Self {
         self.max_label_bytes = max_label_bytes;
         self
     }
 
+    #[cfg(test)]
     pub fn with_tag_limit(mut self, max_tags_per_node: usize) -> Self {
         self.max_tags_per_node = max_tags_per_node;
         self
     }
 
+    #[cfg(test)]
     pub fn with_group_limits(
         mut self,
         max_groups: usize,

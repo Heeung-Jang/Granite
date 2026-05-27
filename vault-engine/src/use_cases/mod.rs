@@ -7,6 +7,8 @@ pub(crate) mod read_parse_documents;
 pub(crate) mod read_types;
 pub(crate) mod read_vault;
 pub(crate) mod rebuild_tantivy;
+#[cfg(test)]
 pub(crate) mod reconcile_startup;
 pub(crate) mod save_note;
+#[cfg(test)]
 pub(crate) mod watcher_burst;

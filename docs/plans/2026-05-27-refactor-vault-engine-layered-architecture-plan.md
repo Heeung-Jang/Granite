@@ -1506,17 +1506,20 @@ Default stop conditions:
   - Evidence: `graph_key.rs` was only a compatibility re-export of `core::links::unresolved_target_key`; the remaining consumers now import `core::links` directly, and the `graph_key` scan returns no code matches. The listed targeted and full test gates passed without warnings.
   - Stop condition: unresolved-link key generation diverges between graph building, local graph reads, and SQLite link writes.
 
-- [ ] **RA07.01b4 Make graph/watcher compatibility modules private**
+- [x] **RA07.01b4 Make graph/watcher compatibility modules private**
   - Build: change only `graph`, `graph_key`, `startup_reconciliation`, and `watcher_burst` legacy modules after graph FFI retargeting and watcher/startup use-case moves are verified.
   - Verify:
     ```sh
     rg -n "vault_engine::(graph|graph_key|startup_reconciliation|watcher_burst)" bench/vault-profiler/src
     rg -n "crate::(graph|graph_key|startup_reconciliation|watcher_burst)" vault-engine/src/ffi vault-engine/src/use_cases vault-engine/src/adapters
+    cargo fmt --manifest-path vault-engine/Cargo.toml --check
     cargo test --manifest-path vault-engine/Cargo.toml graph::
     cargo test --manifest-path vault-engine/Cargo.toml startup_reconciliation::
     cargo test --manifest-path vault-engine/Cargo.toml watcher_burst::
     cargo test --manifest-path vault-engine/Cargo.toml
+    cargo test --manifest-path bench/vault-profiler/Cargo.toml
     ```
+  - Evidence: `graph`, `startup_reconciliation`, and `watcher_burst` are now test-only compatibility modules; `graph_key` was removed in RA07.01b4b. Graph tests import only the builder API they exercise, and the graph request builder methods used only by tests are `cfg(test)` to avoid keeping public-surface-only production API alive. Startup reconciliation and watcher burst use cases are also test-only because there is no production caller yet. The profiler import scan and internal legacy-module scan returned no matches, and all listed tests passed without warnings.
   - Stop condition: graph FFI or watcher recovery still depends on legacy module paths.
 
 - [ ] **RA07.01b5 Verify diagnostics and FFI are the only intentional public families**

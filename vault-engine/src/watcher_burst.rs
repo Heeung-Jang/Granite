@@ -1,5 +1,4 @@
 pub use crate::use_cases::watcher_burst::{
-    WatcherBurstError, WatcherBurstPlan, WatcherBurstRecovery, WatcherBurstResult,
     WatcherBurstState, coalesce_watcher_burst, recover_watcher_burst,
 };
 

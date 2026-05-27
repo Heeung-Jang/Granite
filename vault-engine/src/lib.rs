@@ -6,7 +6,8 @@ pub mod diagnostics;
 pub mod errors;
 pub mod ffi;
 pub mod file_watcher;
-pub mod graph;
+#[cfg(test)]
+pub(crate) mod graph;
 #[cfg(test)]
 pub(crate) mod index;
 pub mod index_rebuild;
@@ -21,11 +22,13 @@ pub mod save;
 pub(crate) mod scanner;
 #[cfg(test)]
 pub(crate) mod sqlite_fts;
-pub mod startup_reconciliation;
+#[cfg(test)]
+pub(crate) mod startup_reconciliation;
 #[cfg(test)]
 pub(crate) mod tantivy_search;
 pub(crate) mod use_cases;
-pub mod watcher_burst;
+#[cfg(test)]
+pub(crate) mod watcher_burst;
 
 pub const ENGINE_ABI_VERSION: u32 = 1;
 
