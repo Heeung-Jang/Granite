@@ -503,7 +503,7 @@ Default stop conditions:
   - Build: move save extern functions and save-specific FFI structs into `vault-engine/src/ffi/save.rs`.
   - Verify: save FFI unit tests pass and conflict payload JSON remains unchanged.
 
-- [ ] **RA01.08 Extract whole-vault graph FFI functions**
+- [x] **RA01.08 Extract whole-vault graph FFI functions**
   - Build: move graph request/payload conversion and graph extern function into `vault-engine/src/ffi/graph.rs`.
   - Verify: graph FFI tests pass and no graph membership code moves into FFI.
 
