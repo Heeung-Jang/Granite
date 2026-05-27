@@ -1,7 +1,8 @@
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::adapters::sqlite::rows::{
-    row_to_attachment, row_to_file_lookup_projection, row_to_file_record, row_to_heading,
+    row_to_attachment, row_to_file_lookup_projection, row_to_file_record, row_to_graph_file,
+    row_to_graph_resolved_edge, row_to_graph_tag, row_to_graph_unresolved_edge, row_to_heading,
     row_to_link, row_to_link_projection, row_to_property, row_to_tag, row_to_tag_note_projection,
 };
 use crate::adapters::sqlite::storage_values::path_to_string;
@@ -10,7 +11,8 @@ use crate::core::metadata::{
     AttachmentRecord, FileRecord, HeadingRecord, LinkEdgeRecord, PropertyRecord, TagRecord,
 };
 use crate::index::{
-    AttachmentProjection, FileLookupProjection, FileTreeProjection, LinkProjection,
+    AttachmentProjection, FileLookupProjection, FileTreeProjection, GraphFileRecord,
+    GraphResolvedEdgeRecord, GraphTagRecord, GraphUnresolvedEdgeRecord, LinkProjection,
     MetadataStoreResult, PropertyProjection, TagNoteProjection,
 };
 
@@ -288,4 +290,247 @@ pub(crate) fn attachment_projections(
             state: attachment.state,
         })
         .collect())
+}
+
+pub(crate) const GRAPH_FILES_SQL: &str = "
+    SELECT file_id, relative_path
+    FROM files
+    WHERE kind = 'markdown'
+      AND status IN ('parsed', 'search_indexed')
+      AND generation = ?1
+    ORDER BY file_id
+    LIMIT ?2";
+
+pub(crate) const GRAPH_RESOLVED_EDGES_SQL: &str = "
+    SELECT links.source_file_id,
+           source_files.relative_path,
+           links.resolved_target_file_id,
+           target_files.relative_path,
+           COUNT(*) AS weight
+    FROM links INDEXED BY idx_links_resolved_pair
+    CROSS JOIN files AS source_files ON source_files.file_id = links.source_file_id
+    CROSS JOIN files AS target_files ON target_files.file_id = links.resolved_target_file_id
+    WHERE links.resolved_target_file_id IS NOT NULL
+      AND source_files.kind = 'markdown'
+      AND source_files.status IN ('parsed', 'search_indexed')
+      AND source_files.generation = ?1
+      AND target_files.kind = 'markdown'
+      AND target_files.status IN ('parsed', 'search_indexed')
+      AND target_files.generation = ?1
+    GROUP BY links.source_file_id, links.resolved_target_file_id
+    ORDER BY links.source_file_id, links.resolved_target_file_id
+    LIMIT ?2";
+
+pub(crate) const GRAPH_RESOLVED_EDGES_COMPACT_SQL: &str = "
+    SELECT links.source_file_id,
+           '' AS source_relative_path,
+           links.resolved_target_file_id,
+           '' AS target_relative_path,
+           COUNT(*) AS weight
+    FROM links INDEXED BY idx_links_resolved_pair
+    CROSS JOIN files AS source_files ON source_files.file_id = links.source_file_id
+    CROSS JOIN files AS target_files ON target_files.file_id = links.resolved_target_file_id
+    WHERE links.resolved_target_file_id IS NOT NULL
+      AND source_files.kind = 'markdown'
+      AND source_files.status IN ('parsed', 'search_indexed')
+      AND source_files.generation = ?1
+      AND target_files.kind = 'markdown'
+      AND target_files.status IN ('parsed', 'search_indexed')
+      AND target_files.generation = ?1
+    GROUP BY links.source_file_id, links.resolved_target_file_id
+    ORDER BY links.source_file_id, links.resolved_target_file_id
+    LIMIT ?2";
+
+pub(crate) const GRAPH_UNRESOLVED_EDGES_SQL: &str = "
+    SELECT links.source_file_id,
+           source_files.relative_path,
+           MIN(links.target_text) AS target_text,
+           COUNT(*) AS weight
+    FROM links INDEXED BY idx_links_unresolved_source_target_key
+    CROSS JOIN files AS source_files ON source_files.file_id = links.source_file_id
+    WHERE links.resolved_target_file_id IS NULL
+      AND source_files.kind = 'markdown'
+      AND source_files.status IN ('parsed', 'search_indexed')
+      AND source_files.generation = ?1
+    GROUP BY links.source_file_id, links.target_key
+    ORDER BY links.source_file_id, links.target_key
+    LIMIT ?2";
+
+pub(crate) const GRAPH_ORPHANS_RESOLVED_ONLY_SQL: &str = "
+    SELECT files.file_id, files.relative_path
+    FROM files
+    WHERE files.kind = 'markdown'
+      AND files.status IN ('parsed', 'search_indexed')
+      AND files.generation = ?1
+      AND NOT EXISTS (
+        SELECT 1 FROM links
+        JOIN files AS source_files ON source_files.file_id = links.source_file_id
+        JOIN files AS target_files ON target_files.file_id = links.resolved_target_file_id
+        WHERE links.resolved_target_file_id IS NOT NULL
+          AND source_files.kind = 'markdown'
+          AND source_files.status IN ('parsed', 'search_indexed')
+          AND source_files.generation = ?1
+          AND target_files.kind = 'markdown'
+          AND target_files.status IN ('parsed', 'search_indexed')
+          AND target_files.generation = ?1
+          AND (links.source_file_id = files.file_id OR links.resolved_target_file_id = files.file_id)
+      )
+    ORDER BY files.file_id
+    LIMIT ?2";
+
+pub(crate) const GRAPH_ORPHANS_WITH_UNRESOLVED_SQL: &str = "
+    SELECT files.file_id, files.relative_path
+    FROM files
+    WHERE files.kind = 'markdown'
+      AND files.status IN ('parsed', 'search_indexed')
+      AND files.generation = ?1
+      AND NOT EXISTS (
+        SELECT 1 FROM links
+        JOIN files AS source_files ON source_files.file_id = links.source_file_id
+        JOIN files AS target_files ON target_files.file_id = links.resolved_target_file_id
+        WHERE links.resolved_target_file_id IS NOT NULL
+          AND source_files.kind = 'markdown'
+          AND source_files.status IN ('parsed', 'search_indexed')
+          AND source_files.generation = ?1
+          AND target_files.kind = 'markdown'
+          AND target_files.status IN ('parsed', 'search_indexed')
+          AND target_files.generation = ?1
+          AND (links.source_file_id = files.file_id OR links.resolved_target_file_id = files.file_id)
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM links
+        WHERE links.resolved_target_file_id IS NULL
+          AND links.source_file_id = files.file_id
+      )
+    ORDER BY files.file_id
+    LIMIT ?2";
+
+pub(crate) const GRAPH_TAGS_PLAN_SQL: &str = "
+    SELECT file_id, tag FROM (
+        SELECT tags.file_id, tags.tag,
+               ROW_NUMBER() OVER (
+                   PARTITION BY tags.file_id
+                   ORDER BY tags.tag, tags.id
+               ) AS tag_rank
+        FROM tags
+        WHERE tags.file_id IN (?1)
+    )
+    WHERE tag_rank <= ?2
+    ORDER BY file_id, tag";
+
+pub(crate) fn graph_files(
+    connection: &Connection,
+    generation: u64,
+    limit: usize,
+) -> MetadataStoreResult<Vec<GraphFileRecord>> {
+    let mut statement = connection.prepare(GRAPH_FILES_SQL)?;
+    let rows = statement.query_map(
+        params![generation as i64, limit_to_i64(limit)],
+        row_to_graph_file,
+    )?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+}
+
+pub(crate) fn graph_resolved_edges(
+    connection: &Connection,
+    generation: u64,
+    limit: usize,
+) -> MetadataStoreResult<Vec<GraphResolvedEdgeRecord>> {
+    let mut statement = connection.prepare(GRAPH_RESOLVED_EDGES_SQL)?;
+    let rows = statement.query_map(
+        params![generation as i64, limit_to_i64(limit)],
+        row_to_graph_resolved_edge,
+    )?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+}
+
+pub(crate) fn graph_resolved_edges_compact(
+    connection: &Connection,
+    generation: u64,
+    limit: usize,
+) -> MetadataStoreResult<Vec<GraphResolvedEdgeRecord>> {
+    let mut statement = connection.prepare(GRAPH_RESOLVED_EDGES_COMPACT_SQL)?;
+    let rows = statement.query_map(
+        params![generation as i64, limit_to_i64(limit)],
+        row_to_graph_resolved_edge,
+    )?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+}
+
+pub(crate) fn graph_unresolved_edges(
+    connection: &Connection,
+    generation: u64,
+    limit: usize,
+) -> MetadataStoreResult<Vec<GraphUnresolvedEdgeRecord>> {
+    let mut statement = connection.prepare(GRAPH_UNRESOLVED_EDGES_SQL)?;
+    let rows = statement.query_map(
+        params![generation as i64, limit_to_i64(limit)],
+        row_to_graph_unresolved_edge,
+    )?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+}
+
+pub(crate) fn graph_orphan_files(
+    connection: &Connection,
+    generation: u64,
+    include_unresolved: bool,
+    limit: usize,
+) -> MetadataStoreResult<Vec<GraphFileRecord>> {
+    let sql = if include_unresolved {
+        GRAPH_ORPHANS_WITH_UNRESOLVED_SQL
+    } else {
+        GRAPH_ORPHANS_RESOLVED_ONLY_SQL
+    };
+    let mut statement = connection.prepare(sql)?;
+    let rows = statement.query_map(
+        params![generation as i64, limit_to_i64(limit)],
+        row_to_graph_file,
+    )?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+}
+
+pub(crate) fn graph_tags_for_files(
+    connection: &Connection,
+    file_ids: &[String],
+    max_tags_per_file: usize,
+) -> MetadataStoreResult<Vec<GraphTagRecord>> {
+    if file_ids.is_empty() || max_tags_per_file == 0 {
+        return Ok(Vec::new());
+    }
+
+    let mut tags = Vec::new();
+    for chunk in file_ids.chunks(400) {
+        let placeholders = std::iter::repeat_n("?", chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT file_id, tag FROM (
+                SELECT tags.file_id, tags.tag,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY tags.file_id
+                           ORDER BY tags.tag, tags.id
+                       ) AS tag_rank
+                FROM tags
+                WHERE tags.file_id IN ({placeholders})
+            )
+            WHERE tag_rank <= ?
+            ORDER BY file_id, tag"
+        );
+        let mut statement = connection.prepare(&sql)?;
+        let max_tags = limit_to_i64(max_tags_per_file);
+        let mut params: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(chunk.len() + 1);
+        for file_id in chunk {
+            params.push(file_id);
+        }
+        params.push(&max_tags);
+        let rows = statement.query_map(params.as_slice(), row_to_graph_tag)?;
+        for row in rows {
+            tags.push(row?);
+        }
+    }
+    Ok(tags)
+}
+
+fn limit_to_i64(limit: usize) -> i64 {
+    limit.min(i64::MAX as usize) as i64
 }
