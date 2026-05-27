@@ -650,7 +650,7 @@ Default stop conditions:
   - Build: move pure SQLite conversion helpers such as property value storage, attachment state/source storage, file status, tag source, scan kind, bool/int, path string, and unix-ms conversion into `adapters/sqlite/storage_values.rs`.
   - Verify: metadata insert/update tests and projection tests pass.
 
-- [ ] **RA04.02c Move SQLite row decoders**
+- [x] **RA04.02c Move SQLite row decoders**
   - Build: move `row_to_*` decoders for file, file lookup, link, tag, graph, property, heading, and attachment records into `adapters/sqlite/rows.rs`.
   - Verify: metadata projection, graph bulk-record, and attachment tests pass.
   - Stop condition: any row decoder starts returning an FFI/read-row type instead of a domain/storage projection.
