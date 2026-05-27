@@ -4,11 +4,11 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::ENGINE_ABI_VERSION;
-use crate::attachments::{AttachmentReferenceSource, AttachmentResolutionState};
-use crate::index::{
+use crate::adapters::sqlite::{
     AttachmentProjection, AttachmentRecord, FileIndexStatus, FileRecord, FileTreeProjection,
     IndexPropertyValue, LinkProjection, PropertyProjection, PropertyRecord, TagRecord,
 };
+use crate::attachments::{AttachmentReferenceSource, AttachmentResolutionState};
 use crate::read_api::{
     LivePreviewMetadataItem, LivePreviewMetadataItemKind, LivePreviewMetadataSource,
     LivePreviewMetadataState, LocalGraphEdge, LocalGraphEdgeDirection, LocalGraphNode,
@@ -572,10 +572,10 @@ pub(crate) fn file_status_code(status: FileIndexStatus) -> u32 {
     }
 }
 
-pub(crate) fn tag_source_code(source: crate::index::TagSource) -> u32 {
+pub(crate) fn tag_source_code(source: crate::adapters::sqlite::TagSource) -> u32 {
     match source {
-        crate::index::TagSource::Inline => 1,
-        crate::index::TagSource::Frontmatter => 2,
+        crate::adapters::sqlite::TagSource::Inline => 1,
+        crate::adapters::sqlite::TagSource::Frontmatter => 2,
     }
 }
 
@@ -659,8 +659,8 @@ pub(crate) fn live_preview_source_code(source: LivePreviewMetadataSource) -> u32
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapters::sqlite::{IndexPropertyValue, PropertyRecord, TagSource};
     use crate::attachments::AttachmentResolutionState;
-    use crate::index::{IndexPropertyValue, PropertyRecord, TagSource};
     use crate::read_api::{
         ENGINE_READ_STATE_COMPLETE, ENGINE_READ_STATE_ERROR, LocalGraphEdgeDirection,
     };

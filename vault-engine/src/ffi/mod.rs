@@ -341,6 +341,10 @@ pub unsafe extern "C" fn engine_read_live_preview_metadata(
 mod tests {
     use super::*;
     use crate::ENGINE_ABI_VERSION;
+    use crate::adapters::sqlite::{
+        AttachmentRecord, FileRecord, HeadingRecord, IndexSchemaMetadata, LinkEdgeRecord,
+        MetadataStore, PropertyRecord, TagRecord, TagSource, slugify_heading,
+    };
     use crate::attachments::{
         AttachmentReferenceSource, AttachmentRejectReason, AttachmentResolutionState,
     };
@@ -353,10 +357,6 @@ mod tests {
         EngineReadAttachmentRow, EngineReadFileTreeRow, EngineReadGraphNodeRow, EngineReadLinkRow,
         EngineReadLivePreviewMetadataRow, EngineReadPropertyRow, EngineReadSearchHitRow,
         EngineReadTagRow, decode_header_for_test, string_for_test,
-    };
-    use crate::index::{
-        AttachmentRecord, FileRecord, HeadingRecord, IndexSchemaMetadata, LinkEdgeRecord,
-        MetadataStore, PropertyRecord, TagRecord, TagSource, slugify_heading,
     };
     use crate::parser::PropertyValue;
     use crate::paths::{FileIdentity, lookup_key};
