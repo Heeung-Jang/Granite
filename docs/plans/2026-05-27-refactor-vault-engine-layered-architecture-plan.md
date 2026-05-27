@@ -1584,9 +1584,10 @@ Default stop conditions:
   - Build: no code change after RA07.04.
   - Verify: inspect remaining `pub mod` and `pub use` entries in `vault-engine/src/lib.rs`; each has a documented reason.
 
-- [ ] **RA07.06 Classify `errors.rs`**
+- [x] **RA07.06 Classify `errors.rs`**
   - Build: either reduce `errors.rs` to a deliberate cross-layer contract or move layer-specific errors into their owning modules before public-surface cleanup is accepted.
   - Verify: no layer imports a global error solely to avoid owning its local error mapping.
+  - Evidence: `errors.rs` contained only the unused placeholder `EngineError::NotImplemented` and had no imports from engine or profiler code, so it was removed instead of preserved as a cross-layer contract. Full `vault-engine` and `vault-profiler` tests passed without warnings.
 
 ## Verification Plan
 

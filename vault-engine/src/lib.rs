@@ -3,7 +3,6 @@ pub(crate) mod adapters;
 pub(crate) mod attachments;
 pub(crate) mod core;
 pub mod diagnostics;
-pub mod errors;
 pub mod ffi;
 pub mod file_watcher;
 #[cfg(test)]

@@ -121,7 +121,7 @@ imports are allowed only for the callers above.
 | --- | --- | --- |
 | `attachments` | `core/attachments.rs` | Attachment reference source, settings, and resolution state are domain values. |
 | `benchmarks` | `diagnostics/benchmarks.rs` | Keep aggregate-only artifact rules. |
-| `errors` | Layer-owned errors or a narrow cross-layer contract | Do not keep a global catch-all unless the contract is explicit. |
+| `errors` | Removed; layer-owned errors remain with their modules | The unused global `EngineError::NotImplemented` placeholder was not a deliberate contract. |
 | `ffi` | `ffi/mod.rs` plus focused FFI files | Split panic, strings, health, read, save, graph, and buffers. |
 | `file_watcher` | `adapters/fsevents/watcher.rs` | Raw FSEvents and platform flags stay in the adapter. |
 | `graph` | `core/graph.rs` and `use_cases/build_graph.rs` | Pure graph records in core; snapshot construction orchestration in use cases. |
