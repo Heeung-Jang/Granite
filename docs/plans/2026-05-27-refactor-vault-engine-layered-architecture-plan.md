@@ -779,7 +779,7 @@ Default stop conditions:
   - Build: move only display-ready file tree projection logic.
   - Verify: metadata projection tests and read FFI projection tests pass.
 
-- [ ] **RA05.02e Move file-open metadata read method**
+- [x] **RA05.02e Move file-open metadata read method**
   - Build: move only the method that returns metadata for opening a selected file.
   - Verify: read API metadata-open tests pass.
 

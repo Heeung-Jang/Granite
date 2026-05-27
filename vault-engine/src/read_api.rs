@@ -190,29 +190,6 @@ impl LocalGraphRequest {
 }
 
 impl VaultReadApi {
-    pub fn file_open_metadata(
-        &self,
-        file_id: &str,
-    ) -> ReadApiResult<ReadValue<Option<FileOpenMetadata>>> {
-        self.file_open_metadata_with_request(0, file_id)
-    }
-
-    pub fn file_open_metadata_with_request(
-        &self,
-        request_id: u64,
-        file_id: &str,
-    ) -> ReadApiResult<ReadValue<Option<FileOpenMetadata>>> {
-        Ok(ReadValue {
-            request_id,
-            generation: self.generation,
-            value: self
-                .metadata
-                .get_file(file_id)?
-                .map(|file| FileOpenMetadata { file }),
-            state: ReadState::Complete,
-        })
-    }
-
     pub fn file_name_search(
         &self,
         query: &str,

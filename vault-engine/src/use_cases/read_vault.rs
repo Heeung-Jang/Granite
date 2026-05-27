@@ -3,12 +3,12 @@ use std::path::Path;
 use crate::adapters::sqlite::{FileRecord, FileTreeProjection, IndexSchemaMetadata, MetadataStore};
 use crate::adapters::tantivy::TantivySearchIndex;
 use crate::read_api::{
-    READ_BACKEND_NAME, READ_BACKEND_VERSION, READ_TOKENIZER_CONFIG, ReadApiResult,
+    FileOpenMetadata, READ_BACKEND_NAME, READ_BACKEND_VERSION, READ_TOKENIZER_CONFIG, ReadApiResult,
 };
 
 use super::read_types::{
     MAX_FILE_TREE_PAGE_LIMIT, MAX_PAGE_LIMIT, PageRequest, ReadOpenError, ReadOpenResult, ReadPage,
-    ReadState,
+    ReadState, ReadValue,
 };
 
 pub struct VaultReadApi {
@@ -57,6 +57,29 @@ impl VaultReadApi {
             page,
             MAX_FILE_TREE_PAGE_LIMIT,
         ))
+    }
+
+    pub fn file_open_metadata(
+        &self,
+        file_id: &str,
+    ) -> ReadApiResult<ReadValue<Option<FileOpenMetadata>>> {
+        self.file_open_metadata_with_request(0, file_id)
+    }
+
+    pub fn file_open_metadata_with_request(
+        &self,
+        request_id: u64,
+        file_id: &str,
+    ) -> ReadApiResult<ReadValue<Option<FileOpenMetadata>>> {
+        Ok(ReadValue {
+            request_id,
+            generation: self.generation,
+            value: self
+                .metadata
+                .get_file(file_id)?
+                .map(|file| FileOpenMetadata { file }),
+            state: ReadState::Complete,
+        })
     }
 
     pub(crate) fn page_from_overfetch<T>(&self, items: Vec<T>, page: PageRequest) -> ReadPage<T> {
