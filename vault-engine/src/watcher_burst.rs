@@ -1,96 +1,19 @@
-use std::fmt;
-
-use crate::adapters::sqlite::MetadataStore;
-use crate::adapters::sqlite::{IndexingQueue, IndexingQueueError};
-use crate::file_watcher::WatcherEvent;
-use crate::scanner::ScanSummary;
-use crate::use_cases::reconcile_startup::{
-    StartupReconciliationError, StartupReconciliationSummary, reconcile_startup,
-};
 pub use crate::use_cases::watcher_burst::{
-    WatcherBurstPlan, WatcherBurstState, coalesce_watcher_burst,
+    WatcherBurstError, WatcherBurstPlan, WatcherBurstRecovery, WatcherBurstResult,
+    WatcherBurstState, coalesce_watcher_burst, recover_watcher_burst,
 };
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WatcherBurstRecovery {
-    pub plan: WatcherBurstPlan,
-    pub reconciliation: StartupReconciliationSummary,
-    pub index_state: WatcherBurstState,
-}
-
-#[derive(Debug)]
-pub enum WatcherBurstError {
-    Reconciliation(StartupReconciliationError),
-    Queue(IndexingQueueError),
-}
-
-pub type WatcherBurstResult<T> = Result<T, WatcherBurstError>;
-
-pub fn recover_watcher_burst(
-    metadata: &MetadataStore,
-    queue: &mut IndexingQueue,
-    current_scan: &ScanSummary,
-    generation: u64,
-    events: &[WatcherEvent],
-) -> WatcherBurstResult<WatcherBurstRecovery> {
-    let plan = coalesce_watcher_burst(events);
-    let reconciliation = if plan.state == WatcherBurstState::Complete {
-        StartupReconciliationSummary::default()
-    } else {
-        reconcile_startup(metadata, queue, current_scan, generation)?
-    };
-    let queue_summary = queue.summary()?;
-    let index_state = if plan.state == WatcherBurstState::Ambiguous {
-        WatcherBurstState::Ambiguous
-    } else if queue_summary.pending > 0 || queue_summary.in_progress > 0 {
-        WatcherBurstState::Stale
-    } else {
-        WatcherBurstState::Complete
-    };
-
-    Ok(WatcherBurstRecovery {
-        plan,
-        reconciliation,
-        index_state,
-    })
-}
-
-impl fmt::Display for WatcherBurstError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Reconciliation(error) => {
-                write!(formatter, "watcher burst reconciliation error: {error}")
-            }
-            Self::Queue(error) => write!(formatter, "watcher burst queue error: {error}"),
-        }
-    }
-}
-
-impl std::error::Error for WatcherBurstError {}
-
-impl From<StartupReconciliationError> for WatcherBurstError {
-    fn from(error: StartupReconciliationError) -> Self {
-        Self::Reconciliation(error)
-    }
-}
-
-impl From<IndexingQueueError> for WatcherBurstError {
-    fn from(error: IndexingQueueError) -> Self {
-        Self::Queue(error)
-    }
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::sqlite::{FileRecord, IndexSchemaMetadata, MetadataStore};
-    use crate::adapters::sqlite::{IndexingQueueReason, IndexingQueueStatus};
-    use crate::file_watcher::{
+    use crate::adapters::fs::watcher::{
         WATCHER_FLAG_ITEM_MODIFIED, WATCHER_FLAG_ITEM_RENAMED, WATCHER_FLAG_KERNEL_DROPPED,
-        WatcherEventKind,
+        WatcherEvent, WatcherEventKind,
     };
-    use crate::paths::FileIdentity;
-    use crate::scanner::{ScanEntry, ScanEntryKind};
+    use crate::adapters::sqlite::{FileRecord, IndexSchemaMetadata, IndexingQueue, MetadataStore};
+    use crate::adapters::sqlite::{IndexingQueueReason, IndexingQueueStatus};
+    use crate::core::files::FileIdentity;
+    use crate::core::scan::{ScanEntry, ScanEntryKind, ScanSummary};
     use std::path::PathBuf;
     use std::time::{Duration, UNIX_EPOCH};
 

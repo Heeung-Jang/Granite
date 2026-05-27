@@ -1,9 +1,16 @@
 use std::collections::BTreeSet;
+use std::fmt;
 use std::path::PathBuf;
 
 use crate::adapters::fs::watcher::{
     WATCHER_FLAG_EVENT_IDS_WRAPPED, WATCHER_FLAG_KERNEL_DROPPED, WATCHER_FLAG_MUST_SCAN_SUBDIRS,
     WATCHER_FLAG_USER_DROPPED, WatcherEvent, WatcherEventKind,
+};
+use crate::adapters::sqlite::MetadataStore;
+use crate::adapters::sqlite::{IndexingQueue, IndexingQueueError};
+use crate::core::scan::ScanSummary;
+use crate::use_cases::reconcile_startup::{
+    StartupReconciliationError, StartupReconciliationSummary, reconcile_startup,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,6 +28,21 @@ pub enum WatcherBurstState {
     Stale,
     Ambiguous,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WatcherBurstRecovery {
+    pub plan: WatcherBurstPlan,
+    pub reconciliation: StartupReconciliationSummary,
+    pub index_state: WatcherBurstState,
+}
+
+#[derive(Debug)]
+pub enum WatcherBurstError {
+    Reconciliation(StartupReconciliationError),
+    Queue(IndexingQueueError),
+}
+
+pub type WatcherBurstResult<T> = Result<T, WatcherBurstError>;
 
 pub fn coalesce_watcher_burst(events: &[WatcherEvent]) -> WatcherBurstPlan {
     let mut changed_paths = BTreeSet::new();
@@ -87,9 +109,63 @@ fn event_requires_root_rescan(event: &WatcherEvent) -> bool {
             != 0
 }
 
+pub fn recover_watcher_burst(
+    metadata: &MetadataStore,
+    queue: &mut IndexingQueue,
+    current_scan: &ScanSummary,
+    generation: u64,
+    events: &[WatcherEvent],
+) -> WatcherBurstResult<WatcherBurstRecovery> {
+    let plan = coalesce_watcher_burst(events);
+    let reconciliation = if plan.state == WatcherBurstState::Complete {
+        StartupReconciliationSummary::default()
+    } else {
+        reconcile_startup(metadata, queue, current_scan, generation)?
+    };
+    let queue_summary = queue.summary()?;
+    let index_state = if plan.state == WatcherBurstState::Ambiguous {
+        WatcherBurstState::Ambiguous
+    } else if queue_summary.pending > 0 || queue_summary.in_progress > 0 {
+        WatcherBurstState::Stale
+    } else {
+        WatcherBurstState::Complete
+    };
+
+    Ok(WatcherBurstRecovery {
+        plan,
+        reconciliation,
+        index_state,
+    })
+}
+
 fn parent_directory(path: &std::path::Path) -> PathBuf {
     path.parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .map(PathBuf::from)
         .unwrap_or_default()
+}
+
+impl fmt::Display for WatcherBurstError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Reconciliation(error) => {
+                write!(formatter, "watcher burst reconciliation error: {error}")
+            }
+            Self::Queue(error) => write!(formatter, "watcher burst queue error: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for WatcherBurstError {}
+
+impl From<StartupReconciliationError> for WatcherBurstError {
+    fn from(error: StartupReconciliationError) -> Self {
+        Self::Reconciliation(error)
+    }
+}
+
+impl From<IndexingQueueError> for WatcherBurstError {
+    fn from(error: IndexingQueueError) -> Self {
+        Self::Queue(error)
+    }
 }

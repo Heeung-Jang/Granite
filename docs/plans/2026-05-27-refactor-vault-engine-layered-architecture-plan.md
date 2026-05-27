@@ -977,7 +977,7 @@ Default stop conditions:
   - Verify: watcher coalescing tests pass, including duplicate paths, ambiguous events, root rescan events, and dropped events without paths.
   - Stop condition: sorted path output, rescan-directory output, or state classification changes.
 
-- [ ] **RA05.08c Move watcher burst recovery orchestration**
+- [x] **RA05.08c Move watcher burst recovery orchestration**
   - Build: move `WatcherBurstRecovery`, `WatcherBurstError`, `WatcherBurstResult`, and `recover_watcher_burst` after RA05.08b is green.
   - Verify:
     ```sh
