@@ -62,16 +62,25 @@ pub struct EngineReadHandle {
     api: VaultReadApi,
 }
 
+/// Opens a read API handle for an existing metadata and Tantivy index pair.
+///
+/// # Safety
+///
+/// `metadata_path` and `tantivy_path` may be null, which returns a structured
+/// error. Non-null pointers must reference valid NUL-terminated byte sequences
+/// for the duration of this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn engine_read_open(
     metadata_path: *const c_char,
     tantivy_path: *const c_char,
 ) -> EngineReadOpenResult {
     read_open_response(|| {
+        // SAFETY: The caller owns the FFI string lifetime contract documented on this function.
         let metadata_path = unsafe {
             read_c_string(metadata_path, "metadata_path")
                 .map_err(|_| ReadOpenError::InvalidInput("metadata_path"))?
         };
+        // SAFETY: The caller owns the FFI string lifetime contract documented on this function.
         let tantivy_path = unsafe {
             read_c_string(tantivy_path, "tantivy_path")
                 .map_err(|_| ReadOpenError::InvalidInput("tantivy_path"))?
@@ -80,6 +89,13 @@ pub unsafe extern "C" fn engine_read_open(
     })
 }
 
+/// Rebuilds the read index into the supplied rebuild path and swaps it into place.
+///
+/// # Safety
+///
+/// `vault_path`, `data_path`, and `rebuild_path` may be null, which returns a
+/// structured error. Non-null pointers must reference valid NUL-terminated byte
+/// sequences for the duration of this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn engine_read_rebuild_index(
     vault_path: *const c_char,
@@ -87,8 +103,11 @@ pub unsafe extern "C" fn engine_read_rebuild_index(
     rebuild_path: *const c_char,
 ) -> EngineReadResultBuffer {
     read_rebuild_response(|| {
+        // SAFETY: The caller owns the FFI string lifetime contract documented on this function.
         let vault_path = unsafe { read_rebuild_c_string(vault_path, "vault_path")? };
+        // SAFETY: The caller owns the FFI string lifetime contract documented on this function.
         let data_path = unsafe { read_rebuild_c_string(data_path, "data_path")? };
+        // SAFETY: The caller owns the FFI string lifetime contract documented on this function.
         let rebuild_path = unsafe { read_rebuild_c_string(rebuild_path, "rebuild_path")? };
         rebuild_read_index(
             Path::new(&vault_path),
@@ -98,6 +117,11 @@ pub unsafe extern "C" fn engine_read_rebuild_index(
     })
 }
 
+/// Reads a paged file tree projection from a read handle.
+///
+/// # Safety
+///
+/// `handle` must be null or a live pointer returned by `engine_read_open`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn engine_read_file_tree(
     handle: *mut EngineReadHandle,
@@ -114,6 +138,14 @@ pub unsafe extern "C" fn engine_read_file_tree(
     )
 }
 
+/// Runs a paged search query against a read handle.
+///
+/// # Safety
+///
+/// `handle` must be null or a live pointer returned by `engine_read_open`.
+/// `query` may be null, which returns a structured error. A non-null pointer
+/// must reference a valid NUL-terminated byte sequence for the duration of this
+/// call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn engine_read_search(
     handle: *mut EngineReadHandle,
@@ -123,6 +155,7 @@ pub unsafe extern "C" fn engine_read_search(
     offset: usize,
     limit: usize,
 ) -> EngineReadResultBuffer {
+    // SAFETY: The caller owns the FFI string lifetime contract documented on this function.
     let query = match unsafe { read_read_string(query, "query") } {
         Ok(value) => value,
         Err(error) => {
@@ -144,6 +177,14 @@ pub unsafe extern "C" fn engine_read_search(
     )
 }
 
+/// Reads one inspector panel projection for the supplied note path.
+///
+/// # Safety
+///
+/// `handle` must be null or a live pointer returned by `engine_read_open`.
+/// `relative_path` may be null, which returns a structured error. A non-null
+/// pointer must reference a valid NUL-terminated byte sequence for the duration
+/// of this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn engine_read_inspector_panel(
     handle: *mut EngineReadHandle,
@@ -153,6 +194,7 @@ pub unsafe extern "C" fn engine_read_inspector_panel(
     offset: usize,
     limit: usize,
 ) -> EngineReadResultBuffer {
+    // SAFETY: The caller owns the FFI string lifetime contract documented on this function.
     let relative_path = match unsafe { read_read_string(relative_path, "relative_path") } {
         Ok(value) => value,
         Err(error) => return read_api_error_buffer(panel_row_kind(panel), request_id, 0, &error),
@@ -227,6 +269,14 @@ pub unsafe extern "C" fn engine_read_inspector_panel(
     }
 }
 
+/// Reads local graph nodes and edges for the supplied note path.
+///
+/// # Safety
+///
+/// `handle` must be null or a live pointer returned by `engine_read_open`.
+/// `relative_path` may be null, which returns a structured error. A non-null
+/// pointer must reference a valid NUL-terminated byte sequence for the duration
+/// of this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn engine_read_local_graph(
     handle: *mut EngineReadHandle,
@@ -236,6 +286,7 @@ pub unsafe extern "C" fn engine_read_local_graph(
     max_nodes: usize,
     max_edges: usize,
 ) -> EngineReadLocalGraphResult {
+    // SAFETY: The caller owns the FFI string lifetime contract documented on this function.
     let relative_path = match unsafe { read_read_string(relative_path, "relative_path") } {
         Ok(value) => value,
         Err(error) => return graph_error_result(request_id, 0, &error),
@@ -253,6 +304,7 @@ pub unsafe extern "C" fn engine_read_local_graph(
     };
     let generation = read_generation(handle);
     match catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: The caller owns the handle validity contract documented on this function.
         let handle = unsafe { read_handle(handle)?.as_ref() };
         handle.api.local_graph_for_path(
             &relative_path,
@@ -284,6 +336,15 @@ pub unsafe extern "C" fn engine_read_local_graph(
     }
 }
 
+/// Parses live-preview metadata for unsaved editor contents.
+///
+/// # Safety
+///
+/// `handle` must be null or a live pointer returned by `engine_read_open`.
+/// `relative_path` may be null, which returns a structured error. A non-null
+/// pointer must reference a valid NUL-terminated byte sequence. `contents` may
+/// be null only when `contents_len == 0`; otherwise it must point to
+/// `contents_len` initialized bytes for the duration of this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn engine_read_live_preview_metadata(
     handle: *mut EngineReadHandle,
@@ -292,6 +353,7 @@ pub unsafe extern "C" fn engine_read_live_preview_metadata(
     contents: *const c_uchar,
     contents_len: usize,
 ) -> EngineReadResultBuffer {
+    // SAFETY: The caller owns the FFI string lifetime contract documented on this function.
     let relative_path = match unsafe { read_read_string(relative_path, "relative_path") } {
         Ok(value) => value,
         Err(error) => {
@@ -303,6 +365,7 @@ pub unsafe extern "C" fn engine_read_live_preview_metadata(
             );
         }
     };
+    // SAFETY: The caller owns the bytes lifetime contract documented on this function.
     let contents = match unsafe { read_bytes(contents, contents_len, "contents") } {
         Ok(value) => value,
         Err(_) => {

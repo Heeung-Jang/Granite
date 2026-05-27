@@ -1705,6 +1705,8 @@ fn scan_error_to_string(error: ScanError) -> BackendBenchmarkError {
 #[cfg(target_os = "macos")]
 fn current_rss_bytes() -> Option<u64> {
     let mut usage = std::mem::MaybeUninit::<libc::rusage_info_v2>::zeroed();
+    // SAFETY: `usage` points to writable `rusage_info_v2` storage and the
+    // kernel writes at most that struct when the call succeeds.
     let result = unsafe {
         libc::proc_pid_rusage(
             libc::getpid(),
@@ -1715,6 +1717,8 @@ fn current_rss_bytes() -> Option<u64> {
     if result != 0 {
         return None;
     }
+    // SAFETY: `proc_pid_rusage` returned success, so `usage` has been
+    // initialized by the kernel.
     Some(unsafe { usage.assume_init().ri_resident_size })
 }
 
@@ -1722,6 +1726,8 @@ fn current_rss_bytes() -> Option<u64> {
 fn current_rss_bytes() -> Option<u64> {
     let statm = fs::read_to_string("/proc/self/statm").ok()?;
     let resident_pages = statm.split_whitespace().nth(1)?.parse::<u64>().ok()?;
+    // SAFETY: `sysconf(_SC_PAGESIZE)` has no pointer arguments and does not
+    // retain Rust-managed memory.
     let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
     if page_size <= 0 {
         return None;
@@ -1739,10 +1745,13 @@ fn release_benchmark_allocator_memory() {}
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 fn peak_rss_bytes() -> Option<u64> {
     let mut usage = std::mem::MaybeUninit::<libc::rusage>::zeroed();
+    // SAFETY: `usage` points to writable `rusage` storage and the kernel
+    // initializes it when `getrusage` returns success.
     let result = unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) };
     if result != 0 {
         return None;
     }
+    // SAFETY: `getrusage` returned success, so `usage` is initialized.
     let max_rss = unsafe { usage.assume_init().ru_maxrss as u64 };
     #[cfg(target_os = "linux")]
     {

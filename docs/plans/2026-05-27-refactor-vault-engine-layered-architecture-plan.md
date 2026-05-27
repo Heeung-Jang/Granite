@@ -559,19 +559,21 @@ Default stop conditions:
   - Build: cover null C strings for every entry point, invalid UTF-8, null bytes pointer with `len > 0`, null bytes pointer with `len == 0`, null read handle for each read function, null `engine_string_free`, null `engine_read_close`, null `engine_read_result_free`, and panic conversion for save JSON, read buffer, and local graph dual-buffer paths.
   - Verify: invalid inputs return structured errors or no-op frees; no test aborts the process.
 
-- [ ] **RA01.12 Audit unsafe allowlist**
+- [x] **RA01.12 Audit unsafe allowlist**
   - Build: no behavior change; verify every unsafe block has a local safety comment, FFI entry points keep panic containment around fallible work, and unsafe operations remain inside the approved FFI/FSEvents/diagnostics allowlist.
   - Verify: unsafe grep returns only `ffi/**`, `adapters/fs/watcher.rs` while it owns FSEvents, `adapters/fsevents/watcher.rs` if split later, or diagnostics-only matches; FSEvents stop/restart/drop tests do not unwind or use freed callback context.
+  - Evidence: FFI, diagnostics RSS measurement, FSEvents callback/stream, and fixed-layout read row helpers now carry local safety comments. `cargo test --manifest-path vault-engine/Cargo.toml ffi::`, `cargo test --manifest-path vault-engine/Cargo.toml file_watcher::`, and full `cargo test --manifest-path vault-engine/Cargo.toml` passed.
 
-- [ ] **RA01.12a Enforce unsafe lint gate**
+- [x] **RA01.12a Enforce unsafe lint gate**
   - Build: no behavior change; run a lint-only gate after unsafe comments and allowlist ownership are checked.
   - Verify:
     ```sh
     cargo clippy --manifest-path vault-engine/Cargo.toml -- -D clippy::undocumented_unsafe_blocks -D unsafe_op_in_unsafe_fn
     ```
   - Stop condition: any unsafe block lacks a local safety comment, or any unsafe operation appears outside `ffi/**`, `adapters/fs/watcher.rs`, `adapters/fsevents/watcher.rs`, or diagnostics-only code.
+  - Evidence: clippy completed with the unsafe lint gate enabled. Remaining warnings are pre-existing non-gated style/large-error warnings.
 
-- [ ] **RA01.12b Align FSEvents allowlist path**
+- [x] **RA01.12b Align FSEvents allowlist path**
   - Build: no behavior change; decide whether the current `adapters/fs/watcher.rs` remains the FSEvents owner or whether a dedicated `adapters/fsevents/watcher.rs` file is needed. Update only docs/import scans in this task unless the file is moved mechanically.
   - Verify:
     ```sh
@@ -579,6 +581,7 @@ Default stop conditions:
     cd vault-engine/src && rg -n "unsafe|extern \"C\"|FSEvent" . -g '!ffi/**' -g '!adapters/fs/watcher.rs' -g '!adapters/fsevents/watcher.rs' -g '!diagnostics/**'
     ```
   - Stop condition: unsafe allowlist docs name a path that does not match the actual FSEvents owner.
+  - Evidence: FSEvents remains owned by `adapters/fs/watcher.rs`. The allowlist exclusion scan outside `ffi/**`, `adapters/fs/watcher.rs`, `adapters/fsevents/watcher.rs`, and `diagnostics/**` returned only test names and fixture strings containing the word `unsafe`.
 
 ### Phase 2: Move Read ABI Rows Under FFI
 

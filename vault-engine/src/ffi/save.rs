@@ -14,13 +14,24 @@ use crate::use_cases::save_note::{
 use super::json::{FfiError, ffi_response, read_json};
 use super::strings::{read_bytes, read_c_string};
 
+/// Captures the current save baseline for a vault-relative file.
+///
+/// # Safety
+///
+/// `vault_path` and `relative_path` may be null, which returns a structured
+/// error. Non-null pointers must reference valid NUL-terminated byte sequences
+/// for the duration of this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn engine_save_capture_baseline(
     vault_path: *const c_char,
     relative_path: *const c_char,
 ) -> *mut c_char {
     ffi_response(|| {
+        // SAFETY: `read_c_string` handles null; non-null pointers are covered
+        // by this function's safety contract.
         let vault_path = unsafe { read_c_string(vault_path, "vault_path") }?;
+        // SAFETY: `read_c_string` handles null; non-null pointers are covered
+        // by this function's safety contract.
         let relative_path = unsafe { read_c_string(relative_path, "relative_path") }?;
         let baseline =
             capture_baseline_for_path(&vault_path, &relative_path).map_err(FfiError::from_save)?;
@@ -28,6 +39,14 @@ pub unsafe extern "C" fn engine_save_capture_baseline(
     })
 }
 
+/// Writes edited contents if the provided save baseline is still valid.
+///
+/// # Safety
+///
+/// `vault_path` and `baseline_json` may be null, which returns a structured
+/// error. Non-null pointers must reference valid NUL-terminated byte sequences
+/// for the duration of this call. When `contents_len > 0`, `contents` must
+/// point to `contents_len` readable bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn engine_save_write(
     vault_path: *const c_char,
@@ -36,8 +55,14 @@ pub unsafe extern "C" fn engine_save_write(
     contents_len: usize,
 ) -> *mut c_char {
     ffi_response(|| {
+        // SAFETY: `read_c_string` handles null; non-null pointers are covered
+        // by this function's safety contract.
         let vault_path = unsafe { read_c_string(vault_path, "vault_path") }?;
+        // SAFETY: `read_c_string` handles null; non-null pointers are covered
+        // by this function's safety contract.
         let baseline_json = unsafe { read_c_string(baseline_json, "baseline_json") }?;
+        // SAFETY: `read_bytes` handles zero-length null; non-empty buffers are
+        // covered by this function's safety contract.
         let contents = unsafe { read_bytes(contents, contents_len, "contents") }?;
         let baseline: FfiSaveBaseline = read_json(&baseline_json, "baseline_json")?;
         let baseline = SaveBaseline::from(baseline);
@@ -47,6 +72,13 @@ pub unsafe extern "C" fn engine_save_write(
     })
 }
 
+/// Reloads the latest on-disk contents after a save conflict.
+///
+/// # Safety
+///
+/// `vault_path`, `queue_path`, and `conflict_json` may be null, which returns a
+/// structured error. Non-null pointers must reference valid NUL-terminated byte
+/// sequences for the duration of this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn engine_save_reload_after_conflict(
     vault_path: *const c_char,
@@ -55,8 +87,14 @@ pub unsafe extern "C" fn engine_save_reload_after_conflict(
     generation: u64,
 ) -> *mut c_char {
     ffi_response(|| {
+        // SAFETY: `read_c_string` handles null; non-null pointers are covered
+        // by this function's safety contract.
         let vault_path = unsafe { read_c_string(vault_path, "vault_path") }?;
+        // SAFETY: `read_c_string` handles null; non-null pointers are covered
+        // by this function's safety contract.
         let queue_path = unsafe { read_c_string(queue_path, "queue_path") }?;
+        // SAFETY: `read_c_string` handles null; non-null pointers are covered
+        // by this function's safety contract.
         let conflict_json = unsafe { read_c_string(conflict_json, "conflict_json") }?;
         let conflict: FfiSaveConflict = read_json(&conflict_json, "conflict_json")?;
         let conflict = SaveConflict::try_from(conflict)?;
@@ -67,6 +105,14 @@ pub unsafe extern "C" fn engine_save_reload_after_conflict(
     })
 }
 
+/// Saves conflicted contents as a new note.
+///
+/// # Safety
+///
+/// `vault_path`, `queue_path`, and `new_relative_path` may be null, which
+/// returns a structured error. Non-null pointers must reference valid
+/// NUL-terminated byte sequences for the duration of this call. When
+/// `contents_len > 0`, `contents` must point to `contents_len` readable bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn engine_save_keep_conflict_as_new_note(
     vault_path: *const c_char,
@@ -77,9 +123,17 @@ pub unsafe extern "C" fn engine_save_keep_conflict_as_new_note(
     generation: u64,
 ) -> *mut c_char {
     ffi_response(|| {
+        // SAFETY: `read_c_string` handles null; non-null pointers are covered
+        // by this function's safety contract.
         let vault_path = unsafe { read_c_string(vault_path, "vault_path") }?;
+        // SAFETY: `read_c_string` handles null; non-null pointers are covered
+        // by this function's safety contract.
         let queue_path = unsafe { read_c_string(queue_path, "queue_path") }?;
+        // SAFETY: `read_c_string` handles null; non-null pointers are covered
+        // by this function's safety contract.
         let new_relative_path = unsafe { read_c_string(new_relative_path, "new_relative_path") }?;
+        // SAFETY: `read_bytes` handles zero-length null; non-empty buffers are
+        // covered by this function's safety contract.
         let contents = unsafe { read_bytes(contents, contents_len, "contents") }?;
         let outcome = keep_conflicted_buffer_as_new_note_for_paths(
             &vault_path,
@@ -93,6 +147,14 @@ pub unsafe extern "C" fn engine_save_keep_conflict_as_new_note(
     })
 }
 
+/// Overwrites a file after the caller accepts a save conflict.
+///
+/// # Safety
+///
+/// `vault_path`, `queue_path`, and `conflict_json` may be null, which returns a
+/// structured error. Non-null pointers must reference valid NUL-terminated byte
+/// sequences for the duration of this call. When `contents_len > 0`, `contents`
+/// must point to `contents_len` readable bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn engine_save_overwrite_after_conflict(
     vault_path: *const c_char,
@@ -103,9 +165,17 @@ pub unsafe extern "C" fn engine_save_overwrite_after_conflict(
     generation: u64,
 ) -> *mut c_char {
     ffi_response(|| {
+        // SAFETY: `read_c_string` handles null; non-null pointers are covered
+        // by this function's safety contract.
         let vault_path = unsafe { read_c_string(vault_path, "vault_path") }?;
+        // SAFETY: `read_c_string` handles null; non-null pointers are covered
+        // by this function's safety contract.
         let queue_path = unsafe { read_c_string(queue_path, "queue_path") }?;
+        // SAFETY: `read_c_string` handles null; non-null pointers are covered
+        // by this function's safety contract.
         let conflict_json = unsafe { read_c_string(conflict_json, "conflict_json") }?;
+        // SAFETY: `read_bytes` handles zero-length null; non-empty buffers are
+        // covered by this function's safety contract.
         let contents = unsafe { read_bytes(contents, contents_len, "contents") }?;
         let conflict: FfiSaveConflict = read_json(&conflict_json, "conflict_json")?;
         let conflict = SaveConflict::try_from(conflict)?;

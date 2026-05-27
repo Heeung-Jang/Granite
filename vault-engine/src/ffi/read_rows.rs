@@ -226,6 +226,8 @@ impl EngineReadResultBuilder {
         } else {
             assert_eq!(self.header.row_stride as usize, row_size);
         }
+        // SAFETY: FFI row types are `Copy` fixed-layout records constructed by
+        // this module and are copied while `row` is alive.
         let row_bytes = unsafe { bytes_of(row) };
         self.rows.extend_from_slice(row_bytes);
         self.header.row_count += 1;
@@ -245,6 +247,8 @@ impl EngineReadResultBuilder {
         let mut bytes = Vec::with_capacity(
             size_of::<EngineReadResultHeader>() + self.rows.len() + self.strings.len(),
         );
+        // SAFETY: `EngineReadResultHeader` is a `Copy` fixed-layout FFI header
+        // constructed by this builder and copied while it is alive.
         let header_bytes = unsafe { bytes_of(&self.header) };
         bytes.extend_from_slice(header_bytes);
         bytes.extend_from_slice(&self.rows);
@@ -522,6 +526,8 @@ impl EngineReadLivePreviewMetadataRow {
 pub fn decode_header_for_test(buffer: &EngineReadResultBuffer) -> EngineReadResultHeader {
     assert!(!buffer.ptr.is_null());
     assert!(buffer.len >= size_of::<EngineReadResultHeader>());
+    // SAFETY: The assertions above prove the buffer contains at least a full
+    // header; unaligned reads are allowed by `read_unaligned`.
     unsafe { std::ptr::read_unaligned(buffer.ptr.cast::<EngineReadResultHeader>()) }
 }
 
@@ -534,11 +540,15 @@ pub fn string_for_test(buffer: &EngineReadResultBuffer, string_ref: EngineReadSt
     let start = header.string_arena_offset as usize + string_ref.offset as usize;
     let end = start + string_ref.length as usize;
     assert!(end <= buffer.len);
+    // SAFETY: Bounds are checked against the buffer length above and the buffer
+    // remains owned by the caller for this test helper call.
     let bytes = unsafe { std::slice::from_raw_parts(buffer.ptr.add(start), end - start) };
     String::from_utf8(bytes.to_vec()).expect("utf8 string")
 }
 
 unsafe fn bytes_of<T>(value: &T) -> &[u8] {
+    // SAFETY: Callers use this only for fixed-layout FFI records/headers that
+    // are fully initialized and immediately copied while `value` is alive.
     unsafe { std::slice::from_raw_parts((value as *const T).cast::<u8>(), size_of::<T>()) }
 }
 

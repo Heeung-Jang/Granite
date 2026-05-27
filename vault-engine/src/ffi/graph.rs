@@ -12,13 +12,25 @@ use crate::use_cases::build_graph::{
 use super::json::{FfiError, ffi_response, ffi_success_response_len, read_json};
 use super::strings::read_c_string;
 
+/// Builds a whole-vault graph snapshot from a metadata database path.
+///
+/// # Safety
+///
+/// `metadata_path` and `request_json` may be null, which returns a structured
+/// error. Non-null pointers must reference valid NUL-terminated byte sequences
+/// for the duration of this call. Invalid JSON or unsupported request values
+/// are returned as structured FFI errors.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn engine_graph_snapshot(
     metadata_path: *const c_char,
     request_json: *const c_char,
 ) -> *mut c_char {
     ffi_response(|| {
+        // SAFETY: `read_c_string` handles null; non-null pointers are covered
+        // by this function's safety contract.
         let metadata_path = unsafe { read_c_string(metadata_path, "metadata_path") }?;
+        // SAFETY: `read_c_string` handles null; non-null pointers are covered
+        // by this function's safety contract.
         let request_json = unsafe { read_c_string(request_json, "request_json") }?;
         let request: FfiWholeVaultGraphRequest = read_json(&request_json, "request_json")?;
         if request.payload_version != 1 {

@@ -136,6 +136,8 @@ where
 {
     let generation = read_generation(handle);
     match catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: FFI entry points pass the raw handle they received from
+        // Swift. `read_handle` validates null before converting to a reference.
         let handle = unsafe { read_handle(handle)?.as_ref() };
         call(&handle.api)
     })) {
@@ -253,6 +255,8 @@ pub(super) fn read_generation(handle: *mut EngineReadHandle) -> u64 {
     if handle.is_null() {
         return 0;
     }
+    // SAFETY: `as_ref` returns `None` if the pointer is null. Non-null pointer
+    // validity is the FFI handle contract shared with `read_handle`.
     unsafe {
         handle
             .as_ref()
@@ -261,6 +265,12 @@ pub(super) fn read_generation(handle: *mut EngineReadHandle) -> u64 {
     }
 }
 
+/// Converts an FFI read handle pointer to a non-null Rust handle pointer.
+///
+/// # Safety
+///
+/// `handle` must be null or a live pointer returned by `engine_read_open`.
+/// Null is converted into a structured read error.
 pub(super) unsafe fn read_handle(
     handle: *mut EngineReadHandle,
 ) -> Result<NonNull<EngineReadHandle>, ReadApiError> {
