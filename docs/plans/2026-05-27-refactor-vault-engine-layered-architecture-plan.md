@@ -1387,7 +1387,7 @@ Default stop conditions:
     ```
   - Stop condition: deleting a compatibility module would require changing production logic in the same commit.
 
-- [ ] **RA07.00b Classify `errors.rs` before visibility reduction**
+- [x] **RA07.00b Classify `errors.rs` before visibility reduction**
   - Build: decide whether `errors.rs` is a deliberate cross-layer contract or split layer-specific errors into owning modules before `lib.rs` public cleanup begins.
   - Verify:
     ```sh
@@ -1395,14 +1395,17 @@ Default stop conditions:
     cargo test --manifest-path vault-engine/Cargo.toml
     ```
   - Stop condition: global errors remain public only because legacy modules have not been drained.
+  - Evidence: `errors.rs` was an unused global placeholder rather than a deliberate cross-layer contract, so it was removed in RA07.06. `rg -n "crate::errors|vault_engine::errors" vault-engine/src bench/vault-profiler/src` returned no matches, and full Rust/profiler tests passed.
 
-- [ ] **RA07.01 Rewrite `lib.rs` module exports**
+- [x] **RA07.01 Rewrite `lib.rs` module exports**
   - Build: expose `pub mod ffi` and intentional public facades only; make internals `pub(crate)` where possible.
   - Verify: Rust tests compile without relying on unintended public modules.
+  - Evidence: `lib.rs` now exposes stable `ffi` and `diagnostics` plus the documented temporary `indexing_pipeline` facade only. Parser/path/scanner are internal, legacy storage/search/read/save/rebuild/graph/watcher roots are test-only or removed, and full Rust/profiler tests pass.
 
-- [ ] **RA07.01a Reduce public surface in two passes**
+- [x] **RA07.01a Reduce public surface in two passes**
   - Build: first change `pub mod` to `pub(crate) mod` only for modules with no external Rust consumers. Then remove transitional modules in a separate step.
   - Verify: each pass compiles independently.
+  - Evidence: visibility was reduced in separate commits: parser/path/scanner first, storage/search roots next, graph/watcher and save/rebuild roots after consumer retargeting. Transitional removals such as `benchmarks`, `graph_key`, and `errors` were separate commits.
 
 - [x] **RA07.01b1 Make parser/path/scanner compatibility modules private**
   - Build: change only `parser`, `paths`, and `scanner` legacy modules to private or compatibility-only visibility after profiler imports are gone. Keep `attachments` public until its compatibility facade is drained without dead-code warning noise.
@@ -1418,7 +1421,7 @@ Default stop conditions:
   - Evidence: `parser`, `paths`, and `scanner` are now `pub(crate)` in `lib.rs`; `paths.rs` no longer re-exports unused private-only path types. The profiler scan returned no matches and all listed tests passed.
   - Stop condition: any external Rust consumer or integration test still requires those legacy public paths.
 
-- [ ] **RA07.01b1a Drain attachments compatibility facade**
+- [x] **RA07.01b1a Drain attachments compatibility facade**
   - Build: retarget or remove the remaining legacy `attachments` public facade without hiding warning-generating dead code behind `allow` attributes.
   - Verify:
     ```sh
@@ -1426,7 +1429,7 @@ Default stop conditions:
     cargo test --manifest-path vault-engine/Cargo.toml attachments::
     cargo test --manifest-path vault-engine/Cargo.toml
     ```
-  - Evidence: type-only consumers now import `core::attachments` directly, and diagnostics profiler re-exports attachment DTOs from `core::attachments`; the `crate::attachments` / `vault_engine::attachments` scan returned no matches. The module remains public until the unused resolver is either re-owned or removed without dead-code warnings.
+  - Evidence: type-only consumers now import `core::attachments` directly, diagnostics profiler re-exports attachment DTOs from `core::attachments`, and the root `attachments` compatibility module is test-only. The `crate::attachments` / `vault_engine::attachments` scan returned no production/profiler matches, and attachment/full Rust/profiler tests passed without warnings.
   - Stop condition: making `attachments` private creates dead-code warnings or requires changing attachment parsing behavior in the same commit.
 
 - [x] **RA07.01b2 Make storage/search compatibility modules private**
