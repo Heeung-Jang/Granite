@@ -1,10 +1,15 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+use crate::adapters::sqlite::reads::{
+    file_tree_projection as read_file_tree_projection, get_file as read_get_file,
+    list_files as read_list_files, list_markdown_files as read_list_markdown_files,
+    lookup_file as read_lookup_file,
+};
 use crate::adapters::sqlite::rows::{
-    row_to_attachment, row_to_file_lookup_projection, row_to_file_record, row_to_graph_file,
-    row_to_graph_resolved_edge, row_to_graph_tag, row_to_graph_unresolved_edge, row_to_heading,
-    row_to_link, row_to_link_projection, row_to_property, row_to_tag, row_to_tag_note_projection,
+    row_to_attachment, row_to_graph_file, row_to_graph_resolved_edge, row_to_graph_tag,
+    row_to_graph_unresolved_edge, row_to_heading, row_to_link, row_to_link_projection,
+    row_to_property, row_to_tag, row_to_tag_note_projection,
 };
 use crate::adapters::sqlite::schema::{
     create_projection_indexes, create_schema, drop_projection_indexes, read_schema_metadata,
@@ -20,7 +25,7 @@ use crate::adapters::sqlite::writes::{
     insert_tag, upsert_file,
 };
 use crate::attachments::{AttachmentReferenceSource, AttachmentResolutionState};
-use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
+use rusqlite::{Connection, OpenFlags, params};
 
 use crate::graph_key::unresolved_target_key;
 use crate::paths::lookup_key;
@@ -570,26 +575,11 @@ impl MetadataStore {
     }
 
     pub fn get_file(&self, file_id: &str) -> MetadataStoreResult<Option<FileRecord>> {
-        self.connection
-            .query_row(
-                "SELECT file_id, relative_path, kind, size_bytes, modified_unix_ms, \
-                 file_device, file_inode, content_hash, generation, status, last_error \
-                 FROM files WHERE file_id = ?1",
-                params![file_id],
-                row_to_file_record,
-            )
-            .optional()
-            .map_err(Into::into)
+        read_get_file(&self.connection, file_id)
     }
 
     pub fn list_files(&self, offset: usize, limit: usize) -> MetadataStoreResult<Vec<FileRecord>> {
-        let mut statement = self.connection.prepare(
-            "SELECT file_id, relative_path, kind, size_bytes, modified_unix_ms, \
-             file_device, file_inode, content_hash, generation, status, last_error \
-             FROM files ORDER BY relative_path LIMIT ?1 OFFSET ?2",
-        )?;
-        let rows = statement.query_map(params![limit as i64, offset as i64], row_to_file_record)?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+        read_list_files(&self.connection, offset, limit)
     }
 
     pub fn list_markdown_files(
@@ -597,29 +587,14 @@ impl MetadataStore {
         offset: usize,
         limit: usize,
     ) -> MetadataStoreResult<Vec<FileRecord>> {
-        let mut statement = self.connection.prepare(
-            "SELECT file_id, relative_path, kind, size_bytes, modified_unix_ms, \
-             file_device, file_inode, content_hash, generation, status, last_error \
-             FROM files WHERE kind = 'markdown' ORDER BY relative_path LIMIT ?1 OFFSET ?2",
-        )?;
-        let rows = statement.query_map(params![limit as i64, offset as i64], row_to_file_record)?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+        read_list_markdown_files(&self.connection, offset, limit)
     }
 
     pub fn lookup_file(
         &self,
         file_id_or_relative_path: &str,
     ) -> MetadataStoreResult<Option<FileLookupProjection>> {
-        self.connection
-            .query_row(
-                "SELECT file_id, relative_path FROM files \
-                 WHERE file_id = ?1 OR relative_path = ?1 \
-                 ORDER BY relative_path LIMIT 1",
-                params![file_id_or_relative_path],
-                row_to_file_lookup_projection,
-            )
-            .optional()
-            .map_err(Into::into)
+        read_lookup_file(&self.connection, file_id_or_relative_path)
     }
 
     pub fn file_tree_projection(
@@ -627,14 +602,7 @@ impl MetadataStore {
         offset: usize,
         limit: usize,
     ) -> MetadataStoreResult<Vec<FileTreeProjection>> {
-        let files = self.list_markdown_files(offset, limit)?;
-        Ok(files
-            .into_iter()
-            .map(|file| FileTreeProjection {
-                display_path: path_to_string(&file.relative_path),
-                file,
-            })
-            .collect())
+        read_file_tree_projection(&self.connection, offset, limit)
     }
 
     pub fn outgoing_links(

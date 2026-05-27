@@ -1,3 +1,4 @@
+pub(crate) mod reads;
 pub(crate) mod rows;
 pub(crate) mod schema;
 pub(crate) mod storage_values;
