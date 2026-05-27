@@ -242,6 +242,12 @@ Rust tests:
 cargo test --manifest-path vault-engine/Cargo.toml
 ```
 
+Read row ABI layout tests after Phase 2 start:
+
+```sh
+cargo test --manifest-path vault-engine/Cargo.toml ffi::read_rows::
+```
+
 Swift engine smoke:
 
 ```sh

@@ -521,11 +521,11 @@ Default stop conditions:
 
 ### Phase 2: Move Read ABI Rows Under FFI
 
-- [ ] **RA02.01 Move read row layout code**
+- [x] **RA02.01 Move read row layout code**
   - Build: move `vault-engine/src/read_ffi.rs` to `vault-engine/src/ffi/read_rows.rs`.
   - Verify: ABI layout fixture test still passes.
 
-- [ ] **RA02.02 Add temporary compatibility re-export**
+- [x] **RA02.02 Add temporary compatibility re-export**
   - Build: if existing modules still import `crate::read_ffi`, keep a temporary `read_ffi` compatibility module that re-exports `ffi::read_rows` for one phase only.
   - Verify: no Swift-facing behavior changes.
 

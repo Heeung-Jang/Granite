@@ -25,6 +25,7 @@ mod json;
 mod lifecycle;
 mod panic;
 mod read;
+pub mod read_rows;
 mod save;
 mod strings;
 
