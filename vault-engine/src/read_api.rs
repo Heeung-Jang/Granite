@@ -1,8 +1,5 @@
-use crate::graph::{
-    WholeVaultGraphInputs, WholeVaultGraphRequest, WholeVaultGraphSnapshot,
-    build_whole_vault_graph_snapshot, whole_vault_graph_needs_tags,
-};
-use crate::use_cases::read_graph::graph_candidate_files;
+use crate::graph::{WholeVaultGraphRequest, WholeVaultGraphSnapshot};
+use crate::use_cases::build_graph::build_whole_vault_graph_from_metadata;
 pub use crate::use_cases::read_graph::{
     LocalGraph, LocalGraphDepth, LocalGraphEdge, LocalGraphEdgeDirection, LocalGraphNode,
     LocalGraphNodeKind, LocalGraphRequest,
@@ -29,72 +26,8 @@ impl VaultReadApi {
         &self,
         request: WholeVaultGraphRequest,
     ) -> ReadApiResult<ReadValue<WholeVaultGraphSnapshot>> {
-        let edge_fetch_limit = request.edge_limit().saturating_add(1);
-        let node_fetch_limit = request.node_limit().saturating_add(1);
-        let all_files = self
-            .metadata
-            .graph_files(self.generation, node_fetch_limit)?;
-        let has_all_files = all_files.len() < node_fetch_limit;
-        let resolved_edges = if has_all_files {
-            self.metadata
-                .graph_resolved_edges_compact(self.generation, edge_fetch_limit)?
-        } else {
-            self.metadata
-                .graph_resolved_edges(self.generation, edge_fetch_limit)?
-        };
-        let unresolved_edges = if request.include_unresolved {
-            self.metadata
-                .graph_unresolved_edges(self.generation, edge_fetch_limit)?
-        } else {
-            Vec::new()
-        };
-        let orphan_files = if request.include_orphans {
-            self.metadata.graph_orphan_files(
-                self.generation,
-                request.include_unresolved,
-                node_fetch_limit,
-            )?
-        } else {
-            Vec::new()
-        };
-        let files = if has_all_files {
-            all_files
-        } else {
-            graph_candidate_files(
-                &resolved_edges,
-                &unresolved_edges,
-                &orphan_files,
-                node_fetch_limit,
-            )
-        };
-        let tags = if whole_vault_graph_needs_tags(request) {
-            let file_ids = files
-                .iter()
-                .map(|file| file.file_id.clone())
-                .collect::<Vec<_>>();
-            self.metadata
-                .graph_tags_for_files(&file_ids, request.tag_limit().saturating_add(1))?
-        } else {
-            Vec::new()
-        };
-        let node_count_total = self.metadata.graph_visible_node_count(
-            self.generation,
-            request.include_unresolved,
-            request.include_orphans,
-        )?;
-        let edge_count_total = self
-            .metadata
-            .graph_visible_edge_count(self.generation, request.include_unresolved)?;
-        let inputs = WholeVaultGraphInputs {
-            node_count_total,
-            edge_count_total,
-            files,
-            resolved_edges,
-            unresolved_edges,
-            orphan_files,
-            tags,
-        };
-        let graph = build_whole_vault_graph_snapshot(request, self.generation, inputs);
+        let graph =
+            build_whole_vault_graph_from_metadata(&self.metadata, self.generation, request)?;
         Ok(ReadValue {
             request_id: request.request_id,
             generation: self.generation,

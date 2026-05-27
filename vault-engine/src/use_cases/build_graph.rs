@@ -1,7 +1,9 @@
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 
 use crate::adapters::sqlite::{
     GraphFileRecord, GraphResolvedEdgeRecord, GraphTagRecord, GraphUnresolvedEdgeRecord,
+    MetadataStore, MetadataStoreError,
 };
 use crate::core::graph::{
     WholeVaultGraphBuild, WholeVaultGraphEdge, WholeVaultGraphEdgeKind, WholeVaultGraphNode,
@@ -172,6 +174,135 @@ pub fn graph_unresolved_node_id(target_text: &str) -> String {
 
 pub fn whole_vault_graph_needs_tags(request: WholeVaultGraphRequest) -> bool {
     request.group_rule_count > 0
+}
+
+pub(crate) fn graph_candidate_files(
+    resolved_edges: &[GraphResolvedEdgeRecord],
+    unresolved_edges: &[GraphUnresolvedEdgeRecord],
+    orphan_files: &[GraphFileRecord],
+    limit: usize,
+) -> Vec<GraphFileRecord> {
+    let mut seen = HashSet::new();
+    let mut files = Vec::new();
+
+    for edge in resolved_edges {
+        push_graph_candidate_file(
+            &mut files,
+            &mut seen,
+            limit,
+            &edge.source_file_id,
+            &edge.source_relative_path,
+        );
+        push_graph_candidate_file(
+            &mut files,
+            &mut seen,
+            limit,
+            &edge.target_file_id,
+            &edge.target_relative_path,
+        );
+    }
+    for edge in unresolved_edges {
+        push_graph_candidate_file(
+            &mut files,
+            &mut seen,
+            limit,
+            &edge.source_file_id,
+            &edge.source_relative_path,
+        );
+    }
+    for file in orphan_files {
+        push_graph_candidate_file(
+            &mut files,
+            &mut seen,
+            limit,
+            &file.file_id,
+            &file.relative_path,
+        );
+    }
+
+    files
+}
+
+fn push_graph_candidate_file(
+    files: &mut Vec<GraphFileRecord>,
+    seen: &mut HashSet<String>,
+    limit: usize,
+    file_id: &str,
+    relative_path: &Path,
+) {
+    if files.len() >= limit || !seen.insert(file_id.to_string()) {
+        return;
+    }
+    files.push(GraphFileRecord {
+        file_id: file_id.to_string(),
+        relative_path: relative_path.to_path_buf(),
+    });
+}
+
+pub fn build_whole_vault_graph_from_metadata(
+    metadata: &MetadataStore,
+    generation: u64,
+    request: WholeVaultGraphRequest,
+) -> Result<WholeVaultGraphBuild, MetadataStoreError> {
+    let edge_fetch_limit = request.edge_limit().saturating_add(1);
+    let node_fetch_limit = request.node_limit().saturating_add(1);
+    let all_files = metadata.graph_files(generation, node_fetch_limit)?;
+    let has_all_files = all_files.len() < node_fetch_limit;
+    let resolved_edges = if has_all_files {
+        metadata.graph_resolved_edges_compact(generation, edge_fetch_limit)?
+    } else {
+        metadata.graph_resolved_edges(generation, edge_fetch_limit)?
+    };
+    let unresolved_edges = if request.include_unresolved {
+        metadata.graph_unresolved_edges(generation, edge_fetch_limit)?
+    } else {
+        Vec::new()
+    };
+    let orphan_files = if request.include_orphans {
+        metadata.graph_orphan_files(generation, request.include_unresolved, node_fetch_limit)?
+    } else {
+        Vec::new()
+    };
+    let files = if has_all_files {
+        all_files
+    } else {
+        graph_candidate_files(
+            &resolved_edges,
+            &unresolved_edges,
+            &orphan_files,
+            node_fetch_limit,
+        )
+    };
+    let tags = if whole_vault_graph_needs_tags(request) {
+        let file_ids = files
+            .iter()
+            .map(|file| file.file_id.clone())
+            .collect::<Vec<_>>();
+        metadata.graph_tags_for_files(&file_ids, request.tag_limit().saturating_add(1))?
+    } else {
+        Vec::new()
+    };
+    let node_count_total = metadata.graph_visible_node_count(
+        generation,
+        request.include_unresolved,
+        request.include_orphans,
+    )?;
+    let edge_count_total =
+        metadata.graph_visible_edge_count(generation, request.include_unresolved)?;
+
+    Ok(build_whole_vault_graph_snapshot(
+        request,
+        generation,
+        WholeVaultGraphInputs {
+            node_count_total,
+            edge_count_total,
+            files,
+            resolved_edges,
+            unresolved_edges,
+            orphan_files,
+            tags,
+        },
+    ))
 }
 
 struct SnapshotBuilder<'a> {

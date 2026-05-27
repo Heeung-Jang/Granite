@@ -1,18 +1,12 @@
-use std::collections::HashSet;
 use std::os::raw::c_char;
 use std::path::Path;
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 
-use crate::adapters::sqlite::{
-    GraphFileRecord, GraphResolvedEdgeRecord, GraphUnresolvedEdgeRecord, IndexSchemaMetadata,
-    MetadataStore, MetadataStoreError,
-};
-use crate::graph::{
-    WholeVaultGraphInputs, WholeVaultGraphRequest, WholeVaultGraphSnapshot,
-    build_whole_vault_graph_snapshot, whole_vault_graph_needs_tags,
-};
+use crate::adapters::sqlite::{IndexSchemaMetadata, MetadataStore, MetadataStoreError};
+use crate::graph::{WholeVaultGraphRequest, WholeVaultGraphSnapshot};
+use crate::use_cases::build_graph::build_whole_vault_graph_from_metadata;
 
 use super::json::{FfiError, ffi_response, ffi_success_response_len, read_json};
 use super::strings::read_c_string;
@@ -87,83 +81,8 @@ fn graph_snapshot_payload(
     .including_unresolved(request.include_unresolved)
     .including_orphans(request.include_orphans);
     let start = Instant::now();
-    let edge_fetch_limit = graph_request.edge_limit().saturating_add(1);
-    let node_fetch_limit = graph_request.node_limit().saturating_add(1);
-    let all_files = metadata
-        .graph_files(generation, node_fetch_limit)
+    let graph = build_whole_vault_graph_from_metadata(&metadata, generation, graph_request)
         .map_err(graph_metadata_error)?;
-    let has_all_files = all_files.len() < node_fetch_limit;
-    let resolved_edges = if has_all_files {
-        metadata
-            .graph_resolved_edges_compact(generation, edge_fetch_limit)
-            .map_err(graph_metadata_error)?
-    } else {
-        metadata
-            .graph_resolved_edges(generation, edge_fetch_limit)
-            .map_err(graph_metadata_error)?
-    };
-    let unresolved_edges = if graph_request.include_unresolved {
-        metadata
-            .graph_unresolved_edges(generation, edge_fetch_limit)
-            .map_err(graph_metadata_error)?
-    } else {
-        Vec::new()
-    };
-    let orphan_files = if graph_request.include_orphans {
-        metadata
-            .graph_orphan_files(
-                generation,
-                graph_request.include_unresolved,
-                node_fetch_limit,
-            )
-            .map_err(graph_metadata_error)?
-    } else {
-        Vec::new()
-    };
-    let files = if has_all_files {
-        all_files
-    } else {
-        graph_candidate_files(
-            &resolved_edges,
-            &unresolved_edges,
-            &orphan_files,
-            node_fetch_limit,
-        )
-    };
-    let tags = if whole_vault_graph_needs_tags(graph_request) {
-        let file_ids = files
-            .iter()
-            .map(|file| file.file_id.clone())
-            .collect::<Vec<_>>();
-        metadata
-            .graph_tags_for_files(&file_ids, graph_request.tag_limit().saturating_add(1))
-            .map_err(graph_metadata_error)?
-    } else {
-        Vec::new()
-    };
-    let node_count_total = metadata
-        .graph_visible_node_count(
-            generation,
-            graph_request.include_unresolved,
-            graph_request.include_orphans,
-        )
-        .map_err(graph_metadata_error)?;
-    let edge_count_total = metadata
-        .graph_visible_edge_count(generation, graph_request.include_unresolved)
-        .map_err(graph_metadata_error)?;
-    let graph = build_whole_vault_graph_snapshot(
-        graph_request,
-        generation,
-        WholeVaultGraphInputs {
-            node_count_total,
-            edge_count_total,
-            files,
-            resolved_edges,
-            unresolved_edges,
-            orphan_files,
-            tags,
-        },
-    );
     let snapshot_duration_milliseconds = start.elapsed().as_secs_f64() * 1_000.0;
     let payload = FfiWholeVaultGraphPayload {
         payload_version: 1,
@@ -229,67 +148,4 @@ fn graph_metadata_error(error: MetadataStoreError) -> FfiError {
             FfiError::graph_index_error()
         }
     }
-}
-
-fn graph_candidate_files(
-    resolved_edges: &[GraphResolvedEdgeRecord],
-    unresolved_edges: &[GraphUnresolvedEdgeRecord],
-    orphan_files: &[GraphFileRecord],
-    limit: usize,
-) -> Vec<GraphFileRecord> {
-    let mut seen = HashSet::new();
-    let mut files = Vec::new();
-
-    for edge in resolved_edges {
-        push_graph_candidate_file(
-            &mut files,
-            &mut seen,
-            limit,
-            &edge.source_file_id,
-            &edge.source_relative_path,
-        );
-        push_graph_candidate_file(
-            &mut files,
-            &mut seen,
-            limit,
-            &edge.target_file_id,
-            &edge.target_relative_path,
-        );
-    }
-    for edge in unresolved_edges {
-        push_graph_candidate_file(
-            &mut files,
-            &mut seen,
-            limit,
-            &edge.source_file_id,
-            &edge.source_relative_path,
-        );
-    }
-    for file in orphan_files {
-        push_graph_candidate_file(
-            &mut files,
-            &mut seen,
-            limit,
-            &file.file_id,
-            &file.relative_path,
-        );
-    }
-
-    files
-}
-
-fn push_graph_candidate_file(
-    files: &mut Vec<GraphFileRecord>,
-    seen: &mut HashSet<String>,
-    limit: usize,
-    file_id: &str,
-    relative_path: &Path,
-) {
-    if files.len() >= limit || !seen.insert(file_id.to_string()) {
-        return;
-    }
-    files.push(GraphFileRecord {
-        file_id: file_id.to_string(),
-        relative_path: relative_path.to_path_buf(),
-    });
 }

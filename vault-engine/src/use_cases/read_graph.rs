@@ -1,8 +1,3 @@
-use std::{collections::HashSet, path::Path};
-
-use crate::adapters::sqlite::{
-    GraphFileRecord, GraphResolvedEdgeRecord, GraphUnresolvedEdgeRecord,
-};
 use crate::graph_key::unresolved_target_key;
 
 const MAX_GRAPH_NODES: usize = 250;
@@ -192,67 +187,4 @@ pub(crate) fn push_frontier_file(frontier: &mut Vec<String>, center_file_id: &st
     if file_id != center_file_id {
         frontier.push(file_id.to_string());
     }
-}
-
-pub(crate) fn graph_candidate_files(
-    resolved_edges: &[GraphResolvedEdgeRecord],
-    unresolved_edges: &[GraphUnresolvedEdgeRecord],
-    orphan_files: &[GraphFileRecord],
-    limit: usize,
-) -> Vec<GraphFileRecord> {
-    let mut seen = HashSet::new();
-    let mut files = Vec::new();
-
-    for edge in resolved_edges {
-        push_graph_candidate_file(
-            &mut files,
-            &mut seen,
-            limit,
-            &edge.source_file_id,
-            &edge.source_relative_path,
-        );
-        push_graph_candidate_file(
-            &mut files,
-            &mut seen,
-            limit,
-            &edge.target_file_id,
-            &edge.target_relative_path,
-        );
-    }
-    for edge in unresolved_edges {
-        push_graph_candidate_file(
-            &mut files,
-            &mut seen,
-            limit,
-            &edge.source_file_id,
-            &edge.source_relative_path,
-        );
-    }
-    for file in orphan_files {
-        push_graph_candidate_file(
-            &mut files,
-            &mut seen,
-            limit,
-            &file.file_id,
-            &file.relative_path,
-        );
-    }
-
-    files
-}
-
-fn push_graph_candidate_file(
-    files: &mut Vec<GraphFileRecord>,
-    seen: &mut HashSet<String>,
-    limit: usize,
-    file_id: &str,
-    relative_path: &Path,
-) {
-    if files.len() >= limit || !seen.insert(file_id.to_string()) {
-        return;
-    }
-    files.push(GraphFileRecord {
-        file_id: file_id.to_string(),
-        relative_path: relative_path.to_path_buf(),
-    });
 }
