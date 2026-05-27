@@ -579,7 +579,7 @@ Default stop conditions:
   - Build: move stable search document/result DTOs out of `sqlite_fts.rs`; `tantivy_search` must not depend on the SQLite FTS module.
   - Verify: SQLite FTS and Tantivy search tests both pass.
 
-- [ ] **RA03.02 Move metadata record structs**
+- [x] **RA03.02 Move metadata record structs**
   - Build: move only pure record types already used outside `index.rs` into `core/metadata.rs`: schema metadata, file records, link records, tag records, property records, heading records, and attachment records.
   - Verify: metadata store tests still pass.
 
