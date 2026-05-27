@@ -571,7 +571,7 @@ Default stop conditions:
   - Build: move attachment reference source/state/settings enums that are stored by metadata records into `core/attachments.rs`.
   - Verify: attachment resolution tests and metadata attachment tests pass.
 
-- [ ] **RA03.01g Move link-key normalization**
+- [x] **RA03.01g Move link-key normalization**
   - Build: move `graph_key::unresolved_target_key` into `core/links.rs` before graph/read/sqlite users are moved.
   - Verify: graph and link resolution tests pass.
 
