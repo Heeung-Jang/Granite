@@ -9,12 +9,12 @@ use std::time::{Duration, Instant, SystemTime};
 
 use serde::Serialize;
 
-use crate::attachments::{AttachmentReferenceSource, AttachmentResolutionState};
-use crate::index::{
+use crate::adapters::sqlite::{
     AttachmentRecord, FileIndexStatus, FileMetadataRecords, FileRecord, HeadingRecord,
     IndexSchemaMetadata, LinkEdgeRecord, MetadataStore, MetadataStoreError, PropertyRecord,
     TagRecord, TagSource, slugify_heading,
 };
+use crate::attachments::{AttachmentReferenceSource, AttachmentResolutionState};
 use crate::index_rebuild::{IndexRebuildError, IndexRebuildPaths, commit_index_rebuild};
 use crate::indexing_queue::{
     IndexingQueue, IndexingQueueError, IndexingQueueItem, IndexingQueueReason, IndexingQueueSummary,
@@ -1237,7 +1237,7 @@ fn duration_micros_nonzero(duration: Duration) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::index::{FileIndexStatus, IndexSchemaMetadata};
+    use crate::adapters::sqlite::{FileIndexStatus, IndexSchemaMetadata};
     use crate::indexing_queue::{IndexingQueueReason, IndexingQueueStatus};
     use std::path::{Path, PathBuf};
     use tempfile::tempdir;
@@ -1379,7 +1379,7 @@ mod tests {
         assert_eq!(queue.summary().expect("summary").completed, 2);
         assert_eq!(
             metadata_store
-                .row_count(crate::index::MetadataTable::Files)
+                .row_count(crate::adapters::sqlite::MetadataTable::Files)
                 .expect("files"),
             2
         );
