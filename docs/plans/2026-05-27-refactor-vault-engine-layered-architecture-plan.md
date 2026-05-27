@@ -1079,7 +1079,7 @@ Default stop conditions:
     ```
   - Stop condition: `core` carries serde only because FFI needs JSON and no architecture decision documents that exception.
 
-- [ ] **RA05.09e Run graph FFI ABI and smoke gate**
+- [x] **RA05.09e Run graph FFI ABI and smoke gate**
   - Build: no code change after RA05.09d.
   - Verify:
     ```sh
