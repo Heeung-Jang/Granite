@@ -7,6 +7,7 @@ public struct SummaryCacheKey: Hashable, Sendable {
     public let promptVersion: Int
     public let summaryFormatVersion: Int
     public let modelPolicyVersion: Int
+    public let stage: SummaryStage
 
     public init(
         vaultID: String,
@@ -14,7 +15,8 @@ public struct SummaryCacheKey: Hashable, Sendable {
         contentHash: String,
         promptVersion: Int,
         summaryFormatVersion: Int,
-        modelPolicyVersion: Int
+        modelPolicyVersion: Int,
+        stage: SummaryStage = .refined
     ) {
         self.vaultID = vaultID
         self.fileID = fileID
@@ -22,6 +24,7 @@ public struct SummaryCacheKey: Hashable, Sendable {
         self.promptVersion = promptVersion
         self.summaryFormatVersion = summaryFormatVersion
         self.modelPolicyVersion = modelPolicyVersion
+        self.stage = stage
     }
 }
 

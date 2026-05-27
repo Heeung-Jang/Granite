@@ -22,6 +22,27 @@ func summaryLanguageFollowsKoreanEnglishPolicy() {
 }
 
 @Test
+func summaryStageRawValuesAreStable() {
+    #expect(SummaryStage.fast.rawValue == "fast")
+    #expect(SummaryStage.refined.rawValue == "refined")
+}
+
+@Test
+func summaryRequestProvidesStageSpecificCacheKeys() {
+    let request = summaryRequestFixture()
+
+    #expect(request.cacheKey == request.refinedCacheKey)
+    #expect(request.fastCacheKey.stage == .fast)
+    #expect(request.refinedCacheKey.stage == .refined)
+    #expect(request.fastCacheKey.vaultID == request.refinedCacheKey.vaultID)
+    #expect(request.fastCacheKey.fileID == request.refinedCacheKey.fileID)
+    #expect(request.fastCacheKey.contentHash == request.refinedCacheKey.contentHash)
+    #expect(request.fastCacheKey.promptVersion == request.refinedCacheKey.promptVersion)
+    #expect(request.fastCacheKey.summaryFormatVersion == request.refinedCacheKey.summaryFormatVersion)
+    #expect(request.fastCacheKey.modelPolicyVersion == request.refinedCacheKey.modelPolicyVersion)
+}
+
+@Test
 func summaryCacheIsVaultScopedAndBounded() async {
     let cache = DocumentSummaryCache(maxEntries: 1, maxEstimatedBytes: 10_000)
     let metadata = SummaryMetadata(sourceByteCount: 10, chunkCount: 1, elapsedMilliseconds: 1, language: .korean)
@@ -37,6 +58,59 @@ func summaryCacheIsVaultScopedAndBounded() async {
     #expect(await cache.entryCount == 1)
     #expect(await cache.value(for: first) == nil)
     #expect(await cache.value(for: second)?.summary == summary)
+}
+
+@Test
+func summaryCacheKeepsFastAndRefinedEntriesSeparate() async {
+    let cache = DocumentSummaryCache(maxEntries: 4, maxEstimatedBytes: 10_000)
+    let request = summaryRequestFixture()
+    let fastSummary = summaryFixture(
+        snapshot: request.snapshot,
+        stage: .fast,
+        overview: "빠른 요약",
+        keyPoints: ["빠른 포인트"],
+        elapsedMilliseconds: 1
+    )
+    let refinedSummary = summaryFixture(
+        snapshot: request.snapshot,
+        stage: .refined,
+        overview: "정교화 요약",
+        keyPoints: ["정교화 포인트"],
+        elapsedMilliseconds: 2
+    )
+
+    await cache.insert(summaryCacheEntry(fastSummary), for: request.fastCacheKey)
+    await cache.insert(summaryCacheEntry(refinedSummary), for: request.refinedCacheKey)
+
+    #expect(await cache.entryCount == 2)
+    #expect(await cache.value(for: request.fastCacheKey)?.summary == fastSummary)
+    #expect(await cache.value(for: request.refinedCacheKey)?.summary == refinedSummary)
+}
+
+@Test
+func summaryRequestPreferredCacheKeysCheckRefinedBeforeFast() async {
+    let cache = DocumentSummaryCache(maxEntries: 4, maxEstimatedBytes: 10_000)
+    let request = summaryRequestFixture()
+    let fastSummary = summaryFixture(
+        snapshot: request.snapshot,
+        stage: .fast,
+        overview: "빠른 요약",
+        elapsedMilliseconds: 1
+    )
+    let refinedSummary = summaryFixture(
+        snapshot: request.snapshot,
+        stage: .refined,
+        overview: "정교화 요약",
+        elapsedMilliseconds: 2
+    )
+
+    await cache.insert(summaryCacheEntry(fastSummary), for: request.fastCacheKey)
+    await cache.insert(summaryCacheEntry(refinedSummary), for: request.refinedCacheKey)
+
+    let firstHit = await firstCachedSummary(for: request.preferredCacheKeys, in: cache)
+
+    #expect(request.preferredCacheKeys.map(\.stage) == [.refined, .fast])
+    #expect(firstHit?.summary == refinedSummary)
 }
 
 @Test
@@ -252,4 +326,57 @@ private actor FreshnessCounter {
         checks += 1
         return checks <= allowBeforeFailure
     }
+}
+
+private func summaryRequestFixture(contents: String = "# Title\nBody") -> DocumentSummaryRequest {
+    DocumentSummaryRequest(snapshot: EditorBufferSnapshot(
+        vaultID: "vault",
+        fileID: "Note.md",
+        tabID: UUID(),
+        ownerID: UUID(),
+        revision: 1,
+        contents: contents
+    ))
+}
+
+private func summaryFixture(
+    snapshot: EditorBufferSnapshot,
+    stage: SummaryStage,
+    overview: String,
+    keyPoints: [String] = [],
+    elapsedMilliseconds: Double
+) -> DocumentSummary {
+    DocumentSummary(
+        overview: overview,
+        keyPoints: keyPoints,
+        actionItems: ["없음"],
+        metadata: SummaryMetadata(
+            sourceByteCount: snapshot.byteCount,
+            chunkCount: 1,
+            elapsedMilliseconds: elapsedMilliseconds,
+            language: .korean,
+            stage: stage
+        )
+    )
+}
+
+private func summaryCacheEntry(_ summary: DocumentSummary) -> SummaryCacheEntry {
+    SummaryCacheEntry(
+        summary: summary,
+        sourceByteCount: summary.metadata.sourceByteCount,
+        chunkCount: summary.metadata.chunkCount,
+        elapsedMilliseconds: summary.metadata.elapsedMilliseconds
+    )
+}
+
+private func firstCachedSummary(
+    for keys: [SummaryCacheKey],
+    in cache: DocumentSummaryCache
+) async -> SummaryCacheEntry? {
+    for key in keys {
+        if let entry = await cache.value(for: key) {
+            return entry
+        }
+    }
+    return nil
 }

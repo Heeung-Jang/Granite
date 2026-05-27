@@ -55,13 +55,30 @@ public struct DocumentSummaryRequest: Sendable {
     }
 
     public var cacheKey: SummaryCacheKey {
+        refinedCacheKey
+    }
+
+    public var fastCacheKey: SummaryCacheKey {
+        cacheKey(stage: .fast)
+    }
+
+    public var refinedCacheKey: SummaryCacheKey {
+        cacheKey(stage: .refined)
+    }
+
+    public var preferredCacheKeys: [SummaryCacheKey] {
+        [refinedCacheKey, fastCacheKey]
+    }
+
+    public func cacheKey(stage: SummaryStage) -> SummaryCacheKey {
         SummaryCacheKey(
             vaultID: snapshot.vaultID,
             fileID: snapshot.fileID,
             contentHash: snapshot.contentHash,
             promptVersion: promptVersion,
             summaryFormatVersion: summaryFormatVersion,
-            modelPolicyVersion: modelPolicyVersion
+            modelPolicyVersion: modelPolicyVersion,
+            stage: stage
         )
     }
 }

@@ -28,22 +28,30 @@ public struct DocumentSummary: Equatable, Sendable {
     }
 }
 
+public enum SummaryStage: String, Equatable, Sendable {
+    case fast
+    case refined
+}
+
 public struct SummaryMetadata: Equatable, Sendable {
     public let sourceByteCount: Int
     public let chunkCount: Int
     public let elapsedMilliseconds: Double
     public let language: SummaryLanguage
+    public let stage: SummaryStage
 
     public init(
         sourceByteCount: Int,
         chunkCount: Int,
         elapsedMilliseconds: Double,
-        language: SummaryLanguage
+        language: SummaryLanguage,
+        stage: SummaryStage = .refined
     ) {
         self.sourceByteCount = sourceByteCount
         self.chunkCount = chunkCount
         self.elapsedMilliseconds = elapsedMilliseconds
         self.language = language
+        self.stage = stage
     }
 }
 
