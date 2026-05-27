@@ -8,6 +8,7 @@ use crate::adapters::sqlite::{FileIndexStatus, IndexPropertyValue, TagSource};
 use crate::core::attachments::{
     AttachmentReferenceSource, AttachmentRejectReason, AttachmentResolutionState,
 };
+use crate::core::scan::ScanEntryKind;
 use crate::ffi::read_rows::{
     ENGINE_READ_NO_NEXT_OFFSET, ENGINE_READ_ROW_KIND_ATTACHMENT, ENGINE_READ_ROW_KIND_BACKLINK,
     ENGINE_READ_ROW_KIND_FILE_TREE, ENGINE_READ_ROW_KIND_GRAPH_EDGE,
@@ -23,7 +24,6 @@ use crate::ffi::read_rows::{
     local_graph_node_kind_code, property_value_kind, tag_source_code,
 };
 use crate::ffi::{EngineReadLocalGraphResult, EngineReadOpenResult};
-use crate::scanner::ScanEntryKind;
 use crate::use_cases::build_graph::{
     MAX_WHOLE_VAULT_GRAPH_EDGES, MAX_WHOLE_VAULT_GRAPH_GROUPS, MAX_WHOLE_VAULT_GRAPH_LABEL_BYTES,
     MAX_WHOLE_VAULT_GRAPH_NODES, MAX_WHOLE_VAULT_GRAPH_RULE_LENGTH,

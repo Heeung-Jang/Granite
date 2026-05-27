@@ -15,11 +15,13 @@ use super::{
     TantivyFields, directory_size, duration_micros_nonzero, percentile_duration,
     safe_tantivy_query, search_schema, search_schema_for_snippet_mode,
 };
+#[cfg(test)]
+use crate::adapters::fs::path_resolver::VaultRoot;
+#[cfg(test)]
+use crate::core::files::FileIdentity;
+use crate::core::paths::PathError;
 use crate::core::search::SnippetStorageMode;
 use crate::core::search::{SearchDocument, SearchMeasurement, SearchResult};
-use crate::paths::PathError;
-#[cfg(test)]
-use crate::paths::{FileIdentity, VaultRoot};
 
 pub const DEFAULT_TANTIVY_WRITER_MEMORY_BUDGET_BYTES: usize = 50_000_000;
 

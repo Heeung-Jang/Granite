@@ -6,10 +6,10 @@ pub use crate::adapters::tantivy::{
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapters::fs::path_resolver::VaultRoot;
     use crate::adapters::tantivy::safe_tantivy_query;
     use crate::core::search::SearchDocument;
-    use crate::indexing_pipeline::SnippetStorageMode;
-    use crate::paths::VaultRoot;
+    use crate::core::search::SnippetStorageMode;
     use std::fs;
     #[cfg(unix)]
     use std::os::unix::fs::symlink;

@@ -3,10 +3,11 @@ pub use crate::adapters::sqlite::{IndexingQueue, IndexingQueueReason, IndexingQu
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapters::fs::path_resolver::VaultRoot;
+    use crate::adapters::fs::scanner::scan_vault;
     use crate::adapters::sqlite::FileRecord;
     use crate::adapters::sqlite::MAX_INDEX_ERROR_CHARS;
-    use crate::paths::VaultRoot;
-    use crate::scanner::{ScanEntry, scan_vault};
+    use crate::core::scan::ScanEntry;
     use std::path::PathBuf;
     use tempfile::tempdir;
 

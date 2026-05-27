@@ -6,7 +6,7 @@ use crate::core::attachments::{
     AttachmentReferenceSource, AttachmentRejectReason, AttachmentResolutionState,
 };
 use crate::core::metadata::{FileIndexStatus, IndexPropertyValue, TagSource};
-use crate::scanner::ScanEntryKind;
+use crate::core::scan::ScanEntryKind;
 
 pub(crate) fn property_value_to_storage(
     value: &IndexPropertyValue,

@@ -1,14 +1,14 @@
 use std::fmt;
 
+use super::indexing_pipeline::{
+    IndexingPipelineOptions, IndexingPipelineResult, ProductionIndexingPipelineResult,
+    SearchDocumentSource, lease_queue_batch_impl, process_indexing_queue_batch_impl,
+};
+use crate::adapters::fs::path_resolver::VaultRoot;
 use crate::adapters::sqlite::{
     IndexingQueue, IndexingQueueItem, IndexingQueueReason, MetadataStore,
 };
 use crate::adapters::tantivy::TantivySearchIndex;
-use crate::indexing_pipeline::{
-    IndexingPipelineOptions, IndexingPipelineResult, ProductionIndexingPipelineResult,
-    SearchDocumentSource, lease_queue_batch_impl, process_indexing_queue_batch_impl,
-};
-use crate::paths::VaultRoot;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct QueueBatchIndexOptions {

@@ -1,8 +1,9 @@
 use std::path::Path;
 
 use crate::adapters::sqlite::FileLookupProjection;
-use crate::parser::{MarkdownLink, PropertyValue, WikiLink, parse_markdown};
-use crate::scanner::{ScanEntryKind, classify_file};
+use crate::core::document::{MarkdownLink, PropertyValue, WikiLink};
+use crate::core::markdown_parser::parse_markdown;
+use crate::core::scan::{ScanEntryKind, classify_file};
 
 use super::read_types::{
     LivePreviewMetadataItem, LivePreviewMetadataItemKind, LivePreviewMetadataSource,

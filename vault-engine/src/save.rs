@@ -1,8 +1,8 @@
 #[cfg(test)]
 mod tests {
     use crate::adapters::fs::note_writer::{rename_temp_file, stable_content_hash};
+    use crate::adapters::fs::path_resolver::VaultRoot;
     use crate::adapters::sqlite::{IndexingQueue, IndexingQueueReason};
-    use crate::paths::VaultRoot;
     use crate::use_cases::save_note::enqueue_saved_file;
     use crate::use_cases::save_note::{
         SafeSaveError, SaveBaseline, SaveConflict, SaveConflictChoice, SaveConflictChoiceError,

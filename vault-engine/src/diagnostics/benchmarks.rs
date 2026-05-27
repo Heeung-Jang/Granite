@@ -7,6 +7,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 
+use crate::adapters::fs::path_resolver::VaultRoot;
+use crate::adapters::fs::scanner::{ScanError, scan_vault};
 use crate::adapters::sqlite::{
     FileRecord, GraphQueryStage, IndexSchemaMetadata, LinkEdgeRecord, MetadataStore,
     MetadataStoreError, MetadataTable, TagRecord, TagSource,
@@ -15,25 +17,26 @@ use crate::adapters::sqlite::{SqliteFtsError, SqliteFtsIndex};
 use crate::adapters::tantivy::{
     TantivyIndexingStageMetrics, TantivySearchError, TantivySearchIndex,
 };
-use crate::core::graph::{WholeVaultGraphRequest, WholeVaultGraphSnapshot};
-use crate::core::search::{SearchDocument, SearchResult};
+use crate::core::document::ParsedMarkdown;
 #[cfg(test)]
-use crate::indexing_pipeline::read_parse_source;
-pub use crate::indexing_pipeline::{
+use crate::core::files::FileIdentity;
+use crate::core::graph::{WholeVaultGraphRequest, WholeVaultGraphSnapshot};
+use crate::core::markdown_parser::parse_markdown;
+use crate::core::paths::{PathError, lookup_key};
+use crate::core::scan::{ScanEntry, ScanEntryKind};
+use crate::core::search::{SearchDocument, SearchResult};
+use crate::use_cases::build_graph::build_whole_vault_graph_from_metadata;
+use crate::use_cases::index_rebuild::IndexRebuildPaths;
+#[cfg(test)]
+use crate::use_cases::indexing_pipeline::read_parse_source;
+pub use crate::use_cases::indexing_pipeline::{
     IndexingMode, IndexingPipelineOptions, MAX_DEFAULT_READ_PARSE_WORKERS, SnippetStorageMode,
 };
-use crate::indexing_pipeline::{
+use crate::use_cases::indexing_pipeline::{
     IndexingPipelineError, PipelineCorpusStageMetrics, PipelineCorpusStats, SearchDocumentSource,
     load_search_document_sources, read_search_document, run_full_rebuild_pipeline,
     run_read_parse_pipeline, run_tantivy_rebuild_pipeline,
 };
-use crate::parser::parse_markdown;
-#[cfg(test)]
-use crate::paths::FileIdentity;
-use crate::paths::{PathError, VaultRoot, lookup_key};
-use crate::scanner::{ScanEntryKind, ScanError, scan_vault};
-use crate::use_cases::build_graph::build_whole_vault_graph_from_metadata;
-use crate::use_cases::index_rebuild::IndexRebuildPaths;
 
 pub const BACKEND_BENCHMARK_ARTIFACT_SCHEMA_VERSION: u32 = 7;
 
@@ -1261,7 +1264,7 @@ fn reset_directory(path: &Path) -> std::io::Result<()> {
     fs::create_dir_all(path)
 }
 
-fn graph_target_map(entries: &[crate::scanner::ScanEntry]) -> HashMap<String, Vec<String>> {
+fn graph_target_map(entries: &[ScanEntry]) -> HashMap<String, Vec<String>> {
     let mut targets: HashMap<String, Vec<String>> = HashMap::new();
     for entry in entries {
         for key in graph_note_keys(&entry.relative_path) {
@@ -1294,7 +1297,7 @@ fn benchmark_link_target_key(target: &str) -> String {
 
 fn graph_link_records(
     source_file_id: &str,
-    parsed: &crate::parser::ParsedMarkdown,
+    parsed: &ParsedMarkdown,
     target_map: &HashMap<String, Vec<String>>,
 ) -> Vec<LinkEdgeRecord> {
     let mut links = Vec::new();

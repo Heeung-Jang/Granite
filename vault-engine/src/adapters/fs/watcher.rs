@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
-use crate::paths::VaultRoot;
+use crate::adapters::fs::path_resolver::VaultRoot;
 
 pub const WATCHER_FLAG_MUST_SCAN_SUBDIRS: u32 = 0x0000_0001;
 pub const WATCHER_FLAG_USER_DROPPED: u32 = 0x0000_0002;

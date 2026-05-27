@@ -15,13 +15,10 @@ pub(crate) mod index_rebuild;
 pub mod indexing_pipeline;
 #[cfg(test)]
 pub(crate) mod indexing_queue;
-pub(crate) mod parser;
-pub(crate) mod paths;
 #[cfg(test)]
 pub(crate) mod read_api;
 #[cfg(test)]
 pub(crate) mod save;
-pub(crate) mod scanner;
 #[cfg(test)]
 pub(crate) mod sqlite_fts;
 #[cfg(test)]

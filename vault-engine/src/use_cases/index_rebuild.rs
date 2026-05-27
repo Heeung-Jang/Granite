@@ -4,6 +4,11 @@ use std::{
     time::{Duration, Instant},
 };
 
+use super::indexing_pipeline::{
+    IndexingPipelineError, IndexingPipelineOptions, IndexingPipelineResult, IndexingPipelineTier,
+    IndexingTierTransition, ProductionIndexingPipelineResult, ProductionIndexingStageMetrics,
+    SearchDocumentSource, load_search_document_sources,
+};
 use crate::adapters::fs::index_directory::{
     IndexDirectoryCommit, IndexDirectoryError, IndexDirectoryPathError, IndexDirectoryPaths,
     commit_index_rebuild as commit_index_rebuild_impl, ensure_directory, remove_sqlite_files,
@@ -13,18 +18,14 @@ use crate::adapters::fs::index_directory::{
 use crate::adapters::fs::index_directory::{
     abort_index_rebuild as abort_index_rebuild_impl, reset_rebuild_directory, validate_paths,
 };
+use crate::adapters::fs::path_resolver::VaultRoot;
 #[cfg(test)]
 use crate::adapters::sqlite::{FileRecord, IndexingQueue, IndexingQueueReason, MetadataStoreError};
 use crate::adapters::sqlite::{IndexSchemaMetadata, IndexingQueueError, MetadataStore};
 use crate::adapters::tantivy::{TantivyIndexingStageMetrics, TantivySearchIndex};
-use crate::indexing_pipeline::{
-    IndexingPipelineError, IndexingPipelineOptions, IndexingPipelineResult, IndexingPipelineTier,
-    IndexingTierTransition, ProductionIndexingPipelineResult, ProductionIndexingStageMetrics,
-    SearchDocumentSource, load_search_document_sources,
-};
-use crate::paths::{PathError, VaultRoot};
+use crate::core::paths::PathError;
 #[cfg(test)]
-use crate::scanner::ScanSummary;
+use crate::core::scan::ScanSummary;
 
 use super::read_parse_documents::{PipelineCorpusStats, run_read_parse_pipeline};
 use super::read_vault::expected_read_schema_metadata;
@@ -215,7 +216,7 @@ pub fn run_full_rebuild_pipeline(
             sqlite_metadata_write_micros += duration_micros_nonzero(start.elapsed());
             pending.clear();
         }
-        Ok::<(), crate::indexing_pipeline::IndexingPipelineError>(())
+        Ok::<(), super::indexing_pipeline::IndexingPipelineError>(())
     })?;
 
     if !pending.is_empty() {

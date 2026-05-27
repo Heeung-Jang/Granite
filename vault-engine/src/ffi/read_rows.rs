@@ -9,7 +9,7 @@ use crate::adapters::sqlite::{
     IndexPropertyValue, LinkProjection, PropertyProjection, PropertyRecord, TagRecord,
 };
 use crate::core::attachments::{AttachmentReferenceSource, AttachmentResolutionState};
-use crate::scanner::ScanEntryKind;
+use crate::core::scan::ScanEntryKind;
 use crate::use_cases::read_graph::{
     LocalGraphEdge, LocalGraphEdgeDirection, LocalGraphNode, LocalGraphNodeKind,
 };
@@ -663,7 +663,7 @@ mod tests {
     use super::*;
     use crate::adapters::sqlite::{IndexPropertyValue, PropertyRecord, TagSource};
     use crate::core::attachments::AttachmentResolutionState;
-    use crate::scanner::{ScanEntry, ScanEntryKind};
+    use crate::core::scan::{ScanEntry, ScanEntryKind};
     use crate::use_cases::read_graph::LocalGraphEdgeDirection;
     use crate::use_cases::read_types::{ENGINE_READ_STATE_COMPLETE, ENGINE_READ_STATE_ERROR};
     use serde_json::Value;

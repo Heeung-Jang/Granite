@@ -1,11 +1,11 @@
 #[cfg(test)]
 mod tests {
+    use crate::adapters::fs::path_resolver::VaultRoot;
+    use crate::adapters::fs::scanner::scan_vault;
     use crate::adapters::fs::watcher::{
         InitialScanState, InitialScanWatcher, WATCHER_FLAG_ITEM_MODIFIED,
         WATCHER_FLAG_KERNEL_DROPPED, WatcherEventKind,
     };
-    use crate::paths::VaultRoot;
-    use crate::scanner::scan_vault;
     use std::fs;
     use std::path::PathBuf;
     use tempfile::tempdir;

@@ -3,14 +3,15 @@ pub use crate::adapters::sqlite::*;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapters::fs::path_resolver::VaultRoot;
+    use crate::adapters::fs::scanner::scan_vault;
     use crate::adapters::sqlite::reads as sqlite_reads;
     use crate::adapters::sqlite::schema::{create_schema, write_schema_metadata};
     use crate::core::attachments::{
         AttachmentReferenceSource, AttachmentRejectReason, AttachmentResolutionState,
     };
-    use crate::parser::PropertyValue;
-    use crate::paths::VaultRoot;
-    use crate::scanner::{ScanEntryKind, scan_vault};
+    use crate::core::document::PropertyValue;
+    use crate::core::scan::ScanEntryKind;
     use rusqlite::{Connection, params};
     use std::{
         path::{Path, PathBuf},
@@ -972,7 +973,7 @@ mod tests {
         }
     }
 
-    fn fixture_entry(relative_path: &str) -> crate::scanner::ScanEntry {
+    fn fixture_entry(relative_path: &str) -> crate::core::scan::ScanEntry {
         let root_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("..")
             .join("fixtures")

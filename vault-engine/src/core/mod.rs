@@ -3,6 +3,7 @@ pub(crate) mod document;
 pub(crate) mod files;
 pub(crate) mod graph;
 pub(crate) mod links;
+pub(crate) mod markdown_parser;
 pub(crate) mod metadata;
 pub(crate) mod paths;
 pub(crate) mod scan;

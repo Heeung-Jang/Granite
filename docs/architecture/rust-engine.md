@@ -93,27 +93,11 @@ owned by `core`.
 
 ## Parser Ownership
 
-`parser` is an intentional pure-domain facade for the current migration phase.
-It owns Markdown string parsing only, re-exports output records from
-`core::document`, and must not import filesystem, SQLite, Tantivy, FFI, or
-platform APIs.
-
-Allowed production callers:
-
-- `use_cases/live_preview_metadata.rs`, because live-preview metadata resolves
-  the current editor buffer without rereading the vault.
-- Indexing/rebuild use cases while parse orchestration is being moved out of
-  legacy modules.
-
-Allowed non-production callers:
-
-- FFI and read API tests that build compatibility fixtures.
-- Diagnostics/benchmarks that intentionally exercise parser behavior.
-
-When `read_api`, indexing, and diagnostics imports have been migrated, the
-remaining parser implementation can move under `core/document.rs` or
-`core/parser.rs` as a mechanical cleanup. Until then, direct `crate::parser`
-imports are allowed only for the callers above.
+`core::markdown_parser` owns Markdown string parsing. Parser output records stay
+in `core::document`, and parser code must not import filesystem, SQLite,
+Tantivy, FFI, or platform APIs. The former crate-root `parser` compatibility
+facade has been removed; production, diagnostics, and tests import the core
+parser owner directly.
 
 ## Current Module Inventory
 
@@ -128,14 +112,14 @@ imports are allowed only for the callers above.
 | `graph_key` | `core/links.rs` | Link key and unresolved target normalization are pure domain logic. |
 | `index` | `core/metadata.rs` and `adapters/sqlite/metadata_store.rs` | Domain records move inward; schema, row decoding, and SQL stay in SQLite adapter. |
 | `index_rebuild` | `adapters/fs/index_directory.rs` and `use_cases/index_rebuild.rs` | Root compatibility shim is test-only; production callers use the use-case owner. |
-| `indexing_pipeline` | `use_cases/process_indexing_queue.rs`, `use_cases/scan_vault.rs`, adapters | Temporary public orchestration facade until queue/rebuild progress DTOs are split by owner. |
+| `indexing_pipeline` | `use_cases/indexing_pipeline.rs`, `use_cases/process_indexing_queue.rs`, adapters | Implementation lives in use cases; crate-root `indexing_pipeline` is a temporary public re-export facade until queue/rebuild progress DTOs are split by owner. |
 | `indexing_queue` | `adapters/sqlite/indexing_queue.rs` plus core queue records if needed | SQL lease/update details stay in adapter. |
-| `parser` | Pure-domain parser facade; eventual `core/document.rs` or `core/parser.rs` cleanup | Parser may only parse strings and re-export `core::document` records. |
-| `paths` | `core/paths.rs`, `core/files.rs`, `adapters/fs/path_resolver.rs` | Pure value types can move to core; canonicalization and metadata reads stay in adapter. |
+| `parser` | Removed; `core/markdown_parser.rs` owns parsing | Parser may only parse strings and use `core::document` records. |
+| `paths` | Removed; `core/paths.rs`, `core/files.rs`, and `adapters/fs/path_resolver.rs` own the split contracts | Pure value types live in core; canonicalization and metadata reads stay in adapter. |
 | `read_api` | `use_cases/read_vault.rs`, `use_cases/live_preview_metadata.rs` | Read orchestration leaves FFI and storage details behind. |
 | `read_ffi` | `ffi/read_rows.rs` | Binary row layout and row-kind constants are FFI-owned. |
 | `save` | `use_cases/save_note.rs`, `adapters/fs/note_writer.rs`, `core` records where pure | Root compatibility shim is test-only; production callers use the use-case owner. |
-| `scanner` | `adapters/fs/scanner.rs`, `core/scan.rs` | Filesystem walking stays in adapter; pure file classification can move to core. |
+| `scanner` | Removed; `adapters/fs/scanner.rs` and `core/scan.rs` own the split contracts | Filesystem walking stays in adapter; pure scan records and file classification live in core. |
 | `sqlite_fts` | `adapters/sqlite/fts_index.rs` or `diagnostics/sqlite_fts.rs` | Decide explicitly before public-surface cleanup. |
 | `startup_reconciliation` | `use_cases/reconcile_startup.rs` | Startup orchestration depends on adapters. |
 | `tantivy_search` | `adapters/tantivy/search_index.rs` | Tantivy schema, writer, reader, query, tokenizer, and snippet code. |
@@ -166,13 +150,13 @@ facade:
 | `ENGINE_ABI_VERSION`, `EngineHealth`, `health_check()` | Stable public contract | Swift health checks need ABI and capability metadata without depending on internal module names. |
 | `ffi` | Public by design | Owns C ABI symbols, pointer handling, panic containment, and Swift field-code mappings. |
 | `diagnostics` | Public by design | `bench/vault-profiler` is a separate crate and must enter through a narrow diagnostic facade. |
-| `indexing_pipeline` | Temporary public facade | This module still owns production queue/rebuild progress DTOs and re-exports used by diagnostics and indexing use cases. Split those contracts into `use_cases` and adapters before hiding it. |
+| `indexing_pipeline` | Temporary public facade | Thin re-export of `use_cases::indexing_pipeline` kept for warning-free staged migration. Diagnostics use the use-case owner internally; hide this facade after queue/rebuild progress DTOs are split or connected to production callers. |
 
 The following root compatibility modules are now test-only: `attachments`,
 `file_watcher`, `graph`, `index`, `index_rebuild`, `indexing_queue`,
 `read_api`, `save`, `sqlite_fts`, `startup_reconciliation`, `tantivy_search`,
-and `watcher_burst`. `benchmarks`, `errors`, and `graph_key` have been removed.
-`adapters`, `core`, `parser`, `paths`, `scanner`, and `use_cases` are internal
+and `watcher_burst`. `parser`, `paths`, `scanner`, `benchmarks`, `errors`, and
+`graph_key` have been removed. `adapters`, `core`, and `use_cases` are internal
 crate modules.
 
 ## Target Module Shape
@@ -187,6 +171,7 @@ vault-engine/src/
     files.rs
     graph.rs
     links.rs
+    markdown_parser.rs
     metadata.rs
     paths.rs
     scan.rs
@@ -194,13 +179,13 @@ vault-engine/src/
   use_cases/
     mod.rs
     build_graph.rs
+    indexing_pipeline.rs
     index_rebuild.rs
     live_preview_metadata.rs
     process_indexing_queue.rs
     read_vault.rs
     reconcile_startup.rs
     save_note.rs
-    scan_vault.rs
     watcher_burst.rs
   adapters/
     mod.rs

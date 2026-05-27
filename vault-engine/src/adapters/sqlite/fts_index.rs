@@ -213,8 +213,8 @@ fn percentile_duration(values: &[Duration], percentile: usize) -> Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::parse_markdown;
-    use crate::paths::lookup_key;
+    use crate::core::markdown_parser::parse_markdown;
+    use crate::core::paths::lookup_key;
     use std::fs;
     use std::path::PathBuf;
 

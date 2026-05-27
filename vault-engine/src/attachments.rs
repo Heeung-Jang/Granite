@@ -1,9 +1,10 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crate::parser::{MarkdownLink, ParsedMarkdown, WikiLink};
-use crate::paths::{PathError, VaultRoot, lookup_key, normalize_relative_path};
-use crate::scanner::{ScanEntryKind, ScanSummary, classify_file};
+use crate::adapters::fs::path_resolver::VaultRoot;
+use crate::core::document::{MarkdownLink, ParsedMarkdown, WikiLink};
+use crate::core::paths::{PathError, lookup_key, normalize_relative_path};
+use crate::core::scan::{ScanEntryKind, ScanSummary, classify_file};
 
 pub use crate::core::attachments::{
     AttachmentReference, AttachmentReferenceSource, AttachmentRejectReason,
@@ -258,8 +259,8 @@ fn map_path_error(error: PathError) -> AttachmentResolutionState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::parse_markdown;
-    use crate::scanner::scan_vault;
+    use crate::adapters::fs::scanner::scan_vault;
+    use crate::core::markdown_parser::parse_markdown;
     use std::fs;
     use tempfile::tempdir;
 

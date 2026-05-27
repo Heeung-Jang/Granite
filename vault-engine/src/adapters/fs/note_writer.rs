@@ -3,7 +3,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::paths::{PathError, VaultRoot};
+use crate::adapters::fs::path_resolver::VaultRoot;
+use crate::core::paths::{PathError, normalize_relative_path};
 use crate::use_cases::save_note::{SafeSaveError, SafeSaveResult, SaveBaseline, SaveIoOperation};
 
 const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
@@ -78,8 +79,7 @@ pub(crate) fn write_new_note(
     relative_path: &str,
     contents: &[u8],
 ) -> SafeSaveResult<()> {
-    let relative_path =
-        crate::paths::normalize_relative_path(relative_path).map_err(SafeSaveError::Path)?;
+    let relative_path = normalize_relative_path(relative_path).map_err(SafeSaveError::Path)?;
     let absolute_path = root.canonical_root().join(&relative_path);
     let display_path = relative_path.as_path();
     if absolute_path.exists() {

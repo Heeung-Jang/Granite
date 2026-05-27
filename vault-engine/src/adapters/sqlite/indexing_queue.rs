@@ -5,7 +5,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::adapters::sqlite::{FileRecord, MAX_INDEX_ERROR_CHARS};
-use crate::scanner::ScanEntryKind;
+use crate::core::scan::ScanEntryKind;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IndexingQueueItem {

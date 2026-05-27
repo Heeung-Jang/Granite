@@ -3,11 +3,12 @@ pub use crate::use_cases::reconcile_startup::reconcile_startup;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapters::fs::path_resolver::VaultRoot;
+    use crate::adapters::fs::scanner::scan_vault;
     use crate::adapters::sqlite::{
         FileRecord, IndexSchemaMetadata, IndexingQueue, IndexingQueueReason, MetadataStore,
     };
-    use crate::paths::VaultRoot;
-    use crate::scanner::{ScanSummary, scan_vault};
+    use crate::core::scan::ScanSummary;
     use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;

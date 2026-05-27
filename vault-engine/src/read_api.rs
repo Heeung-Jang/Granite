@@ -38,16 +38,18 @@ mod tests {
     use super::*;
     use std::{fs, path::PathBuf, sync::Mutex};
 
+    use crate::adapters::fs::path_resolver::VaultRoot;
+    use crate::adapters::fs::scanner::scan_vault;
     use crate::adapters::sqlite::{
         AttachmentRecord, FileRecord, HeadingRecord, IndexSchemaMetadata, MetadataStore,
         PropertyRecord, TagRecord, TagSource, slugify_heading,
     };
     use crate::adapters::tantivy::TantivySearchIndex;
     use crate::core::attachments::{AttachmentReferenceSource, AttachmentResolutionState};
+    use crate::core::document::PropertyValue;
+    use crate::core::paths::lookup_key;
+    use crate::core::scan::{ScanEntry, ScanEntryKind};
     use crate::core::search::SearchDocument;
-    use crate::parser::PropertyValue;
-    use crate::paths::{VaultRoot, lookup_key};
-    use crate::scanner::{ScanEntry, ScanEntryKind, scan_vault};
     use crate::use_cases::read_graph::{graph_file_node_id, graph_unresolved_node_id};
     use rusqlite::trace::{TraceEvent, TraceEventCodes};
     use tempfile::tempdir;

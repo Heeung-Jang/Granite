@@ -5,7 +5,7 @@ mod tests {
         MetadataStore, MetadataTable,
     };
     use crate::core::files::FileIdentity;
-    use crate::scanner::{ScanEntry, ScanEntryKind, ScanSummary};
+    use crate::core::scan::{ScanEntry, ScanEntryKind, ScanSummary};
     use crate::use_cases::index_rebuild::{
         IndexRebuildError, IndexRebuildPathError, IndexRebuildPaths, IndexRebuildReason,
         IndexRebuildStart, MetadataOpenRecovery, abort_index_rebuild, commit_index_rebuild,

@@ -8,11 +8,13 @@ use crate::adapters::fs::note_writer::{
     FileSnapshot, capture_snapshot, read_snapshot_contents, rename_temp_file, sync_parent,
     write_new_note, write_temp_file,
 };
+use crate::adapters::fs::path_resolver::VaultRoot;
 use crate::adapters::sqlite::{
     FileRecord, IndexingQueue, IndexingQueueError, IndexingQueueItem, IndexingQueueReason,
 };
+use crate::core::files::FileIdentity;
+use crate::core::paths::PathError;
 use crate::core::scan::{ScanEntry, classify_file};
-use crate::paths::{FileIdentity, PathError, VaultRoot};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SaveBaseline {

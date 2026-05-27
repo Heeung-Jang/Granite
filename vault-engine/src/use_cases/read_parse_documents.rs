@@ -5,19 +5,20 @@ use std::sync::mpsc::sync_channel;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
+use super::indexing_pipeline::{
+    IndexingPipelineError, IndexingPipelineOptions, IndexingPipelineResult, SearchDocumentSource,
+};
 use crate::adapters::fs::markdown_reader::read_markdown_body;
 use crate::adapters::sqlite::{
     AttachmentRecord, FileIndexStatus, FileMetadataRecords, FileRecord, HeadingRecord,
     LinkEdgeRecord, PropertyRecord, TagRecord, TagSource, slugify_heading,
 };
 use crate::core::attachments::{AttachmentReferenceSource, AttachmentResolutionState};
+use crate::core::document::{ParsedMarkdown, PropertyValue};
+use crate::core::files::FileIdentity;
+use crate::core::markdown_parser::parse_markdown;
+use crate::core::scan::ScanEntryKind;
 use crate::core::search::SearchDocument;
-use crate::indexing_pipeline::{
-    IndexingPipelineError, IndexingPipelineOptions, IndexingPipelineResult, SearchDocumentSource,
-};
-use crate::parser::{ParsedMarkdown, PropertyValue, parse_markdown};
-use crate::paths::FileIdentity;
-use crate::scanner::ScanEntryKind;
 
 pub struct TimedSearchDocument {
     pub document: SearchDocument,

@@ -1378,7 +1378,7 @@ Default stop conditions:
   - Evidence: legacy import scan returned no matches; `cargo test --manifest-path bench/vault-profiler/Cargo.toml` passed after the diagnostics facade migration.
   - Stop condition: any external Rust consumer still needs an old public path that lacks a diagnostics or intentional facade replacement.
 
-- [ ] **RA07.00a Drain internal legacy imports before deleting shims**
+- [x] **RA07.00a Drain internal legacy imports before deleting shims**
   - Build: no behavior change; retarget internal imports from legacy compatibility modules to `core`, `adapters`, or `use_cases` before removing public module shims.
   - Verify:
     ```sh
@@ -1386,6 +1386,7 @@ Default stop conditions:
     cargo test --manifest-path vault-engine/Cargo.toml
     ```
   - Stop condition: deleting a compatibility module would require changing production logic in the same commit.
+  - Evidence: internal imports now target `core`, `adapters`, or `use_cases` owners directly. `parser`, `paths`, and `scanner` root shims were removed after moving parser/scanner tests to owner modules; `indexing_pipeline` implementation moved to `use_cases::indexing_pipeline` with only a thin temporary public re-export. The legacy import scan returned no matches in `core`, `adapters`, `use_cases`, `ffi`, or `diagnostics`; full `vault-engine` and `vault-profiler` tests passed without warnings.
 
 - [x] **RA07.00b Classify `errors.rs` before visibility reduction**
   - Build: decide whether `errors.rs` is a deliberate cross-layer contract or split layer-specific errors into owning modules before `lib.rs` public cleanup begins.
@@ -1418,7 +1419,7 @@ Default stop conditions:
     cargo test --manifest-path vault-engine/Cargo.toml
     cargo test --manifest-path bench/vault-profiler/Cargo.toml
     ```
-  - Evidence: `parser`, `paths`, and `scanner` are now `pub(crate)` in `lib.rs`; `paths.rs` no longer re-exports unused private-only path types. The profiler scan returned no matches and all listed tests passed.
+  - Evidence: `parser`, `paths`, and `scanner` were first made internal, then removed after consumers moved to `core::markdown_parser`, `core::paths`, `core::scan`, and filesystem adapters. The profiler scan returned no matches and all listed tests passed.
   - Stop condition: any external Rust consumer or integration test still requires those legacy public paths.
 
 - [x] **RA07.01b1a Drain attachments compatibility facade**
@@ -1476,6 +1477,7 @@ Default stop conditions:
     cargo test --manifest-path vault-engine/Cargo.toml
     ```
   - Stop condition: FFI still calls one of these legacy modules directly.
+  - Progress: `save`, `read_api`, and `index_rebuild` are test-only; `indexing_pipeline` implementation now lives under `use_cases::indexing_pipeline`. The crate-root `indexing_pipeline` module remains as a thin public re-export to keep staged migration warning-free until queue/rebuild progress DTOs are split or connected to production callers.
 
 - [x] **RA07.01b4a Retarget graph compatibility consumers**
   - Build: retarget remaining internal graph DTO/constant consumers away from the legacy `graph` facade before reducing graph/watcher public modules.

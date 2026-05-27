@@ -2,8 +2,8 @@ use std::path::PathBuf;
 
 use crate::core::attachments::{AttachmentReferenceSource, AttachmentResolutionState};
 
-use crate::paths::lookup_key;
-use crate::scanner::ScanEntry;
+use crate::core::paths::lookup_key;
+use crate::core::scan::ScanEntry;
 
 pub const INDEX_SCHEMA_VERSION: u32 = 2;
 pub const MAX_INDEX_ERROR_CHARS: usize = 512;

@@ -346,8 +346,10 @@ mod tests {
     use crate::core::attachments::{
         AttachmentReferenceSource, AttachmentRejectReason, AttachmentResolutionState,
     };
+    use crate::core::document::PropertyValue;
     use crate::core::files::FileIdentity;
     use crate::core::paths::lookup_key;
+    use crate::core::scan::{ScanEntry, ScanEntryKind};
     use crate::core::search::SearchDocument;
     use crate::ffi::read_rows::{
         ENGINE_READ_NO_NEXT_OFFSET, ENGINE_READ_ROW_KIND_ATTACHMENT, ENGINE_READ_ROW_KIND_BACKLINK,
@@ -359,8 +361,6 @@ mod tests {
         EngineReadLivePreviewMetadataRow, EngineReadPropertyRow, EngineReadSearchHitRow,
         EngineReadTagRow, decode_header_for_test, string_for_test,
     };
-    use crate::parser::PropertyValue;
-    use crate::scanner::{ScanEntry, ScanEntryKind};
     use crate::use_cases::read_types::{
         ENGINE_READ_INSPECTOR_PANEL_ATTACHMENTS, ENGINE_READ_INSPECTOR_PANEL_BACKLINKS,
         ENGINE_READ_INSPECTOR_PANEL_OUTGOING, ENGINE_READ_INSPECTOR_PANEL_PROPERTIES,
