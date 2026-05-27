@@ -799,7 +799,7 @@ Default stop conditions:
   - Build: move only backlink/outgoing panel orchestration.
   - Verify: inspector link-panel tests pass.
 
-- [ ] **RA05.02j Move tags and properties panel methods**
+- [x] **RA05.02j Move tags and properties panel methods**
   - Build: move tag/property panel orchestration and display-value conversion if it is domain-only.
   - Verify: inspector tag/property tests pass.
 

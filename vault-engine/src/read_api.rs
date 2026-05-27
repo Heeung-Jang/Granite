@@ -3,7 +3,6 @@ use std::{collections::HashSet, fmt, path::Path};
 use crate::adapters::sqlite::{
     AttachmentProjection, AttachmentRecord, FileLookupProjection, FileRecord, GraphFileRecord,
     GraphResolvedEdgeRecord, GraphUnresolvedEdgeRecord, HeadingRecord, MetadataStoreError,
-    PropertyProjection, PropertyRecord, TagRecord,
 };
 use crate::adapters::tantivy::TantivySearchError;
 use crate::graph::{
@@ -190,28 +189,6 @@ impl LocalGraphRequest {
 }
 
 impl VaultReadApi {
-    pub fn tags_for_path(
-        &self,
-        relative_path: &str,
-        page: PageRequest,
-    ) -> ReadApiResult<ReadPage<TagRecord>> {
-        let file = self.require_file(relative_path)?;
-        self.tags(&file.file_id, page)
-    }
-
-    pub fn properties_for_path(
-        &self,
-        relative_path: &str,
-        page: PageRequest,
-    ) -> ReadApiResult<ReadPage<PropertyProjection>> {
-        let file = self.require_file(relative_path)?;
-        Ok(self.page_from_overfetch(
-            self.metadata
-                .property_projections(&file.file_id, page.offset, page.fetch_limit())?,
-            page,
-        ))
-    }
-
     pub fn attachments_for_path(
         &self,
         relative_path: &str,
@@ -221,26 +198,6 @@ impl VaultReadApi {
         Ok(self.page_from_overfetch(
             self.metadata
                 .attachment_projections(&file.file_id, page.offset, page.fetch_limit())?,
-            page,
-        ))
-    }
-
-    pub fn tags(&self, file_id: &str, page: PageRequest) -> ReadApiResult<ReadPage<TagRecord>> {
-        Ok(self.page_from_overfetch(
-            self.metadata
-                .tags(file_id, page.offset, page.fetch_limit())?,
-            page,
-        ))
-    }
-
-    pub fn properties(
-        &self,
-        file_id: &str,
-        page: PageRequest,
-    ) -> ReadApiResult<ReadPage<PropertyRecord>> {
-        Ok(self.page_from_overfetch(
-            self.metadata
-                .properties(file_id, page.offset, page.fetch_limit())?,
             page,
         ))
     }
