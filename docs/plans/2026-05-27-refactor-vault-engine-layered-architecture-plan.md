@@ -551,7 +551,7 @@ Default stop conditions:
   - Build: document the `rg` import purity command in `docs/architecture/rust-engine.md` before moving records.
   - Verify: the command initially returns no matches for the empty/new `core` module.
 
-- [ ] **RA03.01b Move pure path and file identity primitives**
+- [x] **RA03.01b Move pure path and file identity primitives**
   - Build: move path/file identity value types that do not open or canonicalize filesystem paths into `core/paths.rs` or `core/files.rs`.
   - Verify: core denylist scan passes; path safety tests still pass through existing adapter code.
 
