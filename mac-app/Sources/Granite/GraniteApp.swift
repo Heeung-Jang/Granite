@@ -1,3 +1,4 @@
+import AppKit
 import NativeMarkdownCore
 import SwiftUI
 
@@ -6,6 +7,7 @@ import SwiftUI
 struct GraniteApp: App {
     @NSApplicationDelegateAdaptor(GraniteAppDelegate.self) private var appDelegate
     @StateObject private var appState = AppState()
+    @StateObject private var editorFontSettings = EditorFontSettings()
 
     init() {
         if CommandLine.arguments.contains("--help") {
@@ -164,6 +166,12 @@ struct GraniteApp: App {
             Foundation.exit(report.summary.passed ? 0 : 2)
         }
 
+        if CommandLine.arguments.contains("--font-settings-probe") {
+            let report = FontSettingsProbe.run()
+            print(FontSettingsProbe.encodedReport(report))
+            Foundation.exit(report.summary.passed ? 0 : 2)
+        }
+
         if CommandLine.arguments.contains("--live-preview-probe") {
             let report = LivePreviewProbe.run()
             print(LivePreviewProbe.encodedReport(report))
@@ -220,12 +228,15 @@ struct GraniteApp: App {
             }
             dispatchMain()
         }
+
+        NSApplication.shared.setActivationPolicy(.regular)
     }
 
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environmentObject(appState)
+                .environmentObject(editorFontSettings)
                 .frame(minWidth: 1180, minHeight: 720)
                 .toolbar(removing: .title)
         }
@@ -240,7 +251,9 @@ struct GraniteApp: App {
         Settings {
             GraniteSettingsView()
                 .environmentObject(appState)
+                .environmentObject(editorFontSettings)
         }
+        .windowResizability(.contentSize)
     }
 }
 

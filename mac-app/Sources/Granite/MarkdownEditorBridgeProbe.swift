@@ -516,6 +516,7 @@ enum MarkdownEditorBridgeProbe {
         fallbackModeRaw: Bool,
         chromeDisabled: Bool
     ) {
+        let expectedFontSet = LivePreviewTheme.defaultFontSet
         let source = "- parent\n  - [ ] child\n"
         let selection = NSRange(location: (source as NSString).length, length: 0)
 
@@ -534,7 +535,7 @@ enum MarkdownEditorBridgeProbe {
         let sourceMarkerColor = foregroundColor(in: sourceTextView, text: source, marker: "  - [ ] child")
         let sourceModeRaw = sourceTextView.string == source
             && sourceMarkerColor != LivePreviewTheme.concealedColor
-            && font(in: sourceTextView, text: source, marker: "child") == LivePreviewTheme.sourceFont
+            && font(in: sourceTextView, text: source, marker: "child") == expectedFontSet.sourceFont
 
         let fallbackTextView = MarkdownEditorTextViewFactory.makeTextView() as! MarkdownInteractionTextView
         fallbackTextView.string = source
@@ -551,7 +552,7 @@ enum MarkdownEditorBridgeProbe {
         let fallbackMarkerColor = foregroundColor(in: fallbackTextView, text: source, marker: "  - [ ] child")
         let fallbackModeRaw = fallbackTextView.string == source
             && fallbackMarkerColor != LivePreviewTheme.concealedColor
-            && font(in: fallbackTextView, text: source, marker: "child") == LivePreviewTheme.sourceFont
+            && font(in: fallbackTextView, text: source, marker: "child") == expectedFontSet.sourceFont
 
         let livePreviewTextView = MarkdownEditorTextViewFactory.makeTextView() as! MarkdownInteractionTextView
         livePreviewTextView.string = source
@@ -1039,9 +1040,10 @@ enum MarkdownEditorBridgeProbe {
         ) as? NSColor
         let sourceHeadingFont = textView.textStorage?.attribute(.font, at: 0, effectiveRange: nil) as? NSFont
         let sourceStrongFont = font(in: textView, text: text, marker: "Strong")
+        let expectedFontSet = LivePreviewTheme.defaultFontSet
         let sourceModeClearsLivePreviewAttributes = sourceHeadingColor != LivePreviewTheme.concealedColor
-            && sourceHeadingFont == LivePreviewTheme.sourceFont
-            && sourceStrongFont == LivePreviewTheme.sourceFont
+            && sourceHeadingFont == expectedFontSet.sourceFont
+            && sourceStrongFont == expectedFontSet.sourceFont
 
         let markedTextView = MarkdownEditorTextViewFactory.makeTextView()
         let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 900, height: 700))

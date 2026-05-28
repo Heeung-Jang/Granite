@@ -426,18 +426,19 @@ enum LivePreviewStyleProbe {
         let tableActiveCellControls = probeTableActiveCellControls()
         let appZoomTableFields = probeAppZoomTableFields()
         let nestedListFields = probeNestedListHierarchy()
+        let expectedFontSet = LivePreviewTheme.defaultFontSet
         let appZoomPrimaryFontFields = probeAppZoomPrimaryFontFields()
         let appZoomOverlayFields = probeAppZoomOverlayFields()
 
         var report = LivePreviewStyleProbeReport(
             summary: .passed,
             headingFontScaleApplied: fonts.map(\.pointSize) == [
-                LivePreviewTheme.h1Font.pointSize,
-                LivePreviewTheme.h2Font.pointSize,
-                LivePreviewTheme.h3Font.pointSize,
-                LivePreviewTheme.h4Font.pointSize,
-                LivePreviewTheme.h5Font.pointSize,
-                LivePreviewTheme.h6Font.pointSize
+                expectedFontSet.h1Font.pointSize,
+                expectedFontSet.h2Font.pointSize,
+                expectedFontSet.h3Font.pointSize,
+                expectedFontSet.h4Font.pointSize,
+                expectedFontSet.h5Font.pointSize,
+                expectedFontSet.h6Font.pointSize
             ],
             headingParagraphSpacingApplied: paragraphStyles.count == 6
                 && paragraphStyles.allSatisfy { $0.paragraphSpacing > 0 && $0.paragraphSpacingBefore > 0 },
@@ -451,11 +452,11 @@ enum LivePreviewStyleProbe {
             collapsedSyntaxFontRemainsTiny: probeCollapsedSyntaxFontRemainsTiny(),
             baseParagraphSpacingApplied: baseParagraphStyle?.lineHeightMultiple ?? 0 > 1
                 && baseParagraphStyle?.paragraphSpacing ?? 0 > 0,
-            inlineCodeStyleApplied: inlineCodeAttributes?[.font] as? NSFont == LivePreviewTheme.codeFont
+            inlineCodeStyleApplied: inlineCodeAttributes?[.font] as? NSFont == expectedFontSet.codeFont
                 && inlineCodeAttributes?[.foregroundColor] as? NSColor == LivePreviewTheme.codeColor
                 && inlineCodeAttributes?[.backgroundColor] as? NSColor == LivePreviewTheme.inlineCodeBackgroundColor,
             inlineCodePreservesSource: textView.string.contains("`code`"),
-            fencedCodeStyleApplied: fencedCodeAttributes?[.font] as? NSFont == LivePreviewTheme.codeFont
+            fencedCodeStyleApplied: fencedCodeAttributes?[.font] as? NSFont == expectedFontSet.codeFont
                 && fencedCodeAttributes?[.foregroundColor] as? NSColor == LivePreviewTheme.codeColor
                 && fencedCodeAttributes?[.backgroundColor] as? NSColor == LivePreviewTheme.codeBlockBackgroundColor
                 && (fencedCodeAttributes?[.paragraphStyle] as? NSParagraphStyle)?.paragraphSpacing ?? 0 > 0,
@@ -582,7 +583,7 @@ enum LivePreviewStyleProbe {
                 && textView.string.contains("![[missing.png]]")
                 && textView.string.contains("![[Note]]")
                 && textView.string.contains("![Alt](nested/photo.jpg)"),
-            tableHeaderChromeApplied: tableHeaderAttributes?[.font] as? NSFont == LivePreviewTheme.strongFont
+            tableHeaderChromeApplied: tableHeaderAttributes?[.font] as? NSFont == expectedFontSet.strongFont
                 && tableHeaderAttributes?[.backgroundColor] as? NSColor == LivePreviewTheme.tableHeaderBackgroundColor,
             tableBodyChromeApplied: tableBodyAttributes?[.backgroundColor] as? NSColor == LivePreviewTheme.tableCellBackgroundColor,
             tableSyntaxConcealedOutsideReveal: hiddenTablePipeColor == LivePreviewTheme.concealedColor
@@ -604,7 +605,7 @@ enum LivePreviewStyleProbe {
             horizontalRuleFalsePositivesRejected: horizontalRuleFields.falsePositivesRejected,
             appZoomHorizontalRuleGeometryScales: appZoomOverlayFields.horizontalRuleGeometryScales,
             appZoomListMarkerGeometryScales: appZoomOverlayFields.listMarkerGeometryScales,
-            tableRenderedStateVisible: tableHeaderAttributes?[.font] as? NSFont == LivePreviewTheme.strongFont
+            tableRenderedStateVisible: tableHeaderAttributes?[.font] as? NSFont == expectedFontSet.strongFont
                 && tableBodyAttributes?[.backgroundColor] as? NSColor == LivePreviewTheme.tableCellBackgroundColor
                 && hiddenTablePipeColor == LivePreviewTheme.concealedColor
                 && hiddenTableAlignmentColor == LivePreviewTheme.concealedColor,

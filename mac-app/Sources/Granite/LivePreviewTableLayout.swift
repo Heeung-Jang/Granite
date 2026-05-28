@@ -52,9 +52,13 @@ struct LivePreviewTableLayout {
         )
     }
 
-    static func tableCell(at point: NSPoint, in textView: NSTextView) -> LivePreviewTableCell? {
+    static func tableCell(
+        at point: NSPoint,
+        in textView: NSTextView,
+        fontSet: LivePreviewFontSet = LivePreviewTheme.defaultFontSet
+    ) -> LivePreviewTableCell? {
         LivePreviewTableParser.parse(textView.string).lazy.compactMap { table -> LivePreviewTableCell? in
-            guard let layout = make(for: table, in: textView),
+            guard let layout = make(for: table, in: textView, fontSet: fontSet),
                   layout.outerRect.contains(point)
             else {
                 return nil
@@ -63,19 +67,28 @@ struct LivePreviewTableLayout {
         }.first
     }
 
-    static func layoutCell(for cell: LivePreviewTableCell, in textView: NSTextView) -> Cell? {
+    static func layoutCell(
+        for cell: LivePreviewTableCell,
+        in textView: NSTextView,
+        fontSet: LivePreviewFontSet = LivePreviewTheme.defaultFontSet
+    ) -> Cell? {
         LivePreviewTableParser.parse(textView.string).lazy.compactMap { table -> Cell? in
-            make(for: table, in: textView)?.layoutCell(for: cell)
+            make(for: table, in: textView, fontSet: fontSet)?.layoutCell(for: cell)
         }.first
     }
 
-    static func make(for table: LivePreviewTable, in textView: NSTextView) -> LivePreviewTableLayout? {
+    static func make(
+        for table: LivePreviewTable,
+        in textView: NSTextView,
+        fontSet: LivePreviewFontSet = LivePreviewTheme.defaultFontSet
+    ) -> LivePreviewTableLayout? {
         let rows = [table.header] + table.bodyRows
         guard !rows.isEmpty else {
             return nil
         }
 
         let scale = scale(for: textView)
+        let fontSet = fontSet.scaled(by: scale)
         let rowRects = rows.compactMap { row -> NSRect? in
             guard let range = unionRange(row.map(\.sourceRange.nsRange)) else {
                 return nil
@@ -97,7 +110,7 @@ struct LivePreviewTableLayout {
         }
 
         let x = first.minX
-        let columnWidths = columnWidths(for: table, scale: scale)
+        let columnWidths = columnWidths(for: table, fontSet: fontSet, scale: scale)
         let naturalWidth = columnWidths.reduce(0, +)
         let minTableWidth = scaled(Metrics.minTableWidth, scale: scale)
         let availableWidth = max(minTableWidth, textView.bounds.width - x - scaled(Metrics.rightPadding, scale: scale))
@@ -177,7 +190,7 @@ struct LivePreviewTableLayout {
         return rects
     }
 
-    private static func columnWidths(for table: LivePreviewTable, scale: Double) -> [CGFloat] {
+    private static func columnWidths(for table: LivePreviewTable, fontSet: LivePreviewFontSet, scale: Double) -> [CGFloat] {
         let rows = [table.header] + table.bodyRows
         let columnCount = rows.map(\.count).max() ?? 0
         return (0..<columnCount).map { column in
@@ -186,7 +199,7 @@ struct LivePreviewTableLayout {
                     guard row.indices.contains(column) else {
                         return nil
                     }
-                    return textWidth(for: row[column].text, isHeader: rowIndex == 0, scale: scale)
+                    return textWidth(for: row[column].text, isHeader: rowIndex == 0, fontSet: fontSet)
                 }
                 .max() ?? scaled(Metrics.minTextWidth, scale: scale)
             return min(
@@ -199,8 +212,8 @@ struct LivePreviewTableLayout {
         }
     }
 
-    private static func textWidth(for text: String, isHeader: Bool, scale: Double) -> CGFloat {
-        let font = isHeader ? LivePreviewTheme.strongFont(scale: scale) : LivePreviewTheme.baseFont(scale: scale)
+    private static func textWidth(for text: String, isHeader: Bool, fontSet: LivePreviewFontSet) -> CGFloat {
+        let font = isHeader ? fontSet.strongFont : fontSet.baseFont
         let measurementText = text.isEmpty ? " " : text
         return (measurementText as NSString).size(withAttributes: [.font: font]).width
     }

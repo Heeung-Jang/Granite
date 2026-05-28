@@ -60,7 +60,8 @@ enum LivePreviewOverlayRenderer {
     static func drawBackgrounds(
         in textView: MarkdownInteractionTextView,
         dirtyRect: NSRect,
-        state: LivePreviewOverlayState
+        state: LivePreviewOverlayState,
+        fontSet: LivePreviewFontSet = LivePreviewTheme.defaultFontSet
     ) {
         guard state.drawsLivePreviewChrome else {
             return
@@ -71,7 +72,7 @@ enum LivePreviewOverlayRenderer {
                 drawCalloutBackground(renderBlock.block, in: textView, dirtyRect: dirtyRect)
             case .table:
                 if let table = renderBlock.table {
-                    drawTableBackground(table, in: textView, dirtyRect: dirtyRect)
+                    drawTableBackground(table, in: textView, dirtyRect: dirtyRect, fontSet: fontSet)
                 }
             default:
                 continue
@@ -82,7 +83,8 @@ enum LivePreviewOverlayRenderer {
     static func drawForegrounds(
         in textView: MarkdownInteractionTextView,
         dirtyRect: NSRect,
-        state: LivePreviewOverlayState
+        state: LivePreviewOverlayState,
+        fontSet: LivePreviewFontSet = LivePreviewTheme.defaultFontSet
     ) {
         guard state.drawsLivePreviewChrome else {
             return
@@ -96,12 +98,12 @@ enum LivePreviewOverlayRenderer {
                 }
             case .table:
                 if let table = renderBlock.table {
-                    drawTableForeground(table, in: textView, dirtyRect: dirtyRect, state: state)
+                    drawTableForeground(table, in: textView, dirtyRect: dirtyRect, state: state, fontSet: fontSet)
                 }
             case .horizontalRule:
                 drawHorizontalRule(renderBlock.block, in: textView, dirtyRect: dirtyRect, state: state)
             case .unorderedList, .orderedList, .taskList:
-                drawMarkerOverlay(renderBlock, in: textView, dirtyRect: dirtyRect, state: state)
+                drawMarkerOverlay(renderBlock, in: textView, dirtyRect: dirtyRect, state: state, fontSet: fontSet)
             default:
                 continue
             }
@@ -320,8 +322,13 @@ enum LivePreviewOverlayRenderer {
         )
     }
 
-    private static func drawTableBackground(_ table: LivePreviewTable, in textView: NSTextView, dirtyRect: NSRect) {
-        guard let layout = LivePreviewTableLayout.make(for: table, in: textView),
+    private static func drawTableBackground(
+        _ table: LivePreviewTable,
+        in textView: NSTextView,
+        dirtyRect: NSRect,
+        fontSet: LivePreviewFontSet
+    ) {
+        guard let layout = LivePreviewTableLayout.make(for: table, in: textView, fontSet: fontSet),
               layout.outerRect.intersects(dirtyRect)
         else {
             return
@@ -339,9 +346,10 @@ enum LivePreviewOverlayRenderer {
         _ table: LivePreviewTable,
         in textView: NSTextView,
         dirtyRect: NSRect,
-        state: LivePreviewOverlayState
+        state: LivePreviewOverlayState,
+        fontSet: LivePreviewFontSet
     ) {
-        guard let layout = LivePreviewTableLayout.make(for: table, in: textView),
+        guard let layout = LivePreviewTableLayout.make(for: table, in: textView, fontSet: fontSet),
               layout.outerRect.intersects(dirtyRect)
         else {
             return
@@ -352,6 +360,7 @@ enum LivePreviewOverlayRenderer {
             let text = NSMutableAttributedString(attributedString: markdownInlineString(
                 displayValue(cell.tableCell.text, key: nil),
                 isHeader: cell.isHeader,
+                fontSet: fontSet,
                 scale: layout.scale
             ))
             let paragraphStyle = NSMutableParagraphStyle()
@@ -502,7 +511,8 @@ enum LivePreviewOverlayRenderer {
         _ renderBlock: RenderBlock,
         in textView: NSTextView,
         dirtyRect: NSRect,
-        state: LivePreviewOverlayState
+        state: LivePreviewOverlayState,
+        fontSet: LivePreviewFontSet
     ) {
         guard let context = renderBlock.listContext,
               let geometry = markerGeometry(for: renderBlock.block, context: context, in: textView),
@@ -515,7 +525,7 @@ enum LivePreviewOverlayRenderer {
         case .unorderedListMarker:
             drawUnorderedBullet(geometry, dirtyRect: dirtyRect)
         case .orderedListMarker:
-            drawOrderedMarker(geometry, source: textView.string, dirtyRect: dirtyRect)
+            drawOrderedMarker(geometry, source: textView.string, dirtyRect: dirtyRect, fontSet: fontSet)
         case .taskCheckbox:
             drawTaskCheckbox(geometry, block: renderBlock.block, dirtyRect: dirtyRect)
         }
@@ -540,7 +550,8 @@ enum LivePreviewOverlayRenderer {
     private static func drawOrderedMarker(
         _ geometry: LivePreviewMarkerGeometry,
         source: String,
-        dirtyRect: NSRect
+        dirtyRect: NSRect,
+        fontSet: LivePreviewFontSet
     ) {
         let marker = markerText(geometry, source: source)
         let markerScale = scale(for: geometry)
@@ -554,7 +565,7 @@ enum LivePreviewOverlayRenderer {
             marker,
             in: rect,
             attributes: [
-                .font: LivePreviewTheme.baseFont(scale: Double(markerScale)),
+                .font: fontSet.scaled(by: Double(markerScale)).baseFont,
                 .foregroundColor: LivePreviewTheme.secondaryTextColor
             ],
             dirtyRect: dirtyRect
@@ -705,10 +716,12 @@ enum LivePreviewOverlayRenderer {
     static func markdownInlineString(
         _ text: String,
         isHeader: Bool = false,
+        fontSet: LivePreviewFontSet = LivePreviewTheme.defaultFontSet,
         scale: Double = AppContentZoom.defaultScale
     ) -> NSAttributedString {
         let output = NSMutableAttributedString()
-        let baseFont = isHeader ? LivePreviewTheme.strongFont(scale: scale) : LivePreviewTheme.baseFont(scale: scale)
+        let fontSet = fontSet.scaled(by: scale)
+        let baseFont = isHeader ? fontSet.strongFont : fontSet.baseFont
         var index = text.startIndex
 
         while index < text.endIndex {
@@ -718,7 +731,7 @@ enum LivePreviewOverlayRenderer {
                 output.append(NSAttributedString(
                     string: String(text[contentStart..<end]),
                     attributes: [
-                        .font: LivePreviewTheme.codeFont(scale: scale),
+                        .font: fontSet.codeFont,
                         .foregroundColor: LivePreviewTheme.codeColor,
                         .backgroundColor: LivePreviewTheme.inlineCodeBackgroundColor
                     ]
@@ -749,7 +762,7 @@ enum LivePreviewOverlayRenderer {
                 output.append(NSAttributedString(
                     string: String(text[contentStart..<end.lowerBound]),
                     attributes: [
-                        .font: LivePreviewTheme.strongFont(scale: scale),
+                        .font: fontSet.strongFont,
                         .foregroundColor: LivePreviewTheme.textColor
                     ]
                 ))

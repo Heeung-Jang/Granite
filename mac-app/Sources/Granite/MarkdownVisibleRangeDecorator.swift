@@ -23,6 +23,7 @@ enum MarkdownVisibleRangeDecorator {
         linkStyleMap: LivePreviewLinkStyleMap = LivePreviewLinkStyleMap(),
         embedPreviewMap: LivePreviewEmbedPreviewMap = LivePreviewEmbedPreviewMap(),
         markerStyle: LivePreviewMarkerStyle = .defaultValue,
+        fontSet: LivePreviewFontSet = LivePreviewTheme.defaultFontSet,
         scale: Double = AppContentZoom.defaultScale
     ) -> MarkdownDecorationResult {
         LivePreviewRenderer.render(
@@ -33,6 +34,7 @@ enum MarkdownVisibleRangeDecorator {
             linkStyleMap: linkStyleMap,
             embedPreviewMap: embedPreviewMap,
             markerStyle: markerStyle,
+            fontSet: fontSet,
             scale: scale
         )
     }

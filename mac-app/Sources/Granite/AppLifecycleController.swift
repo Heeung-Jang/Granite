@@ -40,7 +40,34 @@ final class AppLifecycleController {
 
 @MainActor
 final class GraniteAppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            NSApp.activate(ignoringOtherApps: true)
+            self.openWindowIfNeeded()
+        }
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        NSApp.activate(ignoringOtherApps: true)
+        if !flag {
+            openWindowIfNeeded()
+        }
+        return true
+    }
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         AppLifecycleController.shared.requestAppQuit() ? .terminateNow : .terminateCancel
+    }
+
+    private func openWindowIfNeeded() {
+        guard !NSApp.windows.contains(where: \.isVisible),
+              let fileMenu = NSApp.mainMenu?.item(withTitle: "File")?.submenu,
+              let newWindowItem = fileMenu.item(withTitle: "New Window"),
+              let action = newWindowItem.action
+        else {
+            return
+        }
+
+        NSApp.sendAction(action, to: newWindowItem.target, from: newWindowItem)
     }
 }

@@ -12,6 +12,7 @@ struct SourceNoteView: View {
     private static let fallbackProfileDebounceMilliseconds: UInt64 = 250
 
     @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var editorFontSettings: EditorFontSettings
     @Environment(\.appContentZoomScale) private var appContentZoomScale
     let vaultURL: URL
     let file: FileTreeItem
@@ -75,6 +76,7 @@ struct SourceNoteView: View {
                     embedPreviewMap: livePreviewEmbedPreviewMap,
                     markerStyle: livePreviewMarkerStyle,
                     documentTitle: file.displayName,
+                    fontSet: editorFontSettings.fontSet,
                     appContentZoomScale: appContentZoomScale,
                     isActive: isActive,
                     focusRequestID: focusRequestID,
