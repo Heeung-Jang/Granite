@@ -470,6 +470,8 @@ private func fixture(_ name: String) throws -> String {
         .deletingLastPathComponent()
         .deletingLastPathComponent()
         .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
     let url = repoRoot
         .appendingPathComponent("fixtures/live-preview-vault", isDirectory: true)
         .appendingPathComponent(name, isDirectory: false)
