@@ -10,6 +10,14 @@ use std::ffi::OsStr;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::process;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+pub const REDACTED_PRIVATE_VALUE: &str = "redacted";
+pub const REDACTED_VAULT_NAME: &str = "redacted-vault";
+
+static PUBLIC_ARTIFACT_SALT_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone)]
 pub struct ProfileOptions {
@@ -81,17 +89,11 @@ pub struct MarkdownAnalysis {
 
 pub fn profile_vault(options: &ProfileOptions) -> io::Result<VaultProfile> {
     let vault_root = options.vault_root.canonicalize()?;
+    let artifact_salt = public_artifact_salt();
     let mut profile = VaultProfile {
         schema_version: 1,
         profiler_version: env!("CARGO_PKG_VERSION").to_string(),
-        vault: VaultIdentity {
-            root_name: vault_root
-                .file_name()
-                .and_then(OsStr::to_str)
-                .unwrap_or("vault")
-                .to_string(),
-            root_hash: stable_hash(vault_root.to_string_lossy().as_bytes()),
-        },
+        vault: redacted_vault_identity(),
         totals: ProfileTotals::default(),
         extensions: BTreeMap::new(),
         markdown_size_distribution: BTreeMap::new(),
@@ -99,7 +101,13 @@ pub fn profile_vault(options: &ProfileOptions) -> io::Result<VaultProfile> {
         warnings: Vec::new(),
     };
 
-    visit_dir(&vault_root, &vault_root, options, &mut profile)?;
+    visit_dir(
+        &vault_root,
+        &vault_root,
+        options,
+        &artifact_salt,
+        &mut profile,
+    )?;
     profile
         .largest_files
         .sort_by_key(|file| Reverse(file.bytes));
@@ -111,6 +119,7 @@ fn visit_dir(
     vault_root: &Path,
     dir: &Path,
     options: &ProfileOptions,
+    artifact_salt: &str,
     profile: &mut VaultProfile,
 ) -> io::Result<()> {
     for entry_result in fs::read_dir(dir)? {
@@ -126,7 +135,7 @@ fn visit_dir(
 
         if file_type.is_dir() {
             profile.totals.folders += 1;
-            visit_dir(vault_root, &path, options, profile)?;
+            visit_dir(vault_root, &path, options, artifact_salt, profile)?;
             continue;
         }
 
@@ -160,7 +169,7 @@ fn visit_dir(
                 }
                 Err(err) => profile.warnings.push(format!(
                     "read_failed:{}:{}",
-                    path_hash(vault_root, &path),
+                    path_hash(vault_root, &path, artifact_salt),
                     err.kind()
                 )),
             }
@@ -173,6 +182,7 @@ fn visit_dir(
             extension,
             markdown,
             options,
+            artifact_salt,
             profile,
         );
     }
@@ -187,11 +197,15 @@ fn push_largest_file(
     extension: String,
     markdown: bool,
     options: &ProfileOptions,
+    artifact_salt: &str,
     profile: &mut VaultProfile,
 ) {
     let relative_path = path.strip_prefix(vault_root).unwrap_or(path);
     profile.largest_files.push(FileSizeRecord {
-        relative_path_hash: stable_hash(relative_path.to_string_lossy().as_bytes()),
+        relative_path_hash: salted_private_hash(
+            artifact_salt,
+            relative_path.to_string_lossy().as_bytes(),
+        ),
         relative_path: options
             .include_paths
             .then(|| relative_path.to_string_lossy().to_string()),
@@ -443,9 +457,37 @@ fn count_non_overlapping(text: &str, needle: &str) -> usize {
     text.match_indices(needle).count()
 }
 
-fn path_hash(vault_root: &Path, path: &Path) -> String {
+fn path_hash(vault_root: &Path, path: &Path, artifact_salt: &str) -> String {
     let relative_path = path.strip_prefix(vault_root).unwrap_or(path);
-    stable_hash(relative_path.to_string_lossy().as_bytes())
+    salted_private_hash(artifact_salt, relative_path.to_string_lossy().as_bytes())
+}
+
+pub fn redacted_vault_identity() -> VaultIdentity {
+    VaultIdentity {
+        root_name: REDACTED_VAULT_NAME.to_string(),
+        root_hash: REDACTED_PRIVATE_VALUE.to_string(),
+    }
+}
+
+pub fn redacted_private_value() -> String {
+    REDACTED_PRIVATE_VALUE.to_string()
+}
+
+pub fn public_artifact_salt() -> String {
+    let counter = PUBLIC_ARTIFACT_SALT_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    format!("{}:{nanos}:{counter}", process::id())
+}
+
+pub fn salted_private_hash(salt: &str, bytes: &[u8]) -> String {
+    let mut material = Vec::with_capacity(salt.len() + 1 + bytes.len());
+    material.extend_from_slice(salt.as_bytes());
+    material.push(b':');
+    material.extend_from_slice(bytes);
+    format!("private-{}", stable_hash(&material))
 }
 
 pub fn stable_hash(bytes: &[u8]) -> String {
@@ -529,6 +571,8 @@ Body #tag/one with [[Note]] and ![[image.png]] plus [asset](files/report.pdf).
                 .iter()
                 .all(|file| file.relative_path.is_none())
         );
+        assert_eq!(profile.vault.root_name, "redacted-vault");
+        assert_eq!(profile.vault.root_hash, "redacted");
     }
 
     #[test]

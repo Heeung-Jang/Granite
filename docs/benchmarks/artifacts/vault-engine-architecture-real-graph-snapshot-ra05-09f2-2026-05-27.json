@@ -1,0 +1,138 @@
+{
+  "artifactVersion": 1,
+  "generatedAt": "2026-05-27T15:32:02Z",
+  "vaultAlias": "real-vault-large",
+  "codeRevision": "bd4eab1",
+  "artifactKind": "stage",
+  "stage": "snapshot",
+  "backendVersion": "metadata-v2",
+  "storeSchemaVersion": 2,
+  "rendererKind": "none",
+  "graphGeneration": 1,
+  "graphState": "complete",
+  "counts": {
+    "nodeCount": 64297,
+    "edgeCount": 129299,
+    "visibleNodeCount": 64297,
+    "visibleEdgeCount": 129299,
+    "componentCount": 0,
+    "partialReasonCount": 0
+  },
+  "measurements": [
+    {
+      "name": "snapshotDuration",
+      "unit": "milliseconds",
+      "status": "passed",
+      "value": 868.212417,
+      "target": 2500.0
+    },
+    {
+      "name": "encodedPayloadBytes",
+      "unit": "bytes",
+      "status": "passed",
+      "value": 54624406.0,
+      "target": 67108864.0
+    },
+    {
+      "name": "decodeDuration",
+      "unit": "milliseconds",
+      "status": "passed",
+      "value": 315.432834,
+      "target": 1500.0
+    },
+    {
+      "name": "swiftDecodeMemory",
+      "unit": "bytes",
+      "status": "passed",
+      "value": 160448512.0,
+      "target": 209715200.0
+    },
+    {
+      "name": "rustSnapshotMemory",
+      "unit": "bytes",
+      "status": "passed",
+      "value": 203538432.0,
+      "target": 262144000.0
+    }
+  ],
+  "indexedAccessSummary": [
+    {
+      "stage": "files",
+      "usesIndex": true,
+      "scanKind": "indexed",
+      "durationMilliseconds": 0.0
+    },
+    {
+      "stage": "resolvedEdges",
+      "usesIndex": true,
+      "scanKind": "indexed",
+      "durationMilliseconds": 0.0
+    },
+    {
+      "stage": "unresolvedEdges",
+      "usesIndex": false,
+      "scanKind": "skipped",
+      "durationMilliseconds": 0.0
+    },
+    {
+      "stage": "orphans",
+      "usesIndex": false,
+      "scanKind": "skipped",
+      "durationMilliseconds": 0.0
+    },
+    {
+      "stage": "tags",
+      "usesIndex": false,
+      "scanKind": "skipped",
+      "durationMilliseconds": 0.0
+    },
+    {
+      "stage": "productionSnapshot",
+      "usesIndex": false,
+      "scanKind": "productionUseCase",
+      "durationMilliseconds": 868.212417
+    }
+  ],
+  "bridgeDecision": {
+    "format": "json",
+    "encodedPayloadBytes": 54624406,
+    "decisionReason": "withinJsonBudget",
+    "payloadVersion": 1,
+    "requestScoped": true,
+    "byteCapBytes": 134217728,
+    "countValidation": true,
+    "duplicateNodeValidation": true,
+    "enumValidation": true,
+    "edgeReferenceValidation": true
+  },
+  "budgetResults": [
+    {
+      "name": "rustSnapshot",
+      "unit": "milliseconds",
+      "status": "passed",
+      "measured": 868.212417,
+      "target": 2500.0
+    },
+    {
+      "name": "swiftDecode",
+      "unit": "milliseconds",
+      "status": "passed",
+      "measured": 315.432834,
+      "target": 1500.0
+    },
+    {
+      "name": "rustSnapshotMemory",
+      "unit": "bytes",
+      "status": "passed",
+      "measured": 203538432.0,
+      "target": 262144000.0
+    },
+    {
+      "name": "swiftDecodeMemory",
+      "unit": "bytes",
+      "status": "passed",
+      "measured": 160448512.0,
+      "target": 209715200.0
+    }
+  ]
+}

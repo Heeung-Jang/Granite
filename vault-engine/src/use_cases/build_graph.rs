@@ -1,0 +1,623 @@
+use std::collections::{HashMap, HashSet};
+use std::path::Path;
+
+use crate::adapters::sqlite::{
+    GraphFileRecord, GraphResolvedEdgeRecord, GraphTagRecord, GraphUnresolvedEdgeRecord,
+    IndexSchemaMetadata, MetadataStore, MetadataStoreError,
+};
+use crate::core::graph::{
+    WholeVaultGraphBuild, WholeVaultGraphEdge, WholeVaultGraphEdgeKind, WholeVaultGraphNode,
+    WholeVaultGraphNodeKind, WholeVaultGraphPartialReason, WholeVaultGraphRequest,
+    WholeVaultGraphSnapshot,
+};
+use crate::core::links::unresolved_target_key;
+
+pub const MAX_WHOLE_VAULT_GRAPH_NODES: usize = 100_000;
+pub const MAX_WHOLE_VAULT_GRAPH_EDGES: usize = 250_000;
+pub const MAX_WHOLE_VAULT_GRAPH_LABEL_BYTES: usize = 512;
+pub const MAX_WHOLE_VAULT_GRAPH_TAGS_PER_NODE: usize = 32;
+pub const MAX_WHOLE_VAULT_GRAPH_GROUPS: usize = 32;
+pub const MAX_WHOLE_VAULT_GRAPH_RULE_LENGTH: usize = 512;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WholeVaultGraphInputs {
+    pub node_count_total: usize,
+    pub edge_count_total: usize,
+    pub files: Vec<GraphFileRecord>,
+    pub resolved_edges: Vec<GraphResolvedEdgeRecord>,
+    pub unresolved_edges: Vec<GraphUnresolvedEdgeRecord>,
+    pub orphan_files: Vec<GraphFileRecord>,
+    pub tags: Vec<GraphTagRecord>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct WholeVaultGraphSnapshotRequest<'a> {
+    pub metadata_path: &'a Path,
+    pub requested_generation: u64,
+    pub graph_request: WholeVaultGraphRequest,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WholeVaultGraphSnapshotResult {
+    pub generation: u64,
+    pub graph: WholeVaultGraphBuild,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WholeVaultGraphSnapshotError {
+    MissingIndex,
+    StaleSchema,
+    GraphIndex,
+}
+
+impl WholeVaultGraphRequest {
+    #[cfg(test)]
+    pub fn new(max_nodes: usize, max_edges: usize) -> Self {
+        Self::with_request_id(0, max_nodes, max_edges)
+    }
+
+    pub fn with_request_id(request_id: u64, max_nodes: usize, max_edges: usize) -> Self {
+        Self {
+            request_id,
+            include_unresolved: false,
+            include_orphans: false,
+            max_nodes,
+            max_edges,
+            max_label_bytes: MAX_WHOLE_VAULT_GRAPH_LABEL_BYTES,
+            max_tags_per_node: MAX_WHOLE_VAULT_GRAPH_TAGS_PER_NODE,
+            max_groups: MAX_WHOLE_VAULT_GRAPH_GROUPS,
+            max_rule_length: MAX_WHOLE_VAULT_GRAPH_RULE_LENGTH,
+            group_rule_count: 0,
+            longest_group_rule_length: 0,
+        }
+    }
+
+    pub fn including_unresolved(mut self, include_unresolved: bool) -> Self {
+        self.include_unresolved = include_unresolved;
+        self
+    }
+
+    pub fn including_orphans(mut self, include_orphans: bool) -> Self {
+        self.include_orphans = include_orphans;
+        self
+    }
+
+    #[cfg(test)]
+    pub fn with_label_limit(mut self, max_label_bytes: usize) -> Self {
+        self.max_label_bytes = max_label_bytes;
+        self
+    }
+
+    #[cfg(test)]
+    pub fn with_tag_limit(mut self, max_tags_per_node: usize) -> Self {
+        self.max_tags_per_node = max_tags_per_node;
+        self
+    }
+
+    #[cfg(test)]
+    pub fn with_group_limits(
+        mut self,
+        max_groups: usize,
+        group_rule_count: usize,
+        max_rule_length: usize,
+        longest_group_rule_length: usize,
+    ) -> Self {
+        self.max_groups = max_groups;
+        self.group_rule_count = group_rule_count;
+        self.max_rule_length = max_rule_length;
+        self.longest_group_rule_length = longest_group_rule_length;
+        self
+    }
+
+    pub fn node_limit(self) -> usize {
+        self.max_nodes.clamp(1, MAX_WHOLE_VAULT_GRAPH_NODES)
+    }
+
+    pub fn edge_limit(self) -> usize {
+        self.max_edges.clamp(1, MAX_WHOLE_VAULT_GRAPH_EDGES)
+    }
+
+    pub fn label_limit(self) -> usize {
+        self.max_label_bytes
+            .clamp(1, MAX_WHOLE_VAULT_GRAPH_LABEL_BYTES)
+    }
+
+    pub fn tag_limit(self) -> usize {
+        self.max_tags_per_node
+            .clamp(0, MAX_WHOLE_VAULT_GRAPH_TAGS_PER_NODE)
+    }
+
+    fn group_limit(self) -> usize {
+        self.max_groups.min(MAX_WHOLE_VAULT_GRAPH_GROUPS)
+    }
+
+    fn rule_length_limit(self) -> usize {
+        self.max_rule_length.min(MAX_WHOLE_VAULT_GRAPH_RULE_LENGTH)
+    }
+}
+
+pub fn build_whole_vault_graph_snapshot(
+    request: WholeVaultGraphRequest,
+    generation: u64,
+    inputs: WholeVaultGraphInputs,
+) -> WholeVaultGraphBuild {
+    let files_by_id: HashMap<&str, &GraphFileRecord> = inputs
+        .files
+        .iter()
+        .map(|file| (file.file_id.as_str(), file))
+        .collect();
+    let degree_by_file = degree_by_file(&inputs.resolved_edges, &inputs.unresolved_edges, request);
+    let node_count_total = inputs.node_count_total;
+    let edge_count_total = inputs.edge_count_total;
+    let tags_by_file = tags_by_file(inputs.tags);
+
+    let mut builder = SnapshotBuilder::new(
+        request,
+        generation,
+        node_count_total,
+        edge_count_total,
+        &files_by_id,
+        &tags_by_file,
+        &degree_by_file,
+    );
+
+    if request.group_rule_count > request.group_limit() {
+        builder.add_partial_reason(WholeVaultGraphPartialReason::MaxGroups);
+    }
+    if request.longest_group_rule_length > request.rule_length_limit() {
+        builder.add_partial_reason(WholeVaultGraphPartialReason::MaxRuleLength);
+    }
+
+    for edge in &inputs.resolved_edges {
+        builder.add_resolved_edge(edge);
+    }
+    if request.include_unresolved {
+        for edge in &inputs.unresolved_edges {
+            builder.add_unresolved_edge(edge);
+        }
+    }
+    if request.include_orphans {
+        for file in &inputs.orphan_files {
+            builder.add_file_node(&file.file_id);
+        }
+    }
+
+    builder.finish()
+}
+
+pub fn graph_file_node_id(file_id: &str) -> String {
+    format!("file:{}", stable_hash_hex(file_id))
+}
+
+pub fn graph_unresolved_node_id(target_text: &str) -> String {
+    format!(
+        "unresolved:{}",
+        stable_hash_hex(&unresolved_target_key(target_text))
+    )
+}
+
+pub fn whole_vault_graph_needs_tags(request: WholeVaultGraphRequest) -> bool {
+    request.group_rule_count > 0
+}
+
+pub(crate) fn graph_candidate_files(
+    resolved_edges: &[GraphResolvedEdgeRecord],
+    unresolved_edges: &[GraphUnresolvedEdgeRecord],
+    orphan_files: &[GraphFileRecord],
+    limit: usize,
+) -> Vec<GraphFileRecord> {
+    let mut seen = HashSet::new();
+    let mut files = Vec::new();
+
+    for edge in resolved_edges {
+        push_graph_candidate_file(
+            &mut files,
+            &mut seen,
+            limit,
+            &edge.source_file_id,
+            &edge.source_relative_path,
+        );
+        push_graph_candidate_file(
+            &mut files,
+            &mut seen,
+            limit,
+            &edge.target_file_id,
+            &edge.target_relative_path,
+        );
+    }
+    for edge in unresolved_edges {
+        push_graph_candidate_file(
+            &mut files,
+            &mut seen,
+            limit,
+            &edge.source_file_id,
+            &edge.source_relative_path,
+        );
+    }
+    for file in orphan_files {
+        push_graph_candidate_file(
+            &mut files,
+            &mut seen,
+            limit,
+            &file.file_id,
+            &file.relative_path,
+        );
+    }
+
+    files
+}
+
+fn push_graph_candidate_file(
+    files: &mut Vec<GraphFileRecord>,
+    seen: &mut HashSet<String>,
+    limit: usize,
+    file_id: &str,
+    relative_path: &Path,
+) {
+    if files.len() >= limit || !seen.insert(file_id.to_string()) {
+        return;
+    }
+    files.push(GraphFileRecord {
+        file_id: file_id.to_string(),
+        relative_path: relative_path.to_path_buf(),
+    });
+}
+
+pub fn build_whole_vault_graph_from_metadata(
+    metadata: &MetadataStore,
+    generation: u64,
+    request: WholeVaultGraphRequest,
+) -> Result<WholeVaultGraphBuild, MetadataStoreError> {
+    let edge_fetch_limit = request.edge_limit().saturating_add(1);
+    let node_fetch_limit = request.node_limit().saturating_add(1);
+    let all_files = metadata.graph_files(generation, node_fetch_limit)?;
+    let has_all_files = all_files.len() < node_fetch_limit;
+    let resolved_edges = if has_all_files {
+        metadata.graph_resolved_edges_compact(generation, edge_fetch_limit)?
+    } else {
+        metadata.graph_resolved_edges(generation, edge_fetch_limit)?
+    };
+    let unresolved_edges = if request.include_unresolved {
+        metadata.graph_unresolved_edges(generation, edge_fetch_limit)?
+    } else {
+        Vec::new()
+    };
+    let orphan_files = if request.include_orphans {
+        metadata.graph_orphan_files(generation, request.include_unresolved, node_fetch_limit)?
+    } else {
+        Vec::new()
+    };
+    let files = if has_all_files {
+        all_files
+    } else {
+        graph_candidate_files(
+            &resolved_edges,
+            &unresolved_edges,
+            &orphan_files,
+            node_fetch_limit,
+        )
+    };
+    let tags = if whole_vault_graph_needs_tags(request) {
+        let file_ids = files
+            .iter()
+            .map(|file| file.file_id.clone())
+            .collect::<Vec<_>>();
+        metadata.graph_tags_for_files(&file_ids, request.tag_limit().saturating_add(1))?
+    } else {
+        Vec::new()
+    };
+    let node_count_total = metadata.graph_visible_node_count(
+        generation,
+        request.include_unresolved,
+        request.include_orphans,
+    )?;
+    let edge_count_total =
+        metadata.graph_visible_edge_count(generation, request.include_unresolved)?;
+
+    Ok(build_whole_vault_graph_snapshot(
+        request,
+        generation,
+        WholeVaultGraphInputs {
+            node_count_total,
+            edge_count_total,
+            files,
+            resolved_edges,
+            unresolved_edges,
+            orphan_files,
+            tags,
+        },
+    ))
+}
+
+pub(crate) fn read_whole_vault_graph_snapshot(
+    request: WholeVaultGraphSnapshotRequest<'_>,
+) -> Result<WholeVaultGraphSnapshotResult, WholeVaultGraphSnapshotError> {
+    if !request.metadata_path.is_file() {
+        return Err(WholeVaultGraphSnapshotError::MissingIndex);
+    }
+
+    let generation = graph_request_generation(request.metadata_path, request.requested_generation)?;
+    let expected = IndexSchemaMetadata::new("sqlite+tantivy", "metadata-v2", "tantivy", generation);
+    let metadata =
+        MetadataStore::open(request.metadata_path, &expected).map_err(graph_metadata_error)?;
+    let graph = build_whole_vault_graph_from_metadata(&metadata, generation, request.graph_request)
+        .map_err(graph_metadata_error)?;
+
+    Ok(WholeVaultGraphSnapshotResult { generation, graph })
+}
+
+fn graph_request_generation(
+    metadata_path: &Path,
+    requested_generation: u64,
+) -> Result<u64, WholeVaultGraphSnapshotError> {
+    if requested_generation != 0 {
+        return Ok(requested_generation);
+    }
+
+    let metadata =
+        MetadataStore::stored_schema_metadata(metadata_path).map_err(graph_metadata_error)?;
+    metadata
+        .map(|metadata| metadata.generation)
+        .ok_or(WholeVaultGraphSnapshotError::GraphIndex)
+}
+
+fn graph_metadata_error(error: MetadataStoreError) -> WholeVaultGraphSnapshotError {
+    match error {
+        MetadataStoreError::SchemaMismatch { .. } => WholeVaultGraphSnapshotError::StaleSchema,
+        MetadataStoreError::Sqlite(_) | MetadataStoreError::InvalidStoredValue(_) => {
+            WholeVaultGraphSnapshotError::GraphIndex
+        }
+    }
+}
+
+struct SnapshotBuilder<'a> {
+    request: WholeVaultGraphRequest,
+    generation: u64,
+    node_count_total: usize,
+    edge_count_total: usize,
+    files_by_id: &'a HashMap<&'a str, &'a GraphFileRecord>,
+    tags_by_file: &'a HashMap<String, Vec<String>>,
+    degree_by_file: &'a HashMap<&'a str, usize>,
+    node_ids: HashSet<String>,
+    nodes: Vec<WholeVaultGraphNode>,
+    edges: Vec<WholeVaultGraphEdge>,
+    partial_reasons: Vec<WholeVaultGraphPartialReason>,
+}
+
+impl<'a> SnapshotBuilder<'a> {
+    fn new(
+        request: WholeVaultGraphRequest,
+        generation: u64,
+        node_count_total: usize,
+        edge_count_total: usize,
+        files_by_id: &'a HashMap<&'a str, &'a GraphFileRecord>,
+        tags_by_file: &'a HashMap<String, Vec<String>>,
+        degree_by_file: &'a HashMap<&'a str, usize>,
+    ) -> Self {
+        Self {
+            request,
+            generation,
+            node_count_total,
+            edge_count_total,
+            files_by_id,
+            tags_by_file,
+            degree_by_file,
+            node_ids: HashSet::new(),
+            nodes: Vec::new(),
+            edges: Vec::new(),
+            partial_reasons: Vec::new(),
+        }
+    }
+
+    fn add_resolved_edge(&mut self, edge: &GraphResolvedEdgeRecord) {
+        if !self.can_add_edge() {
+            return;
+        }
+        let source_node_id = graph_file_node_id(&edge.source_file_id);
+        let target_node_id = graph_file_node_id(&edge.target_file_id);
+        if !self.add_file_node(&edge.source_file_id) || !self.add_file_node(&edge.target_file_id) {
+            return;
+        }
+        self.add_edge(WholeVaultGraphEdge {
+            source_node_id,
+            target_node_id,
+            kind: WholeVaultGraphEdgeKind::Resolved,
+            weight: edge.weight,
+        });
+    }
+
+    fn add_unresolved_edge(&mut self, edge: &GraphUnresolvedEdgeRecord) {
+        if !self.can_add_edge() {
+            return;
+        }
+        let source_node_id = graph_file_node_id(&edge.source_file_id);
+        let target_node_id = graph_unresolved_node_id(&edge.target_text);
+        if !self.add_file_node(&edge.source_file_id) || !self.add_unresolved_node(&edge.target_text)
+        {
+            return;
+        }
+        self.add_edge(WholeVaultGraphEdge {
+            source_node_id,
+            target_node_id,
+            kind: WholeVaultGraphEdgeKind::Unresolved,
+            weight: edge.weight,
+        });
+    }
+
+    fn add_file_node(&mut self, file_id: &str) -> bool {
+        let node_id = graph_file_node_id(file_id);
+        if self.node_ids.contains(&node_id) {
+            return true;
+        }
+        if self.nodes.len() >= self.request.node_limit() {
+            self.add_partial_reason(WholeVaultGraphPartialReason::MaxNodes);
+            return false;
+        }
+        let Some(file) = self.files_by_id.get(file_id) else {
+            return false;
+        };
+
+        let relative_path = file.relative_path.display().to_string();
+        let label_source = file
+            .relative_path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or(&relative_path);
+        let (label, was_truncated) = bounded_label(label_source, self.request.label_limit());
+        if was_truncated {
+            self.add_partial_reason(WholeVaultGraphPartialReason::MaxLabelBytes);
+        }
+        let tags = self.visible_tags(file_id);
+        self.node_ids.insert(node_id.clone());
+        self.nodes.push(WholeVaultGraphNode {
+            node_id,
+            file_id: None,
+            relative_path: Some(relative_path),
+            label,
+            kind: WholeVaultGraphNodeKind::Resolved,
+            degree: self.degree_by_file.get(file_id).copied().unwrap_or(0),
+            tags,
+        });
+        true
+    }
+
+    fn add_unresolved_node(&mut self, target_text: &str) -> bool {
+        let node_id = graph_unresolved_node_id(target_text);
+        if self.node_ids.contains(&node_id) {
+            return true;
+        }
+        if self.nodes.len() >= self.request.node_limit() {
+            self.add_partial_reason(WholeVaultGraphPartialReason::MaxNodes);
+            return false;
+        }
+        let (label, was_truncated) = bounded_label(target_text, self.request.label_limit());
+        if was_truncated {
+            self.add_partial_reason(WholeVaultGraphPartialReason::MaxLabelBytes);
+        }
+        self.node_ids.insert(node_id.clone());
+        self.nodes.push(WholeVaultGraphNode {
+            node_id,
+            file_id: None,
+            relative_path: None,
+            label,
+            kind: WholeVaultGraphNodeKind::Unresolved,
+            degree: 0,
+            tags: Vec::new(),
+        });
+        true
+    }
+
+    fn can_add_edge(&mut self) -> bool {
+        if self.edges.len() >= self.request.edge_limit() {
+            self.add_partial_reason(WholeVaultGraphPartialReason::MaxEdges);
+            return false;
+        }
+        true
+    }
+
+    fn add_edge(&mut self, edge: WholeVaultGraphEdge) {
+        self.edges.push(edge);
+    }
+
+    fn visible_tags(&mut self, file_id: &str) -> Vec<String> {
+        let tag_limit = self.request.tag_limit();
+        let Some(tags) = self.tags_by_file.get(file_id) else {
+            return Vec::new();
+        };
+        if tags.len() > tag_limit {
+            self.add_partial_reason(WholeVaultGraphPartialReason::MaxTagsPerNode);
+        }
+        tags.iter().take(tag_limit).cloned().collect()
+    }
+
+    fn add_partial_reason(&mut self, reason: WholeVaultGraphPartialReason) {
+        if !self.partial_reasons.contains(&reason) {
+            self.partial_reasons.push(reason);
+        }
+    }
+
+    fn finish(self) -> WholeVaultGraphBuild {
+        let partial = !self.partial_reasons.is_empty();
+        WholeVaultGraphBuild {
+            snapshot: WholeVaultGraphSnapshot {
+                request_id: self.request.request_id,
+                generation: self.generation,
+                partial_reasons: self.partial_reasons,
+                node_count_total: self.node_count_total,
+                edge_count_total: self.edge_count_total,
+                nodes: self.nodes,
+                edges: self.edges,
+            },
+            partial,
+        }
+    }
+}
+
+fn degree_by_file<'a>(
+    resolved_edges: &'a [GraphResolvedEdgeRecord],
+    unresolved_edges: &'a [GraphUnresolvedEdgeRecord],
+    request: WholeVaultGraphRequest,
+) -> HashMap<&'a str, usize> {
+    let mut degrees = HashMap::new();
+    for edge in resolved_edges {
+        *degrees.entry(edge.source_file_id.as_str()).or_insert(0) += edge.weight;
+        *degrees.entry(edge.target_file_id.as_str()).or_insert(0) += edge.weight;
+    }
+    if request.include_unresolved {
+        for edge in unresolved_edges {
+            *degrees.entry(edge.source_file_id.as_str()).or_insert(0) += edge.weight;
+        }
+    }
+    degrees
+}
+
+fn tags_by_file(tags: Vec<GraphTagRecord>) -> HashMap<String, Vec<String>> {
+    let mut by_file: HashMap<String, Vec<String>> = HashMap::new();
+    for tag in tags {
+        by_file.entry(tag.file_id).or_default().push(tag.tag);
+    }
+    by_file
+}
+
+fn bounded_label(value: &str, max_bytes: usize) -> (String, bool) {
+    let normalized = normalize_label(value);
+    if normalized.len() <= max_bytes {
+        return (normalized, false);
+    }
+
+    let mut end = 0;
+    for (index, ch) in normalized.char_indices() {
+        let next = index + ch.len_utf8();
+        if next > max_bytes {
+            break;
+        }
+        end = next;
+    }
+    (normalized[..end].to_string(), true)
+}
+
+fn normalize_label(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_control() || is_bidi_control(ch) {
+                '\u{FFFD}'
+            } else {
+                ch
+            }
+        })
+        .collect()
+}
+
+fn is_bidi_control(ch: char) -> bool {
+    matches!(ch, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+}
+
+fn stable_hash_hex(value: &str) -> String {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for byte in value.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{hash:016x}")
+}

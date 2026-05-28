@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "tool": "vault-profiler materialize-read-index",
+  "vault_root_hash": "5592b176bced2ad2",
+  "metadata_path_hash": "d7e9f184556c9f54",
+  "tantivy_path_hash": "1b8c4baa388637f0",
+  "markdown_files": 6,
+  "attachment_files": 2,
+  "other_files": 1,
+  "indexed_files": 9,
+  "errored_files": 0,
+  "links": 15,
+  "tags": 10,
+  "properties": 12,
+  "headings": 7,
+  "attachments": 4,
+  "duration_ms": 187.58,
+  "privacy": {
+    "raw_note_bodies_committed": false,
+    "raw_paths_committed": false,
+    "absolute_paths_committed": false
+  }
+}

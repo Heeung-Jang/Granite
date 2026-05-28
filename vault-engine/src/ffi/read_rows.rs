@@ -4,17 +4,19 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::ENGINE_ABI_VERSION;
-use crate::attachments::{AttachmentReferenceSource, AttachmentResolutionState};
-use crate::index::{
+use crate::core::attachments::{AttachmentReferenceSource, AttachmentResolutionState};
+use crate::core::metadata::{
     AttachmentProjection, AttachmentRecord, FileIndexStatus, FileRecord, FileTreeProjection,
-    IndexPropertyValue, LinkProjection, PropertyProjection, PropertyRecord, TagRecord,
+    IndexPropertyValue, LinkProjection, PropertyProjection, PropertyRecord, TagRecord, TagSource,
 };
-use crate::read_api::{
+use crate::core::scan::ScanEntryKind;
+use crate::use_cases::read_graph::{
+    LocalGraphEdge, LocalGraphEdgeDirection, LocalGraphNode, LocalGraphNodeKind,
+};
+use crate::use_cases::read_types::{
     LivePreviewMetadataItem, LivePreviewMetadataItemKind, LivePreviewMetadataSource,
-    LivePreviewMetadataState, LocalGraphEdge, LocalGraphEdgeDirection, LocalGraphNode,
-    LocalGraphNodeKind, ReadOpenError, SearchHit,
+    LivePreviewMetadataState, ReadOpenError, SearchHit,
 };
-use crate::scanner::ScanEntryKind;
 
 pub const ENGINE_READ_NO_NEXT_OFFSET: u64 = u64::MAX;
 pub const ENGINE_READ_ROW_KIND_OPEN_STATUS: u32 = 1;
@@ -224,6 +226,8 @@ impl EngineReadResultBuilder {
         } else {
             assert_eq!(self.header.row_stride as usize, row_size);
         }
+        // SAFETY: FFI row types are `Copy` fixed-layout records constructed by
+        // this module and are copied while `row` is alive.
         let row_bytes = unsafe { bytes_of(row) };
         self.rows.extend_from_slice(row_bytes);
         self.header.row_count += 1;
@@ -243,6 +247,8 @@ impl EngineReadResultBuilder {
         let mut bytes = Vec::with_capacity(
             size_of::<EngineReadResultHeader>() + self.rows.len() + self.strings.len(),
         );
+        // SAFETY: `EngineReadResultHeader` is a `Copy` fixed-layout FFI header
+        // constructed by this builder and copied while it is alive.
         let header_bytes = unsafe { bytes_of(&self.header) };
         bytes.extend_from_slice(header_bytes);
         bytes.extend_from_slice(&self.rows);
@@ -341,10 +347,7 @@ impl EngineReadTagRow {
         Self {
             file_id: builder.push_string(&record.file_id),
             tag: builder.push_string(&record.tag),
-            source: match record.source {
-                crate::index::TagSource::Inline => 1,
-                crate::index::TagSource::Frontmatter => 2,
-            },
+            source: tag_source_code(record.source),
         }
     }
 }
@@ -382,11 +385,7 @@ impl EngineReadLinkRow {
                 .as_ref()
                 .map(|value| builder.push_string(value))
                 .unwrap_or_else(EngineReadStringRef::empty),
-            resolution_state: if projection.target_file_id.is_some() {
-                1
-            } else {
-                2
-            },
+            resolution_state: link_resolution_state_code(projection.target_file_id.is_some()),
             is_embed: u32::from(projection.is_embed),
         }
     }
@@ -394,16 +393,16 @@ impl EngineReadLinkRow {
 
 impl EngineReadPropertyRow {
     pub fn from_record(builder: &mut EngineReadResultBuilder, record: &PropertyRecord) -> Self {
-        let (display_value, value_kind) = match &record.value {
-            IndexPropertyValue::String(value) => (value.clone(), 1),
-            IndexPropertyValue::Bool(value) => (value.to_string(), 2),
-            IndexPropertyValue::List(values) => (values.join(", "), 3),
+        let display_value = match &record.value {
+            IndexPropertyValue::String(value) => value.clone(),
+            IndexPropertyValue::Bool(value) => value.to_string(),
+            IndexPropertyValue::List(values) => values.join(", "),
         };
         Self {
             file_id: builder.push_string(&record.file_id),
             key: builder.push_string(&record.key),
             display_value: builder.push_string(&display_value),
-            value_kind,
+            value_kind: property_value_kind(&record.value),
         }
     }
 
@@ -422,22 +421,22 @@ impl EngineReadPropertyRow {
 
 impl EngineReadAttachmentRow {
     pub fn from_record(builder: &mut EngineReadResultBuilder, record: &AttachmentRecord) -> Self {
-        let (resolved_relative_path, state_kind) = match &record.state {
+        let resolved_relative_path = match &record.state {
             AttachmentResolutionState::Resolved { relative_path } => {
-                (builder.push_string(&path_display(relative_path)), 1)
+                builder.push_string(&path_display(relative_path))
             }
-            AttachmentResolutionState::Missing => (EngineReadStringRef::empty(), 2),
-            AttachmentResolutionState::Duplicate { .. } => (EngineReadStringRef::empty(), 3),
-            AttachmentResolutionState::Remote => (EngineReadStringRef::empty(), 4),
-            AttachmentResolutionState::Rejected(_) => (EngineReadStringRef::empty(), 5),
-            AttachmentResolutionState::Unsupported => (EngineReadStringRef::empty(), 6),
+            AttachmentResolutionState::Missing
+            | AttachmentResolutionState::Duplicate { .. }
+            | AttachmentResolutionState::Remote
+            | AttachmentResolutionState::Rejected(_)
+            | AttachmentResolutionState::Unsupported => EngineReadStringRef::empty(),
         };
         Self {
             source_file_id: builder.push_string(&record.source_file_id),
             raw_target: builder.push_string(&record.raw_target),
             resolved_relative_path,
             source_kind: attachment_source_code(record.source),
-            state_kind,
+            state_kind: attachment_state_code(&record.state),
         }
     }
 
@@ -470,11 +469,7 @@ impl EngineReadGraphNodeRow {
                 .map(|value| builder.push_string(value))
                 .unwrap_or_else(EngineReadStringRef::empty),
             label: builder.push_string(&node.label),
-            node_kind: match node.kind {
-                LocalGraphNodeKind::Center => 1,
-                LocalGraphNodeKind::Resolved => 2,
-                LocalGraphNodeKind::Unresolved => 3,
-            },
+            node_kind: local_graph_node_kind_code(node.kind),
         }
     }
 }
@@ -485,10 +480,7 @@ impl EngineReadGraphEdgeRow {
             source_node_id: builder.push_string(&edge.source_node_id),
             target_node_id: builder.push_string(&edge.target_node_id),
             target_text: builder.push_string(&edge.target_text),
-            direction: match edge.direction {
-                LocalGraphEdgeDirection::Outgoing => 1,
-                LocalGraphEdgeDirection::Backlink => 2,
-            },
+            direction: local_graph_edge_direction_code(edge.direction),
             is_embed: u32::from(edge.is_embed),
             hop: u32::from(edge.hop),
         }
@@ -534,6 +526,8 @@ impl EngineReadLivePreviewMetadataRow {
 pub fn decode_header_for_test(buffer: &EngineReadResultBuffer) -> EngineReadResultHeader {
     assert!(!buffer.ptr.is_null());
     assert!(buffer.len >= size_of::<EngineReadResultHeader>());
+    // SAFETY: The assertions above prove the buffer contains at least a full
+    // header; unaligned reads are allowed by `read_unaligned`.
     unsafe { std::ptr::read_unaligned(buffer.ptr.cast::<EngineReadResultHeader>()) }
 }
 
@@ -546,11 +540,15 @@ pub fn string_for_test(buffer: &EngineReadResultBuffer, string_ref: EngineReadSt
     let start = header.string_arena_offset as usize + string_ref.offset as usize;
     let end = start + string_ref.length as usize;
     assert!(end <= buffer.len);
+    // SAFETY: Bounds are checked against the buffer length above and the buffer
+    // remains owned by the caller for this test helper call.
     let bytes = unsafe { std::slice::from_raw_parts(buffer.ptr.add(start), end - start) };
     String::from_utf8(bytes.to_vec()).expect("utf8 string")
 }
 
 unsafe fn bytes_of<T>(value: &T) -> &[u8] {
+    // SAFETY: Callers use this only for fixed-layout FFI records/headers that
+    // are fully initialized and immediately copied while `value` is alive.
     unsafe { std::slice::from_raw_parts((value as *const T).cast::<u8>(), size_of::<T>()) }
 }
 
@@ -568,7 +566,7 @@ fn unix_ms(time: Option<SystemTime>) -> i64 {
         .unwrap_or(-1)
 }
 
-fn file_kind_code(kind: ScanEntryKind) -> u32 {
+pub(crate) fn file_kind_code(kind: ScanEntryKind) -> u32 {
     match kind {
         ScanEntryKind::Markdown => 1,
         ScanEntryKind::Attachment => 2,
@@ -576,7 +574,7 @@ fn file_kind_code(kind: ScanEntryKind) -> u32 {
     }
 }
 
-fn file_status_code(status: FileIndexStatus) -> u32 {
+pub(crate) fn file_status_code(status: FileIndexStatus) -> u32 {
     match status {
         FileIndexStatus::SeenMetadata => 1,
         FileIndexStatus::Parsed => 2,
@@ -586,7 +584,18 @@ fn file_status_code(status: FileIndexStatus) -> u32 {
     }
 }
 
-fn attachment_source_code(source: AttachmentReferenceSource) -> u32 {
+pub(crate) fn tag_source_code(source: TagSource) -> u32 {
+    match source {
+        TagSource::Inline => 1,
+        TagSource::Frontmatter => 2,
+    }
+}
+
+pub(crate) fn link_resolution_state_code(resolved: bool) -> u32 {
+    if resolved { 1 } else { 2 }
+}
+
+pub(crate) fn attachment_source_code(source: AttachmentReferenceSource) -> u32 {
     match source {
         AttachmentReferenceSource::WikiEmbed => 1,
         AttachmentReferenceSource::MarkdownImage => 2,
@@ -594,7 +603,7 @@ fn attachment_source_code(source: AttachmentReferenceSource) -> u32 {
     }
 }
 
-fn attachment_state_code(state: &AttachmentResolutionState) -> u32 {
+pub(crate) fn attachment_state_code(state: &AttachmentResolutionState) -> u32 {
     match state {
         AttachmentResolutionState::Resolved { .. } => 1,
         AttachmentResolutionState::Missing => 2,
@@ -605,7 +614,7 @@ fn attachment_state_code(state: &AttachmentResolutionState) -> u32 {
     }
 }
 
-fn property_value_kind(value: &IndexPropertyValue) -> u32 {
+pub(crate) fn property_value_kind(value: &IndexPropertyValue) -> u32 {
     match value {
         IndexPropertyValue::String(_) => 1,
         IndexPropertyValue::Bool(_) => 2,
@@ -613,7 +622,22 @@ fn property_value_kind(value: &IndexPropertyValue) -> u32 {
     }
 }
 
-fn live_preview_item_kind_code(kind: LivePreviewMetadataItemKind) -> u32 {
+pub(crate) fn local_graph_node_kind_code(kind: LocalGraphNodeKind) -> u32 {
+    match kind {
+        LocalGraphNodeKind::Center => 1,
+        LocalGraphNodeKind::Resolved => 2,
+        LocalGraphNodeKind::Unresolved => 3,
+    }
+}
+
+pub(crate) fn local_graph_edge_direction_code(direction: LocalGraphEdgeDirection) -> u32 {
+    match direction {
+        LocalGraphEdgeDirection::Outgoing => 1,
+        LocalGraphEdgeDirection::Backlink => 2,
+    }
+}
+
+pub(crate) fn live_preview_item_kind_code(kind: LivePreviewMetadataItemKind) -> u32 {
     match kind {
         LivePreviewMetadataItemKind::Property => 1,
         LivePreviewMetadataItemKind::Tag => 2,
@@ -622,7 +646,7 @@ fn live_preview_item_kind_code(kind: LivePreviewMetadataItemKind) -> u32 {
     }
 }
 
-fn live_preview_state_code(state: LivePreviewMetadataState) -> u32 {
+pub(crate) fn live_preview_state_code(state: LivePreviewMetadataState) -> u32 {
     match state {
         LivePreviewMetadataState::None => 0,
         LivePreviewMetadataState::Resolved => 1,
@@ -633,7 +657,7 @@ fn live_preview_state_code(state: LivePreviewMetadataState) -> u32 {
     }
 }
 
-fn live_preview_source_code(source: LivePreviewMetadataSource) -> u32 {
+pub(crate) fn live_preview_source_code(source: LivePreviewMetadataSource) -> u32 {
     match source {
         LivePreviewMetadataSource::None => 0,
         LivePreviewMetadataSource::Inline => 1,
@@ -647,12 +671,11 @@ fn live_preview_source_code(source: LivePreviewMetadataSource) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::attachments::AttachmentResolutionState;
-    use crate::index::{IndexPropertyValue, PropertyRecord, TagSource};
-    use crate::read_api::{
-        ENGINE_READ_STATE_COMPLETE, ENGINE_READ_STATE_ERROR, LocalGraphEdgeDirection,
-    };
-    use crate::scanner::{ScanEntry, ScanEntryKind};
+    use crate::core::attachments::AttachmentResolutionState;
+    use crate::core::metadata::{IndexPropertyValue, PropertyRecord, TagSource};
+    use crate::core::scan::{ScanEntry, ScanEntryKind};
+    use crate::use_cases::read_graph::LocalGraphEdgeDirection;
+    use crate::use_cases::read_types::{ENGINE_READ_STATE_COMPLETE, ENGINE_READ_STATE_ERROR};
     use serde_json::Value;
     use std::time::UNIX_EPOCH;
 
@@ -757,7 +780,7 @@ mod tests {
             kind: ScanEntryKind::Markdown,
             size_bytes: 12,
             modified: Some(UNIX_EPOCH),
-            file_identity: crate::paths::FileIdentity {
+            file_identity: crate::core::files::FileIdentity {
                 device: 1,
                 inode: 2,
             },
@@ -865,8 +888,9 @@ mod tests {
 
     #[test]
     fn layout_fixture_matches_current_abi() {
-        let fixture: Value = serde_json::from_str(include_str!("../fixtures/read-abi-layout.json"))
-            .expect("layout fixture");
+        let fixture: Value =
+            serde_json::from_str(include_str!("../../fixtures/read-abi-layout.json"))
+                .expect("layout fixture");
         assert_layout::<EngineReadStringRef>(&fixture, "EngineReadStringRef");
         assert_layout::<EngineReadResultHeader>(&fixture, "EngineReadResultHeader");
         assert_layout::<EngineReadFileTreeRow>(&fixture, "EngineReadFileTreeRow");

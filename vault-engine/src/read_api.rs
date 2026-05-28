@@ -1,609 +1,25 @@
-use std::{collections::HashSet, fmt, path::Path};
-
-use crate::graph::{
-    WholeVaultGraphInputs, WholeVaultGraphRequest, WholeVaultGraphSnapshot,
-    build_whole_vault_graph_snapshot, whole_vault_graph_needs_tags,
+use crate::core::graph::{WholeVaultGraphRequest, WholeVaultGraphSnapshot};
+use crate::use_cases::build_graph::build_whole_vault_graph_from_metadata;
+pub use crate::use_cases::read_graph::{
+    LocalGraphDepth, LocalGraphEdgeDirection, LocalGraphNodeKind, LocalGraphRequest,
 };
-use crate::graph_key::unresolved_target_key;
-use crate::index::{
-    AttachmentProjection, AttachmentRecord, FileLookupProjection, FileRecord, FileTreeProjection,
-    GraphFileRecord, GraphResolvedEdgeRecord, GraphUnresolvedEdgeRecord, HeadingRecord,
-    IndexSchemaMetadata, LinkEdgeRecord, LinkProjection, MetadataStore, MetadataStoreError,
-    PropertyProjection, PropertyRecord, TagRecord,
+pub use crate::use_cases::read_types::{
+    ENGINE_READ_STATE_CANCELLED, ENGINE_READ_STATE_COMPLETE, ENGINE_READ_STATE_ERROR,
+    ENGINE_READ_STATE_INDEX_UNAVAILABLE, ENGINE_READ_STATE_PARTIAL, ENGINE_READ_STATE_STALE,
+    PageRequest, READ_BACKEND_NAME, READ_BACKEND_VERSION, READ_TOKENIZER_CONFIG, ReadApiResult,
+    ReadOpenError, ReadState, ReadValue,
 };
-use crate::parser::{MarkdownLink, PropertyValue, WikiLink, parse_markdown};
-use crate::scanner::{ScanEntryKind, classify_file};
-use crate::sqlite_fts::SearchResult;
-use crate::tantivy_search::{TantivySearchError, TantivySearchIndex};
-
-const MAX_PAGE_LIMIT: usize = 100;
-const MAX_FILE_TREE_PAGE_LIMIT: usize = 100_000;
-const MAX_GRAPH_NODES: usize = 250;
-const MAX_GRAPH_EDGES: usize = 500;
-pub const READ_BACKEND_NAME: &str = "sqlite+tantivy";
-pub const READ_BACKEND_VERSION: &str = "metadata-v2";
-pub const READ_TOKENIZER_CONFIG: &str = "tantivy";
-pub const ENGINE_READ_STATE_COMPLETE: u32 = 0;
-pub const ENGINE_READ_STATE_PARTIAL: u32 = 1;
-pub const ENGINE_READ_STATE_STALE: u32 = 2;
-pub const ENGINE_READ_STATE_CANCELLED: u32 = 3;
-pub const ENGINE_READ_STATE_ERROR: u32 = 4;
-pub const ENGINE_READ_STATE_INDEX_UNAVAILABLE: u32 = 5;
-pub const ENGINE_READ_SEARCH_MODE_FILE_NAME: u32 = 1;
-pub const ENGINE_READ_SEARCH_MODE_BODY: u32 = 2;
-pub const ENGINE_READ_INSPECTOR_PANEL_BACKLINKS: u32 = 1;
-pub const ENGINE_READ_INSPECTOR_PANEL_OUTGOING: u32 = 2;
-pub const ENGINE_READ_INSPECTOR_PANEL_TAGS: u32 = 3;
-pub const ENGINE_READ_INSPECTOR_PANEL_PROPERTIES: u32 = 4;
-pub const ENGINE_READ_INSPECTOR_PANEL_ATTACHMENTS: u32 = 5;
-pub const ENGINE_READ_LOCAL_GRAPH_DEPTH_ONE_HOP: u32 = 1;
-pub const ENGINE_READ_LOCAL_GRAPH_DEPTH_TWO_HOP: u32 = 2;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PageRequest {
-    pub request_id: u64,
-    pub offset: usize,
-    pub limit: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReadPage<T> {
-    pub request_id: u64,
-    pub generation: u64,
-    pub items: Vec<T>,
-    pub next_offset: Option<usize>,
-    pub state: ReadState,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReadValue<T> {
-    pub request_id: u64,
-    pub generation: u64,
-    pub value: T,
-    pub state: ReadState,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ReadState {
-    Complete,
-    Partial,
-    Stale,
-    Cancelled,
-    Error,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct SearchHit {
-    pub file_id: String,
-    pub path: String,
-    pub title: String,
-    pub rank: f64,
-    pub snippet: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FileOpenMetadata {
-    pub file: FileRecord,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LocalGraphRequest {
-    pub request_id: u64,
-    pub max_nodes: usize,
-    pub max_edges: usize,
-    pub depth: LocalGraphDepth,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LocalGraphDepth {
-    OneHop,
-    TwoHop,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LocalGraph {
-    pub center_node_id: String,
-    pub nodes: Vec<LocalGraphNode>,
-    pub edges: Vec<LocalGraphEdge>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LocalGraphNode {
-    pub node_id: String,
-    pub file_id: Option<String>,
-    pub label: String,
-    pub kind: LocalGraphNodeKind,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LocalGraphNodeKind {
-    Center,
-    Resolved,
-    Unresolved,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LocalGraphEdge {
-    pub source_node_id: String,
-    pub target_node_id: String,
-    pub target_text: String,
-    pub direction: LocalGraphEdgeDirection,
-    pub is_embed: bool,
-    pub hop: u8,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LocalGraphEdgeDirection {
-    Outgoing,
-    Backlink,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LivePreviewMetadataItem {
-    pub kind: LivePreviewMetadataItemKind,
-    pub key: String,
-    pub value: String,
-    pub resolved_file_id: Option<String>,
-    pub resolved_relative_path: Option<String>,
-    pub heading: Option<String>,
-    pub alias: Option<String>,
-    pub state: LivePreviewMetadataState,
-    pub source: LivePreviewMetadataSource,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LivePreviewMetadataItemKind {
-    Property,
-    Tag,
-    Link,
-    Attachment,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LivePreviewMetadataState {
-    None,
-    Resolved,
-    Missing,
-    Remote,
-    Rejected,
-    Unsupported,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LivePreviewMetadataSource {
-    None,
-    Inline,
-    WikiLink,
-    MarkdownLink,
-    WikiEmbed,
-    MarkdownImage,
-}
-
-pub struct VaultReadApi {
-    metadata: MetadataStore,
-    search: TantivySearchIndex,
-    generation: u64,
-}
-
-#[derive(Debug)]
-pub enum ReadApiError {
-    Metadata(MetadataStoreError),
-    Search(TantivySearchError),
-    InvalidInput(&'static str),
-    NotFound(&'static str),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ReadOpenError {
-    MissingMetadata,
-    CorruptMetadata,
-    SchemaMismatch {
-        stored: u32,
-        expected: u32,
-    },
-    BackendMismatch {
-        stored_name: String,
-        stored_version: String,
-        expected_name: String,
-        expected_version: String,
-    },
-    TokenizerMismatch {
-        stored: String,
-        expected: String,
-    },
-    MissingTantivyIndex,
-    InvalidInput(&'static str),
-    Panic,
-}
-
-pub type ReadApiResult<T> = Result<T, ReadApiError>;
-pub type ReadOpenResult<T> = Result<T, ReadOpenError>;
-
-impl PageRequest {
-    pub fn new(offset: usize, limit: usize) -> Self {
-        Self::with_request_id(0, offset, limit)
-    }
-
-    pub fn with_request_id(request_id: u64, offset: usize, limit: usize) -> Self {
-        Self {
-            request_id,
-            offset,
-            limit,
-        }
-    }
-
-    fn fetch_limit(self) -> usize {
-        self.fetch_limit_capped(MAX_PAGE_LIMIT)
-    }
-
-    fn file_tree_fetch_limit(self) -> usize {
-        self.fetch_limit_capped(MAX_FILE_TREE_PAGE_LIMIT)
-    }
-
-    fn visible_limit_capped(self, max_limit: usize) -> usize {
-        self.limit.clamp(1, max_limit)
-    }
-
-    fn fetch_limit_capped(self, max_limit: usize) -> usize {
-        self.visible_limit_capped(max_limit) + 1
-    }
-}
-
-impl LocalGraphRequest {
-    pub fn new(max_nodes: usize, max_edges: usize) -> Self {
-        Self::with_request_id(0, max_nodes, max_edges)
-    }
-
-    pub fn with_request_id(request_id: u64, max_nodes: usize, max_edges: usize) -> Self {
-        Self::with_depth(request_id, max_nodes, max_edges, LocalGraphDepth::OneHop)
-    }
-
-    pub fn with_depth(
-        request_id: u64,
-        max_nodes: usize,
-        max_edges: usize,
-        depth: LocalGraphDepth,
-    ) -> Self {
-        Self {
-            request_id,
-            max_nodes,
-            max_edges,
-            depth,
-        }
-    }
-
-    fn node_limit(self) -> usize {
-        self.max_nodes.clamp(1, MAX_GRAPH_NODES)
-    }
-
-    fn edge_limit(self) -> usize {
-        self.max_edges.clamp(1, MAX_GRAPH_EDGES)
-    }
-}
+pub use crate::use_cases::read_vault::{
+    VaultReadApi, open_metadata_store_for_read, open_tantivy_index_for_read,
+};
 
 impl VaultReadApi {
-    pub fn new(metadata: MetadataStore, search: TantivySearchIndex) -> Self {
-        Self::with_generation(metadata, search, 0)
-    }
-
-    pub fn with_generation(
-        metadata: MetadataStore,
-        search: TantivySearchIndex,
-        generation: u64,
-    ) -> Self {
-        Self {
-            metadata,
-            search,
-            generation,
-        }
-    }
-
-    pub fn generation(&self) -> u64 {
-        self.generation
-    }
-
-    pub fn file_tree(&self, page: PageRequest) -> ReadApiResult<ReadPage<FileRecord>> {
-        Ok(self.page_from_overfetch_with_limit(
-            self.metadata
-                .list_markdown_files(page.offset, page.file_tree_fetch_limit())?,
-            page,
-            MAX_FILE_TREE_PAGE_LIMIT,
-        ))
-    }
-
-    pub fn file_tree_projection(
-        &self,
-        page: PageRequest,
-    ) -> ReadApiResult<ReadPage<FileTreeProjection>> {
-        Ok(self.page_from_overfetch_with_limit(
-            self.metadata
-                .file_tree_projection(page.offset, page.file_tree_fetch_limit())?,
-            page,
-            MAX_FILE_TREE_PAGE_LIMIT,
-        ))
-    }
-
-    pub fn file_open_metadata(
-        &self,
-        file_id: &str,
-    ) -> ReadApiResult<ReadValue<Option<FileOpenMetadata>>> {
-        self.file_open_metadata_with_request(0, file_id)
-    }
-
-    pub fn file_open_metadata_with_request(
-        &self,
-        request_id: u64,
-        file_id: &str,
-    ) -> ReadApiResult<ReadValue<Option<FileOpenMetadata>>> {
-        Ok(ReadValue {
-            request_id,
-            generation: self.generation,
-            value: self
-                .metadata
-                .get_file(file_id)?
-                .map(|file| FileOpenMetadata { file }),
-            state: ReadState::Complete,
-        })
-    }
-
-    pub fn file_name_search(
-        &self,
-        query: &str,
-        page: PageRequest,
-    ) -> ReadApiResult<ReadPage<SearchHit>> {
-        self.search(query, page)
-    }
-
-    pub fn body_search(
-        &self,
-        query: &str,
-        page: PageRequest,
-    ) -> ReadApiResult<ReadPage<SearchHit>> {
-        self.search(query, page)
-    }
-
-    pub fn search_with_mode(
-        &self,
-        mode: u32,
-        query: &str,
-        page: PageRequest,
-    ) -> ReadApiResult<ReadPage<SearchHit>> {
-        match mode {
-            ENGINE_READ_SEARCH_MODE_FILE_NAME => self.file_name_search(query, page),
-            ENGINE_READ_SEARCH_MODE_BODY => self.body_search(query, page),
-            _ => Err(ReadApiError::InvalidInput("search_mode")),
-        }
-    }
-
-    pub fn backlinks_for_path(
-        &self,
-        relative_path: &str,
-        page: PageRequest,
-    ) -> ReadApiResult<ReadPage<LinkProjection>> {
-        let file = self.require_file(relative_path)?;
-        Ok(self.page_from_overfetch(
-            self.metadata
-                .backlink_projections(&file.file_id, page.offset, page.fetch_limit())?,
-            page,
-        ))
-    }
-
-    pub fn outgoing_links_for_path(
-        &self,
-        relative_path: &str,
-        page: PageRequest,
-    ) -> ReadApiResult<ReadPage<LinkProjection>> {
-        let file = self.require_file(relative_path)?;
-        Ok(self.page_from_overfetch(
-            self.metadata.outgoing_link_projections(
-                &file.file_id,
-                page.offset,
-                page.fetch_limit(),
-            )?,
-            page,
-        ))
-    }
-
-    pub fn tags_for_path(
-        &self,
-        relative_path: &str,
-        page: PageRequest,
-    ) -> ReadApiResult<ReadPage<TagRecord>> {
-        let file = self.require_file(relative_path)?;
-        self.tags(&file.file_id, page)
-    }
-
-    pub fn properties_for_path(
-        &self,
-        relative_path: &str,
-        page: PageRequest,
-    ) -> ReadApiResult<ReadPage<PropertyProjection>> {
-        let file = self.require_file(relative_path)?;
-        Ok(self.page_from_overfetch(
-            self.metadata
-                .property_projections(&file.file_id, page.offset, page.fetch_limit())?,
-            page,
-        ))
-    }
-
-    pub fn attachments_for_path(
-        &self,
-        relative_path: &str,
-        page: PageRequest,
-    ) -> ReadApiResult<ReadPage<AttachmentProjection>> {
-        let file = self.require_file(relative_path)?;
-        Ok(self.page_from_overfetch(
-            self.metadata
-                .attachment_projections(&file.file_id, page.offset, page.fetch_limit())?,
-            page,
-        ))
-    }
-
-    pub fn backlinks(
-        &self,
-        file_id: &str,
-        page: PageRequest,
-    ) -> ReadApiResult<ReadPage<LinkEdgeRecord>> {
-        Ok(self.page_from_overfetch(
-            self.metadata
-                .backlinks(file_id, page.offset, page.fetch_limit())?,
-            page,
-        ))
-    }
-
-    pub fn outgoing_links(
-        &self,
-        file_id: &str,
-        page: PageRequest,
-    ) -> ReadApiResult<ReadPage<LinkEdgeRecord>> {
-        Ok(self.page_from_overfetch(
-            self.metadata
-                .outgoing_links(file_id, page.offset, page.fetch_limit())?,
-            page,
-        ))
-    }
-
-    pub fn tags(&self, file_id: &str, page: PageRequest) -> ReadApiResult<ReadPage<TagRecord>> {
-        Ok(self.page_from_overfetch(
-            self.metadata
-                .tags(file_id, page.offset, page.fetch_limit())?,
-            page,
-        ))
-    }
-
-    pub fn properties(
-        &self,
-        file_id: &str,
-        page: PageRequest,
-    ) -> ReadApiResult<ReadPage<PropertyRecord>> {
-        Ok(self.page_from_overfetch(
-            self.metadata
-                .properties(file_id, page.offset, page.fetch_limit())?,
-            page,
-        ))
-    }
-
-    pub fn headings(
-        &self,
-        file_id: &str,
-        page: PageRequest,
-    ) -> ReadApiResult<ReadPage<HeadingRecord>> {
-        Ok(self.page_from_overfetch(
-            self.metadata
-                .headings(file_id, page.offset, page.fetch_limit())?,
-            page,
-        ))
-    }
-
-    pub fn attachments(
-        &self,
-        file_id: &str,
-        page: PageRequest,
-    ) -> ReadApiResult<ReadPage<AttachmentRecord>> {
-        Ok(self.page_from_overfetch(
-            self.metadata
-                .attachments(file_id, page.offset, page.fetch_limit())?,
-            page,
-        ))
-    }
-
-    pub fn local_graph(
-        &self,
-        file_id: &str,
-        request: LocalGraphRequest,
-    ) -> ReadApiResult<ReadValue<LocalGraph>> {
-        let graph = self.build_one_hop_graph(file_id, request)?;
-        Ok(ReadValue {
-            request_id: request.request_id,
-            generation: self.generation,
-            state: if graph.partial {
-                ReadState::Partial
-            } else {
-                ReadState::Complete
-            },
-            value: graph.graph,
-        })
-    }
-
-    pub fn local_graph_for_path(
-        &self,
-        relative_path: &str,
-        request: LocalGraphRequest,
-    ) -> ReadApiResult<ReadValue<LocalGraph>> {
-        let file = self.require_file(relative_path)?;
-        self.local_graph(&file.file_id, request)
-    }
-
     pub fn whole_vault_graph(
         &self,
         request: WholeVaultGraphRequest,
     ) -> ReadApiResult<ReadValue<WholeVaultGraphSnapshot>> {
-        let edge_fetch_limit = request.edge_limit().saturating_add(1);
-        let node_fetch_limit = request.node_limit().saturating_add(1);
-        let all_files = self
-            .metadata
-            .graph_files(self.generation, node_fetch_limit)?;
-        let has_all_files = all_files.len() < node_fetch_limit;
-        let resolved_edges = if has_all_files {
-            self.metadata
-                .graph_resolved_edges_compact(self.generation, edge_fetch_limit)?
-        } else {
-            self.metadata
-                .graph_resolved_edges(self.generation, edge_fetch_limit)?
-        };
-        let unresolved_edges = if request.include_unresolved {
-            self.metadata
-                .graph_unresolved_edges(self.generation, edge_fetch_limit)?
-        } else {
-            Vec::new()
-        };
-        let orphan_files = if request.include_orphans {
-            self.metadata.graph_orphan_files(
-                self.generation,
-                request.include_unresolved,
-                node_fetch_limit,
-            )?
-        } else {
-            Vec::new()
-        };
-        let files = if has_all_files {
-            all_files
-        } else {
-            graph_candidate_files(
-                &resolved_edges,
-                &unresolved_edges,
-                &orphan_files,
-                node_fetch_limit,
-            )
-        };
-        let tags = if whole_vault_graph_needs_tags(request) {
-            let file_ids = files
-                .iter()
-                .map(|file| file.file_id.clone())
-                .collect::<Vec<_>>();
-            self.metadata
-                .graph_tags_for_files(&file_ids, request.tag_limit().saturating_add(1))?
-        } else {
-            Vec::new()
-        };
-        let node_count_total = self.metadata.graph_visible_node_count(
-            self.generation,
-            request.include_unresolved,
-            request.include_orphans,
-        )?;
-        let edge_count_total = self
-            .metadata
-            .graph_visible_edge_count(self.generation, request.include_unresolved)?;
-        let inputs = WholeVaultGraphInputs {
-            node_count_total,
-            edge_count_total,
-            files,
-            resolved_edges,
-            unresolved_edges,
-            orphan_files,
-            tags,
-        };
-        let graph = build_whole_vault_graph_snapshot(request, self.generation, inputs);
+        let graph =
+            build_whole_vault_graph_from_metadata(&self.metadata, self.generation, request)?;
         Ok(ReadValue {
             request_id: request.request_id,
             generation: self.generation,
@@ -615,846 +31,31 @@ impl VaultReadApi {
             value: graph.snapshot,
         })
     }
-
-    pub fn live_preview_metadata(
-        &self,
-        request_id: u64,
-        relative_path: &str,
-        contents: &str,
-    ) -> ReadApiResult<ReadPage<LivePreviewMetadataItem>> {
-        if relative_path.trim().is_empty() {
-            return Err(ReadApiError::InvalidInput("relative_path"));
-        }
-
-        let parsed = parse_markdown(contents);
-        let mut items = Vec::new();
-
-        for (key, value) in &parsed.properties {
-            items.push(LivePreviewMetadataItem {
-                kind: LivePreviewMetadataItemKind::Property,
-                key: key.clone(),
-                value: display_property_value(value),
-                resolved_file_id: None,
-                resolved_relative_path: None,
-                heading: None,
-                alias: None,
-                state: LivePreviewMetadataState::None,
-                source: LivePreviewMetadataSource::None,
-            });
-        }
-
-        for tag in &parsed.tags {
-            items.push(LivePreviewMetadataItem {
-                kind: LivePreviewMetadataItemKind::Tag,
-                key: "tag".to_string(),
-                value: tag.clone(),
-                resolved_file_id: None,
-                resolved_relative_path: None,
-                heading: None,
-                alias: None,
-                state: LivePreviewMetadataState::None,
-                source: LivePreviewMetadataSource::Inline,
-            });
-        }
-
-        for link in &parsed.wikilinks {
-            items.push(self.live_wiki_link_item(link)?);
-        }
-
-        for embed in &parsed.embeds {
-            items.push(self.live_wiki_embed_item(embed)?);
-        }
-
-        for link in &parsed.markdown_links {
-            items.push(self.live_markdown_link_item(relative_path, link)?);
-        }
-
-        let has_next = items.len() > MAX_PAGE_LIMIT;
-        if has_next {
-            items.truncate(MAX_PAGE_LIMIT);
-        }
-
-        Ok(ReadPage {
-            request_id,
-            generation: self.generation,
-            items,
-            next_offset: has_next.then_some(MAX_PAGE_LIMIT),
-            state: if has_next {
-                ReadState::Partial
-            } else {
-                ReadState::Complete
-            },
-        })
-    }
-
-    fn search(&self, query: &str, page: PageRequest) -> ReadApiResult<ReadPage<SearchHit>> {
-        let results = match self
-            .search
-            .search_page(query, page.offset, page.fetch_limit())
-        {
-            Ok(results) => results,
-            Err(TantivySearchError::EmptyQuery) => {
-                return Ok(ReadPage {
-                    request_id: page.request_id,
-                    generation: self.generation,
-                    items: Vec::new(),
-                    next_offset: None,
-                    state: ReadState::Error,
-                });
-            }
-            Err(error) => return Err(error.into()),
-        };
-        Ok(self.page_from_overfetch(results.into_iter().map(SearchHit::from).collect(), page))
-    }
-
-    fn page_from_overfetch<T>(&self, items: Vec<T>, page: PageRequest) -> ReadPage<T> {
-        self.page_from_overfetch_with_limit(items, page, MAX_PAGE_LIMIT)
-    }
-
-    fn page_from_overfetch_with_limit<T>(
-        &self,
-        mut items: Vec<T>,
-        page: PageRequest,
-        max_limit: usize,
-    ) -> ReadPage<T> {
-        let visible_limit = page.visible_limit_capped(max_limit);
-        let has_next = items.len() > visible_limit;
-        if has_next {
-            items.truncate(visible_limit);
-        }
-        ReadPage {
-            request_id: page.request_id,
-            generation: self.generation,
-            items,
-            next_offset: has_next.then_some(page.offset + visible_limit),
-            state: if has_next {
-                ReadState::Partial
-            } else {
-                ReadState::Complete
-            },
-        }
-    }
-
-    fn require_file(&self, relative_path: &str) -> ReadApiResult<FileLookupProjection> {
-        if relative_path.trim().is_empty() {
-            return Err(ReadApiError::InvalidInput("relative_path"));
-        }
-        self.metadata
-            .lookup_file(relative_path)?
-            .ok_or(ReadApiError::NotFound("relative_path"))
-    }
-
-    fn live_wiki_link_item(&self, link: &WikiLink) -> ReadApiResult<LivePreviewMetadataItem> {
-        let resolved = self.resolve_wiki_target(&link.target)?;
-        Ok(link_metadata_item(
-            LivePreviewMetadataItemKind::Link,
-            "wikilink",
-            &link.target,
-            resolved,
-            link.heading.clone(),
-            link.alias.clone(),
-            LivePreviewMetadataSource::WikiLink,
-        ))
-    }
-
-    fn live_wiki_embed_item(&self, embed: &WikiLink) -> ReadApiResult<LivePreviewMetadataItem> {
-        let resolved = self.resolve_wiki_target(&embed.target)?;
-        Ok(link_metadata_item(
-            LivePreviewMetadataItemKind::Attachment,
-            "embed",
-            &embed.target,
-            resolved,
-            embed.heading.clone(),
-            embed.alias.clone(),
-            LivePreviewMetadataSource::WikiEmbed,
-        ))
-    }
-
-    fn live_markdown_link_item(
-        &self,
-        relative_path: &str,
-        link: &MarkdownLink,
-    ) -> ReadApiResult<LivePreviewMetadataItem> {
-        let target = link.target.split('#').next().unwrap_or(&link.target);
-        let is_attachment =
-            link.image || classify_file(Path::new(target)) == ScanEntryKind::Attachment;
-        let resolved = self.resolve_markdown_target(relative_path, target)?;
-        Ok(link_metadata_item(
-            if is_attachment {
-                LivePreviewMetadataItemKind::Attachment
-            } else {
-                LivePreviewMetadataItemKind::Link
-            },
-            if link.image { "image" } else { "markdown_link" },
-            &link.target,
-            resolved,
-            None,
-            Some(link.text.clone()),
-            if link.image {
-                LivePreviewMetadataSource::MarkdownImage
-            } else {
-                LivePreviewMetadataSource::MarkdownLink
-            },
-        ))
-    }
-
-    fn resolve_wiki_target(&self, target: &str) -> ReadApiResult<LivePreviewTargetResolution> {
-        if is_remote_target(target) {
-            return Ok(LivePreviewTargetResolution::remote());
-        }
-        if is_rejected_target(target) {
-            return Ok(LivePreviewTargetResolution::rejected());
-        }
-        self.resolve_target_candidates(link_target_candidates(target))
-    }
-
-    fn resolve_markdown_target(
-        &self,
-        relative_path: &str,
-        target: &str,
-    ) -> ReadApiResult<LivePreviewTargetResolution> {
-        if is_remote_target(target) {
-            return Ok(LivePreviewTargetResolution::remote());
-        }
-        if is_rejected_target(target) {
-            return Ok(LivePreviewTargetResolution::rejected());
-        }
-
-        let target_path = Path::new(relative_path)
-            .parent()
-            .unwrap_or_else(|| Path::new(""))
-            .join(target);
-        self.resolve_target_candidates(path_target_candidates(&target_path))
-    }
-
-    fn resolve_target_candidates(
-        &self,
-        candidates: Vec<String>,
-    ) -> ReadApiResult<LivePreviewTargetResolution> {
-        if candidates.is_empty() {
-            return Ok(LivePreviewTargetResolution::missing());
-        }
-        for candidate in candidates {
-            if let Some(file) = self.metadata.lookup_file(&candidate)? {
-                return Ok(LivePreviewTargetResolution::resolved(file));
-            }
-        }
-        Ok(LivePreviewTargetResolution::missing())
-    }
-
-    fn build_one_hop_graph(
-        &self,
-        file_id: &str,
-        request: LocalGraphRequest,
-    ) -> ReadApiResult<LocalGraphBuild> {
-        let node_limit = request.node_limit();
-        let edge_limit = request.edge_limit();
-        let center_node_id = graph_file_node_id(file_id);
-        let center_label = self
-            .metadata
-            .get_file(file_id)?
-            .map(|file| file.relative_path.display().to_string())
-            .unwrap_or_else(|| file_id.to_string());
-
-        let mut builder = LocalGraphBuilder::new(node_limit, edge_limit);
-        builder.add_node(LocalGraphNode {
-            node_id: center_node_id.clone(),
-            file_id: Some(file_id.to_string()),
-            label: center_label,
-            kind: LocalGraphNodeKind::Center,
-        });
-
-        let mut frontier_file_ids = Vec::new();
-        let outgoing = self
-            .metadata
-            .outgoing_links(file_id, 0, edge_limit.saturating_add(1))?;
-        for (index, link) in outgoing.into_iter().enumerate() {
-            if index >= edge_limit {
-                builder.mark_partial();
-                break;
-            }
-            if let Some(target_file_id) = link.resolved_target_file_id.as_deref() {
-                push_frontier_file(&mut frontier_file_ids, file_id, target_file_id);
-            }
-            let target_node = match link.resolved_target_file_id.as_deref() {
-                Some(target_file_id) => self.resolved_graph_node(target_file_id)?,
-                None => unresolved_graph_node(&link.target_text),
-            };
-            builder.add_edge(
-                target_node,
-                LocalGraphEdge {
-                    source_node_id: center_node_id.clone(),
-                    target_node_id: link
-                        .resolved_target_file_id
-                        .as_deref()
-                        .map(graph_file_node_id)
-                        .unwrap_or_else(|| graph_unresolved_node_id(&link.target_text)),
-                    target_text: link.target_text,
-                    direction: LocalGraphEdgeDirection::Outgoing,
-                    is_embed: link.is_embed,
-                    hop: 1,
-                },
-            );
-        }
-
-        if builder.edge_limit_reached() {
-            if !builder.is_partial() && !self.metadata.backlinks(file_id, 0, 1)?.is_empty() {
-                builder.mark_partial();
-            }
-        } else {
-            let remaining = edge_limit.saturating_sub(builder.edges.len());
-            let backlinks = self
-                .metadata
-                .backlinks(file_id, 0, remaining.saturating_add(1))?;
-            for (index, link) in backlinks.into_iter().enumerate() {
-                if index >= remaining {
-                    builder.mark_partial();
-                    break;
-                }
-                push_frontier_file(&mut frontier_file_ids, file_id, &link.source_file_id);
-                let source_node = self.resolved_graph_node(&link.source_file_id)?;
-                builder.add_edge(
-                    source_node,
-                    LocalGraphEdge {
-                        source_node_id: graph_file_node_id(&link.source_file_id),
-                        target_node_id: center_node_id.clone(),
-                        target_text: link.target_text,
-                        direction: LocalGraphEdgeDirection::Backlink,
-                        is_embed: link.is_embed,
-                        hop: 1,
-                    },
-                );
-            }
-        }
-
-        if request.depth == LocalGraphDepth::TwoHop && !builder.edge_limit_reached() {
-            frontier_file_ids.sort();
-            frontier_file_ids.dedup();
-            let frontier_count = frontier_file_ids.len();
-            for (source_index, source_file_id) in frontier_file_ids.into_iter().enumerate() {
-                if builder.edge_limit_reached() {
-                    if source_index < frontier_count {
-                        builder.mark_partial();
-                    }
-                    break;
-                }
-                let remaining = edge_limit.saturating_sub(builder.edges.len());
-                let outgoing = self.metadata.outgoing_links(
-                    &source_file_id,
-                    0,
-                    remaining.saturating_add(1),
-                )?;
-                for (index, link) in outgoing.into_iter().enumerate() {
-                    if index >= remaining {
-                        builder.mark_partial();
-                        break;
-                    }
-                    let target_node = match link.resolved_target_file_id.as_deref() {
-                        Some(target_file_id) => self.resolved_graph_node(target_file_id)?,
-                        None => unresolved_graph_node(&link.target_text),
-                    };
-                    builder.add_edge(
-                        target_node,
-                        LocalGraphEdge {
-                            source_node_id: graph_file_node_id(&source_file_id),
-                            target_node_id: link
-                                .resolved_target_file_id
-                                .as_deref()
-                                .map(graph_file_node_id)
-                                .unwrap_or_else(|| graph_unresolved_node_id(&link.target_text)),
-                            target_text: link.target_text,
-                            direction: LocalGraphEdgeDirection::Outgoing,
-                            is_embed: link.is_embed,
-                            hop: 2,
-                        },
-                    );
-                }
-            }
-        }
-
-        Ok(builder.finish(center_node_id))
-    }
-
-    fn resolved_graph_node(&self, file_id: &str) -> ReadApiResult<LocalGraphNode> {
-        let label = self
-            .metadata
-            .get_file(file_id)?
-            .map(|file| file.relative_path.display().to_string())
-            .unwrap_or_else(|| file_id.to_string());
-        Ok(LocalGraphNode {
-            node_id: graph_file_node_id(file_id),
-            file_id: Some(file_id.to_string()),
-            label,
-            kind: LocalGraphNodeKind::Resolved,
-        })
-    }
-}
-
-pub fn expected_read_schema_metadata() -> IndexSchemaMetadata {
-    IndexSchemaMetadata::new(
-        READ_BACKEND_NAME,
-        READ_BACKEND_VERSION,
-        READ_TOKENIZER_CONFIG,
-        0,
-    )
-}
-
-pub fn open_metadata_store_for_read(
-    metadata_path: impl AsRef<Path>,
-) -> ReadOpenResult<(MetadataStore, u64)> {
-    let metadata_path = metadata_path.as_ref();
-    if metadata_path.as_os_str().is_empty() {
-        return Err(ReadOpenError::InvalidInput("metadata_path"));
-    }
-    if !metadata_path.is_file() {
-        return Err(ReadOpenError::MissingMetadata);
-    }
-
-    let expected = expected_read_schema_metadata();
-    let (metadata, stored) = MetadataStore::open_existing_read_only(metadata_path, &expected)
-        .map_err(ReadOpenError::from_metadata_open)?;
-    Ok((metadata, stored.generation))
-}
-
-pub fn open_tantivy_index_for_read(
-    tantivy_path: impl AsRef<Path>,
-) -> ReadOpenResult<TantivySearchIndex> {
-    let tantivy_path = tantivy_path.as_ref();
-    if tantivy_path.as_os_str().is_empty() {
-        return Err(ReadOpenError::InvalidInput("tantivy_path"));
-    }
-    if !tantivy_path.is_dir() {
-        return Err(ReadOpenError::MissingTantivyIndex);
-    }
-    TantivySearchIndex::open_existing_dir(tantivy_path)
-        .map_err(|_| ReadOpenError::MissingTantivyIndex)
-}
-
-pub fn open_vault_read_api(
-    metadata_path: impl AsRef<Path>,
-    tantivy_path: impl AsRef<Path>,
-) -> ReadOpenResult<VaultReadApi> {
-    let (metadata, generation) = open_metadata_store_for_read(metadata_path)?;
-    let search = open_tantivy_index_for_read(tantivy_path)?;
-    Ok(VaultReadApi::with_generation(metadata, search, generation))
-}
-
-struct LocalGraphBuild {
-    graph: LocalGraph,
-    partial: bool,
-}
-
-struct LocalGraphBuilder {
-    node_limit: usize,
-    edge_limit: usize,
-    nodes: Vec<LocalGraphNode>,
-    edges: Vec<LocalGraphEdge>,
-    partial: bool,
-}
-
-impl LocalGraphBuilder {
-    fn new(node_limit: usize, edge_limit: usize) -> Self {
-        Self {
-            node_limit,
-            edge_limit,
-            nodes: Vec::new(),
-            edges: Vec::new(),
-            partial: false,
-        }
-    }
-
-    fn add_node(&mut self, node: LocalGraphNode) -> bool {
-        if self
-            .nodes
-            .iter()
-            .any(|existing| existing.node_id == node.node_id)
-        {
-            return true;
-        }
-        if self.nodes.len() >= self.node_limit {
-            self.partial = true;
-            return false;
-        }
-        self.nodes.push(node);
-        true
-    }
-
-    fn add_edge(&mut self, node: LocalGraphNode, edge: LocalGraphEdge) {
-        if self.edges.len() >= self.edge_limit {
-            self.partial = true;
-            return;
-        }
-        if !self.add_node(node) {
-            return;
-        }
-        self.edges.push(edge);
-    }
-
-    fn edge_limit_reached(&self) -> bool {
-        self.edges.len() >= self.edge_limit
-    }
-
-    fn is_partial(&self) -> bool {
-        self.partial
-    }
-
-    fn mark_partial(&mut self) {
-        self.partial = true;
-    }
-
-    fn finish(self, center_node_id: String) -> LocalGraphBuild {
-        LocalGraphBuild {
-            graph: LocalGraph {
-                center_node_id,
-                nodes: self.nodes,
-                edges: self.edges,
-            },
-            partial: self.partial,
-        }
-    }
-}
-
-struct LivePreviewTargetResolution {
-    file: Option<FileLookupProjection>,
-    state: LivePreviewMetadataState,
-}
-
-impl LivePreviewTargetResolution {
-    fn resolved(file: FileLookupProjection) -> Self {
-        Self {
-            file: Some(file),
-            state: LivePreviewMetadataState::Resolved,
-        }
-    }
-
-    fn missing() -> Self {
-        Self {
-            file: None,
-            state: LivePreviewMetadataState::Missing,
-        }
-    }
-
-    fn remote() -> Self {
-        Self {
-            file: None,
-            state: LivePreviewMetadataState::Remote,
-        }
-    }
-
-    fn rejected() -> Self {
-        Self {
-            file: None,
-            state: LivePreviewMetadataState::Rejected,
-        }
-    }
-}
-
-fn graph_file_node_id(file_id: &str) -> String {
-    format!("file:{file_id}")
-}
-
-fn graph_unresolved_node_id(target_text: &str) -> String {
-    format!("unresolved:{}", unresolved_target_key(target_text))
-}
-
-fn unresolved_graph_node(target_text: &str) -> LocalGraphNode {
-    LocalGraphNode {
-        node_id: graph_unresolved_node_id(target_text),
-        file_id: None,
-        label: target_text.to_string(),
-        kind: LocalGraphNodeKind::Unresolved,
-    }
-}
-
-fn push_frontier_file(frontier: &mut Vec<String>, center_file_id: &str, file_id: &str) {
-    if file_id != center_file_id {
-        frontier.push(file_id.to_string());
-    }
-}
-
-fn graph_candidate_files(
-    resolved_edges: &[GraphResolvedEdgeRecord],
-    unresolved_edges: &[GraphUnresolvedEdgeRecord],
-    orphan_files: &[GraphFileRecord],
-    limit: usize,
-) -> Vec<GraphFileRecord> {
-    let mut seen = HashSet::new();
-    let mut files = Vec::new();
-
-    for edge in resolved_edges {
-        push_graph_candidate_file(
-            &mut files,
-            &mut seen,
-            limit,
-            &edge.source_file_id,
-            &edge.source_relative_path,
-        );
-        push_graph_candidate_file(
-            &mut files,
-            &mut seen,
-            limit,
-            &edge.target_file_id,
-            &edge.target_relative_path,
-        );
-    }
-    for edge in unresolved_edges {
-        push_graph_candidate_file(
-            &mut files,
-            &mut seen,
-            limit,
-            &edge.source_file_id,
-            &edge.source_relative_path,
-        );
-    }
-    for file in orphan_files {
-        push_graph_candidate_file(
-            &mut files,
-            &mut seen,
-            limit,
-            &file.file_id,
-            &file.relative_path,
-        );
-    }
-
-    files
-}
-
-fn push_graph_candidate_file(
-    files: &mut Vec<GraphFileRecord>,
-    seen: &mut HashSet<String>,
-    limit: usize,
-    file_id: &str,
-    relative_path: &Path,
-) {
-    if files.len() >= limit || !seen.insert(file_id.to_string()) {
-        return;
-    }
-    files.push(GraphFileRecord {
-        file_id: file_id.to_string(),
-        relative_path: relative_path.to_path_buf(),
-    });
-}
-
-fn display_property_value(value: &PropertyValue) -> String {
-    match value {
-        PropertyValue::String(value) => value.clone(),
-        PropertyValue::Bool(value) => value.to_string(),
-        PropertyValue::List(values) => values.join(", "),
-    }
-}
-
-fn link_metadata_item(
-    kind: LivePreviewMetadataItemKind,
-    key: &str,
-    value: &str,
-    resolved: LivePreviewTargetResolution,
-    heading: Option<String>,
-    alias: Option<String>,
-    source: LivePreviewMetadataSource,
-) -> LivePreviewMetadataItem {
-    LivePreviewMetadataItem {
-        kind,
-        key: key.to_string(),
-        value: value.to_string(),
-        resolved_file_id: resolved.file.as_ref().map(|file| file.file_id.clone()),
-        resolved_relative_path: resolved.file.map(|file| file.display_path),
-        heading,
-        alias,
-        state: resolved.state,
-        source,
-    }
-}
-
-fn link_target_candidates(target: &str) -> Vec<String> {
-    let target = target.trim();
-    if target.is_empty() {
-        return Vec::new();
-    }
-    path_target_candidates(Path::new(target))
-}
-
-fn path_target_candidates(path: &Path) -> Vec<String> {
-    let mut candidates = Vec::new();
-    let value = path.to_string_lossy().trim().to_string();
-    if value.is_empty() {
-        return candidates;
-    }
-    candidates.push(value.clone());
-    if path.extension().is_none() {
-        candidates.push(format!("{value}.md"));
-    }
-    candidates
-}
-
-fn is_remote_target(target: &str) -> bool {
-    target_scheme(target).is_some_and(|scheme| {
-        scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")
-    })
-}
-
-fn is_rejected_target(target: &str) -> bool {
-    target_scheme(target).is_some() && !is_remote_target(target)
-}
-
-fn target_scheme(target: &str) -> Option<&str> {
-    let colon = target.find(':')?;
-    let slash = target.find('/').unwrap_or(usize::MAX);
-    (colon < slash).then(|| &target[..colon])
-}
-
-impl fmt::Display for ReadApiError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Metadata(error) => write!(formatter, "read api metadata error: {error}"),
-            Self::Search(error) => write!(formatter, "read api search error: {error}"),
-            Self::InvalidInput(field) => write!(formatter, "invalid read api input: {field}"),
-            Self::NotFound(field) => write!(formatter, "read api target not found: {field}"),
-        }
-    }
-}
-
-impl std::error::Error for ReadApiError {}
-
-impl From<MetadataStoreError> for ReadApiError {
-    fn from(error: MetadataStoreError) -> Self {
-        Self::Metadata(error)
-    }
-}
-
-impl From<TantivySearchError> for ReadApiError {
-    fn from(error: TantivySearchError) -> Self {
-        Self::Search(error)
-    }
-}
-
-impl ReadOpenError {
-    pub fn abi_code(&self) -> &'static str {
-        match self {
-            Self::MissingMetadata => "missing_metadata",
-            Self::CorruptMetadata => "corrupt_metadata",
-            Self::SchemaMismatch { .. } => "schema_mismatch",
-            Self::BackendMismatch { .. } => "backend_mismatch",
-            Self::TokenizerMismatch { .. } => "tokenizer_mismatch",
-            Self::MissingTantivyIndex => "missing_tantivy_index",
-            Self::InvalidInput(_) => "invalid_input",
-            Self::Panic => "panic",
-        }
-    }
-
-    pub fn abi_numeric_code(&self) -> u32 {
-        match self {
-            Self::MissingMetadata => 1,
-            Self::CorruptMetadata => 2,
-            Self::SchemaMismatch { .. } => 3,
-            Self::BackendMismatch { .. } => 4,
-            Self::TokenizerMismatch { .. } => 5,
-            Self::MissingTantivyIndex => 6,
-            Self::InvalidInput(_) => 7,
-            Self::Panic => 8,
-        }
-    }
-
-    pub fn state_code(&self) -> u32 {
-        match self {
-            Self::MissingMetadata | Self::MissingTantivyIndex => {
-                ENGINE_READ_STATE_INDEX_UNAVAILABLE
-            }
-            _ => ENGINE_READ_STATE_ERROR,
-        }
-    }
-
-    fn from_metadata_open(error: MetadataStoreError) -> Self {
-        match error {
-            MetadataStoreError::SchemaMismatch { stored, expected } => {
-                if stored.schema_version != expected.schema_version {
-                    Self::SchemaMismatch {
-                        stored: stored.schema_version,
-                        expected: expected.schema_version,
-                    }
-                } else if stored.backend_name != expected.backend_name
-                    || stored.backend_version != expected.backend_version
-                {
-                    Self::BackendMismatch {
-                        stored_name: stored.backend_name,
-                        stored_version: stored.backend_version,
-                        expected_name: expected.backend_name,
-                        expected_version: expected.backend_version,
-                    }
-                } else if stored.tokenizer_config != expected.tokenizer_config {
-                    Self::TokenizerMismatch {
-                        stored: stored.tokenizer_config,
-                        expected: expected.tokenizer_config,
-                    }
-                } else {
-                    Self::CorruptMetadata
-                }
-            }
-            MetadataStoreError::Sqlite(_) | MetadataStoreError::InvalidStoredValue(_) => {
-                Self::CorruptMetadata
-            }
-        }
-    }
-}
-
-impl fmt::Display for ReadOpenError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::MissingMetadata => write!(formatter, "metadata store is missing"),
-            Self::CorruptMetadata => write!(formatter, "metadata store is corrupt"),
-            Self::SchemaMismatch { stored, expected } => write!(
-                formatter,
-                "metadata schema mismatch: stored={stored}, expected={expected}"
-            ),
-            Self::BackendMismatch {
-                stored_name,
-                stored_version,
-                expected_name,
-                expected_version,
-            } => write!(
-                formatter,
-                "metadata backend mismatch: stored={stored_name}/{stored_version}, expected={expected_name}/{expected_version}"
-            ),
-            Self::TokenizerMismatch { stored, expected } => write!(
-                formatter,
-                "metadata tokenizer mismatch: stored={stored}, expected={expected}"
-            ),
-            Self::MissingTantivyIndex => write!(formatter, "tantivy search index is missing"),
-            Self::InvalidInput(field) => write!(formatter, "invalid read open input: {field}"),
-            Self::Panic => write!(formatter, "read ffi panic"),
-        }
-    }
-}
-
-impl std::error::Error for ReadOpenError {}
-
-impl From<SearchResult> for SearchHit {
-    fn from(result: SearchResult) -> Self {
-        Self {
-            file_id: result.file_id,
-            path: result.path,
-            title: result.title,
-            rank: result.rank,
-            snippet: result.snippet,
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{fs, path::PathBuf};
+    use std::{fs, path::PathBuf, sync::Mutex};
 
-    use crate::attachments::{AttachmentReferenceSource, AttachmentResolutionState};
-    use crate::index::{
-        FileRecord, HeadingRecord, IndexSchemaMetadata, MetadataStore, PropertyRecord, TagRecord,
-        TagSource, slugify_heading,
+    use crate::adapters::fs::path_resolver::VaultRoot;
+    use crate::adapters::fs::scanner::scan_vault;
+    use crate::adapters::sqlite::{
+        AttachmentRecord, FileRecord, HeadingRecord, IndexSchemaMetadata, MetadataStore,
+        PropertyRecord, TagRecord, TagSource, slugify_heading,
     };
-    use crate::parser::PropertyValue;
-    use crate::paths::{VaultRoot, lookup_key};
-    use crate::scanner::{ScanEntry, ScanEntryKind, scan_vault};
-    use crate::sqlite_fts::SearchDocument;
-    use crate::tantivy_search::TantivySearchIndex;
+    use crate::adapters::tantivy::TantivySearchIndex;
+    use crate::core::attachments::{AttachmentReferenceSource, AttachmentResolutionState};
+    use crate::core::document::PropertyValue;
+    use crate::core::paths::lookup_key;
+    use crate::core::scan::{ScanEntry, ScanEntryKind};
+    use crate::core::search::SearchDocument;
+    use crate::use_cases::read_graph::{graph_file_node_id, graph_unresolved_node_id};
+    use rusqlite::trace::{TraceEvent, TraceEventCodes};
     use tempfile::tempdir;
+
+    static READ_API_TRACE_LOCK: Mutex<()> = Mutex::new(());
+    static READ_API_TRACE_SQL: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
     #[test]
     fn read_open_error_codes_are_stable() {
@@ -1648,29 +249,27 @@ mod tests {
     }
 
     #[test]
-    fn read_api_returns_paginated_metadata_and_search_states() {
+    fn read_api_sql_query_counts_stay_bounded_for_ui_surfaces() {
         let metadata = IndexSchemaMetadata::new("sqlite+tantivy", "metadata-v1", "tantivy", 1);
         let mut store = MetadataStore::open_in_memory(&metadata).expect("store");
         let mut search = TantivySearchIndex::open_in_ram().expect("search");
 
-        let mut home = crate::index::FileRecord::from_scan_entry(&fixture_entry("Home.md"), 1);
+        let mut home = FileRecord::from_scan_entry(&fixture_entry("Home.md"), 1);
         home.mark_search_indexed();
-        let mut target =
-            crate::index::FileRecord::from_scan_entry(&fixture_entry("Folder/Target.md"), 1);
+        let mut target = FileRecord::from_scan_entry(&fixture_entry("Folder/Target.md"), 1);
         target.mark_search_indexed();
-        let mut guide =
-            crate::index::FileRecord::from_scan_entry(&fixture_entry("Docs/Guide.md"), 1);
+        let mut guide = FileRecord::from_scan_entry(&fixture_entry("Docs/Guide.md"), 1);
         guide.mark_search_indexed();
 
-        let link = crate::index::LinkEdgeRecord {
+        let home_to_target = crate::adapters::sqlite::LinkEdgeRecord {
             source_file_id: home.file_id.clone(),
             target_text: "Folder/Target".to_string(),
             resolved_target_file_id: Some(target.file_id.clone()),
-            heading: Some("Details".to_string()),
+            heading: None,
             alias: None,
             is_embed: false,
         };
-        let unresolved_link = crate::index::LinkEdgeRecord {
+        let home_to_missing = crate::adapters::sqlite::LinkEdgeRecord {
             source_file_id: home.file_id.clone(),
             target_text: "Missing Note".to_string(),
             resolved_target_file_id: None,
@@ -1678,7 +277,163 @@ mod tests {
             alias: None,
             is_embed: false,
         };
-        let backlink = crate::index::LinkEdgeRecord {
+        let target_to_home = crate::adapters::sqlite::LinkEdgeRecord {
+            source_file_id: target.file_id.clone(),
+            target_text: "Home".to_string(),
+            resolved_target_file_id: Some(home.file_id.clone()),
+            heading: None,
+            alias: None,
+            is_embed: false,
+        };
+        let target_to_guide = crate::adapters::sqlite::LinkEdgeRecord {
+            source_file_id: target.file_id.clone(),
+            target_text: "Docs/Guide".to_string(),
+            resolved_target_file_id: Some(guide.file_id.clone()),
+            heading: None,
+            alias: None,
+            is_embed: false,
+        };
+        let tag = TagRecord {
+            file_id: home.file_id.clone(),
+            tag: "project/native".to_string(),
+            source: TagSource::Inline,
+        };
+        let property = PropertyRecord::from_property_value(
+            home.file_id.clone(),
+            "status",
+            &PropertyValue::String("active".to_string()),
+        );
+        let heading = HeadingRecord {
+            file_id: home.file_id.clone(),
+            slug: slugify_heading("Home"),
+            title: "Home".to_string(),
+            level: 1,
+            byte_offset: Some(0),
+        };
+        let attachment = AttachmentRecord {
+            source_file_id: home.file_id.clone(),
+            source: AttachmentReferenceSource::WikiEmbed,
+            raw_target: "attachments/diagram.svg".to_string(),
+            state: AttachmentResolutionState::Resolved {
+                relative_path: PathBuf::from("attachments/diagram.svg"),
+            },
+        };
+
+        store
+            .replace_file_records(
+                &home,
+                &[home_to_target, home_to_missing],
+                std::slice::from_ref(&tag),
+                std::slice::from_ref(&property),
+                std::slice::from_ref(&heading),
+                std::slice::from_ref(&attachment),
+            )
+            .expect("home");
+        store
+            .replace_file_records(
+                &target,
+                &[target_to_home, target_to_guide],
+                &[],
+                &[],
+                &[],
+                &[],
+            )
+            .expect("target");
+        store
+            .replace_file_records(&guide, &[], &[], &[], &[], &[])
+            .expect("guide");
+        search
+            .replace_documents(&[
+                SearchDocument {
+                    file_id: home.file_id.clone(),
+                    path: "Home.md".to_string(),
+                    title: "Home".to_string(),
+                    body: "Home body mentions compatibility.".to_string(),
+                },
+                SearchDocument {
+                    file_id: target.file_id.clone(),
+                    path: "Folder/Target.md".to_string(),
+                    title: "Target".to_string(),
+                    body: "Target body receives backlinks.".to_string(),
+                },
+            ])
+            .expect("index");
+
+        let api = VaultReadApi::with_generation(store, search, 1);
+        assert_sql_count("file tree", &api, 1, || {
+            api.file_tree_projection(PageRequest::new(0, 10))
+                .expect("file tree")
+        });
+        assert_sql_count("file-name search", &api, 0, || {
+            api.file_name_search("Home", PageRequest::new(0, 10))
+                .expect("file-name search")
+        });
+        assert_sql_count("body search", &api, 0, || {
+            api.body_search("compatibility", PageRequest::new(0, 10))
+                .expect("body search")
+        });
+        assert_sql_count("outgoing by path", &api, 2, || {
+            api.outgoing_links_for_path("Home.md", PageRequest::new(0, 10))
+                .expect("outgoing by path")
+        });
+        assert_sql_count("properties by path", &api, 2, || {
+            api.properties_for_path("Home.md", PageRequest::new(0, 10))
+                .expect("properties by path")
+        });
+        assert_sql_count("attachments by path", &api, 2, || {
+            api.attachments_for_path("Home.md", PageRequest::new(0, 10))
+                .expect("attachments by path")
+        });
+        assert_sql_count("local graph one-hop", &api, 5, || {
+            api.local_graph(&home.file_id, LocalGraphRequest::new(10, 10))
+                .expect("one-hop graph")
+        });
+        assert_sql_count("local graph two-hop", &api, 8, || {
+            api.local_graph(
+                &home.file_id,
+                LocalGraphRequest::with_depth(0, 10, 10, LocalGraphDepth::TwoHop),
+            )
+            .expect("two-hop graph")
+        });
+    }
+
+    #[test]
+    fn read_api_returns_paginated_metadata_and_search_states() {
+        let metadata = IndexSchemaMetadata::new("sqlite+tantivy", "metadata-v1", "tantivy", 1);
+        let mut store = MetadataStore::open_in_memory(&metadata).expect("store");
+        let mut search = TantivySearchIndex::open_in_ram().expect("search");
+
+        let mut home =
+            crate::adapters::sqlite::FileRecord::from_scan_entry(&fixture_entry("Home.md"), 1);
+        home.mark_search_indexed();
+        let mut target = crate::adapters::sqlite::FileRecord::from_scan_entry(
+            &fixture_entry("Folder/Target.md"),
+            1,
+        );
+        target.mark_search_indexed();
+        let mut guide = crate::adapters::sqlite::FileRecord::from_scan_entry(
+            &fixture_entry("Docs/Guide.md"),
+            1,
+        );
+        guide.mark_search_indexed();
+
+        let link = crate::adapters::sqlite::LinkEdgeRecord {
+            source_file_id: home.file_id.clone(),
+            target_text: "Folder/Target".to_string(),
+            resolved_target_file_id: Some(target.file_id.clone()),
+            heading: Some("Details".to_string()),
+            alias: None,
+            is_embed: false,
+        };
+        let unresolved_link = crate::adapters::sqlite::LinkEdgeRecord {
+            source_file_id: home.file_id.clone(),
+            target_text: "Missing Note".to_string(),
+            resolved_target_file_id: None,
+            heading: None,
+            alias: None,
+            is_embed: false,
+        };
+        let backlink = crate::adapters::sqlite::LinkEdgeRecord {
             source_file_id: target.file_id.clone(),
             target_text: "Home".to_string(),
             resolved_target_file_id: Some(home.file_id.clone()),
@@ -1686,7 +441,7 @@ mod tests {
             alias: Some("Home alias".to_string()),
             is_embed: true,
         };
-        let deep_link = crate::index::LinkEdgeRecord {
+        let deep_link = crate::adapters::sqlite::LinkEdgeRecord {
             source_file_id: target.file_id.clone(),
             target_text: "Docs/Guide".to_string(),
             resolved_target_file_id: Some(guide.file_id.clone()),
@@ -1990,5 +745,44 @@ mod tests {
             .into_iter()
             .find(|entry| entry.relative_path == PathBuf::from(relative_path))
             .expect("fixture entry")
+    }
+
+    fn assert_sql_count<T, F>(label: &str, api: &VaultReadApi, expected: usize, operation: F) -> T
+    where
+        F: FnOnce() -> T,
+    {
+        let (value, statements) = traced_sql(api, operation);
+        assert_eq!(
+            statements.len(),
+            expected,
+            "{label} SQL count changed: {statements:#?}"
+        );
+        value
+    }
+
+    fn traced_sql<T, F>(api: &VaultReadApi, operation: F) -> (T, Vec<String>)
+    where
+        F: FnOnce() -> T,
+    {
+        let _guard = READ_API_TRACE_LOCK.lock().expect("trace lock");
+        READ_API_TRACE_SQL.lock().expect("trace sql").clear();
+        api.metadata.connection.trace_v2(
+            TraceEventCodes::SQLITE_TRACE_STMT,
+            Some(record_read_api_sql),
+        );
+        let value = operation();
+        api.metadata
+            .connection
+            .trace_v2(TraceEventCodes::empty(), None);
+        let statements = READ_API_TRACE_SQL.lock().expect("trace sql").clone();
+        (value, statements)
+    }
+
+    fn record_read_api_sql(event: TraceEvent<'_>) {
+        if let TraceEvent::Stmt(_, sql) = event {
+            if let Ok(mut statements) = READ_API_TRACE_SQL.lock() {
+                statements.push(sql.to_string());
+            }
+        }
     }
 }

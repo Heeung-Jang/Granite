@@ -1,4 +1,4 @@
-use crate::stable_hash;
+use crate::{redacted_private_value, stable_hash};
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -6,19 +6,14 @@ use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
-use vault_engine::attachments::{
+use vault_engine::diagnostics::profiler::{
     AttachmentReferenceSource, AttachmentRejectReason, AttachmentResolutionState,
-};
-use vault_engine::index::{
     AttachmentRecord, FileRecord, HeadingRecord, IndexedFileRecords, LinkEdgeRecord, MetadataStore,
-    PropertyRecord, TagRecord, TagSource, slugify_heading,
+    MarkdownLink, ParsedMarkdown, PropertyRecord, ScanEntry, ScanEntryKind, ScanSummary,
+    SearchDocument, TagRecord, TagSource, TantivySearchIndex, VaultRoot, WikiLink, classify_file,
+    expected_read_schema_metadata, lookup_key, normalize_relative_path, parse_markdown, scan_vault,
+    slugify_heading,
 };
-use vault_engine::parser::{MarkdownLink, ParsedMarkdown, WikiLink, parse_markdown};
-use vault_engine::paths::{VaultRoot, lookup_key, normalize_relative_path};
-use vault_engine::read_api::expected_read_schema_metadata;
-use vault_engine::scanner::{ScanEntry, ScanEntryKind, ScanSummary, classify_file, scan_vault};
-use vault_engine::sqlite_fts::SearchDocument;
-use vault_engine::tantivy_search::TantivySearchIndex;
 
 #[derive(Debug, Clone)]
 pub struct ReadIndexMaterializeOptions {
@@ -32,9 +27,11 @@ pub struct ReadIndexMaterializeOptions {
 pub struct ReadIndexMaterializeArtifact {
     pub schema_version: u32,
     pub tool: String,
+    pub diagnostic_only: bool,
     pub vault_root_hash: String,
     pub metadata_path_hash: String,
     pub tantivy_path_hash: String,
+    pub metadata_batch_size: usize,
     pub markdown_files: usize,
     pub attachment_files: usize,
     pub other_files: usize,
@@ -46,6 +43,7 @@ pub struct ReadIndexMaterializeArtifact {
     pub headings: usize,
     pub attachments: usize,
     pub duration_ms: f64,
+    pub peak_rss_bytes: Option<u64>,
     pub privacy: ReadIndexMaterializePrivacy,
 }
 
@@ -113,7 +111,7 @@ pub fn materialize_read_index(
                         });
                     }
                     Err(error) => {
-                        file.mark_error(error.to_string());
+                        file.mark_error(format!("io:{:?}", error.kind()));
                         records.push(IndexedFileRecords {
                             file,
                             links: Vec::new(),
@@ -154,9 +152,11 @@ pub fn materialize_read_index(
     Ok(ReadIndexMaterializeArtifact {
         schema_version: 1,
         tool: "vault-profiler materialize-read-index".to_string(),
-        vault_root_hash: stable_hash(root.canonical_root().to_string_lossy().as_bytes()),
-        metadata_path_hash: stable_hash(options.metadata_path.to_string_lossy().as_bytes()),
-        tantivy_path_hash: stable_hash(options.tantivy_path.to_string_lossy().as_bytes()),
+        diagnostic_only: true,
+        vault_root_hash: redacted_private_value(),
+        metadata_path_hash: redacted_private_value(),
+        tantivy_path_hash: redacted_private_value(),
+        metadata_batch_size: scan.entries.len(),
         markdown_files: scan.markdown_files,
         attachment_files: scan.attachment_files,
         other_files: scan.other_files,
@@ -168,6 +168,7 @@ pub fn materialize_read_index(
         headings: stats.headings,
         attachments: stats.attachments,
         duration_ms: rounded_ms(started.elapsed().as_secs_f64() * 1_000.0),
+        peak_rss_bytes: peak_rss_bytes(),
         privacy: ReadIndexMaterializePrivacy {
             raw_note_bodies_committed: false,
             raw_paths_committed: false,
@@ -551,11 +552,34 @@ fn rounded_ms(value: f64) -> f64 {
     (value * 1_000.0).round() / 1_000.0
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn peak_rss_bytes() -> Option<u64> {
+    let mut usage = std::mem::MaybeUninit::<libc::rusage>::zeroed();
+    let result = unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) };
+    if result != 0 {
+        return None;
+    }
+    let max_rss = unsafe { usage.assume_init().ru_maxrss as u64 };
+    #[cfg(target_os = "linux")]
+    {
+        Some(max_rss.saturating_mul(1024))
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Some(max_rss)
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn peak_rss_bytes() -> Option<u64> {
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::tempdir;
-    use vault_engine::read_api::{PageRequest, open_vault_read_api};
+    use vault_engine::diagnostics::profiler::{PageRequest, open_vault_read_api};
 
     #[test]
     fn materializes_fixture_read_index_for_read_api() {
@@ -588,6 +612,12 @@ mod tests {
         assert_eq!(artifact.links, 2);
         assert_eq!(artifact.properties, 2);
         assert_eq!(artifact.attachments, 1);
+        assert!(artifact.diagnostic_only);
+        assert_eq!(artifact.metadata_batch_size, 3);
+        assert!(artifact.peak_rss_bytes.is_some());
+        assert_eq!(artifact.vault_root_hash, "redacted");
+        assert_eq!(artifact.metadata_path_hash, "redacted");
+        assert_eq!(artifact.tantivy_path_hash, "redacted");
 
         let api = open_vault_read_api(index.join("metadata.sqlite"), index.join("tantivy"))
             .expect("read api");

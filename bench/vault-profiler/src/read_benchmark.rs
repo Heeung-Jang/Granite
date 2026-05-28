@@ -1,4 +1,7 @@
-use crate::{VaultIdentity, stable_hash};
+use crate::{
+    VaultIdentity, public_artifact_salt, redacted_private_value, redacted_vault_identity,
+    salted_private_hash,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -6,8 +9,9 @@ use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
-use vault_engine::read_api::{
-    LocalGraphDepth, LocalGraphRequest, PageRequest, ReadState, open_vault_read_api,
+use vault_engine::diagnostics::profiler::{
+    LocalGraphDepth, LocalGraphRequest, PageRequest, ReadApiError, ReadApiResult, ReadPage,
+    ReadState, SearchHit, VaultReadApi, open_vault_read_api,
 };
 
 #[derive(Debug, Clone)]
@@ -78,6 +82,7 @@ pub fn run_read_api_benchmark(
 ) -> Result<ReadApiBenchmarkArtifact, Box<dyn Error>> {
     let api = open_vault_read_api(&options.metadata_path, &options.tantivy_path)?;
     let result_limit = options.result_limit.max(1);
+    let input_redactor = InputRedactor::new();
     let mut samples = Vec::new();
 
     let file_tree_start = Instant::now();
@@ -93,7 +98,11 @@ pub fn run_read_api_benchmark(
                 Vec::new(),
             ));
         }
-        Err(error) => samples.push(error_sample("file_tree", "first_page", error.to_string())),
+        Err(error) => samples.push(error_sample(
+            "file_tree",
+            "first_page",
+            read_api_error_note(&error),
+        )),
     }
 
     let sampled_paths = sampled_paths(options, &api, result_limit)?;
@@ -103,6 +112,7 @@ pub fn run_read_api_benchmark(
         measure_search_surface(
             &api,
             &mut samples,
+            &input_redactor,
             "file_name_search",
             &query,
             result_limit,
@@ -111,6 +121,7 @@ pub fn run_read_api_benchmark(
         measure_search_surface(
             &api,
             &mut samples,
+            &input_redactor,
             "body_search",
             &query,
             result_limit,
@@ -119,7 +130,7 @@ pub fn run_read_api_benchmark(
     }
 
     for relative_path in sampled_paths {
-        let path_hash = stable_hash(relative_path.as_bytes());
+        let path_hash = input_redactor.hash(relative_path.as_bytes());
 
         let start = Instant::now();
         match api.backlinks_for_path(
@@ -137,7 +148,7 @@ pub fn run_read_api_benchmark(
             Err(error) => samples.push(error_sample_with_hash(
                 "backlinks",
                 path_hash.clone(),
-                error.to_string(),
+                read_api_error_note(&error),
             )),
         }
 
@@ -157,7 +168,7 @@ pub fn run_read_api_benchmark(
             Err(error) => samples.push(error_sample_with_hash(
                 "properties",
                 path_hash.clone(),
-                error.to_string(),
+                read_api_error_note(&error),
             )),
         }
 
@@ -177,7 +188,7 @@ pub fn run_read_api_benchmark(
             Err(error) => samples.push(error_sample_with_hash(
                 "local_graph",
                 path_hash,
-                error.to_string(),
+                read_api_error_note(&error),
             )),
         }
     }
@@ -189,21 +200,12 @@ pub fn artifact_from_samples(
     options: &ReadApiBenchmarkOptions,
     samples: Vec<ReadApiBenchmarkSample>,
 ) -> ReadApiBenchmarkArtifact {
-    let vault_name = options
-        .vault_root
-        .file_name()
-        .and_then(OsStr::to_str)
-        .unwrap_or("vault")
-        .to_string();
     ReadApiBenchmarkArtifact {
         schema_version: 1,
         tool: "vault-profiler read-api-benchmark".to_string(),
-        vault: VaultIdentity {
-            root_name: vault_name,
-            root_hash: stable_hash(options.vault_root.to_string_lossy().as_bytes()),
-        },
-        metadata_path_hash: stable_hash(options.metadata_path.to_string_lossy().as_bytes()),
-        tantivy_path_hash: stable_hash(options.tantivy_path.to_string_lossy().as_bytes()),
+        vault: redacted_vault_identity(),
+        metadata_path_hash: redacted_private_value(),
+        tantivy_path_hash: redacted_private_value(),
         result_limit: options.result_limit.max(1),
         summaries: summaries_from_samples(&samples),
         samples,
@@ -212,11 +214,11 @@ pub fn artifact_from_samples(
             raw_note_bodies_committed: false,
             absolute_paths_committed: false,
             input_material:
-                "Inputs are represented by hashes only; raw query text and relative paths are not written."
+                "Inputs are represented by per-artifact salted hashes only; raw query text and relative paths are not written."
                     .to_string(),
         },
         notes: vec![
-            "Search queries may be read from private query files or sampled from indexed file names, but only hashes are persisted.".to_string(),
+            "Search queries may be read from private query files or sampled from indexed file names, but only salted redacted IDs are persisted.".to_string(),
             "Read API timings use the existing SQLite metadata and Tantivy search artifacts without scanning note bodies.".to_string(),
         ],
     }
@@ -262,7 +264,7 @@ pub fn summaries_from_samples(samples: &[ReadApiBenchmarkSample]) -> Vec<ReadApi
 
 fn sampled_paths(
     options: &ReadApiBenchmarkOptions,
-    api: &vault_engine::read_api::VaultReadApi,
+    api: &VaultReadApi,
     result_limit: usize,
 ) -> Result<Vec<String>, Box<dyn Error>> {
     let mut paths = options.sampled_paths.clone();
@@ -285,7 +287,7 @@ fn sampled_paths(
 
 fn benchmark_queries(
     options: &ReadApiBenchmarkOptions,
-    api: &vault_engine::read_api::VaultReadApi,
+    api: &VaultReadApi,
     result_limit: usize,
 ) -> Result<Vec<String>, Box<dyn Error>> {
     let mut queries = options.queries.clone();
@@ -326,21 +328,17 @@ fn read_lines(path: &Path) -> Result<Vec<String>, Box<dyn Error>> {
 }
 
 fn measure_search_surface<F>(
-    _api: &vault_engine::read_api::VaultReadApi,
+    _api: &VaultReadApi,
     samples: &mut Vec<ReadApiBenchmarkSample>,
+    input_redactor: &InputRedactor,
     surface: &str,
     query: &str,
     result_limit: usize,
     mut read: F,
 ) where
-    F: FnMut(
-        &str,
-        PageRequest,
-    ) -> vault_engine::read_api::ReadApiResult<
-        vault_engine::read_api::ReadPage<vault_engine::read_api::SearchHit>,
-    >,
+    F: FnMut(&str, PageRequest) -> ReadApiResult<ReadPage<SearchHit>>,
 {
-    let query_hash = stable_hash(query.as_bytes());
+    let query_hash = input_redactor.hash(query.as_bytes());
     let start = Instant::now();
     match read(query, PageRequest::with_request_id(1, 0, result_limit)) {
         Ok(page) => samples.push(sample_with_hash(
@@ -354,7 +352,7 @@ fn measure_search_surface<F>(
         Err(error) => samples.push(error_sample_with_hash(
             surface,
             query_hash,
-            error.to_string(),
+            read_api_error_note(&error),
         )),
     }
 }
@@ -369,7 +367,7 @@ fn sample(
 ) -> ReadApiBenchmarkSample {
     sample_with_hash(
         surface,
-        stable_hash(input_label.as_bytes()),
+        salted_private_hash(&public_artifact_salt(), input_label.as_bytes()),
         duration_ms,
         result_count,
         state,
@@ -397,7 +395,11 @@ fn sample_with_hash(
 }
 
 fn error_sample(surface: &str, input_label: &str, note: String) -> ReadApiBenchmarkSample {
-    error_sample_with_hash(surface, stable_hash(input_label.as_bytes()), note)
+    error_sample_with_hash(
+        surface,
+        salted_private_hash(&public_artifact_salt(), input_label.as_bytes()),
+        note,
+    )
 }
 
 fn error_sample_with_hash(
@@ -405,7 +407,49 @@ fn error_sample_with_hash(
     input_hash: String,
     note: String,
 ) -> ReadApiBenchmarkSample {
-    sample_with_hash(surface, input_hash, None, None, "error", vec![note])
+    sample_with_hash(
+        surface,
+        input_hash,
+        None,
+        None,
+        "error",
+        vec![safe_error_note(&note)],
+    )
+}
+
+#[derive(Debug, Clone)]
+struct InputRedactor {
+    salt: String,
+}
+
+impl InputRedactor {
+    fn new() -> Self {
+        Self {
+            salt: public_artifact_salt(),
+        }
+    }
+
+    fn hash(&self, bytes: &[u8]) -> String {
+        salted_private_hash(&self.salt, bytes)
+    }
+}
+
+fn read_api_error_note(error: &ReadApiError) -> String {
+    let class = match error {
+        ReadApiError::Metadata(_) => "metadata",
+        ReadApiError::Search(_) => "search",
+        ReadApiError::InvalidInput(_) => "invalid_input",
+        ReadApiError::NotFound(_) => "not_found",
+    };
+    format!("error_class={class}")
+}
+
+fn safe_error_note(note: &str) -> String {
+    if note.starts_with("error_class=") {
+        note.to_string()
+    } else {
+        "error_class=redacted".to_string()
+    }
 }
 
 fn state_name(state: ReadState) -> &'static str {
@@ -490,9 +534,56 @@ mod tests {
 
         assert!(!json.contains("Secret Query"));
         assert!(!json.contains("Private Project"));
+        assert!(!json.contains("Private Vault"));
         assert!(!json.contains("/Users/example"));
         assert!(!json.contains("metadata.sqlite"));
         assert!(json.contains("\"body_search\""));
         assert!(json.contains("\"raw_queries_committed\":false"));
+        assert!(json.contains("\"root_name\":\"redacted-vault\""));
+        assert!(json.contains("\"metadata_path_hash\":\"redacted\""));
+        assert!(json.contains("\"tantivy_path_hash\":\"redacted\""));
+    }
+
+    #[test]
+    fn private_input_hashes_do_not_repeat_across_public_samples() {
+        let first = sample(
+            "body_search",
+            "Secret Query About Private Project",
+            Some(1.0),
+            Some(1),
+            "complete",
+            Vec::new(),
+        );
+        let second = sample(
+            "body_search",
+            "Secret Query About Private Project",
+            Some(1.0),
+            Some(1),
+            "complete",
+            Vec::new(),
+        );
+
+        assert_ne!(first.input_hash, second.input_hash);
+        assert_ne!(first.sample_id, second.sample_id);
+    }
+
+    #[test]
+    fn raw_error_notes_are_classified_before_serialization() {
+        let artifact = artifact_from_samples(
+            &options(),
+            vec![error_sample(
+                "body_search",
+                "Secret Query About Private Project",
+                "sqlite failed at /Users/example/Private Vault/Secret.md for Secret Query"
+                    .to_string(),
+            )],
+        );
+
+        let json = serde_json::to_string(&artifact).expect("json");
+
+        assert!(!json.contains("/Users/example"));
+        assert!(!json.contains("Secret.md"));
+        assert!(!json.contains("Secret Query"));
+        assert!(json.contains("error_class=redacted"));
     }
 }

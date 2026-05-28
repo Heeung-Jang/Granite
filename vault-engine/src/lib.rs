@@ -1,24 +1,32 @@
-pub mod attachments;
-pub mod benchmarks;
-pub mod errors;
+pub(crate) mod adapters;
+#[cfg(test)]
+pub(crate) mod attachments;
+pub(crate) mod core;
+pub mod diagnostics;
 pub mod ffi;
-pub mod file_watcher;
-pub mod graph;
-pub(crate) mod graph_key;
-pub mod index;
-pub mod index_rebuild;
-pub mod indexing_pipeline;
-pub mod indexing_queue;
-pub mod parser;
-pub mod paths;
-pub mod read_api;
-pub mod read_ffi;
-pub mod save;
-pub mod scanner;
-pub mod sqlite_fts;
-pub mod startup_reconciliation;
-pub mod tantivy_search;
-pub mod watcher_burst;
+#[cfg(test)]
+pub(crate) mod file_watcher;
+#[cfg(test)]
+pub(crate) mod graph;
+#[cfg(test)]
+pub(crate) mod index;
+#[cfg(test)]
+pub(crate) mod index_rebuild;
+#[cfg(test)]
+pub(crate) mod indexing_queue;
+#[cfg(test)]
+pub(crate) mod read_api;
+#[cfg(test)]
+pub(crate) mod save;
+#[cfg(test)]
+pub(crate) mod sqlite_fts;
+#[cfg(test)]
+pub(crate) mod startup_reconciliation;
+#[cfg(test)]
+pub(crate) mod tantivy_search;
+pub(crate) mod use_cases;
+#[cfg(test)]
+pub(crate) mod watcher_burst;
 
 pub const ENGINE_ABI_VERSION: u32 = 1;
 
@@ -32,26 +40,13 @@ pub fn health_check() -> EngineHealth {
     EngineHealth {
         abi_version: ENGINE_ABI_VERSION,
         modules: &[
-            "attachments",
-            "scanner",
-            "parser",
-            "paths",
-            "file_watcher",
-            "graph",
-            "read_api",
-            "read_ffi",
-            "save",
-            "index",
-            "index_rebuild",
-            "indexing_pipeline",
-            "indexing_queue",
             "ffi",
-            "errors",
-            "benchmarks",
-            "sqlite_fts",
-            "tantivy_search",
-            "startup_reconciliation",
-            "watcher_burst",
+            "diagnostics",
+            "read",
+            "save",
+            "indexing",
+            "graph",
+            "watcher",
         ],
     }
 }
@@ -68,26 +63,13 @@ mod tests {
         assert_eq!(
             health.modules,
             &[
-                "attachments",
-                "scanner",
-                "parser",
-                "paths",
-                "file_watcher",
-                "graph",
-                "read_api",
-                "read_ffi",
-                "save",
-                "index",
-                "index_rebuild",
-                "indexing_pipeline",
-                "indexing_queue",
                 "ffi",
-                "errors",
-                "benchmarks",
-                "sqlite_fts",
-                "tantivy_search",
-                "startup_reconciliation",
-                "watcher_burst",
+                "diagnostics",
+                "read",
+                "save",
+                "indexing",
+                "graph",
+                "watcher"
             ]
         );
     }

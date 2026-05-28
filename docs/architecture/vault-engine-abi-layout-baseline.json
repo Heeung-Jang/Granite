@@ -1,0 +1,1294 @@
+{
+  "schema_version": 2,
+  "abi_version": 1,
+  "layouts": [
+    {
+      "name": "EngineReadStringRef",
+      "size": 8,
+      "align": 4,
+      "fields": [
+        {
+          "name": "offset",
+          "offset": 0
+        },
+        {
+          "name": "length",
+          "offset": 4
+        }
+      ]
+    },
+    {
+      "name": "EngineReadResultHeader",
+      "size": 72,
+      "align": 8,
+      "fields": [
+        {
+          "name": "abi_version",
+          "offset": 0
+        },
+        {
+          "name": "row_kind",
+          "offset": 4
+        },
+        {
+          "name": "request_id",
+          "offset": 8
+        },
+        {
+          "name": "generation",
+          "offset": 16
+        },
+        {
+          "name": "state",
+          "offset": 24
+        },
+        {
+          "name": "row_count",
+          "offset": 28
+        },
+        {
+          "name": "row_stride",
+          "offset": 32
+        },
+        {
+          "name": "rows_offset",
+          "offset": 36
+        },
+        {
+          "name": "string_arena_offset",
+          "offset": 40
+        },
+        {
+          "name": "string_arena_length",
+          "offset": 44
+        },
+        {
+          "name": "next_offset",
+          "offset": 48
+        },
+        {
+          "name": "error_code",
+          "offset": 56
+        },
+        {
+          "name": "error_message",
+          "offset": 64
+        }
+      ]
+    },
+    {
+      "name": "EngineReadResultBuffer",
+      "size": 24,
+      "align": 8,
+      "fields": [
+        {
+          "name": "ptr",
+          "offset": 0
+        },
+        {
+          "name": "len",
+          "offset": 8
+        },
+        {
+          "name": "capacity",
+          "offset": 16
+        }
+      ]
+    },
+    {
+      "name": "EngineReadFileTreeRow",
+      "size": 40,
+      "align": 8,
+      "fields": [
+        {
+          "name": "relative_path",
+          "offset": 0
+        },
+        {
+          "name": "display_name",
+          "offset": 8
+        },
+        {
+          "name": "kind",
+          "offset": 16
+        },
+        {
+          "name": "status",
+          "offset": 20
+        },
+        {
+          "name": "size_bytes",
+          "offset": 24
+        },
+        {
+          "name": "modified_unix_ms",
+          "offset": 32
+        }
+      ]
+    },
+    {
+      "name": "EngineReadSearchHitRow",
+      "size": 40,
+      "align": 8,
+      "fields": [
+        {
+          "name": "file_id",
+          "offset": 0
+        },
+        {
+          "name": "relative_path",
+          "offset": 8
+        },
+        {
+          "name": "title",
+          "offset": 16
+        },
+        {
+          "name": "snippet",
+          "offset": 24
+        },
+        {
+          "name": "rank",
+          "offset": 32
+        }
+      ]
+    },
+    {
+      "name": "EngineReadLinkRow",
+      "size": 64,
+      "align": 4,
+      "fields": [
+        {
+          "name": "source_file_id",
+          "offset": 0
+        },
+        {
+          "name": "source_relative_path",
+          "offset": 8
+        },
+        {
+          "name": "target_file_id",
+          "offset": 16
+        },
+        {
+          "name": "target_relative_path",
+          "offset": 24
+        },
+        {
+          "name": "target_text",
+          "offset": 32
+        },
+        {
+          "name": "heading",
+          "offset": 40
+        },
+        {
+          "name": "alias",
+          "offset": 48
+        },
+        {
+          "name": "resolution_state",
+          "offset": 56
+        },
+        {
+          "name": "is_embed",
+          "offset": 60
+        }
+      ]
+    },
+    {
+      "name": "EngineReadTagRow",
+      "size": 20,
+      "align": 4,
+      "fields": [
+        {
+          "name": "file_id",
+          "offset": 0
+        },
+        {
+          "name": "tag",
+          "offset": 8
+        },
+        {
+          "name": "source",
+          "offset": 16
+        }
+      ]
+    },
+    {
+      "name": "EngineReadPropertyRow",
+      "size": 28,
+      "align": 4,
+      "fields": [
+        {
+          "name": "file_id",
+          "offset": 0
+        },
+        {
+          "name": "key",
+          "offset": 8
+        },
+        {
+          "name": "display_value",
+          "offset": 16
+        },
+        {
+          "name": "value_kind",
+          "offset": 24
+        }
+      ]
+    },
+    {
+      "name": "EngineReadAttachmentRow",
+      "size": 32,
+      "align": 4,
+      "fields": [
+        {
+          "name": "source_file_id",
+          "offset": 0
+        },
+        {
+          "name": "raw_target",
+          "offset": 8
+        },
+        {
+          "name": "resolved_relative_path",
+          "offset": 16
+        },
+        {
+          "name": "source_kind",
+          "offset": 24
+        },
+        {
+          "name": "state_kind",
+          "offset": 28
+        }
+      ]
+    },
+    {
+      "name": "EngineReadGraphNodeRow",
+      "size": 28,
+      "align": 4,
+      "fields": [
+        {
+          "name": "node_id",
+          "offset": 0
+        },
+        {
+          "name": "file_id",
+          "offset": 8
+        },
+        {
+          "name": "label",
+          "offset": 16
+        },
+        {
+          "name": "node_kind",
+          "offset": 24
+        }
+      ]
+    },
+    {
+      "name": "EngineReadGraphEdgeRow",
+      "size": 36,
+      "align": 4,
+      "fields": [
+        {
+          "name": "source_node_id",
+          "offset": 0
+        },
+        {
+          "name": "target_node_id",
+          "offset": 8
+        },
+        {
+          "name": "target_text",
+          "offset": 16
+        },
+        {
+          "name": "direction",
+          "offset": 24
+        },
+        {
+          "name": "is_embed",
+          "offset": 28
+        },
+        {
+          "name": "hop",
+          "offset": 32
+        }
+      ]
+    },
+    {
+      "name": "EngineReadLivePreviewMetadataRow",
+      "size": 60,
+      "align": 4,
+      "fields": [
+        {
+          "name": "item_kind",
+          "offset": 0
+        },
+        {
+          "name": "key",
+          "offset": 4
+        },
+        {
+          "name": "value",
+          "offset": 12
+        },
+        {
+          "name": "resolved_file_id",
+          "offset": 20
+        },
+        {
+          "name": "resolved_relative_path",
+          "offset": 28
+        },
+        {
+          "name": "heading",
+          "offset": 36
+        },
+        {
+          "name": "alias",
+          "offset": 44
+        },
+        {
+          "name": "state_kind",
+          "offset": 52
+        },
+        {
+          "name": "source_kind",
+          "offset": 56
+        }
+      ]
+    },
+    {
+      "name": "EngineReadOpenResult",
+      "size": 32,
+      "align": 8,
+      "fields": [
+        {
+          "name": "handle",
+          "offset": 0
+        },
+        {
+          "name": "result",
+          "offset": 8
+        }
+      ]
+    },
+    {
+      "name": "EngineReadLocalGraphResult",
+      "size": 48,
+      "align": 8,
+      "fields": [
+        {
+          "name": "nodes",
+          "offset": 0
+        },
+        {
+          "name": "edges",
+          "offset": 24
+        }
+      ]
+    }
+  ],
+  "constants": [
+    {
+      "name": "ENGINE_ABI_VERSION",
+      "value": "1"
+    },
+    {
+      "name": "ENGINE_READ_NO_NEXT_OFFSET",
+      "value": "18446744073709551615"
+    },
+    {
+      "name": "ENGINE_READ_ROW_KIND_OPEN_STATUS",
+      "value": "1"
+    },
+    {
+      "name": "ENGINE_READ_ROW_KIND_FILE_TREE",
+      "value": "10"
+    },
+    {
+      "name": "ENGINE_READ_ROW_KIND_SEARCH_HIT",
+      "value": "11"
+    },
+    {
+      "name": "ENGINE_READ_ROW_KIND_BACKLINK",
+      "value": "12"
+    },
+    {
+      "name": "ENGINE_READ_ROW_KIND_OUTGOING_LINK",
+      "value": "13"
+    },
+    {
+      "name": "ENGINE_READ_ROW_KIND_TAG",
+      "value": "14"
+    },
+    {
+      "name": "ENGINE_READ_ROW_KIND_PROPERTY",
+      "value": "15"
+    },
+    {
+      "name": "ENGINE_READ_ROW_KIND_ATTACHMENT",
+      "value": "16"
+    },
+    {
+      "name": "ENGINE_READ_ROW_KIND_GRAPH_NODE",
+      "value": "17"
+    },
+    {
+      "name": "ENGINE_READ_ROW_KIND_GRAPH_EDGE",
+      "value": "18"
+    },
+    {
+      "name": "ENGINE_READ_ROW_KIND_LIVE_PREVIEW_METADATA",
+      "value": "19"
+    },
+    {
+      "name": "ENGINE_READ_STATE_COMPLETE",
+      "value": "0"
+    },
+    {
+      "name": "ENGINE_READ_STATE_PARTIAL",
+      "value": "1"
+    },
+    {
+      "name": "ENGINE_READ_STATE_STALE",
+      "value": "2"
+    },
+    {
+      "name": "ENGINE_READ_STATE_CANCELLED",
+      "value": "3"
+    },
+    {
+      "name": "ENGINE_READ_STATE_ERROR",
+      "value": "4"
+    },
+    {
+      "name": "ENGINE_READ_STATE_INDEX_UNAVAILABLE",
+      "value": "5"
+    },
+    {
+      "name": "ENGINE_READ_SEARCH_MODE_FILE_NAME",
+      "value": "1"
+    },
+    {
+      "name": "ENGINE_READ_SEARCH_MODE_BODY",
+      "value": "2"
+    },
+    {
+      "name": "ENGINE_READ_INSPECTOR_PANEL_BACKLINKS",
+      "value": "1"
+    },
+    {
+      "name": "ENGINE_READ_INSPECTOR_PANEL_OUTGOING",
+      "value": "2"
+    },
+    {
+      "name": "ENGINE_READ_INSPECTOR_PANEL_TAGS",
+      "value": "3"
+    },
+    {
+      "name": "ENGINE_READ_INSPECTOR_PANEL_PROPERTIES",
+      "value": "4"
+    },
+    {
+      "name": "ENGINE_READ_INSPECTOR_PANEL_ATTACHMENTS",
+      "value": "5"
+    },
+    {
+      "name": "ENGINE_READ_LOCAL_GRAPH_DEPTH_ONE_HOP",
+      "value": "1"
+    },
+    {
+      "name": "ENGINE_READ_LOCAL_GRAPH_DEPTH_TWO_HOP",
+      "value": "2"
+    },
+    {
+      "name": "FILE_KIND_MARKDOWN",
+      "value": "1"
+    },
+    {
+      "name": "FILE_KIND_ATTACHMENT",
+      "value": "2"
+    },
+    {
+      "name": "FILE_KIND_OTHER",
+      "value": "3"
+    },
+    {
+      "name": "FILE_STATUS_SEEN_METADATA",
+      "value": "1"
+    },
+    {
+      "name": "FILE_STATUS_PARSED",
+      "value": "2"
+    },
+    {
+      "name": "FILE_STATUS_SEARCH_INDEXED",
+      "value": "3"
+    },
+    {
+      "name": "FILE_STATUS_TOMBSTONED",
+      "value": "4"
+    },
+    {
+      "name": "FILE_STATUS_ERROR",
+      "value": "5"
+    },
+    {
+      "name": "TAG_SOURCE_INLINE",
+      "value": "1"
+    },
+    {
+      "name": "TAG_SOURCE_FRONTMATTER",
+      "value": "2"
+    },
+    {
+      "name": "PROPERTY_VALUE_KIND_STRING",
+      "value": "1"
+    },
+    {
+      "name": "PROPERTY_VALUE_KIND_BOOL",
+      "value": "2"
+    },
+    {
+      "name": "PROPERTY_VALUE_KIND_LIST",
+      "value": "3"
+    },
+    {
+      "name": "LINK_RESOLUTION_STATE_RESOLVED",
+      "value": "1"
+    },
+    {
+      "name": "LINK_RESOLUTION_STATE_UNRESOLVED",
+      "value": "2"
+    },
+    {
+      "name": "ATTACHMENT_SOURCE_WIKI_EMBED",
+      "value": "1"
+    },
+    {
+      "name": "ATTACHMENT_SOURCE_MARKDOWN_IMAGE",
+      "value": "2"
+    },
+    {
+      "name": "ATTACHMENT_SOURCE_MARKDOWN_LINK",
+      "value": "3"
+    },
+    {
+      "name": "ATTACHMENT_STATE_RESOLVED",
+      "value": "1"
+    },
+    {
+      "name": "ATTACHMENT_STATE_MISSING",
+      "value": "2"
+    },
+    {
+      "name": "ATTACHMENT_STATE_DUPLICATE",
+      "value": "3"
+    },
+    {
+      "name": "ATTACHMENT_STATE_REMOTE",
+      "value": "4"
+    },
+    {
+      "name": "ATTACHMENT_STATE_REJECTED",
+      "value": "5"
+    },
+    {
+      "name": "ATTACHMENT_STATE_UNSUPPORTED",
+      "value": "6"
+    },
+    {
+      "name": "LOCAL_GRAPH_NODE_CENTER",
+      "value": "1"
+    },
+    {
+      "name": "LOCAL_GRAPH_NODE_RESOLVED",
+      "value": "2"
+    },
+    {
+      "name": "LOCAL_GRAPH_NODE_UNRESOLVED",
+      "value": "3"
+    },
+    {
+      "name": "LOCAL_GRAPH_EDGE_OUTGOING",
+      "value": "1"
+    },
+    {
+      "name": "LOCAL_GRAPH_EDGE_BACKLINK",
+      "value": "2"
+    },
+    {
+      "name": "LIVE_PREVIEW_ITEM_PROPERTY",
+      "value": "1"
+    },
+    {
+      "name": "LIVE_PREVIEW_ITEM_TAG",
+      "value": "2"
+    },
+    {
+      "name": "LIVE_PREVIEW_ITEM_LINK",
+      "value": "3"
+    },
+    {
+      "name": "LIVE_PREVIEW_ITEM_ATTACHMENT",
+      "value": "4"
+    },
+    {
+      "name": "LIVE_PREVIEW_STATE_NONE",
+      "value": "0"
+    },
+    {
+      "name": "LIVE_PREVIEW_STATE_RESOLVED",
+      "value": "1"
+    },
+    {
+      "name": "LIVE_PREVIEW_STATE_MISSING",
+      "value": "2"
+    },
+    {
+      "name": "LIVE_PREVIEW_STATE_REMOTE",
+      "value": "4"
+    },
+    {
+      "name": "LIVE_PREVIEW_STATE_REJECTED",
+      "value": "5"
+    },
+    {
+      "name": "LIVE_PREVIEW_STATE_UNSUPPORTED",
+      "value": "6"
+    },
+    {
+      "name": "LIVE_PREVIEW_SOURCE_NONE",
+      "value": "0"
+    },
+    {
+      "name": "LIVE_PREVIEW_SOURCE_INLINE",
+      "value": "1"
+    },
+    {
+      "name": "LIVE_PREVIEW_SOURCE_WIKI_LINK",
+      "value": "2"
+    },
+    {
+      "name": "LIVE_PREVIEW_SOURCE_MARKDOWN_LINK",
+      "value": "3"
+    },
+    {
+      "name": "LIVE_PREVIEW_SOURCE_WIKI_EMBED",
+      "value": "4"
+    },
+    {
+      "name": "LIVE_PREVIEW_SOURCE_MARKDOWN_IMAGE",
+      "value": "5"
+    },
+    {
+      "name": "WHOLE_VAULT_GRAPH_PAYLOAD_VERSION",
+      "value": "1"
+    },
+    {
+      "name": "WHOLE_VAULT_GRAPH_CURRENT_GENERATION",
+      "value": "0"
+    },
+    {
+      "name": "MAX_WHOLE_VAULT_GRAPH_NODES",
+      "value": "100000"
+    },
+    {
+      "name": "MAX_WHOLE_VAULT_GRAPH_EDGES",
+      "value": "250000"
+    },
+    {
+      "name": "MAX_WHOLE_VAULT_GRAPH_LABEL_BYTES",
+      "value": "512"
+    },
+    {
+      "name": "MAX_WHOLE_VAULT_GRAPH_TAGS_PER_NODE",
+      "value": "32"
+    },
+    {
+      "name": "MAX_WHOLE_VAULT_GRAPH_GROUPS",
+      "value": "32"
+    },
+    {
+      "name": "MAX_WHOLE_VAULT_GRAPH_RULE_LENGTH",
+      "value": "512"
+    },
+    {
+      "name": "WHOLE_VAULT_GRAPH_STATE_COMPLETE",
+      "value": "complete"
+    },
+    {
+      "name": "WHOLE_VAULT_GRAPH_STATE_PARTIAL",
+      "value": "partial"
+    },
+    {
+      "name": "WHOLE_VAULT_GRAPH_NODE_KIND_RESOLVED",
+      "value": "Resolved"
+    },
+    {
+      "name": "WHOLE_VAULT_GRAPH_NODE_KIND_UNRESOLVED",
+      "value": "Unresolved"
+    },
+    {
+      "name": "WHOLE_VAULT_GRAPH_EDGE_KIND_RESOLVED",
+      "value": "Resolved"
+    },
+    {
+      "name": "WHOLE_VAULT_GRAPH_EDGE_KIND_UNRESOLVED",
+      "value": "Unresolved"
+    },
+    {
+      "name": "WHOLE_VAULT_GRAPH_PARTIAL_MAX_NODES",
+      "value": "MaxNodes"
+    },
+    {
+      "name": "WHOLE_VAULT_GRAPH_PARTIAL_MAX_EDGES",
+      "value": "MaxEdges"
+    },
+    {
+      "name": "WHOLE_VAULT_GRAPH_PARTIAL_MAX_LABEL_BYTES",
+      "value": "MaxLabelBytes"
+    },
+    {
+      "name": "WHOLE_VAULT_GRAPH_PARTIAL_MAX_TAGS_PER_NODE",
+      "value": "MaxTagsPerNode"
+    },
+    {
+      "name": "WHOLE_VAULT_GRAPH_PARTIAL_MAX_GROUPS",
+      "value": "MaxGroups"
+    },
+    {
+      "name": "WHOLE_VAULT_GRAPH_PARTIAL_MAX_RULE_LENGTH",
+      "value": "MaxRuleLength"
+    }
+  ],
+  "error_codes": [
+    {
+      "group": "read_open",
+      "code": "missing_metadata",
+      "numeric_code": 1,
+      "state_code": 5
+    },
+    {
+      "group": "read_open",
+      "code": "corrupt_metadata",
+      "numeric_code": 2,
+      "state_code": 4
+    },
+    {
+      "group": "read_open",
+      "code": "schema_mismatch",
+      "numeric_code": 3,
+      "state_code": 4
+    },
+    {
+      "group": "read_open",
+      "code": "backend_mismatch",
+      "numeric_code": 4,
+      "state_code": 4
+    },
+    {
+      "group": "read_open",
+      "code": "tokenizer_mismatch",
+      "numeric_code": 5,
+      "state_code": 4
+    },
+    {
+      "group": "read_open",
+      "code": "missing_tantivy_index",
+      "numeric_code": 6,
+      "state_code": 5
+    },
+    {
+      "group": "read_open",
+      "code": "invalid_input",
+      "numeric_code": 7,
+      "state_code": 4
+    },
+    {
+      "group": "read_open",
+      "code": "panic",
+      "numeric_code": 8,
+      "state_code": 4
+    },
+    {
+      "group": "read_page",
+      "code": "metadata_error",
+      "numeric_code": null,
+      "state_code": 4
+    },
+    {
+      "group": "read_page",
+      "code": "search_error",
+      "numeric_code": null,
+      "state_code": 4
+    },
+    {
+      "group": "read_page",
+      "code": "panic",
+      "numeric_code": null,
+      "state_code": 4
+    },
+    {
+      "group": "read_page",
+      "code": "invalid_input",
+      "numeric_code": null,
+      "state_code": 4
+    },
+    {
+      "group": "read_page",
+      "code": "not_found",
+      "numeric_code": null,
+      "state_code": 4
+    },
+    {
+      "group": "json_response",
+      "code": "invalid_input",
+      "numeric_code": null,
+      "state_code": null
+    },
+    {
+      "group": "json_response",
+      "code": "invalid_json",
+      "numeric_code": null,
+      "state_code": null
+    },
+    {
+      "group": "json_response",
+      "code": "unsupported_encoding",
+      "numeric_code": null,
+      "state_code": null
+    },
+    {
+      "group": "json_response",
+      "code": "invalid_request",
+      "numeric_code": null,
+      "state_code": null
+    },
+    {
+      "group": "json_response",
+      "code": "missing_index",
+      "numeric_code": null,
+      "state_code": null
+    },
+    {
+      "group": "json_response",
+      "code": "stale_schema",
+      "numeric_code": null,
+      "state_code": null
+    },
+    {
+      "group": "json_response",
+      "code": "graph_index_error",
+      "numeric_code": null,
+      "state_code": null
+    },
+    {
+      "group": "json_response",
+      "code": "oversized_response",
+      "numeric_code": null,
+      "state_code": null
+    },
+    {
+      "group": "json_response",
+      "code": "path_error",
+      "numeric_code": null,
+      "state_code": null
+    },
+    {
+      "group": "json_response",
+      "code": "save_conflict",
+      "numeric_code": null,
+      "state_code": null
+    },
+    {
+      "group": "json_response",
+      "code": "read_only",
+      "numeric_code": null,
+      "state_code": null
+    },
+    {
+      "group": "json_response",
+      "code": "not_regular_file",
+      "numeric_code": null,
+      "state_code": null
+    },
+    {
+      "group": "json_response",
+      "code": "io_error",
+      "numeric_code": null,
+      "state_code": null
+    },
+    {
+      "group": "json_response",
+      "code": "queue_error",
+      "numeric_code": null,
+      "state_code": null
+    },
+    {
+      "group": "json_response",
+      "code": "serialization_error",
+      "numeric_code": null,
+      "state_code": null
+    },
+    {
+      "group": "json_response",
+      "code": "panic",
+      "numeric_code": null,
+      "state_code": null
+    },
+    {
+      "group": "read_rebuild",
+      "code": "invalid_input",
+      "numeric_code": null,
+      "state_code": 4
+    },
+    {
+      "group": "read_rebuild",
+      "code": "rebuild_failed",
+      "numeric_code": null,
+      "state_code": 4
+    },
+    {
+      "group": "read_rebuild",
+      "code": "panic",
+      "numeric_code": null,
+      "state_code": 4
+    }
+  ],
+  "json_contracts": [
+    {
+      "name": "FfiResponse<T>",
+      "direction": "rust_to_swift",
+      "fields": [
+        "ok",
+        "value",
+        "error"
+      ],
+      "values": []
+    },
+    {
+      "name": "FfiError",
+      "direction": "rust_to_swift",
+      "fields": [
+        "code",
+        "message",
+        "conflict_kind",
+        "conflict"
+      ],
+      "values": []
+    },
+    {
+      "name": "FfiFileIdentity",
+      "direction": "both",
+      "fields": [
+        "device",
+        "inode"
+      ],
+      "values": []
+    },
+    {
+      "name": "FfiSystemTime",
+      "direction": "both",
+      "fields": [
+        "secs_since_unix_epoch",
+        "nanos"
+      ],
+      "values": []
+    },
+    {
+      "name": "FfiSaveBaseline",
+      "direction": "both",
+      "fields": [
+        "relative_path",
+        "file_identity",
+        "size_bytes",
+        "modified",
+        "content_hash"
+      ],
+      "values": []
+    },
+    {
+      "name": "FfiSaveConflictSnapshot",
+      "direction": "both",
+      "fields": [
+        "file_identity",
+        "size_bytes",
+        "modified",
+        "content_hash"
+      ],
+      "values": []
+    },
+    {
+      "name": "FfiSaveConflict",
+      "direction": "both",
+      "fields": [
+        "relative_path",
+        "kind",
+        "expected",
+        "actual"
+      ],
+      "values": [
+        {
+          "name": "kind.Deleted",
+          "value": "Deleted"
+        },
+        {
+          "name": "kind.FileIdentityChanged",
+          "value": "FileIdentityChanged"
+        },
+        {
+          "name": "kind.ContentChanged",
+          "value": "ContentChanged"
+        },
+        {
+          "name": "kind.MetadataChanged",
+          "value": "MetadataChanged"
+        },
+        {
+          "name": "kind.SymlinkChanged",
+          "value": "SymlinkChanged"
+        }
+      ]
+    },
+    {
+      "name": "FfiSaveOutcome",
+      "direction": "rust_to_swift",
+      "fields": [
+        "baseline",
+        "bytes_written"
+      ],
+      "values": []
+    },
+    {
+      "name": "FfiQueuedItem",
+      "direction": "rust_to_swift",
+      "fields": [
+        "relative_path",
+        "generation",
+        "reason",
+        "status"
+      ],
+      "values": [
+        {
+          "name": "reason.InitialScan",
+          "value": "InitialScan"
+        },
+        {
+          "name": "reason.FileCreated",
+          "value": "FileCreated"
+        },
+        {
+          "name": "reason.FileChanged",
+          "value": "FileChanged"
+        },
+        {
+          "name": "reason.FileDeleted",
+          "value": "FileDeleted"
+        },
+        {
+          "name": "reason.Rebuild",
+          "value": "Rebuild"
+        },
+        {
+          "name": "reason.OwnSave",
+          "value": "OwnSave"
+        },
+        {
+          "name": "status.Pending",
+          "value": "Pending"
+        },
+        {
+          "name": "status.InProgress",
+          "value": "InProgress"
+        },
+        {
+          "name": "status.Completed",
+          "value": "Completed"
+        },
+        {
+          "name": "status.Failed",
+          "value": "Failed"
+        },
+        {
+          "name": "status.Cancelled",
+          "value": "Cancelled"
+        }
+      ]
+    },
+    {
+      "name": "FfiSaveReloadOutcome",
+      "direction": "rust_to_swift",
+      "fields": [
+        "baseline",
+        "contents",
+        "queued_item",
+        "dirty"
+      ],
+      "values": []
+    },
+    {
+      "name": "FfiSaveChoiceOutcome",
+      "direction": "rust_to_swift",
+      "fields": [
+        "choice",
+        "baseline",
+        "bytes_written",
+        "queued_item",
+        "dirty"
+      ],
+      "values": [
+        {
+          "name": "choice.KeepAsNewNote",
+          "value": "KeepAsNewNote"
+        },
+        {
+          "name": "choice.Overwrite",
+          "value": "Overwrite"
+        }
+      ]
+    },
+    {
+      "name": "FfiWholeVaultGraphRequest",
+      "direction": "swift_to_rust",
+      "fields": [
+        "payload_version",
+        "request_id",
+        "generation",
+        "include_unresolved",
+        "include_orphans",
+        "max_nodes",
+        "max_edges",
+        "byte_cap_bytes"
+      ],
+      "values": [
+        {
+          "name": "payload_version",
+          "value": "1"
+        },
+        {
+          "name": "current_generation",
+          "value": "0"
+        }
+      ]
+    },
+    {
+      "name": "FfiWholeVaultGraphPayload",
+      "direction": "rust_to_swift",
+      "fields": [
+        "payload_version",
+        "request_id",
+        "generation",
+        "state",
+        "metrics",
+        "snapshot"
+      ],
+      "values": [
+        {
+          "name": "state.complete",
+          "value": "complete"
+        },
+        {
+          "name": "state.partial",
+          "value": "partial"
+        }
+      ]
+    },
+    {
+      "name": "FfiWholeVaultGraphMetrics",
+      "direction": "rust_to_swift",
+      "fields": [
+        "snapshot_duration_milliseconds",
+        "encoded_payload_bytes"
+      ],
+      "values": []
+    },
+    {
+      "name": "WholeVaultGraphSnapshot",
+      "direction": "rust_to_swift",
+      "fields": [
+        "request_id",
+        "generation",
+        "partial_reasons",
+        "node_count_total",
+        "edge_count_total",
+        "nodes",
+        "edges"
+      ],
+      "values": [
+        {
+          "name": "partial_reason.MaxNodes",
+          "value": "MaxNodes"
+        },
+        {
+          "name": "partial_reason.MaxEdges",
+          "value": "MaxEdges"
+        },
+        {
+          "name": "partial_reason.MaxLabelBytes",
+          "value": "MaxLabelBytes"
+        },
+        {
+          "name": "partial_reason.MaxTagsPerNode",
+          "value": "MaxTagsPerNode"
+        },
+        {
+          "name": "partial_reason.MaxGroups",
+          "value": "MaxGroups"
+        },
+        {
+          "name": "partial_reason.MaxRuleLength",
+          "value": "MaxRuleLength"
+        }
+      ]
+    },
+    {
+      "name": "WholeVaultGraphNode",
+      "direction": "rust_to_swift",
+      "fields": [
+        "node_id",
+        "file_id",
+        "relative_path",
+        "label",
+        "kind",
+        "degree",
+        "tags"
+      ],
+      "values": [
+        {
+          "name": "kind.Resolved",
+          "value": "Resolved"
+        },
+        {
+          "name": "kind.Unresolved",
+          "value": "Unresolved"
+        }
+      ]
+    },
+    {
+      "name": "WholeVaultGraphEdge",
+      "direction": "rust_to_swift",
+      "fields": [
+        "source_node_id",
+        "target_node_id",
+        "kind",
+        "weight"
+      ],
+      "values": [
+        {
+          "name": "kind.Resolved",
+          "value": "Resolved"
+        },
+        {
+          "name": "kind.Unresolved",
+          "value": "Unresolved"
+        }
+      ]
+    }
+  ]
+}

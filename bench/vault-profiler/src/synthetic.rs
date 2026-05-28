@@ -290,8 +290,8 @@ mod tests {
     use super::*;
     use std::collections::BTreeMap;
     use tempfile::tempdir;
-    use vault_engine::benchmarks::{
-        VaultBackendBenchmarkOptions, run_shared_backend_benchmark_from_vault,
+    use vault_engine::diagnostics::profiler::{
+        SnippetStorageMode, VaultBackendBenchmarkOptions, run_shared_backend_benchmark_from_vault,
     };
 
     const ALLOWED_REGRESSION: f64 = 0.10;
@@ -411,7 +411,7 @@ mod tests {
             result_limit: 10,
             work_dir: dir.path().join("indexes"),
             time_to_usable_sample_count: 1,
-            snippet_storage_mode: vault_engine::benchmarks::SnippetStorageMode::StoredBody,
+            snippet_storage_mode: SnippetStorageMode::StoredBody,
             include_sqlite_fts: true,
         })
         .expect("benchmark");

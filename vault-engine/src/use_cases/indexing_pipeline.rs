@@ -1,31 +1,47 @@
 use std::fmt;
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::sync_channel;
+use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
 use serde::Serialize;
 
-use crate::attachments::{AttachmentReferenceSource, AttachmentResolutionState};
-use crate::index::{
-    AttachmentRecord, FileIndexStatus, FileMetadataRecords, FileRecord, HeadingRecord,
-    IndexSchemaMetadata, LinkEdgeRecord, MetadataStore, MetadataStoreError, PropertyRecord,
-    TagRecord, TagSource, slugify_heading,
+use crate::adapters::fs::path_resolver::VaultRoot;
+use crate::adapters::fs::scanner::scan_vault;
+#[cfg(test)]
+use crate::adapters::sqlite::IndexingQueueSummary;
+use crate::adapters::sqlite::{IndexingQueueError, MetadataStoreError};
+#[cfg(test)]
+use crate::adapters::sqlite::{IndexingQueueReason, MetadataStore};
+#[cfg(test)]
+use crate::adapters::tantivy::TantivySearchIndex;
+use crate::adapters::tantivy::{
+    TantivyIndexingStageMetrics, TantivySearchError, TantivyWriterOptions,
 };
-use crate::index_rebuild::{IndexRebuildError, IndexRebuildPaths, commit_index_rebuild};
-use crate::indexing_queue::{
-    IndexingQueue, IndexingQueueError, IndexingQueueItem, IndexingQueueReason, IndexingQueueSummary,
+use crate::core::files::FileIdentity;
+use crate::core::paths::{PathError, lookup_key};
+use crate::core::scan::ScanEntryKind;
+pub use crate::core::search::SnippetStorageMode;
+use crate::use_cases::index_rebuild::IndexRebuildError;
+pub use crate::use_cases::index_rebuild::run_full_rebuild_pipeline;
+#[cfg(test)]
+pub use crate::use_cases::index_rebuild::run_full_rebuild_pipeline_and_commit;
+#[cfg(test)]
+pub use crate::use_cases::process_indexing_queue::{
+    QueueBatchIndexOptions, QueueLeaseBatch, QueuePipelineItem, lease_queue_batch,
+    process_indexing_queue_batch,
 };
-use crate::parser::{ParsedMarkdown, PropertyValue, parse_markdown};
-use crate::paths::{FileIdentity, PathError, VaultRoot, lookup_key};
-use crate::scanner::{ScanEntryKind, scan_vault};
-use crate::sqlite_fts::SearchDocument;
-use crate::tantivy_search::{
-    TantivyIndexingStageMetrics, TantivySearchError, TantivySearchIndex, TantivyWriterOptions,
+#[cfg(test)]
+use crate::use_cases::process_indexing_queue::{
+    record_queue_failure, record_queue_failures, source_for_queue_item,
 };
+#[cfg(test)]
+pub use crate::use_cases::read_parse_documents::read_parse_source;
+pub use crate::use_cases::read_parse_documents::{
+    PipelineCorpusStats, read_search_document, run_read_parse_pipeline,
+};
+#[cfg(test)]
+use crate::use_cases::rebuild_tantivy::merge_tantivy_metrics;
+pub use crate::use_cases::rebuild_tantivy::run_tantivy_rebuild_pipeline;
 
 pub const MAX_DEFAULT_READ_PARSE_WORKERS: usize = 4;
 const DEFAULT_CHANNEL_CAPACITY: usize = 32;
@@ -88,32 +104,18 @@ impl IndexingPipelineOptions {
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum SnippetStorageMode {
-    StoredBody,
-    LazySourceExperiment,
-}
-
-impl SnippetStorageMode {
-    pub fn config_name(self) -> &'static str {
-        match self {
-            Self::StoredBody => "stored_body",
-            Self::LazySourceExperiment => "lazy_source_experiment",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
 pub enum IndexingPipelineTier {
     Discovered,
     MetadataReady,
     FilenameReady,
     BodyIndexing,
     Complete,
+    #[cfg(test)]
     Stale,
     Error,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum IndexingProgressStage {
@@ -124,6 +126,7 @@ pub enum IndexingProgressStage {
     CommitRebuild,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct IndexingProgressSnapshot {
     pub generation: u64,
@@ -136,6 +139,7 @@ pub struct IndexingProgressSnapshot {
     pub cancelled_count: usize,
 }
 
+#[cfg(test)]
 impl IndexingProgressSnapshot {
     pub fn from_queue_summary(
         generation: u64,
@@ -183,6 +187,7 @@ pub struct IndexingTierTransition {
 }
 
 impl ProductionIndexingPipelineResult {
+    #[cfg(test)]
     pub fn new(
         generation: u64,
         processed_count: usize,
@@ -232,32 +237,6 @@ impl ProductionIndexingPipelineResult {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct QueueBatchIndexOptions {
-    pub lease_limit: usize,
-    pub max_attempts: u32,
-}
-
-impl Default for QueueBatchIndexOptions {
-    fn default() -> Self {
-        Self {
-            lease_limit: 32,
-            max_attempts: 3,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct QueueLeaseBatch {
-    pub items: Vec<QueuePipelineItem>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct QueuePipelineItem {
-    pub queue_item: IndexingQueueItem,
-    pub source: Option<SearchDocumentSource>,
-}
-
 #[derive(Debug)]
 pub enum IndexingPipelineError {
     Io(std::io::Error),
@@ -285,100 +264,12 @@ pub struct SearchDocumentSource {
 pub struct LoadedSearchDocumentSources {
     pub sources: Vec<SearchDocumentSource>,
     pub stages: PipelineCorpusStageMetrics,
-    pub tier: IndexingPipelineTier,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PipelineCorpusStageMetrics {
     pub scan_micros: u64,
     pub source_collection_micros: u64,
-}
-
-pub struct TimedSearchDocument {
-    pub document: SearchDocument,
-    pub work_item: ParsedSearchWorkItem,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParsedSearchWorkItem {
-    pub source_index: usize,
-    pub file_id: String,
-    pub relative_path: PathBuf,
-    pub title: String,
-    pub body_len: usize,
-    pub metadata_counts: ParsedMetadataCounts,
-    pub metadata_records: FileMetadataRecords,
-    pub file_identity: FileIdentity,
-    pub size_bytes: u64,
-    pub modified: Option<SystemTime>,
-    pub timing: ReadParseTiming,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct ParsedMetadataCounts {
-    pub link_count: usize,
-    pub tag_count: usize,
-    pub property_count: usize,
-    pub heading_count: usize,
-    pub attachment_count: usize,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct ReadParseTiming {
-    pub read_micros: u64,
-    pub parse_micros: u64,
-    pub combined_micros: u64,
-    pub bytes: u64,
-}
-
-pub struct ReadParsePipelineRun {
-    pub stats: PipelineCorpusStats,
-    pub peak_in_flight_items: usize,
-}
-
-pub struct TantivyPipelineRun {
-    pub stats: PipelineCorpusStats,
-    pub peak_in_flight_items: usize,
-    pub stages: TantivyIndexingStageMetrics,
-}
-
-#[derive(Default)]
-pub struct PipelineCorpusStats {
-    pub document_count: usize,
-    pub total_document_bytes: u64,
-    first_document_index: Option<usize>,
-    first_document: Option<SearchDocument>,
-    pub read_micros: Vec<u64>,
-    pub parse_micros: Vec<u64>,
-    pub combined_micros: Vec<u64>,
-    pub read_parse_bytes: u64,
-}
-
-impl PipelineCorpusStats {
-    pub fn record(&mut self, document: &SearchDocument) {
-        self.document_count += 1;
-        self.total_document_bytes += document_bytes(document);
-    }
-
-    pub fn record_timed(&mut self, timed: &TimedSearchDocument) {
-        self.record(&timed.document);
-        if self
-            .first_document_index
-            .is_none_or(|index| timed.work_item.source_index < index)
-        {
-            self.first_document_index = Some(timed.work_item.source_index);
-            self.first_document = Some(timed.document.clone());
-        }
-        self.read_micros.push(timed.work_item.timing.read_micros);
-        self.parse_micros.push(timed.work_item.timing.parse_micros);
-        self.combined_micros
-            .push(timed.work_item.timing.combined_micros);
-        self.read_parse_bytes += timed.work_item.timing.bytes;
-    }
-
-    pub fn first_document(&self) -> Option<&SearchDocument> {
-        self.first_document.as_ref()
-    }
 }
 
 pub fn load_search_document_sources(
@@ -415,12 +306,12 @@ pub fn load_search_document_sources(
             scan_micros,
             source_collection_micros,
         },
-        tier: IndexingPipelineTier::Discovered,
     })
 }
 
-pub fn lease_queue_batch(
-    queue: &mut IndexingQueue,
+#[cfg(test)]
+pub(crate) fn lease_queue_batch_impl(
+    queue: &mut crate::adapters::sqlite::IndexingQueue,
     root: &VaultRoot,
     limit: usize,
 ) -> IndexingPipelineResult<QueueLeaseBatch> {
@@ -433,8 +324,9 @@ pub fn lease_queue_batch(
     Ok(QueueLeaseBatch { items })
 }
 
-pub fn process_indexing_queue_batch(
-    queue: &mut IndexingQueue,
+#[cfg(test)]
+pub(crate) fn process_indexing_queue_batch_impl(
+    queue: &mut crate::adapters::sqlite::IndexingQueue,
     metadata_store: &mut MetadataStore,
     tantivy_index: &mut TantivySearchIndex,
     root: &VaultRoot,
@@ -610,307 +502,7 @@ pub fn process_indexing_queue_batch(
     ))
 }
 
-pub fn run_full_rebuild_pipeline(
-    paths: &IndexRebuildPaths,
-    sources: &[SearchDocumentSource],
-    metadata: &IndexSchemaMetadata,
-    pipeline_options: &IndexingPipelineOptions,
-) -> IndexingPipelineResult<ProductionIndexingPipelineResult> {
-    let started = Instant::now();
-    let mut tier_transitions = vec![tier_transition(
-        IndexingPipelineTier::Discovered,
-        started.elapsed(),
-    )];
-    fs::create_dir_all(&paths.rebuild_directory)?;
-    let options = pipeline_options.normalized();
-    let metadata_path = paths.rebuild_directory.join("metadata.sqlite");
-    remove_sqlite_files(&metadata_path)?;
-    let mut metadata_store = MetadataStore::open(&metadata_path, metadata)?;
-    let batch_size = options.metadata_batch_size;
-    let mut pending = Vec::with_capacity(batch_size);
-    let mut sqlite_metadata_write_micros = 0;
-
-    run_read_parse_pipeline(sources, &options, |timed| {
-        let mut records = timed.work_item.metadata_records;
-        records.file.generation = metadata.generation;
-        records.file.mark_search_indexed();
-        pending.push(records);
-        if pending.len() >= batch_size {
-            let start = Instant::now();
-            metadata_store.replace_file_records_batch(&pending)?;
-            sqlite_metadata_write_micros += duration_micros_nonzero(start.elapsed());
-            pending.clear();
-        }
-        Ok::<(), IndexingPipelineError>(())
-    })?;
-
-    if !pending.is_empty() {
-        let start = Instant::now();
-        metadata_store.replace_file_records_batch(&pending)?;
-        sqlite_metadata_write_micros += duration_micros_nonzero(start.elapsed());
-    }
-    tier_transitions.push(tier_transition(
-        IndexingPipelineTier::MetadataReady,
-        started.elapsed(),
-    ));
-
-    let tantivy_dir = paths.rebuild_directory.join("tantivy");
-    reset_directory(&tantivy_dir)?;
-    let mut tantivy = TantivySearchIndex::open_in_dir(&tantivy_dir)?;
-    tier_transitions.push(tier_transition(
-        IndexingPipelineTier::BodyIndexing,
-        started.elapsed(),
-    ));
-    let tantivy_run = run_tantivy_rebuild_pipeline(&mut tantivy, sources, &options)?;
-    let time_to_usable_micros = duration_micros_nonzero(started.elapsed());
-    tier_transitions.push(IndexingTierTransition {
-        tier: IndexingPipelineTier::FilenameReady,
-        elapsed_micros: time_to_usable_micros,
-    });
-    tier_transitions.push(IndexingTierTransition {
-        tier: IndexingPipelineTier::Complete,
-        elapsed_micros: time_to_usable_micros,
-    });
-
-    Ok(production_result_with_timing(
-        metadata.generation,
-        tantivy_run.stages.added_document_count,
-        tantivy_run.stages.failed_document_count,
-        tantivy_run.stats,
-        sqlite_metadata_write_micros,
-        tantivy_run.stages,
-        tier_transitions,
-        Some(time_to_usable_micros),
-    ))
-}
-
-pub fn run_full_rebuild_pipeline_and_commit(
-    paths: &IndexRebuildPaths,
-    sources: &[SearchDocumentSource],
-    metadata: &IndexSchemaMetadata,
-    pipeline_options: &IndexingPipelineOptions,
-) -> IndexingPipelineResult<ProductionIndexingPipelineResult> {
-    let result = run_full_rebuild_pipeline(paths, sources, metadata, pipeline_options)?;
-    commit_index_rebuild(paths)?;
-    Ok(result)
-}
-
-pub fn read_search_document(
-    source: &SearchDocumentSource,
-) -> IndexingPipelineResult<SearchDocument> {
-    Ok(read_parse_source(source)?.document)
-}
-
-pub fn read_parse_source(
-    source: &SearchDocumentSource,
-) -> IndexingPipelineResult<TimedSearchDocument> {
-    read_parse_source_at(0, source)
-}
-
-pub fn read_parse_source_at(
-    source_index: usize,
-    source: &SearchDocumentSource,
-) -> IndexingPipelineResult<TimedSearchDocument> {
-    debug_assert_eq!(source.kind, ScanEntryKind::Markdown);
-    let combined_start = Instant::now();
-    let (body, read_micros) = read_markdown_body(&source.absolute_path)?;
-    let parse_start = Instant::now();
-    let parsed = parse_markdown(&body);
-    let parse_micros = duration_micros_nonzero(parse_start.elapsed());
-    let combined_micros = duration_micros_nonzero(combined_start.elapsed());
-    let bytes = body.len() as u64;
-    let title = parsed
-        .headings
-        .first()
-        .map(|heading| heading.text.clone())
-        .unwrap_or_else(|| fallback_title(&source.relative_path));
-    let metadata_counts = parsed_metadata_counts(&parsed);
-    let metadata_records = parsed_metadata_records(source, &parsed);
-    Ok(TimedSearchDocument {
-        document: SearchDocument {
-            file_id: source.file_id.clone(),
-            path: source.relative_path.to_string_lossy().to_string(),
-            title: title.clone(),
-            body,
-        },
-        work_item: ParsedSearchWorkItem {
-            source_index,
-            file_id: source.file_id.clone(),
-            relative_path: source.relative_path.clone(),
-            title,
-            body_len: bytes as usize,
-            metadata_counts,
-            metadata_records,
-            file_identity: source.file_identity.clone(),
-            size_bytes: source.size_bytes,
-            modified: source.modified,
-            timing: ReadParseTiming {
-                read_micros,
-                parse_micros,
-                combined_micros,
-                bytes,
-            },
-        },
-    })
-}
-
-pub fn run_read_parse_pipeline<F, E>(
-    sources: &[SearchDocumentSource],
-    options: &IndexingPipelineOptions,
-    mut consume: F,
-) -> Result<ReadParsePipelineRun, E>
-where
-    F: FnMut(TimedSearchDocument) -> Result<(), E>,
-    E: From<IndexingPipelineError>,
-{
-    let options = options.normalized();
-    let (sender, receiver) =
-        sync_channel::<IndexingPipelineResult<TimedSearchDocument>>(options.channel_capacity);
-    let next_source = AtomicUsize::new(0);
-    let in_flight = Arc::new(AtomicUsize::new(0));
-    let peak_in_flight = Arc::new(AtomicUsize::new(0));
-    let mut stats = PipelineCorpusStats::default();
-
-    thread::scope(|scope| {
-        for _ in 0..options.read_parse_workers {
-            let sender = sender.clone();
-            let in_flight = Arc::clone(&in_flight);
-            let peak_in_flight = Arc::clone(&peak_in_flight);
-            let next_source = &next_source;
-            scope.spawn(move || {
-                loop {
-                    let index = next_source.fetch_add(1, Ordering::Relaxed);
-                    let Some(source) = sources.get(index) else {
-                        break;
-                    };
-                    let result = read_parse_source_at(index, source);
-                    let current_in_flight = in_flight.fetch_add(1, Ordering::AcqRel) + 1;
-                    update_peak_in_flight(&peak_in_flight, current_in_flight);
-                    if sender.send(result).is_err() {
-                        in_flight.fetch_sub(1, Ordering::AcqRel);
-                        break;
-                    }
-                }
-            });
-        }
-        drop(sender);
-
-        for result in receiver {
-            in_flight.fetch_sub(1, Ordering::AcqRel);
-            let timed = result.map_err(E::from)?;
-            stats.record_timed(&timed);
-            consume(timed)?;
-        }
-
-        Ok::<(), E>(())
-    })?;
-
-    Ok(ReadParsePipelineRun {
-        stats,
-        peak_in_flight_items: peak_in_flight.load(Ordering::Acquire),
-    })
-}
-
-pub fn run_tantivy_rebuild_pipeline(
-    index: &mut TantivySearchIndex,
-    sources: &[SearchDocumentSource],
-    options: &IndexingPipelineOptions,
-) -> IndexingPipelineResult<TantivyPipelineRun> {
-    let options = options.normalized();
-    let (sender, receiver) =
-        sync_channel::<IndexingPipelineResult<TimedSearchDocument>>(options.channel_capacity);
-    let next_source = AtomicUsize::new(0);
-    let in_flight = Arc::new(AtomicUsize::new(0));
-    let peak_in_flight = Arc::new(AtomicUsize::new(0));
-    let mut stats = PipelineCorpusStats::default();
-
-    let stages = thread::scope(|scope| {
-        for _ in 0..options.read_parse_workers {
-            let sender = sender.clone();
-            let in_flight = Arc::clone(&in_flight);
-            let peak_in_flight = Arc::clone(&peak_in_flight);
-            let next_source = &next_source;
-            scope.spawn(move || {
-                loop {
-                    let index = next_source.fetch_add(1, Ordering::Relaxed);
-                    let Some(source) = sources.get(index) else {
-                        break;
-                    };
-                    let result = read_parse_source_at(index, source);
-                    let current_in_flight = in_flight.fetch_add(1, Ordering::AcqRel) + 1;
-                    update_peak_in_flight(&peak_in_flight, current_in_flight);
-                    if sender.send(result).is_err() {
-                        in_flight.fetch_sub(1, Ordering::AcqRel);
-                        break;
-                    }
-                }
-            });
-        }
-        drop(sender);
-
-        let documents = receiver.into_iter().map(|result| {
-            in_flight.fetch_sub(1, Ordering::AcqRel);
-            let timed = result?;
-            stats.record_timed(&timed);
-            Ok::<SearchDocument, IndexingPipelineError>(timed.document)
-        });
-
-        index.add_documents_for_rebuild_from_result_iter_with_options_and_stage_durations(
-            documents,
-            options.writer_options,
-        )
-    })?;
-
-    Ok(TantivyPipelineRun {
-        stats,
-        peak_in_flight_items: peak_in_flight.load(Ordering::Acquire),
-        stages,
-    })
-}
-
-fn source_for_queue_item(
-    root: &VaultRoot,
-    queue_item: &IndexingQueueItem,
-) -> IndexingPipelineResult<Option<SearchDocumentSource>> {
-    if queue_item.reason == IndexingQueueReason::FileDeleted {
-        return Ok(None);
-    }
-    let relative_path = queue_item.relative_path.to_string_lossy();
-    let resolved = root.resolve_existing_relative(relative_path.as_ref())?;
-
-    Ok(Some(SearchDocumentSource {
-        relative_path: resolved.relative_path,
-        absolute_path: resolved.absolute_path,
-        file_id: queue_item.file_id.clone(),
-        kind: queue_item.kind,
-        size_bytes: queue_item.size_bytes,
-        modified: queue_item.modified,
-        file_identity: resolved.file_identity,
-    }))
-}
-
-fn record_queue_failure(
-    queue: &mut IndexingQueue,
-    item_id: i64,
-    error: &impl fmt::Display,
-    max_attempts: u32,
-) -> IndexingPipelineResult<()> {
-    queue.record_failure(item_id, error.to_string(), max_attempts)?;
-    Ok(())
-}
-
-fn record_queue_failures(
-    queue: &mut IndexingQueue,
-    item_ids: &[i64],
-    error: &impl fmt::Display,
-    max_attempts: u32,
-) -> IndexingPipelineResult<()> {
-    for item_id in item_ids {
-        record_queue_failure(queue, *item_id, error, max_attempts)?;
-    }
-    Ok(())
-}
-
+#[cfg(test)]
 fn production_result(
     generation: u64,
     processed_count: usize,
@@ -931,54 +523,6 @@ fn production_result(
             tantivy,
         },
     )
-}
-
-fn production_result_with_timing(
-    generation: u64,
-    processed_count: usize,
-    failed_count: usize,
-    stats: PipelineCorpusStats,
-    sqlite_metadata_write_micros: u64,
-    tantivy: TantivyIndexingStageMetrics,
-    tier_transitions: Vec<IndexingTierTransition>,
-    time_to_usable_micros: Option<u64>,
-) -> ProductionIndexingPipelineResult {
-    ProductionIndexingPipelineResult::with_timing(
-        generation,
-        processed_count,
-        failed_count,
-        tier_transitions,
-        time_to_usable_micros,
-        ProductionIndexingStageMetrics {
-            read_parse_sample_count: stats.read_micros.len(),
-            read_parse_total_bytes: stats.read_parse_bytes,
-            read_parse_peak_in_flight_items: 0,
-            sqlite_metadata_write_micros,
-            tantivy,
-        },
-    )
-}
-
-fn tier_transition(tier: IndexingPipelineTier, elapsed: Duration) -> IndexingTierTransition {
-    IndexingTierTransition {
-        tier,
-        elapsed_micros: duration_micros_nonzero(elapsed),
-    }
-}
-
-fn merge_tantivy_metrics(
-    left: TantivyIndexingStageMetrics,
-    right: TantivyIndexingStageMetrics,
-) -> TantivyIndexingStageMetrics {
-    TantivyIndexingStageMetrics {
-        add_micros: left.add_micros + right.add_micros,
-        commit_micros: left.commit_micros + right.commit_micros,
-        reader_reload_micros: left.reader_reload_micros + right.reader_reload_micros,
-        added_document_count: left.added_document_count + right.added_document_count,
-        deleted_document_count: left.deleted_document_count + right.deleted_document_count,
-        skipped_document_count: left.skipped_document_count + right.skipped_document_count,
-        failed_document_count: left.failed_document_count + right.failed_document_count,
-    }
 }
 
 impl fmt::Display for IndexingPipelineError {
@@ -1035,197 +579,6 @@ impl From<TantivySearchError> for IndexingPipelineError {
     }
 }
 
-fn read_markdown_body(path: &Path) -> IndexingPipelineResult<(String, u64)> {
-    let start = Instant::now();
-    let body = fs::read_to_string(path)?;
-    let read_micros = duration_micros_nonzero(start.elapsed());
-    Ok((body, read_micros))
-}
-
-fn parsed_metadata_counts(parsed: &ParsedMarkdown) -> ParsedMetadataCounts {
-    ParsedMetadataCounts {
-        link_count: parsed.wikilinks.len()
-            + parsed.embeds.len()
-            + parsed
-                .markdown_links
-                .iter()
-                .filter(|link| !link.image)
-                .count(),
-        tag_count: parsed.tags.len(),
-        property_count: parsed.properties.len(),
-        heading_count: parsed.headings.len(),
-        attachment_count: parsed.embeds.len()
-            + parsed
-                .markdown_links
-                .iter()
-                .filter(|link| link.image)
-                .count(),
-    }
-}
-
-fn parsed_metadata_records(
-    source: &SearchDocumentSource,
-    parsed: &ParsedMarkdown,
-) -> FileMetadataRecords {
-    let file_id = source.file_id.clone();
-    let frontmatter_tags = frontmatter_tags(parsed);
-    let mut links = Vec::new();
-    let mut attachments = Vec::new();
-
-    for link in &parsed.wikilinks {
-        links.push(LinkEdgeRecord {
-            source_file_id: file_id.clone(),
-            target_text: link.target.clone(),
-            resolved_target_file_id: None,
-            heading: link.heading.clone(),
-            alias: link.alias.clone(),
-            is_embed: false,
-        });
-    }
-
-    for embed in &parsed.embeds {
-        links.push(LinkEdgeRecord {
-            source_file_id: file_id.clone(),
-            target_text: embed.target.clone(),
-            resolved_target_file_id: None,
-            heading: embed.heading.clone(),
-            alias: embed.alias.clone(),
-            is_embed: true,
-        });
-        attachments.push(AttachmentRecord {
-            source_file_id: file_id.clone(),
-            source: AttachmentReferenceSource::WikiEmbed,
-            raw_target: embed.target.clone(),
-            state: AttachmentResolutionState::Unsupported,
-        });
-    }
-
-    for link in &parsed.markdown_links {
-        if link.image {
-            attachments.push(AttachmentRecord {
-                source_file_id: file_id.clone(),
-                source: AttachmentReferenceSource::MarkdownImage,
-                raw_target: link.target.clone(),
-                state: AttachmentResolutionState::Unsupported,
-            });
-        } else {
-            links.push(LinkEdgeRecord {
-                source_file_id: file_id.clone(),
-                target_text: link.target.clone(),
-                resolved_target_file_id: None,
-                heading: None,
-                alias: Some(link.text.clone()),
-                is_embed: false,
-            });
-            if !link.target.ends_with(".md") {
-                attachments.push(AttachmentRecord {
-                    source_file_id: file_id.clone(),
-                    source: AttachmentReferenceSource::MarkdownLink,
-                    raw_target: link.target.clone(),
-                    state: AttachmentResolutionState::Unsupported,
-                });
-            }
-        }
-    }
-
-    FileMetadataRecords {
-        file: FileRecord {
-            file_id: file_id.clone(),
-            relative_path: source.relative_path.clone(),
-            kind: source.kind,
-            size_bytes: source.size_bytes,
-            modified: source.modified,
-            file_identity: source.file_identity.clone(),
-            content_hash: None,
-            generation: 0,
-            status: FileIndexStatus::Parsed,
-            last_error: None,
-        },
-        links,
-        tags: parsed
-            .tags
-            .iter()
-            .map(|tag| TagRecord {
-                file_id: file_id.clone(),
-                tag: tag.clone(),
-                source: if frontmatter_tags.contains(tag) {
-                    TagSource::Frontmatter
-                } else {
-                    TagSource::Inline
-                },
-            })
-            .collect(),
-        properties: parsed
-            .properties
-            .iter()
-            .map(|(key, value)| PropertyRecord::from_property_value(file_id.clone(), key, value))
-            .collect(),
-        headings: parsed
-            .headings
-            .iter()
-            .map(|heading| HeadingRecord {
-                file_id: file_id.clone(),
-                slug: slugify_heading(&heading.text),
-                title: heading.text.clone(),
-                level: heading.level,
-                byte_offset: None,
-            })
-            .collect(),
-        attachments,
-    }
-}
-
-fn frontmatter_tags(parsed: &ParsedMarkdown) -> Vec<String> {
-    match parsed.properties.get("tags") {
-        Some(PropertyValue::String(value)) => vec![value.clone()],
-        Some(PropertyValue::List(values)) => values.clone(),
-        _ => Vec::new(),
-    }
-}
-
-fn update_peak_in_flight(peak: &AtomicUsize, candidate: usize) {
-    let mut current = peak.load(Ordering::Acquire);
-    while candidate > current {
-        match peak.compare_exchange(current, candidate, Ordering::AcqRel, Ordering::Acquire) {
-            Ok(_) => break,
-            Err(observed) => current = observed,
-        }
-    }
-}
-
-fn fallback_title(relative_path: &Path) -> String {
-    relative_path
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .unwrap_or("Untitled")
-        .to_string()
-}
-
-fn document_bytes(document: &SearchDocument) -> u64 {
-    document.path.len() as u64 + document.title.len() as u64 + document.body.len() as u64
-}
-
-fn remove_file_if_exists(path: &Path) -> std::io::Result<()> {
-    if path.exists() {
-        fs::remove_file(path)?;
-    }
-    Ok(())
-}
-
-fn remove_sqlite_files(path: &Path) -> std::io::Result<()> {
-    remove_file_if_exists(path)?;
-    remove_file_if_exists(&path.with_extension("sqlite-wal"))?;
-    remove_file_if_exists(&path.with_extension("sqlite-shm"))?;
-    Ok(())
-}
-
-fn reset_directory(path: &Path) -> std::io::Result<()> {
-    if path.exists() {
-        fs::remove_dir_all(path)?;
-    }
-    fs::create_dir_all(path)
-}
-
 fn duration_micros(duration: Duration) -> u64 {
     duration.as_micros().min(u128::from(u64::MAX)) as u64
 }
@@ -1237,8 +590,16 @@ fn duration_micros_nonzero(duration: Duration) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::index::{FileIndexStatus, IndexSchemaMetadata};
-    use crate::indexing_queue::{IndexingQueueReason, IndexingQueueStatus};
+    use crate::adapters::fs::index_directory::mark_engine_owned_for_test;
+    use crate::adapters::sqlite::{
+        FileIndexStatus, FileRecord, IndexSchemaMetadata, IndexingQueue,
+    };
+    use crate::adapters::sqlite::{IndexingQueueReason, IndexingQueueStatus};
+    use crate::use_cases::index_rebuild::{
+        IndexRebuildError, IndexRebuildPathError, IndexRebuildPaths,
+    };
+    #[cfg(unix)]
+    use std::os::unix::fs::symlink;
     use std::path::{Path, PathBuf};
     use tempfile::tempdir;
 
@@ -1341,6 +702,134 @@ mod tests {
     }
 
     #[test]
+    fn queue_item_source_rejects_db_tampered_paths_before_read_parse() {
+        let temp = tempdir().expect("tempdir");
+        let root = fixture_vault(temp.path(), &["Safe.md"]);
+        let absolute_path = root
+            .canonical_root()
+            .join("Safe.md")
+            .to_string_lossy()
+            .to_string();
+
+        assert_tampered_queue_path_matches(&root, &absolute_path, |error| {
+            matches!(error, PathError::AbsolutePath(_))
+        });
+        assert_tampered_queue_path_matches(&root, "../outside.md", |error| {
+            matches!(error, PathError::OutsideVault(_))
+        });
+        assert_tampered_queue_path_matches(&root, "bad\0path.md", |error| {
+            matches!(error, PathError::ContainsNul)
+        });
+        assert_tampered_queue_path_matches(
+            &root,
+            "file:///etc/passwd",
+            |error| matches!(error, PathError::UrlScheme(scheme) if scheme == "file"),
+        );
+        assert_tampered_queue_path_matches(
+            &root,
+            "https://example.com/Note.md",
+            |error| matches!(error, PathError::UrlScheme(scheme) if scheme == "https"),
+        );
+        assert_tampered_queue_path_matches(
+            &root,
+            "obsidian://open?vault=Codex",
+            |error| matches!(error, PathError::UrlScheme(scheme) if scheme == "obsidian"),
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn queue_item_source_rejects_symlinked_db_tampered_paths() {
+        let temp = tempdir().expect("tempdir");
+        let root = fixture_vault(temp.path(), &["Safe.md"]);
+        let outside = temp.path().join("outside");
+        std::fs::create_dir_all(&outside).expect("outside dir");
+        std::fs::write(outside.join("Secret.md"), "# Secret").expect("outside note");
+
+        symlink(&outside, root.canonical_root().join("LinkedParent")).expect("symlinked parent");
+        assert_tampered_queue_path_matches(&root, "LinkedParent/Secret.md", |error| {
+            matches!(error, PathError::SymlinkEscape { .. })
+        });
+
+        symlink(
+            outside.join("Secret.md"),
+            root.canonical_root().join("SecretLink.md"),
+        )
+        .expect("symlinked note");
+        assert_tampered_queue_path_matches(&root, "SecretLink.md", |error| {
+            matches!(error, PathError::SymlinkEscape { .. })
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn queue_item_source_rejects_hardlinked_notes() {
+        let temp = tempdir().expect("tempdir");
+        let root = fixture_vault(temp.path(), &["Safe.md"]);
+        let outside = temp.path().join("outside");
+        std::fs::create_dir_all(&outside).expect("outside dir");
+        std::fs::write(outside.join("Shared.md"), "# Secret").expect("outside note");
+        let hardlinked_path = root.canonical_root().join("Shared.md");
+        std::fs::hard_link(outside.join("Shared.md"), &hardlinked_path).expect("hardlink");
+        let metadata = std::fs::metadata(&hardlinked_path).expect("metadata");
+        let file = FileRecord {
+            file_id: lookup_key(Path::new("Shared.md")),
+            relative_path: PathBuf::from("Shared.md"),
+            kind: ScanEntryKind::Markdown,
+            size_bytes: metadata.len(),
+            modified: metadata.modified().ok(),
+            file_identity: FileIdentity::from_metadata(&metadata),
+            content_hash: None,
+            generation: 1,
+            status: FileIndexStatus::SeenMetadata,
+            last_error: None,
+        };
+        let mut queue = IndexingQueue::open_in_memory().expect("queue");
+        queue
+            .enqueue_file(&file, IndexingQueueReason::FileChanged)
+            .expect("enqueue hardlink");
+
+        let error = lease_queue_batch(&mut queue, &root, 1).expect_err("hardlink");
+
+        assert!(matches!(
+            error,
+            IndexingPipelineError::Path(PathError::UnsupportedHardlink(_))
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_parse_source_rejects_hardlinked_markdown_body() {
+        let temp = tempdir().expect("tempdir");
+        let root = fixture_vault(temp.path(), &["Safe.md"]);
+        let outside = temp.path().join("outside");
+        std::fs::create_dir_all(&outside).expect("outside dir");
+        std::fs::write(outside.join("Shared.md"), "# Secret").expect("outside note");
+        let hardlinked_path = root.canonical_root().join("Shared.md");
+        std::fs::hard_link(outside.join("Shared.md"), &hardlinked_path).expect("hardlink");
+        let metadata = std::fs::metadata(&hardlinked_path).expect("metadata");
+        let source = SearchDocumentSource {
+            file_id: lookup_key(Path::new("Shared.md")),
+            relative_path: PathBuf::from("Shared.md"),
+            absolute_path: hardlinked_path,
+            kind: ScanEntryKind::Markdown,
+            size_bytes: metadata.len(),
+            modified: metadata.modified().ok(),
+            file_identity: FileIdentity::from_metadata(&metadata),
+        };
+
+        let error = match read_parse_source(&source) {
+            Ok(_) => panic!("expected hardlinked read to fail"),
+            Err(error) => error,
+        };
+
+        assert!(matches!(
+            error,
+            IndexingPipelineError::Io(error) if error.kind() == std::io::ErrorKind::PermissionDenied
+        ));
+    }
+
+    #[test]
     fn process_queue_batch_marks_created_and_changed_files_complete() {
         let temp = tempdir().expect("tempdir");
         let root = fixture_vault(temp.path(), &["Home.md", "Guide.md"]);
@@ -1379,7 +868,7 @@ mod tests {
         assert_eq!(queue.summary().expect("summary").completed, 2);
         assert_eq!(
             metadata_store
-                .row_count(crate::index::MetadataTable::Files)
+                .row_count(crate::adapters::sqlite::MetadataTable::Files)
                 .expect("files"),
             2
         );
@@ -1567,7 +1056,7 @@ mod tests {
         let temp = tempdir().expect("tempdir");
         let root = fixture_vault(temp.path(), &["Home.md"]);
         let paths = rebuild_paths(temp.path());
-        std::fs::create_dir_all(&paths.data_directory).expect("data");
+        mark_engine_owned_for_test(&paths.data_directory).expect("data");
         std::fs::write(paths.data_directory.join("old.index"), "old").expect("old data");
         let loaded = load_search_document_sources(&root).expect("sources");
 
@@ -1591,9 +1080,9 @@ mod tests {
         let temp = tempdir().expect("tempdir");
         let root = fixture_vault(temp.path(), &["Home.md"]);
         let paths = rebuild_paths(temp.path());
-        std::fs::create_dir_all(&paths.data_directory).expect("data");
+        mark_engine_owned_for_test(&paths.data_directory).expect("data");
         std::fs::write(paths.data_directory.join("old.index"), "old").expect("old data");
-        std::fs::create_dir_all(&paths.rebuild_directory).expect("rebuild");
+        mark_engine_owned_for_test(&paths.rebuild_directory).expect("rebuild");
         std::fs::write(paths.rebuild_directory.join("tantivy"), "not a directory")
             .expect("tantivy blocker");
         let loaded = load_search_document_sources(&root).expect("sources");
@@ -1605,9 +1094,53 @@ mod tests {
             &IndexingPipelineOptions::serial(),
         );
 
-        assert!(matches!(result, Err(IndexingPipelineError::Io(_))));
+        assert!(matches!(
+            result,
+            Err(IndexingPipelineError::Rebuild(
+                IndexRebuildError::InvalidPath(IndexRebuildPathError::MissingEngineOwnedMarker)
+            ))
+        ));
         assert!(paths.data_directory.join("old.index").exists());
         assert!(paths.rebuild_directory.exists());
+    }
+
+    #[test]
+    fn full_rebuild_rejects_unmarked_tantivy_directory_without_touching_data() {
+        let temp = tempdir().expect("tempdir");
+        let root = fixture_vault(temp.path(), &["Home.md"]);
+        let paths = rebuild_paths(temp.path());
+        mark_engine_owned_for_test(&paths.data_directory).expect("data");
+        std::fs::write(paths.data_directory.join("old.index"), "old").expect("old data");
+        mark_engine_owned_for_test(&paths.rebuild_directory).expect("rebuild");
+        std::fs::create_dir_all(paths.rebuild_directory.join("tantivy")).expect("tantivy");
+        std::fs::write(
+            paths.rebuild_directory.join("tantivy").join("stale"),
+            "stale",
+        )
+        .expect("stale tantivy");
+        let loaded = load_search_document_sources(&root).expect("sources");
+
+        let result = run_full_rebuild_pipeline_and_commit(
+            &paths,
+            &loaded.sources,
+            &IndexSchemaMetadata::new("sqlite+tantivy", "metadata-v1", "tantivy", 6),
+            &IndexingPipelineOptions::serial(),
+        );
+
+        assert!(matches!(
+            result,
+            Err(IndexingPipelineError::Rebuild(
+                IndexRebuildError::InvalidPath(IndexRebuildPathError::MissingEngineOwnedMarker)
+            ))
+        ));
+        assert!(paths.data_directory.join("old.index").exists());
+        assert!(
+            paths
+                .rebuild_directory
+                .join("tantivy")
+                .join("stale")
+                .exists()
+        );
     }
 
     #[test]
@@ -1632,6 +1165,20 @@ mod tests {
         assert!(!json.contains(".md"));
         assert!(!json.contains("Home"));
         assert!(!json.contains("/"));
+
+        let stages = [
+            (IndexingProgressStage::LeaseQueue, "lease_queue"),
+            (IndexingProgressStage::ReadParse, "read_parse"),
+            (IndexingProgressStage::MetadataWrite, "metadata_write"),
+            (IndexingProgressStage::SearchIndex, "search_index"),
+            (IndexingProgressStage::CommitRebuild, "commit_rebuild"),
+        ];
+        for (stage, serialized) in stages {
+            assert_eq!(
+                serde_json::to_string(&stage).expect("stage json"),
+                format!("\"{serialized}\"")
+            );
+        }
     }
 
     fn metadata_store() -> MetadataStore {
@@ -1702,5 +1249,30 @@ mod tests {
             status: FileIndexStatus::SeenMetadata,
             last_error: None,
         }
+    }
+
+    fn assert_tampered_queue_path_matches(
+        root: &VaultRoot,
+        tampered_relative_path: &str,
+        predicate: impl FnOnce(&PathError) -> bool,
+    ) {
+        let mut queue = IndexingQueue::open_in_memory().expect("queue");
+        let file = file_record(root, "Safe.md", 1);
+        queue
+            .enqueue_file(&file, IndexingQueueReason::FileChanged)
+            .expect("enqueue safe file");
+        queue
+            .tamper_relative_path_for_test(&file.file_id, tampered_relative_path)
+            .expect("tamper path");
+
+        let error = lease_queue_batch(&mut queue, root, 1).expect_err("reject tampered path");
+
+        let IndexingPipelineError::Path(path_error) = error else {
+            panic!("expected path error for {tampered_relative_path:?}");
+        };
+        assert!(
+            predicate(&path_error),
+            "unexpected path error for {tampered_relative_path:?}: {path_error:?}"
+        );
     }
 }
