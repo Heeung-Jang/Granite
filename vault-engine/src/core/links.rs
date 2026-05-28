@@ -369,10 +369,11 @@ mod tests {
     }
 
     #[test]
-    fn builds_from_note_metadata_without_bodies() {
-        let targets = (0..10_000)
+    fn builds_100k_targets_from_note_metadata_without_bodies_under_budget() {
+        let targets = (0..100_000)
             .map(|index| (format!("id-{index}"), format!("Folder/Note-{index}.md")))
             .collect::<Vec<_>>();
+        let started = std::time::Instant::now();
         let index =
             NoteTargetIndex::from_targets(targets.iter().map(|(file_id, relative_path)| {
                 NoteTarget {
@@ -380,11 +381,16 @@ mod tests {
                     relative_path: Path::new(relative_path),
                 }
             }));
+        let elapsed = started.elapsed();
 
-        assert_eq!(index.targets.len(), 10_000);
+        assert_eq!(index.targets.len(), 100_000);
         assert_eq!(
-            resolved_file_id(index.resolve_wiki_target(Path::new("Home.md"), "Note-9999")),
-            Some("id-9999")
+            resolved_file_id(index.resolve_wiki_target(Path::new("Home.md"), "Note-99999")),
+            Some("id-99999")
+        );
+        assert!(
+            elapsed <= std::time::Duration::from_millis(1_500),
+            "100k resolver build exceeded budget: {elapsed:?}"
         );
     }
 }
