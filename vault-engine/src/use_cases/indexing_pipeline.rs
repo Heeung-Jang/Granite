@@ -1,3 +1,5 @@
+#[cfg(test)]
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::path::PathBuf;
 use std::thread;
@@ -18,6 +20,8 @@ use crate::adapters::tantivy::{
     TantivyIndexingStageMetrics, TantivySearchError, TantivyWriterOptions,
 };
 use crate::core::files::FileIdentity;
+#[cfg(test)]
+use crate::core::links::{NoteTarget, NoteTargetIndex};
 use crate::core::paths::{PathError, lookup_key};
 use crate::core::scan::ScanEntryKind;
 pub use crate::core::search::SnippetStorageMode;
@@ -36,6 +40,8 @@ use crate::use_cases::process_indexing_queue::{
 };
 #[cfg(test)]
 pub use crate::use_cases::read_parse_documents::read_parse_source;
+#[cfg(test)]
+use crate::use_cases::read_parse_documents::read_parse_source_at_with_note_targets;
 pub use crate::use_cases::read_parse_documents::{
     PipelineCorpusStats, read_search_document, run_read_parse_pipeline,
 };
@@ -343,6 +349,8 @@ pub(crate) fn process_indexing_queue_batch_impl(
     let mut successful_item_ids = Vec::new();
     let mut deleted_file_ids = Vec::new();
     let mut deleted_item_ids = Vec::new();
+    let mut parse_items = Vec::new();
+    let mut batch_sources = Vec::new();
     let options = pipeline_options.normalized();
 
     for queue_item in queue_items {
@@ -353,11 +361,13 @@ pub(crate) fn process_indexing_queue_batch_impl(
             continue;
         }
 
-        let source = match source_for_queue_item(root, &queue_item) {
-            Ok(Some(source)) => source,
+        match source_for_queue_item(root, &queue_item) {
+            Ok(Some(source)) => {
+                batch_sources.push(source.clone());
+                parse_items.push((queue_item, source));
+            }
             Ok(None) => {
                 successful_item_ids.push(queue_item.item_id);
-                continue;
             }
             Err(error) => {
                 record_queue_failure(
@@ -367,11 +377,15 @@ pub(crate) fn process_indexing_queue_batch_impl(
                     batch_options.max_attempts,
                 )?;
                 failed_count += 1;
-                continue;
             }
-        };
+        }
+    }
 
-        match read_parse_source(&source) {
+    let note_targets =
+        note_target_index_for_queue(metadata_store, &batch_sources, &deleted_file_ids)?;
+
+    for (queue_item, source) in parse_items {
+        match read_parse_source_at_with_note_targets(0, &source, Some(&note_targets)) {
             Ok(timed) => {
                 stats.record_timed(&timed);
                 let mut records = timed.work_item.metadata_records;
@@ -500,6 +514,44 @@ pub(crate) fn process_indexing_queue_batch_impl(
         sqlite_metadata_write_micros,
         tantivy_stages,
     ))
+}
+
+#[cfg(test)]
+fn note_target_index_for_queue(
+    metadata_store: &MetadataStore,
+    batch_sources: &[SearchDocumentSource],
+    deleted_file_ids: &[String],
+) -> IndexingPipelineResult<NoteTargetIndex> {
+    const PAGE_SIZE: usize = 4_096;
+
+    let deleted_file_ids = deleted_file_ids.iter().cloned().collect::<HashSet<_>>();
+    let mut targets = HashMap::<String, PathBuf>::new();
+    let mut offset = 0;
+    loop {
+        let files = metadata_store.list_markdown_files(offset, PAGE_SIZE)?;
+        if files.is_empty() {
+            break;
+        }
+        offset += files.len();
+        for file in files {
+            if !deleted_file_ids.contains(&file.file_id) {
+                targets.insert(file.file_id, file.relative_path);
+            }
+        }
+    }
+
+    for source in batch_sources {
+        if !deleted_file_ids.contains(&source.file_id) {
+            targets.insert(source.file_id.clone(), source.relative_path.clone());
+        }
+    }
+
+    Ok(NoteTargetIndex::from_targets(targets.iter().map(
+        |(file_id, relative_path)| NoteTarget {
+            file_id,
+            relative_path,
+        },
+    )))
 }
 
 #[cfg(test)]
@@ -934,6 +986,123 @@ mod tests {
     }
 
     #[test]
+    fn process_queue_batch_resolves_links_to_persisted_markdown_outside_batch() {
+        let temp = tempdir().expect("tempdir");
+        let root = fixture_vault(temp.path(), &["Home.md", "Target.md"]);
+        let mut queue = IndexingQueue::open_in_memory().expect("queue");
+        let mut metadata_store = metadata_store();
+        let mut tantivy = TantivySearchIndex::open_in_ram().expect("tantivy");
+        queue
+            .enqueue_file(
+                &file_record(&root, "Target.md", 1),
+                IndexingQueueReason::FileCreated,
+            )
+            .expect("target");
+        process_indexing_queue_batch(
+            &mut queue,
+            &mut metadata_store,
+            &mut tantivy,
+            &root,
+            QueueBatchIndexOptions::default(),
+            &IndexingPipelineOptions::serial(),
+        )
+        .expect("target process");
+        std::fs::write(
+            root.canonical_root().join("Home.md"),
+            "# Home\n\n[[Target]]\n",
+        )
+        .expect("edit home");
+        queue
+            .enqueue_file(
+                &file_record(&root, "Home.md", 2),
+                IndexingQueueReason::FileChanged,
+            )
+            .expect("home");
+
+        let result = process_indexing_queue_batch(
+            &mut queue,
+            &mut metadata_store,
+            &mut tantivy,
+            &root,
+            QueueBatchIndexOptions::default(),
+            &IndexingPipelineOptions::serial(),
+        )
+        .expect("home process");
+
+        assert_eq!(result.failed_count, 0);
+        let links = metadata_store
+            .outgoing_links(&lookup_key(Path::new("Home.md")), 0, 10)
+            .expect("home links");
+        assert_eq!(links.len(), 1);
+        assert_eq!(
+            links[0].resolved_target_file_id.as_deref(),
+            Some(lookup_key(Path::new("Target.md")).as_str())
+        );
+    }
+
+    #[test]
+    fn process_queue_batch_does_not_resolve_links_to_deleted_markdown() {
+        let temp = tempdir().expect("tempdir");
+        let root = fixture_vault(temp.path(), &["Home.md", "Target.md"]);
+        let mut queue = IndexingQueue::open_in_memory().expect("queue");
+        let mut metadata_store = metadata_store();
+        let mut tantivy = TantivySearchIndex::open_in_ram().expect("tantivy");
+        let target_generation_one = file_record(&root, "Target.md", 1);
+        queue
+            .enqueue_file(&target_generation_one, IndexingQueueReason::FileCreated)
+            .expect("target");
+        process_indexing_queue_batch(
+            &mut queue,
+            &mut metadata_store,
+            &mut tantivy,
+            &root,
+            QueueBatchIndexOptions::default(),
+            &IndexingPipelineOptions::serial(),
+        )
+        .expect("target process");
+        std::fs::remove_file(root.canonical_root().join("Target.md")).expect("delete target");
+        std::fs::write(
+            root.canonical_root().join("Home.md"),
+            "# Home\n\n[[Target]]\n",
+        )
+        .expect("edit home");
+        let mut deleted_target = target_generation_one;
+        deleted_target.mark_tombstoned(2);
+        queue
+            .enqueue_file(&deleted_target, IndexingQueueReason::FileDeleted)
+            .expect("delete enqueue");
+        queue
+            .enqueue_file(
+                &file_record(&root, "Home.md", 2),
+                IndexingQueueReason::FileChanged,
+            )
+            .expect("home");
+
+        let result = process_indexing_queue_batch(
+            &mut queue,
+            &mut metadata_store,
+            &mut tantivy,
+            &root,
+            QueueBatchIndexOptions::default(),
+            &IndexingPipelineOptions::serial(),
+        )
+        .expect("process");
+
+        assert_eq!(result.failed_count, 0);
+        assert!(
+            metadata_store
+                .get_file(&lookup_key(Path::new("Target.md")))
+                .expect("target lookup")
+                .is_none()
+        );
+        let links = metadata_store
+            .outgoing_links(&lookup_key(Path::new("Home.md")), 0, 10)
+            .expect("home links");
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].resolved_target_file_id, None);
+    }
+
+    #[test]
     fn process_queue_batch_records_retryable_failures() {
         let temp = tempdir().expect("tempdir");
         let root = fixture_vault(temp.path(), &[]);
@@ -1052,12 +1221,48 @@ mod tests {
     }
 
     #[test]
+    fn full_rebuild_persists_resolved_wikilink_metadata() {
+        let temp = tempdir().expect("tempdir");
+        let root = fixture_vault(temp.path(), &["Home.md", "Target.md"]);
+        std::fs::write(
+            root.canonical_root().join("Home.md"),
+            "# Home\n\n[[Target]]\n",
+        )
+        .expect("edit home");
+        let paths = rebuild_paths(temp.path());
+        let metadata = IndexSchemaMetadata::new("sqlite+tantivy", "metadata-v1", "tantivy", 4);
+        let loaded = load_search_document_sources(&root).expect("sources");
+
+        let result = run_full_rebuild_pipeline(
+            &paths,
+            &loaded.sources,
+            &metadata,
+            &IndexingPipelineOptions::serial(),
+        )
+        .expect("rebuild");
+
+        assert_eq!(result.failed_count, 0);
+        let metadata_store =
+            MetadataStore::open(paths.rebuild_directory.join("metadata.sqlite"), &metadata)
+                .expect("metadata");
+        let links = metadata_store
+            .outgoing_links(&lookup_key(Path::new("Home.md")), 0, 10)
+            .expect("home links");
+        assert_eq!(links.len(), 1);
+        assert_eq!(
+            links[0].resolved_target_file_id.as_deref(),
+            Some(lookup_key(Path::new("Target.md")).as_str())
+        );
+    }
+
+    #[test]
     fn full_rebuild_commits_only_after_stores_succeed() {
         let temp = tempdir().expect("tempdir");
         let root = fixture_vault(temp.path(), &["Home.md"]);
         let paths = rebuild_paths(temp.path());
         mark_engine_owned_for_test(&paths.data_directory).expect("data");
-        std::fs::write(paths.data_directory.join("old.index"), "old").expect("old data");
+        std::fs::write(paths.data_directory.join("indexing-queue.sqlite"), "old")
+            .expect("old data");
         let loaded = load_search_document_sources(&root).expect("sources");
 
         let result = run_full_rebuild_pipeline_and_commit(
@@ -1070,21 +1275,21 @@ mod tests {
 
         assert_eq!(result.processed_count, 1);
         assert!(!paths.rebuild_directory.exists());
-        assert!(!paths.data_directory.join("old.index").exists());
+        assert!(!paths.data_directory.join("indexing-queue.sqlite").exists());
         assert!(paths.data_directory.join("metadata.sqlite").exists());
         assert!(paths.data_directory.join("tantivy").exists());
     }
 
     #[test]
-    fn failed_rebuild_keeps_active_data_uncommitted() {
+    fn failed_rebuild_keeps_active_data_uncommitted_when_rebuild_has_unknown_root_file() {
         let temp = tempdir().expect("tempdir");
         let root = fixture_vault(temp.path(), &["Home.md"]);
         let paths = rebuild_paths(temp.path());
         mark_engine_owned_for_test(&paths.data_directory).expect("data");
-        std::fs::write(paths.data_directory.join("old.index"), "old").expect("old data");
-        mark_engine_owned_for_test(&paths.rebuild_directory).expect("rebuild");
-        std::fs::write(paths.rebuild_directory.join("tantivy"), "not a directory")
-            .expect("tantivy blocker");
+        std::fs::write(paths.data_directory.join("metadata.sqlite"), "old").expect("old data");
+        std::fs::create_dir_all(&paths.rebuild_directory).expect("rebuild");
+        std::fs::write(paths.rebuild_directory.join("stale.tmp"), "stale")
+            .expect("unknown rebuild file");
         let loaded = load_search_document_sources(&root).expect("sources");
 
         let result = run_full_rebuild_pipeline_and_commit(
@@ -1097,21 +1302,38 @@ mod tests {
         assert!(matches!(
             result,
             Err(IndexingPipelineError::Rebuild(
-                IndexRebuildError::InvalidPath(IndexRebuildPathError::MissingEngineOwnedMarker)
+                IndexRebuildError::InvalidPath(
+                    IndexRebuildPathError::UnexpectedIndexDirectoryEntry
+                )
             ))
         ));
-        assert!(paths.data_directory.join("old.index").exists());
-        assert!(paths.rebuild_directory.exists());
+        assert_eq!(
+            std::fs::read_to_string(paths.data_directory.join("metadata.sqlite"))
+                .expect("old data"),
+            "old"
+        );
+        assert_eq!(
+            std::fs::read_to_string(paths.rebuild_directory.join("stale.tmp"))
+                .expect("unknown rebuild file"),
+            "stale"
+        );
+        assert!(!paths.data_directory.join("stale.tmp").exists());
     }
 
     #[test]
-    fn full_rebuild_rejects_unmarked_tantivy_directory_without_touching_data() {
+    fn full_rebuild_resets_known_markerless_rebuild_artifacts_without_touching_vault() {
         let temp = tempdir().expect("tempdir");
         let root = fixture_vault(temp.path(), &["Home.md"]);
         let paths = rebuild_paths(temp.path());
         mark_engine_owned_for_test(&paths.data_directory).expect("data");
-        std::fs::write(paths.data_directory.join("old.index"), "old").expect("old data");
-        mark_engine_owned_for_test(&paths.rebuild_directory).expect("rebuild");
+        std::fs::write(paths.data_directory.join("indexing-queue.sqlite"), "old")
+            .expect("old data");
+        std::fs::create_dir_all(&paths.rebuild_directory).expect("rebuild");
+        std::fs::write(
+            paths.rebuild_directory.join("metadata.sqlite"),
+            "stale metadata",
+        )
+        .expect("stale metadata");
         std::fs::create_dir_all(paths.rebuild_directory.join("tantivy")).expect("tantivy");
         std::fs::write(
             paths.rebuild_directory.join("tantivy").join("stale"),
@@ -1125,22 +1347,16 @@ mod tests {
             &loaded.sources,
             &IndexSchemaMetadata::new("sqlite+tantivy", "metadata-v1", "tantivy", 6),
             &IndexingPipelineOptions::serial(),
-        );
+        )
+        .expect("rebuild commit");
 
-        assert!(matches!(
-            result,
-            Err(IndexingPipelineError::Rebuild(
-                IndexRebuildError::InvalidPath(IndexRebuildPathError::MissingEngineOwnedMarker)
-            ))
-        ));
-        assert!(paths.data_directory.join("old.index").exists());
-        assert!(
-            paths
-                .rebuild_directory
-                .join("tantivy")
-                .join("stale")
-                .exists()
-        );
+        assert_eq!(result.processed_count, 1);
+        assert!(!paths.data_directory.join("indexing-queue.sqlite").exists());
+        assert!(paths.data_directory.join("metadata.sqlite").exists());
+        assert!(paths.data_directory.join("tantivy").exists());
+        assert!(!paths.data_directory.join("tantivy").join("stale").exists());
+        assert!(!paths.data_directory.join("rebuild.json").exists());
+        assert!(!paths.rebuild_directory.exists());
     }
 
     #[test]

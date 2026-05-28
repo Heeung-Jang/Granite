@@ -3,7 +3,7 @@ use std::path::Path;
 
 use crate::adapters::sqlite::{
     GraphFileRecord, GraphResolvedEdgeRecord, GraphTagRecord, GraphUnresolvedEdgeRecord,
-    IndexSchemaMetadata, MetadataStore, MetadataStoreError,
+    MetadataStore, MetadataStoreError,
 };
 use crate::core::graph::{
     WholeVaultGraphBuild, WholeVaultGraphEdge, WholeVaultGraphEdgeKind, WholeVaultGraphNode,
@@ -11,6 +11,7 @@ use crate::core::graph::{
     WholeVaultGraphSnapshot,
 };
 use crate::core::links::unresolved_target_key;
+use crate::use_cases::read_vault::expected_read_schema_metadata_for_generation;
 
 pub const MAX_WHOLE_VAULT_GRAPH_NODES: usize = 100_000;
 pub const MAX_WHOLE_VAULT_GRAPH_EDGES: usize = 250_000;
@@ -270,6 +271,24 @@ pub fn build_whole_vault_graph_from_metadata(
 ) -> Result<WholeVaultGraphBuild, MetadataStoreError> {
     let edge_fetch_limit = request.edge_limit().saturating_add(1);
     let node_fetch_limit = request.node_limit().saturating_add(1);
+    if !request.include_unresolved && !request.include_orphans {
+        let resolved_edges = metadata.graph_resolved_edges_compact(generation, edge_fetch_limit)?;
+        if resolved_edges.is_empty() {
+            return Ok(build_whole_vault_graph_snapshot(
+                request,
+                generation,
+                WholeVaultGraphInputs {
+                    node_count_total: 0,
+                    edge_count_total: 0,
+                    files: Vec::new(),
+                    resolved_edges,
+                    unresolved_edges: Vec::new(),
+                    orphan_files: Vec::new(),
+                    tags: Vec::new(),
+                },
+            ));
+        }
+    }
     let all_files = metadata.graph_files(generation, node_fetch_limit)?;
     let has_all_files = all_files.len() < node_fetch_limit;
     let resolved_edges = if has_all_files {
@@ -337,7 +356,7 @@ pub(crate) fn read_whole_vault_graph_snapshot(
     }
 
     let generation = graph_request_generation(request.metadata_path, request.requested_generation)?;
-    let expected = IndexSchemaMetadata::new("sqlite+tantivy", "metadata-v2", "tantivy", generation);
+    let expected = expected_read_schema_metadata_for_generation(generation);
     let metadata =
         MetadataStore::open(request.metadata_path, &expected).map_err(graph_metadata_error)?;
     let graph = build_whole_vault_graph_from_metadata(&metadata, generation, request.graph_request)
@@ -620,4 +639,95 @@ fn stable_hash_hex(value: &str) -> String {
         hash = hash.wrapping_mul(0x100000001b3);
     }
     format!("{hash:016x}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::adapters::sqlite::{
+        FileIndexStatus, FileRecord, IndexSchemaMetadata, LinkEdgeRecord,
+    };
+    use crate::core::files::FileIdentity;
+    use crate::core::paths::lookup_key;
+    use crate::core::scan::ScanEntryKind;
+    use std::path::PathBuf;
+
+    #[test]
+    fn resolved_only_empty_graph_returns_empty_snapshot_without_orphans() {
+        let mut store = graph_store();
+        store
+            .replace_file_records(&file_record("Home.md"), &[], &[], &[], &[], &[])
+            .expect("home");
+
+        let graph = build_whole_vault_graph_from_metadata(
+            &store,
+            1,
+            WholeVaultGraphRequest::with_request_id(1, 100, 100),
+        )
+        .expect("graph");
+
+        assert!(!graph.partial);
+        assert_eq!(graph.snapshot.node_count_total, 0);
+        assert_eq!(graph.snapshot.edge_count_total, 0);
+        assert!(graph.snapshot.nodes.is_empty());
+        assert!(graph.snapshot.edges.is_empty());
+    }
+
+    #[test]
+    fn unresolved_graph_request_still_renders_unresolved_edges() {
+        let mut store = graph_store();
+        let home = file_record("Home.md");
+        let links = [LinkEdgeRecord {
+            source_file_id: home.file_id.clone(),
+            target_text: "Missing".to_string(),
+            resolved_target_file_id: None,
+            heading: None,
+            alias: None,
+            is_embed: false,
+        }];
+        store
+            .replace_file_records(&home, &links, &[], &[], &[], &[])
+            .expect("home");
+
+        let graph = build_whole_vault_graph_from_metadata(
+            &store,
+            1,
+            WholeVaultGraphRequest::with_request_id(1, 100, 100).including_unresolved(true),
+        )
+        .expect("graph");
+
+        assert_eq!(graph.snapshot.node_count_total, 2);
+        assert_eq!(graph.snapshot.edge_count_total, 1);
+        assert_eq!(graph.snapshot.nodes.len(), 2);
+        assert_eq!(graph.snapshot.edges.len(), 1);
+    }
+
+    fn graph_store() -> MetadataStore {
+        MetadataStore::open_in_memory(&IndexSchemaMetadata::new(
+            "sqlite+tantivy",
+            "metadata-v3",
+            "tantivy",
+            1,
+        ))
+        .expect("metadata store")
+    }
+
+    fn file_record(relative_path: &str) -> FileRecord {
+        let relative_path = PathBuf::from(relative_path);
+        FileRecord {
+            file_id: lookup_key(&relative_path),
+            relative_path,
+            kind: ScanEntryKind::Markdown,
+            size_bytes: 0,
+            modified: None,
+            file_identity: FileIdentity {
+                device: 0,
+                inode: 0,
+            },
+            content_hash: None,
+            generation: 1,
+            status: FileIndexStatus::SearchIndexed,
+            last_error: None,
+        }
+    }
 }

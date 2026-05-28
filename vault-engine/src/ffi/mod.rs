@@ -562,6 +562,77 @@ mod tests {
     }
 
     #[test]
+    fn engine_read_rebuild_index_replaces_precreated_unmarked_index_directories() {
+        let dir = tempdir().expect("tempdir");
+        let vault_path = dir.path().join("vault");
+        fs::create_dir_all(&vault_path).expect("vault dir");
+        fs::write(vault_path.join("Home.md"), "# Home\n\nBody").expect("home file");
+        let index_root = dir.path().join("support").join("Indexes").join("vault-id");
+        let data_path = index_root.join("data");
+        let rebuild_path = index_root.join("rebuild");
+        fs::create_dir_all(&data_path).expect("data dir");
+        fs::write(data_path.join("indexing-queue.sqlite"), "old").expect("old data");
+        fs::write(data_path.join("indexing-queue.sqlite-wal"), "old wal").expect("old data wal");
+        fs::write(data_path.join("indexing-queue.sqlite-shm"), "old shm").expect("old data shm");
+        fs::create_dir_all(&rebuild_path).expect("rebuild dir");
+        fs::write(rebuild_path.join("rebuild.json"), "stale").expect("stale rebuild");
+        let vault = CString::new(vault_path.to_string_lossy().as_bytes()).expect("vault");
+        let data = CString::new(data_path.to_string_lossy().as_bytes()).expect("data");
+        let rebuild = CString::new(rebuild_path.to_string_lossy().as_bytes()).expect("rebuild");
+
+        let buffer =
+            unsafe { engine_read_rebuild_index(vault.as_ptr(), data.as_ptr(), rebuild.as_ptr()) };
+        let header = unsafe { take_open_header(buffer) };
+
+        assert_eq!(header.row_kind, ENGINE_READ_ROW_KIND_OPEN_STATUS);
+        assert_eq!(header.state, ENGINE_READ_STATE_COMPLETE);
+        assert!(data_path.join("metadata.sqlite").is_file());
+        assert!(data_path.join("tantivy").is_dir());
+        assert!(!data_path.join("indexing-queue.sqlite").exists());
+        assert!(!data_path.join("indexing-queue.sqlite-wal").exists());
+        assert!(!data_path.join("indexing-queue.sqlite-shm").exists());
+        assert!(!data_path.join("rebuild.json").exists());
+        assert!(!rebuild_path.exists());
+        assert_eq!(
+            fs::read_to_string(vault_path.join("Home.md")).expect("vault note"),
+            "# Home\n\nBody"
+        );
+    }
+
+    #[test]
+    fn engine_read_rebuild_index_rejects_unknown_unmarked_index_directory_content() {
+        let dir = tempdir().expect("tempdir");
+        let vault_path = dir.path().join("vault");
+        fs::create_dir_all(&vault_path).expect("vault dir");
+        fs::write(vault_path.join("Home.md"), "# Home\n\nBody").expect("home file");
+        let index_root = dir.path().join("support").join("Indexes").join("vault-id");
+        let data_path = index_root.join("data");
+        let rebuild_path = index_root.join("rebuild");
+        fs::create_dir_all(&data_path).expect("data dir");
+        fs::write(data_path.join("personal-note.md"), "do not delete").expect("unknown data");
+        let vault = CString::new(vault_path.to_string_lossy().as_bytes()).expect("vault");
+        let data = CString::new(data_path.to_string_lossy().as_bytes()).expect("data");
+        let rebuild = CString::new(rebuild_path.to_string_lossy().as_bytes()).expect("rebuild");
+
+        let buffer =
+            unsafe { engine_read_rebuild_index(vault.as_ptr(), data.as_ptr(), rebuild.as_ptr()) };
+        let (header, error_code) = unsafe { take_open_error(buffer) };
+
+        assert_eq!(header.row_kind, ENGINE_READ_ROW_KIND_OPEN_STATUS);
+        assert_eq!(header.state, ENGINE_READ_STATE_ERROR);
+        assert_eq!(error_code, "rebuild_failed");
+        assert_eq!(
+            fs::read_to_string(data_path.join("personal-note.md")).expect("unknown data"),
+            "do not delete"
+        );
+        assert!(!data_path.join("metadata.sqlite").exists());
+        assert_eq!(
+            fs::read_to_string(vault_path.join("Home.md")).expect("vault note"),
+            "# Home\n\nBody"
+        );
+    }
+
+    #[test]
     fn engine_read_close_and_result_free_are_null_safe() {
         unsafe {
             engine_read_close(std::ptr::null_mut());

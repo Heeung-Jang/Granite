@@ -11,8 +11,8 @@ use super::indexing_pipeline::{
 };
 use crate::adapters::fs::index_directory::{
     IndexDirectoryCommit, IndexDirectoryError, IndexDirectoryPathError, IndexDirectoryPaths,
-    commit_index_rebuild as commit_index_rebuild_impl, ensure_directory, remove_sqlite_files,
-    reset_directory,
+    commit_index_rebuild as commit_index_rebuild_impl, reset_pipeline_rebuild_directory,
+    reset_tantivy_rebuild_directory,
 };
 #[cfg(test)]
 use crate::adapters::fs::index_directory::{
@@ -87,6 +87,7 @@ pub enum IndexRebuildPathError {
     RebuildOverlapsVault,
     DataEqualsRebuild,
     MissingEngineOwnedMarker,
+    UnexpectedIndexDirectoryEntry,
 }
 
 pub type IndexRebuildResult<T> = Result<T, IndexRebuildError>;
@@ -138,7 +139,7 @@ pub fn start_index_rebuild(
         .checked_add(1)
         .ok_or(IndexRebuildError::GenerationOverflow)?;
 
-    reset_rebuild_directory(&paths.rebuild_directory, generation, reason.as_str())?;
+    reset_rebuild_directory(&paths, generation, reason.as_str())?;
     let cancelled_items = queue.cancel_generation(current_generation)?;
 
     let mut enqueued_items = 0;
@@ -197,10 +198,10 @@ pub fn run_full_rebuild_pipeline(
         IndexingPipelineTier::Discovered,
         started.elapsed(),
     )];
-    ensure_directory(&paths.rebuild_directory).map_err(index_directory_error_for_pipeline)?;
+    reset_pipeline_rebuild_directory(&paths.to_index_directory_paths())
+        .map_err(index_directory_error_for_pipeline)?;
     let options = pipeline_options.normalized();
     let metadata_path = paths.rebuild_directory.join("metadata.sqlite");
-    remove_sqlite_files(&metadata_path).map_err(index_directory_error_for_pipeline)?;
     let mut metadata_store = MetadataStore::open(&metadata_path, metadata)?;
     let batch_size = options.metadata_batch_size;
     let mut pending = Vec::with_capacity(batch_size);
@@ -231,7 +232,8 @@ pub fn run_full_rebuild_pipeline(
     ));
 
     let tantivy_dir = paths.rebuild_directory.join("tantivy");
-    reset_directory(&tantivy_dir).map_err(index_directory_error_for_pipeline)?;
+    reset_tantivy_rebuild_directory(&paths.to_index_directory_paths())
+        .map_err(index_directory_error_for_pipeline)?;
     let mut tantivy = TantivySearchIndex::open_in_dir(&tantivy_dir)?;
     tier_transitions.push(tier_transition(
         IndexingPipelineTier::BodyIndexing,
@@ -403,6 +405,9 @@ impl From<IndexDirectoryPathError> for IndexRebuildPathError {
             IndexDirectoryPathError::RebuildOverlapsVault => Self::RebuildOverlapsVault,
             IndexDirectoryPathError::DataEqualsRebuild => Self::DataEqualsRebuild,
             IndexDirectoryPathError::MissingEngineOwnedMarker => Self::MissingEngineOwnedMarker,
+            IndexDirectoryPathError::UnexpectedIndexDirectoryEntry => {
+                Self::UnexpectedIndexDirectoryEntry
+            }
         }
     }
 }

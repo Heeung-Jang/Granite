@@ -37,6 +37,7 @@ use crate::use_cases::indexing_pipeline::{
     load_search_document_sources, read_search_document, run_full_rebuild_pipeline,
     run_read_parse_pipeline, run_tantivy_rebuild_pipeline,
 };
+use crate::use_cases::read_vault::expected_read_schema_metadata_for_generation;
 
 pub const BACKEND_BENCHMARK_ARTIFACT_SCHEMA_VERSION: u32 = 7;
 
@@ -456,7 +457,7 @@ pub fn run_whole_vault_graph_snapshot_benchmark(
         return Err(BackendBenchmarkError::EmptyDocuments);
     }
 
-    let metadata = IndexSchemaMetadata::new("sqlite+tantivy", "metadata-v2", "tantivy", 1);
+    let metadata = expected_read_schema_metadata_for_generation(1);
     let mut store = MetadataStore::open_in_memory(&metadata)?;
     let target_map = graph_target_map(&markdown_entries);
     for entry in &markdown_entries {
@@ -532,7 +533,7 @@ pub fn run_whole_vault_graph_snapshot_benchmark(
         code_revision: options.code_revision.clone(),
         artifact_kind: "stage".to_string(),
         stage: "snapshot".to_string(),
-        backend_version: "metadata-v2".to_string(),
+        backend_version: metadata.backend_version,
         store_schema_version: crate::adapters::sqlite::INDEX_SCHEMA_VERSION,
         renderer_kind: "none".to_string(),
         graph_generation: 1,

@@ -484,11 +484,15 @@ impl VaultReadApi {
 }
 
 pub fn expected_read_schema_metadata() -> IndexSchemaMetadata {
+    expected_read_schema_metadata_for_generation(0)
+}
+
+pub fn expected_read_schema_metadata_for_generation(generation: u64) -> IndexSchemaMetadata {
     IndexSchemaMetadata::new(
         READ_BACKEND_NAME,
         READ_BACKEND_VERSION,
         READ_TOKENIZER_CONFIG,
-        0,
+        generation,
     )
 }
 

@@ -1200,7 +1200,7 @@ func indexDirectoryResolverCreatesOnlyAppOwnedDirectories() throws {
 func indexConfigurationDefaultsMatchSelectedReadBackend() {
     let configuration = IndexConfiguration()
 
-    #expect(configuration.schemaVersion == "metadata-v2")
+    #expect(configuration.schemaVersion == "metadata-v3")
     #expect(configuration.backendVersion == "sqlite+tantivy")
     #expect(configuration.tokenizerConfig == "tantivy")
 }
@@ -1280,7 +1280,7 @@ func indexDirectoryResolverIgnoresLegacyMetadataFromPreviousSchemaVersion() thro
     let location = try resolver.prepareIndexLocation(forVaultAt: vaultURL)
 
     #expect(location.rootDirectory.path.hasPrefix(preferredRoot.path))
-    #expect(location.configuration.schemaVersion == "metadata-v2")
+    #expect(location.configuration.schemaVersion == "metadata-v3")
     #expect(location.metadataStoreFile.path != previousSchemaLocation.metadataStoreFile.path)
 }
 

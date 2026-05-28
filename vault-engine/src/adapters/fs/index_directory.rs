@@ -1,3 +1,4 @@
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
@@ -33,33 +34,10 @@ pub(crate) enum IndexDirectoryPathError {
     RebuildOverlapsVault,
     DataEqualsRebuild,
     MissingEngineOwnedMarker,
+    UnexpectedIndexDirectoryEntry,
 }
 
 pub(crate) type IndexDirectoryResult<T> = Result<T, IndexDirectoryError>;
-
-pub(crate) fn ensure_directory(path: &Path) -> IndexDirectoryResult<()> {
-    require_engine_owned_marker_if_exists(path)?;
-    fs::create_dir_all(path)?;
-    write_engine_owned_marker(path)?;
-    Ok(())
-}
-
-pub(crate) fn remove_sqlite_files(path: &Path) -> IndexDirectoryResult<()> {
-    remove_file_if_exists(path)?;
-    remove_file_if_exists(&path.with_extension("sqlite-wal"))?;
-    remove_file_if_exists(&path.with_extension("sqlite-shm"))?;
-    Ok(())
-}
-
-pub(crate) fn reset_directory(path: &Path) -> IndexDirectoryResult<()> {
-    if path.exists() {
-        require_engine_owned_marker(path)?;
-        remove_path(path)?;
-    }
-    fs::create_dir_all(path)?;
-    write_engine_owned_marker(path)?;
-    Ok(())
-}
 
 pub(crate) fn commit_index_rebuild(
     paths: &IndexDirectoryPaths,
@@ -74,19 +52,36 @@ pub(crate) fn commit_index_rebuild(
         IndexDirectoryPathError::DataOverlapsVault,
     )?;
 
-    if previous_directory.exists() {
-        require_engine_owned_marker(&previous_directory)?;
+    let previous_exists = ensure_safe_replaceable_directory(
+        &previous_directory,
+        &paths.vault_root,
+        IndexDirectoryPathError::DataOverlapsVault,
+        ReplaceableDirectoryRole::IndexArtifacts,
+    )?;
+    let data_exists = ensure_safe_replaceable_directory(
+        &paths.data_directory,
+        &paths.vault_root,
+        IndexDirectoryPathError::DataOverlapsVault,
+        ReplaceableDirectoryRole::IndexArtifacts,
+    )?;
+    let rebuild_exists = ensure_safe_replaceable_directory(
+        &paths.rebuild_directory,
+        &paths.vault_root,
+        IndexDirectoryPathError::RebuildOverlapsVault,
+        ReplaceableDirectoryRole::IndexArtifacts,
+    )?;
+    if !rebuild_exists {
+        return Err(IndexDirectoryError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "index rebuild directory does not exist",
+        )));
+    }
+
+    if previous_exists {
         remove_path(&previous_directory)?;
     }
 
-    if paths.data_directory.exists() {
-        require_engine_owned_marker(&paths.data_directory)?;
-    }
-    if paths.rebuild_directory.exists() {
-        require_engine_owned_marker(&paths.rebuild_directory)?;
-    }
-
-    let previous_data_removed = if paths.data_directory.exists() {
+    let previous_data_removed = if data_exists {
         fs::rename(&paths.data_directory, &previous_directory)?;
         true
     } else {
@@ -103,8 +98,12 @@ pub(crate) fn commit_index_rebuild(
         }
     }
 
-    if previous_directory.exists() {
-        require_engine_owned_marker(&previous_directory)?;
+    if ensure_safe_replaceable_directory(
+        &previous_directory,
+        &paths.vault_root,
+        IndexDirectoryPathError::DataOverlapsVault,
+        ReplaceableDirectoryRole::IndexArtifacts,
+    )? {
         remove_path(&previous_directory)?;
     }
 
@@ -117,27 +116,56 @@ pub(crate) fn commit_index_rebuild(
 #[cfg(test)]
 pub(crate) fn abort_index_rebuild(paths: &IndexDirectoryPaths) -> IndexDirectoryResult<()> {
     let paths = validate_paths(paths)?;
-    if paths.rebuild_directory.exists() {
-        require_engine_owned_marker(&paths.rebuild_directory)?;
+    if ensure_safe_replaceable_directory(
+        &paths.rebuild_directory,
+        &paths.vault_root,
+        IndexDirectoryPathError::RebuildOverlapsVault,
+        ReplaceableDirectoryRole::IndexArtifacts,
+    )? {
         remove_path(&paths.rebuild_directory)?;
     }
     Ok(())
 }
 
+pub(crate) fn reset_pipeline_rebuild_directory(
+    paths: &IndexDirectoryPaths,
+) -> IndexDirectoryResult<()> {
+    let paths = validate_paths(paths)?;
+    reset_directory_with_role(
+        &paths.rebuild_directory,
+        &paths.vault_root,
+        IndexDirectoryPathError::RebuildOverlapsVault,
+        ReplaceableDirectoryRole::IndexArtifacts,
+    )
+}
+
+pub(crate) fn reset_tantivy_rebuild_directory(
+    paths: &IndexDirectoryPaths,
+) -> IndexDirectoryResult<()> {
+    let paths = validate_paths(paths)?;
+    reset_directory_with_role(
+        &paths.rebuild_directory.join("tantivy"),
+        &paths.vault_root,
+        IndexDirectoryPathError::RebuildOverlapsVault,
+        ReplaceableDirectoryRole::TantivySubtree,
+    )
+}
+
 #[cfg(test)]
 pub(crate) fn reset_rebuild_directory(
-    rebuild_directory: &Path,
+    paths: &IndexDirectoryPaths,
     generation: u64,
     reason: &str,
 ) -> IndexDirectoryResult<()> {
-    if rebuild_directory.exists() {
-        require_engine_owned_marker(rebuild_directory)?;
-        remove_path(rebuild_directory)?;
-    }
-    fs::create_dir_all(rebuild_directory)?;
-    write_engine_owned_marker(rebuild_directory)?;
+    let paths = validate_paths(paths)?;
+    reset_directory_with_role(
+        &paths.rebuild_directory,
+        &paths.vault_root,
+        IndexDirectoryPathError::RebuildOverlapsVault,
+        ReplaceableDirectoryRole::IndexArtifacts,
+    )?;
     fs::write(
-        rebuild_directory.join("rebuild.json"),
+        paths.rebuild_directory.join("rebuild.json"),
         format!("{{\"generation\":{generation},\"reason\":\"{reason}\"}}\n"),
     )?;
     Ok(())
@@ -216,36 +244,108 @@ fn remove_path(path: &Path) -> IndexDirectoryResult<()> {
     Ok(())
 }
 
-fn require_engine_owned_marker_if_exists(path: &Path) -> IndexDirectoryResult<()> {
+#[derive(Debug, Clone, Copy)]
+enum ReplaceableDirectoryRole {
+    IndexArtifacts,
+    TantivySubtree,
+}
+
+fn reset_directory_with_role(
+    path: &Path,
+    vault_root: &Path,
+    overlap_error: IndexDirectoryPathError,
+    role: ReplaceableDirectoryRole,
+) -> IndexDirectoryResult<()> {
+    if ensure_safe_replaceable_directory(path, vault_root, overlap_error, role)? {
+        remove_path(path)?;
+    }
+    fs::create_dir_all(path)?;
+    write_engine_owned_marker(path)?;
+    Ok(())
+}
+
+fn ensure_safe_replaceable_directory(
+    path: &Path,
+    vault_root: &Path,
+    overlap_error: IndexDirectoryPathError,
+    role: ReplaceableDirectoryRole,
+) -> IndexDirectoryResult<bool> {
+    ensure_existing_path_does_not_resolve_into_vault(path, vault_root, overlap_error)?;
+    ensure_replaceable_directory(path, role)
+}
+
+fn ensure_replaceable_directory(
+    path: &Path,
+    role: ReplaceableDirectoryRole,
+) -> IndexDirectoryResult<bool> {
     match fs::symlink_metadata(path) {
-        Ok(_) => require_engine_owned_marker(path),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Ok(metadata) => {
+            if !metadata.is_dir() {
+                return Err(IndexDirectoryError::InvalidPath(
+                    IndexDirectoryPathError::MissingEngineOwnedMarker,
+                ));
+            }
+            if matches!(role, ReplaceableDirectoryRole::IndexArtifacts)
+                && !is_replaceable_index_artifact_directory(path)?
+            {
+                return Err(IndexDirectoryError::InvalidPath(
+                    IndexDirectoryPathError::UnexpectedIndexDirectoryEntry,
+                ));
+            }
+            Ok(true)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(error) => Err(IndexDirectoryError::Io(error)),
     }
 }
 
-fn require_engine_owned_marker(path: &Path) -> IndexDirectoryResult<()> {
-    let metadata = fs::symlink_metadata(path)?;
-    if !metadata.is_dir() {
-        return Err(IndexDirectoryError::InvalidPath(
-            IndexDirectoryPathError::MissingEngineOwnedMarker,
-        ));
+fn is_replaceable_index_artifact_directory(path: &Path) -> IndexDirectoryResult<bool> {
+    if has_engine_owned_marker(path)? {
+        return Ok(true);
     }
-    let marker_metadata = match fs::symlink_metadata(path.join(ENGINE_OWNED_MARKER_FILE)) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Err(IndexDirectoryError::InvalidPath(
-                IndexDirectoryPathError::MissingEngineOwnedMarker,
-            ));
+    for entry in fs::read_dir(path)? {
+        let entry = entry?;
+        if !is_known_index_artifact_entry(&entry)? {
+            return Ok(false);
         }
-        Err(error) => return Err(IndexDirectoryError::Io(error)),
-    };
-    if !marker_metadata.is_file() {
-        return Err(IndexDirectoryError::InvalidPath(
-            IndexDirectoryPathError::MissingEngineOwnedMarker,
-        ));
     }
-    Ok(())
+    Ok(true)
+}
+
+fn has_engine_owned_marker(path: &Path) -> IndexDirectoryResult<bool> {
+    match fs::symlink_metadata(path.join(ENGINE_OWNED_MARKER_FILE)) {
+        Ok(metadata) => {
+            if metadata.is_file() {
+                Ok(true)
+            } else {
+                Err(IndexDirectoryError::InvalidPath(
+                    IndexDirectoryPathError::MissingEngineOwnedMarker,
+                ))
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(IndexDirectoryError::Io(error)),
+    }
+}
+
+fn is_known_index_artifact_entry(entry: &fs::DirEntry) -> IndexDirectoryResult<bool> {
+    let name = entry.file_name();
+    let file_type = entry.file_type()?;
+    let is_known_file = name == OsStr::new(ENGINE_OWNED_MARKER_FILE)
+        || name == OsStr::new("metadata.sqlite")
+        || name == OsStr::new("metadata.sqlite-wal")
+        || name == OsStr::new("metadata.sqlite-shm")
+        || name == OsStr::new("indexing-queue.sqlite")
+        || name == OsStr::new("indexing-queue.sqlite-wal")
+        || name == OsStr::new("indexing-queue.sqlite-shm")
+        || name == OsStr::new("rebuild.json");
+    if is_known_file {
+        return Ok(file_type.is_file());
+    }
+    if name == OsStr::new("tantivy") {
+        return Ok(file_type.is_dir());
+    }
+    Ok(false)
 }
 
 fn write_engine_owned_marker(path: &Path) -> IndexDirectoryResult<()> {
@@ -254,14 +354,6 @@ fn write_engine_owned_marker(path: &Path) -> IndexDirectoryResult<()> {
         ENGINE_OWNED_MARKER_CONTENT,
     )?;
     Ok(())
-}
-
-fn remove_file_if_exists(path: &Path) -> IndexDirectoryResult<()> {
-    match fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(IndexDirectoryError::Io(error)),
-    }
 }
 
 fn normalize_path(path: &Path) -> IndexDirectoryResult<PathBuf> {
@@ -301,21 +393,33 @@ fn ensure_existing_path_does_not_resolve_into_vault(
     vault_root: &Path,
     error: IndexDirectoryPathError,
 ) -> IndexDirectoryResult<()> {
-    let metadata = match fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(IndexDirectoryError::Io(error)),
-    };
-    if !metadata.file_type().is_symlink() {
+    let Some(existing_path) = nearest_existing_path(path)? else {
         return Ok(());
-    }
-
-    let canonical = fs::canonicalize(path)?;
+    };
+    let canonical = fs::canonicalize(existing_path)?;
     let canonical_vault_root = fs::canonicalize(vault_root)?;
-    if paths_overlap(&canonical, &canonical_vault_root) {
+    if path_inside_or_equal(&canonical, &canonical_vault_root) {
         return Err(IndexDirectoryError::InvalidPath(error));
     }
     Ok(())
+}
+
+fn nearest_existing_path(path: &Path) -> IndexDirectoryResult<Option<PathBuf>> {
+    let mut current = Some(path);
+    while let Some(candidate) = current {
+        match fs::symlink_metadata(candidate) {
+            Ok(_) => return Ok(Some(candidate.to_path_buf())),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                current = candidate.parent();
+            }
+            Err(error) => return Err(IndexDirectoryError::Io(error)),
+        }
+    }
+    Ok(None)
+}
+
+fn path_inside_or_equal(path: &Path, root: &Path) -> bool {
+    path == root || path.starts_with(root)
 }
 
 impl From<std::io::Error> for IndexDirectoryError {

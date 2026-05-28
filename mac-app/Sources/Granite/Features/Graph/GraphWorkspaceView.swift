@@ -64,7 +64,7 @@ struct GraphWorkspaceView: View {
             clearSelection: clearGraphSelection,
             openSelectedNode: openSelectedGraphNodeFromCommand,
             toggleControls: { showsSettings.toggle() },
-            canOpenSelectedNode: interaction.selectedNodeID != nil
+            canOpenSelectedNode: canOpenSelectedGraphNode
         )
     }
 
@@ -312,6 +312,7 @@ struct GraphWorkspaceView: View {
             includeUnresolved: settings.semantic.includeUnresolved,
             includeOrphans: settings.semantic.includeOrphans
         )
+        let loadIdentity = graphLoadKey
         let totalSignpost = AppTelemetry.beginGraphStage(.totalFirstRender)
         var shouldEndTotalSignpost = true
         defer {
@@ -326,10 +327,21 @@ struct GraphWorkspaceView: View {
         }
 
         do {
-            let payload = try await graphClient.loadSnapshot(
+            let firstPayload = try await graphClient.loadSnapshot(
                 metadataURL: metadataURL,
                 request: request
             )
+            try Task.checkCancellation()
+            guard graphLoadKey == loadIdentity else {
+                throw CancellationError()
+            }
+            let fallback = try await graphFallbackPayloadIfNeeded(
+                firstPayload: firstPayload,
+                originalRequest: request,
+                metadataURL: metadataURL,
+                loadIdentity: loadIdentity
+            )
+            let payload = fallback.payload
             let clientDuration = loadTimer.elapsedMilliseconds()
             AppTelemetry.graphStageCompleted(
                 stage: .snapshot,
@@ -350,6 +362,10 @@ struct GraphWorkspaceView: View {
             )
 
             let preparedGraph = try await prepareGraphLayout(from: payload.snapshot)
+            try Task.checkCancellation()
+            guard graphLoadKey == loadIdentity else {
+                throw CancellationError()
+            }
             let layout = preparedGraph.layout
             AppTelemetry.graphStageCompleted(
                 stage: .layout,
@@ -376,6 +392,8 @@ struct GraphWorkspaceView: View {
             if payload.state == .partial {
                 workspaceModel.markPartial()
                 graphBannerText = partialBannerText(for: payload)
+            } else if let bannerText = fallback.bannerText {
+                graphBannerText = bannerText
             } else {
                 graphBannerText = nil
             }
@@ -406,6 +424,41 @@ struct GraphWorkspaceView: View {
                 graphBannerText = "Graph refresh failed; showing previous graph"
             }
         }
+    }
+
+    @MainActor
+    private func graphFallbackPayloadIfNeeded(
+        firstPayload: WholeVaultGraphPayload,
+        originalRequest: WholeVaultGraphRequest,
+        metadataURL: URL,
+        loadIdentity: String
+    ) async throws -> (payload: WholeVaultGraphPayload, bannerText: String?) {
+        guard GraphFallbackPolicy.shouldRequestUnresolvedFallback(
+            settings: settings.semantic,
+            payload: firstPayload
+        ) else {
+            return (firstPayload, nil)
+        }
+
+        let fallbackRequestID = nextGraphRequestID
+        nextGraphRequestID += 1
+        let fallbackRequest = GraphFallbackPolicy.unresolvedFallbackRequest(
+            from: originalRequest,
+            requestID: fallbackRequestID
+        )
+        let payload = try await graphClient.loadSnapshot(
+            metadataURL: metadataURL,
+            request: fallbackRequest
+        )
+        try Task.checkCancellation()
+        guard graphLoadKey == loadIdentity else {
+            throw CancellationError()
+        }
+        let hasVisibleGraph = !payload.snapshot.nodes.isEmpty || !payload.snapshot.edges.isEmpty
+        return (
+            payload,
+            hasVisibleGraph ? GraphFallbackPolicy.unresolvedFallbackBannerText : "No visible graph links"
+        )
     }
 
     private func prepareGraphLayout(
@@ -642,6 +695,16 @@ struct GraphWorkspaceView: View {
             return
         }
         openNode(selectedNodeID, in: input)
+    }
+
+    private var canOpenSelectedGraphNode: Bool {
+        guard let loadedLayout,
+              let selectedNodeID = interaction.selectedNodeID,
+              let node = loadedLayout.nodes.first(where: { $0.nodeID == selectedNodeID })
+        else {
+            return false
+        }
+        return GraphNodeOpenResolver.file(for: node) != nil
     }
 
     private func graphInteractionCallbacks(input: GraphRendererInput) -> GraphRendererInteractionCallbacks {

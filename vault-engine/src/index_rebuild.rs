@@ -81,18 +81,17 @@ mod tests {
         let fixture = RebuildFixture::new();
         fixture.write_vault_note("private");
         fixture.create_engine_directory(&fixture.paths.data_directory);
-        fs::write(fixture.paths.data_directory.join("old.index"), "old").expect("old index");
+        fixture.write_metadata_artifact(&fixture.paths.data_directory, "old");
         fixture.create_engine_directory(&fixture.paths.rebuild_directory);
-        fs::write(fixture.paths.rebuild_directory.join("new.index"), "new").expect("new index");
+        fixture.write_metadata_artifact(&fixture.paths.rebuild_directory, "new");
 
         let commit = commit_index_rebuild(&fixture.paths).expect("commit rebuild");
 
         assert_eq!(commit.data_directory, fixture.paths.data_directory);
         assert!(commit.previous_data_removed);
         assert!(!fixture.paths.rebuild_directory.exists());
-        assert!(!fixture.paths.data_directory.join("old.index").exists());
         assert_eq!(
-            fs::read_to_string(fixture.paths.data_directory.join("new.index")).expect("new index"),
+            fixture.read_metadata_artifact(&fixture.paths.data_directory),
             "new"
         );
         assert!(!fixture.paths.index_root.join("previous-data").exists());
@@ -238,13 +237,74 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn rejects_data_parent_symlink_into_vault_without_touching_vault() {
+        let fixture = RebuildFixture::new();
+        fixture.write_vault_note("private");
+        let support_symlink = fixture.temp.path().join("support");
+        symlink(&fixture.vault_root, &support_symlink).expect("support symlink");
+        let index_root = support_symlink.join("Indexes").join("vault-id");
+        let bad_paths = IndexRebuildPaths::new(
+            &fixture.vault_root,
+            &index_root,
+            index_root.join("data"),
+            index_root.join("rebuild"),
+        );
+
+        let start = start_rebuild_with_paths(&bad_paths);
+        let commit = commit_index_rebuild(&bad_paths);
+
+        assert!(matches!(
+            start,
+            Err(IndexRebuildError::InvalidPath(
+                IndexRebuildPathError::DataOverlapsVault
+            ))
+        ));
+        assert!(matches!(
+            commit,
+            Err(IndexRebuildError::InvalidPath(
+                IndexRebuildPathError::DataOverlapsVault
+            ))
+        ));
+        assert_eq!(fixture.read_vault_note(), "private");
+        assert!(!fixture.vault_root.join("Indexes").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_rebuild_parent_symlink_into_vault_without_touching_vault() {
+        let fixture = RebuildFixture::new();
+        fixture.write_vault_note("private");
+        fs::create_dir_all(&fixture.paths.index_root).expect("index root");
+        let rebuild_parent = fixture.paths.index_root.join("rebuild-parent");
+        symlink(&fixture.vault_root, &rebuild_parent).expect("rebuild parent symlink");
+        let bad_paths = IndexRebuildPaths::new(
+            &fixture.vault_root,
+            &fixture.paths.index_root,
+            &fixture.paths.data_directory,
+            rebuild_parent.join("rebuild"),
+        );
+
+        let result = start_rebuild_with_paths(&bad_paths);
+
+        assert!(matches!(
+            result,
+            Err(IndexRebuildError::InvalidPath(
+                IndexRebuildPathError::RebuildOverlapsVault
+            ))
+        ));
+        assert_eq!(fixture.read_vault_note(), "private");
+        assert!(!fixture.vault_root.join("rebuild").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn rejects_previous_data_symlink_into_vault_before_commit_without_touching_vault() {
         let fixture = RebuildFixture::new();
         fixture.write_vault_note("private");
         fs::create_dir_all(&fixture.paths.data_directory).expect("data");
-        fs::write(fixture.paths.data_directory.join("old.index"), "old").expect("old index");
+        fixture.write_metadata_artifact(&fixture.paths.data_directory, "old");
         fs::create_dir_all(&fixture.paths.rebuild_directory).expect("rebuild");
-        fs::write(fixture.paths.rebuild_directory.join("new.index"), "new").expect("new index");
+        fixture.write_metadata_artifact(&fixture.paths.rebuild_directory, "new");
         symlink(
             &fixture.vault_root,
             fixture.paths.index_root.join("previous-data"),
@@ -260,8 +320,14 @@ mod tests {
             ))
         ));
         assert_eq!(fixture.read_vault_note(), "private");
-        assert!(fixture.paths.data_directory.join("old.index").exists());
-        assert!(fixture.paths.rebuild_directory.join("new.index").exists());
+        assert_eq!(
+            fixture.read_metadata_artifact(&fixture.paths.data_directory),
+            "old"
+        );
+        assert_eq!(
+            fixture.read_metadata_artifact(&fixture.paths.rebuild_directory),
+            "new"
+        );
     }
 
     #[test]
@@ -330,14 +396,9 @@ mod tests {
         let fixture = RebuildFixture::new();
         fixture.write_vault_note("private");
         fs::create_dir_all(&fixture.paths.data_directory).expect("data");
-        fs::write(
-            fixture.paths.data_directory.join("metadata.sqlite"),
-            "active",
-        )
-        .expect("active metadata");
+        fixture.write_metadata_artifact(&fixture.paths.data_directory, "active");
         fixture.create_engine_directory(&fixture.paths.rebuild_directory);
-        fs::write(fixture.paths.rebuild_directory.join("stale.tmp"), "stale")
-            .expect("stale rebuild");
+        fixture.write_metadata_artifact(&fixture.paths.rebuild_directory, "stale");
 
         abort_index_rebuild(&fixture.paths).expect("abort rebuild");
 
@@ -353,97 +414,191 @@ mod tests {
     }
 
     #[test]
-    fn user_rebuild_rejects_unmarked_rebuild_directory_without_touching_vault() {
+    fn user_rebuild_replaces_unmarked_rebuild_directory_without_touching_vault() {
+        let fixture = RebuildFixture::new();
+        fixture.write_vault_note("private");
+        fs::create_dir_all(&fixture.paths.rebuild_directory).expect("rebuild");
+        fixture.write_metadata_artifact(&fixture.paths.rebuild_directory, "stale");
+
+        let start = start_rebuild_with_paths(&fixture.paths).expect("start rebuild");
+
+        assert_eq!(start.generation, 2);
+        assert_eq!(fixture.read_vault_note(), "private");
+        assert!(!fixture.paths.rebuild_directory.join("stale.tmp").exists());
+        assert!(
+            fixture
+                .paths
+                .rebuild_directory
+                .join("rebuild.json")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn abort_rebuild_removes_unmarked_rebuild_directory_without_touching_vault() {
+        let fixture = RebuildFixture::new();
+        fixture.write_vault_note("private");
+        fs::create_dir_all(&fixture.paths.rebuild_directory).expect("rebuild");
+        fixture.write_metadata_artifact(&fixture.paths.rebuild_directory, "stale");
+
+        abort_index_rebuild(&fixture.paths).expect("abort rebuild");
+
+        assert_eq!(fixture.read_vault_note(), "private");
+        assert!(!fixture.paths.rebuild_directory.exists());
+    }
+
+    #[test]
+    fn commit_rebuild_replaces_unmarked_data_without_touching_vault() {
+        let fixture = RebuildFixture::new();
+        fixture.write_vault_note("private");
+        fs::create_dir_all(&fixture.paths.data_directory).expect("data");
+        fixture.write_metadata_artifact(&fixture.paths.data_directory, "old");
+        fixture.create_engine_directory(&fixture.paths.rebuild_directory);
+        fixture.write_metadata_artifact(&fixture.paths.rebuild_directory, "new");
+
+        let commit = commit_index_rebuild(&fixture.paths).expect("commit rebuild");
+
+        assert!(commit.previous_data_removed);
+        assert_eq!(fixture.read_vault_note(), "private");
+        assert_eq!(
+            fixture.read_metadata_artifact(&fixture.paths.data_directory),
+            "new"
+        );
+        assert!(!fixture.paths.rebuild_directory.exists());
+    }
+
+    #[test]
+    fn commit_rebuild_replaces_unmarked_rebuild_without_touching_vault() {
+        let fixture = RebuildFixture::new();
+        fixture.write_vault_note("private");
+        fixture.create_engine_directory(&fixture.paths.data_directory);
+        fixture.write_metadata_artifact(&fixture.paths.data_directory, "old");
+        fs::create_dir_all(&fixture.paths.rebuild_directory).expect("rebuild");
+        fixture.write_metadata_artifact(&fixture.paths.rebuild_directory, "new");
+
+        let commit = commit_index_rebuild(&fixture.paths).expect("commit rebuild");
+
+        assert!(commit.previous_data_removed);
+        assert_eq!(fixture.read_vault_note(), "private");
+        assert_eq!(
+            fixture.read_metadata_artifact(&fixture.paths.data_directory),
+            "new"
+        );
+        assert!(!fixture.paths.rebuild_directory.exists());
+    }
+
+    #[test]
+    fn commit_rebuild_replaces_unmarked_previous_data_without_touching_vault() {
+        let fixture = RebuildFixture::new();
+        fixture.write_vault_note("private");
+        fixture.create_engine_directory(&fixture.paths.data_directory);
+        fixture.write_metadata_artifact(&fixture.paths.data_directory, "old");
+        fixture.create_engine_directory(&fixture.paths.rebuild_directory);
+        fixture.write_metadata_artifact(&fixture.paths.rebuild_directory, "new");
+        fs::create_dir_all(fixture.paths.index_root.join("previous-data")).expect("previous data");
+        fixture.write_metadata_artifact(&fixture.paths.index_root.join("previous-data"), "stale");
+
+        let commit = commit_index_rebuild(&fixture.paths).expect("commit rebuild");
+
+        assert!(commit.previous_data_removed);
+        assert_eq!(fixture.read_vault_note(), "private");
+        assert_eq!(
+            fixture.read_metadata_artifact(&fixture.paths.data_directory),
+            "new"
+        );
+        assert!(!fixture.paths.rebuild_directory.exists());
+        assert!(!fixture.paths.index_root.join("previous-data").exists());
+    }
+
+    #[test]
+    fn user_rebuild_rejects_unmarked_rebuild_with_unknown_entry_without_touching_vault() {
         let fixture = RebuildFixture::new();
         fixture.write_vault_note("private");
         fs::create_dir_all(&fixture.paths.rebuild_directory).expect("rebuild");
         fs::write(fixture.paths.rebuild_directory.join("stale.tmp"), "stale")
-            .expect("stale rebuild");
+            .expect("unknown rebuild file");
 
         let result = start_rebuild_with_paths(&fixture.paths);
 
-        assert!(matches!(
-            result,
-            Err(IndexRebuildError::InvalidPath(
-                IndexRebuildPathError::MissingEngineOwnedMarker
-            ))
-        ));
+        assert_unexpected_index_entry(result);
         assert_eq!(fixture.read_vault_note(), "private");
-        assert!(fixture.paths.rebuild_directory.join("stale.tmp").exists());
+        assert_eq!(
+            fs::read_to_string(fixture.paths.rebuild_directory.join("stale.tmp"))
+                .expect("unknown rebuild file"),
+            "stale"
+        );
     }
 
     #[test]
-    fn abort_rebuild_rejects_unmarked_rebuild_directory_without_touching_vault() {
+    fn abort_rebuild_rejects_unmarked_rebuild_with_unknown_entry_without_touching_vault() {
         let fixture = RebuildFixture::new();
         fixture.write_vault_note("private");
         fs::create_dir_all(&fixture.paths.rebuild_directory).expect("rebuild");
         fs::write(fixture.paths.rebuild_directory.join("stale.tmp"), "stale")
-            .expect("stale rebuild");
+            .expect("unknown rebuild file");
 
         let result = abort_index_rebuild(&fixture.paths);
 
-        assert!(matches!(
-            result,
-            Err(IndexRebuildError::InvalidPath(
-                IndexRebuildPathError::MissingEngineOwnedMarker
-            ))
-        ));
+        assert_unexpected_index_entry(result);
         assert_eq!(fixture.read_vault_note(), "private");
         assert!(fixture.paths.rebuild_directory.join("stale.tmp").exists());
     }
 
     #[test]
-    fn commit_rebuild_rejects_unmarked_data_without_touching_vault() {
+    fn commit_rebuild_rejects_unmarked_data_with_unknown_entry_without_touching_vault() {
         let fixture = RebuildFixture::new();
         fixture.write_vault_note("private");
         fs::create_dir_all(&fixture.paths.data_directory).expect("data");
         fs::write(fixture.paths.data_directory.join("old.index"), "old").expect("old index");
         fixture.create_engine_directory(&fixture.paths.rebuild_directory);
-        fs::write(fixture.paths.rebuild_directory.join("new.index"), "new").expect("new index");
+        fixture.write_metadata_artifact(&fixture.paths.rebuild_directory, "new");
 
         let result = commit_index_rebuild(&fixture.paths);
 
-        assert!(matches!(
-            result,
-            Err(IndexRebuildError::InvalidPath(
-                IndexRebuildPathError::MissingEngineOwnedMarker
-            ))
-        ));
+        assert_unexpected_index_entry(result);
         assert_eq!(fixture.read_vault_note(), "private");
-        assert!(fixture.paths.data_directory.join("old.index").exists());
-        assert!(fixture.paths.rebuild_directory.join("new.index").exists());
+        assert_eq!(
+            fs::read_to_string(fixture.paths.data_directory.join("old.index")).expect("old index"),
+            "old"
+        );
+        assert_eq!(
+            fixture.read_metadata_artifact(&fixture.paths.rebuild_directory),
+            "new"
+        );
     }
 
     #[test]
-    fn commit_rebuild_rejects_unmarked_rebuild_without_touching_vault() {
+    fn commit_rebuild_rejects_unmarked_rebuild_with_unknown_entry_without_touching_vault() {
         let fixture = RebuildFixture::new();
         fixture.write_vault_note("private");
         fixture.create_engine_directory(&fixture.paths.data_directory);
-        fs::write(fixture.paths.data_directory.join("old.index"), "old").expect("old index");
+        fixture.write_metadata_artifact(&fixture.paths.data_directory, "old");
         fs::create_dir_all(&fixture.paths.rebuild_directory).expect("rebuild");
         fs::write(fixture.paths.rebuild_directory.join("new.index"), "new").expect("new index");
 
         let result = commit_index_rebuild(&fixture.paths);
 
-        assert!(matches!(
-            result,
-            Err(IndexRebuildError::InvalidPath(
-                IndexRebuildPathError::MissingEngineOwnedMarker
-            ))
-        ));
+        assert_unexpected_index_entry(result);
         assert_eq!(fixture.read_vault_note(), "private");
-        assert!(fixture.paths.data_directory.join("old.index").exists());
-        assert!(fixture.paths.rebuild_directory.join("new.index").exists());
+        assert_eq!(
+            fixture.read_metadata_artifact(&fixture.paths.data_directory),
+            "old"
+        );
+        assert_eq!(
+            fs::read_to_string(fixture.paths.rebuild_directory.join("new.index"))
+                .expect("new index"),
+            "new"
+        );
     }
 
     #[test]
-    fn commit_rebuild_rejects_unmarked_previous_data_without_touching_vault() {
+    fn commit_rebuild_rejects_unmarked_previous_data_with_unknown_entry_without_touching_vault() {
         let fixture = RebuildFixture::new();
         fixture.write_vault_note("private");
         fixture.create_engine_directory(&fixture.paths.data_directory);
-        fs::write(fixture.paths.data_directory.join("old.index"), "old").expect("old index");
+        fixture.write_metadata_artifact(&fixture.paths.data_directory, "old");
         fixture.create_engine_directory(&fixture.paths.rebuild_directory);
-        fs::write(fixture.paths.rebuild_directory.join("new.index"), "new").expect("new index");
+        fixture.write_metadata_artifact(&fixture.paths.rebuild_directory, "new");
         fs::create_dir_all(fixture.paths.index_root.join("previous-data")).expect("previous data");
         fs::write(
             fixture
@@ -457,22 +612,26 @@ mod tests {
 
         let result = commit_index_rebuild(&fixture.paths);
 
-        assert!(matches!(
-            result,
-            Err(IndexRebuildError::InvalidPath(
-                IndexRebuildPathError::MissingEngineOwnedMarker
-            ))
-        ));
+        assert_unexpected_index_entry(result);
         assert_eq!(fixture.read_vault_note(), "private");
-        assert!(fixture.paths.data_directory.join("old.index").exists());
-        assert!(fixture.paths.rebuild_directory.join("new.index").exists());
-        assert!(
-            fixture
-                .paths
-                .index_root
-                .join("previous-data")
-                .join("stale.index")
-                .exists()
+        assert_eq!(
+            fixture.read_metadata_artifact(&fixture.paths.data_directory),
+            "old"
+        );
+        assert_eq!(
+            fixture.read_metadata_artifact(&fixture.paths.rebuild_directory),
+            "new"
+        );
+        assert_eq!(
+            fs::read_to_string(
+                fixture
+                    .paths
+                    .index_root
+                    .join("previous-data")
+                    .join("stale.index")
+            )
+            .expect("stale previous"),
+            "stale"
         );
     }
 
@@ -600,6 +759,15 @@ mod tests {
             fs::read_to_string(self.vault_root.join("Note.md")).expect("vault note")
         }
 
+        fn write_metadata_artifact(&self, path: &std::path::Path, content: &str) {
+            fs::create_dir_all(path).expect("artifact directory");
+            fs::write(path.join("metadata.sqlite"), content).expect("metadata artifact");
+        }
+
+        fn read_metadata_artifact(&self, path: &std::path::Path) -> String {
+            fs::read_to_string(path.join("metadata.sqlite")).expect("metadata artifact")
+        }
+
         fn create_engine_directory(&self, path: &std::path::Path) {
             mark_engine_owned_for_test(path).expect("engine owned directory");
         }
@@ -617,6 +785,15 @@ mod tests {
             1,
             IndexRebuildReason::UserRequested,
         )
+    }
+
+    fn assert_unexpected_index_entry<T>(result: Result<T, IndexRebuildError>) {
+        assert!(matches!(
+            result,
+            Err(IndexRebuildError::InvalidPath(
+                IndexRebuildPathError::UnexpectedIndexDirectoryEntry
+            ))
+        ));
     }
 
     fn synthetic_scan(count: usize, generation_seed: u64) -> ScanSummary {

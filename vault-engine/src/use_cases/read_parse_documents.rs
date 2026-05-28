@@ -16,6 +16,7 @@ use crate::adapters::sqlite::{
 use crate::core::attachments::{AttachmentReferenceSource, AttachmentResolutionState};
 use crate::core::document::{ParsedMarkdown, PropertyValue};
 use crate::core::files::FileIdentity;
+use crate::core::links::{NoteTarget, NoteTargetIndex, NoteTargetResolution};
 use crate::core::markdown_parser::parse_markdown;
 use crate::core::scan::ScanEntryKind;
 use crate::core::search::SearchDocument;
@@ -117,6 +118,14 @@ pub fn read_parse_source_at(
     source_index: usize,
     source: &SearchDocumentSource,
 ) -> IndexingPipelineResult<TimedSearchDocument> {
+    read_parse_source_at_with_note_targets(source_index, source, None)
+}
+
+pub(crate) fn read_parse_source_at_with_note_targets(
+    source_index: usize,
+    source: &SearchDocumentSource,
+    note_targets: Option<&NoteTargetIndex>,
+) -> IndexingPipelineResult<TimedSearchDocument> {
     debug_assert_eq!(source.kind, ScanEntryKind::Markdown);
     let combined_start = Instant::now();
     let (body, read_micros) = read_markdown_body(&source.absolute_path)?;
@@ -131,7 +140,7 @@ pub fn read_parse_source_at(
         .map(|heading| heading.text.clone())
         .unwrap_or_else(|| fallback_title(&source.relative_path));
     let metadata_counts = parsed_metadata_counts(&parsed);
-    let metadata_records = parsed_metadata_records(source, &parsed);
+    let metadata_records = parsed_metadata_records(source, &parsed, note_targets);
     Ok(TimedSearchDocument {
         document: SearchDocument {
             file_id: source.file_id.clone(),
@@ -170,6 +179,7 @@ where
     E: From<IndexingPipelineError>,
 {
     let options = options.normalized();
+    let note_targets = Arc::new(note_target_index_for_sources(sources));
     let (sender, receiver) =
         sync_channel::<IndexingPipelineResult<TimedSearchDocument>>(options.channel_capacity);
     let next_source = AtomicUsize::new(0);
@@ -182,6 +192,7 @@ where
             let sender = sender.clone();
             let in_flight = Arc::clone(&in_flight);
             let peak_in_flight = Arc::clone(&peak_in_flight);
+            let note_targets = Arc::clone(&note_targets);
             let next_source = &next_source;
             scope.spawn(move || {
                 loop {
@@ -189,7 +200,11 @@ where
                     let Some(source) = sources.get(index) else {
                         break;
                     };
-                    let result = read_parse_source_at(index, source);
+                    let result = read_parse_source_at_with_note_targets(
+                        index,
+                        source,
+                        Some(note_targets.as_ref()),
+                    );
                     let current_in_flight = in_flight.fetch_add(1, Ordering::AcqRel) + 1;
                     update_peak_in_flight(&peak_in_flight, current_in_flight);
                     if sender.send(result).is_err() {
@@ -217,6 +232,13 @@ where
     })
 }
 
+pub(crate) fn note_target_index_for_sources(sources: &[SearchDocumentSource]) -> NoteTargetIndex {
+    NoteTargetIndex::from_targets(sources.iter().map(|source| NoteTarget {
+        file_id: &source.file_id,
+        relative_path: &source.relative_path,
+    }))
+}
+
 fn parsed_metadata_counts(parsed: &ParsedMarkdown) -> ParsedMetadataCounts {
     ParsedMetadataCounts {
         link_count: parsed.wikilinks.len()
@@ -241,6 +263,7 @@ fn parsed_metadata_counts(parsed: &ParsedMarkdown) -> ParsedMetadataCounts {
 fn parsed_metadata_records(
     source: &SearchDocumentSource,
     parsed: &ParsedMarkdown,
+    note_targets: Option<&NoteTargetIndex>,
 ) -> FileMetadataRecords {
     let file_id = source.file_id.clone();
     let frontmatter_tags = frontmatter_tags(parsed);
@@ -251,7 +274,7 @@ fn parsed_metadata_records(
         links.push(LinkEdgeRecord {
             source_file_id: file_id.clone(),
             target_text: link.target.clone(),
-            resolved_target_file_id: None,
+            resolved_target_file_id: resolve_wiki_target(note_targets, source, &link.target),
             heading: link.heading.clone(),
             alias: link.alias.clone(),
             is_embed: false,
@@ -262,7 +285,7 @@ fn parsed_metadata_records(
         links.push(LinkEdgeRecord {
             source_file_id: file_id.clone(),
             target_text: embed.target.clone(),
-            resolved_target_file_id: None,
+            resolved_target_file_id: resolve_wiki_target(note_targets, source, &embed.target),
             heading: embed.heading.clone(),
             alias: embed.alias.clone(),
             is_embed: true,
@@ -287,7 +310,11 @@ fn parsed_metadata_records(
             links.push(LinkEdgeRecord {
                 source_file_id: file_id.clone(),
                 target_text: link.target.clone(),
-                resolved_target_file_id: None,
+                resolved_target_file_id: resolve_markdown_target(
+                    note_targets,
+                    source,
+                    &link.target,
+                ),
                 heading: None,
                 alias: Some(link.text.clone()),
                 is_embed: false,
@@ -350,6 +377,33 @@ fn parsed_metadata_records(
     }
 }
 
+fn resolve_wiki_target(
+    note_targets: Option<&NoteTargetIndex>,
+    source: &SearchDocumentSource,
+    target_text: &str,
+) -> Option<String> {
+    let note_targets = note_targets?;
+    resolved_file_id(note_targets.resolve_wiki_target(&source.relative_path, target_text))
+}
+
+fn resolve_markdown_target(
+    note_targets: Option<&NoteTargetIndex>,
+    source: &SearchDocumentSource,
+    target_text: &str,
+) -> Option<String> {
+    let note_targets = note_targets?;
+    resolved_file_id(note_targets.resolve_markdown_note_target(&source.relative_path, target_text))
+}
+
+fn resolved_file_id(resolution: NoteTargetResolution<'_>) -> Option<String> {
+    match resolution {
+        NoteTargetResolution::Resolved { file_id } => Some(file_id.to_string()),
+        NoteTargetResolution::Missing
+        | NoteTargetResolution::Ambiguous
+        | NoteTargetResolution::Rejected => None,
+    }
+}
+
 fn frontmatter_tags(parsed: &ParsedMarkdown) -> Vec<String> {
     match parsed.properties.get("tags") {
         Some(PropertyValue::String(value)) => vec![value.clone()],
@@ -386,4 +440,121 @@ fn duration_micros(duration: Duration) -> u64 {
 
 fn duration_micros_nonzero(duration: Duration) -> u64 {
     duration_micros(duration).max(1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::paths::lookup_key;
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[test]
+    fn read_parse_source_without_resolver_leaves_links_unresolved() {
+        let dir = tempdir().expect("tempdir");
+        let source = write_source(
+            dir.path(),
+            "Home.md",
+            "# Home\n\n[[Target]]\n![[Target]]\n[Target](Target.md)\n",
+        );
+
+        let timed = read_parse_source(&source).expect("read parse");
+
+        assert_eq!(timed.work_item.metadata_records.links.len(), 3);
+        assert!(
+            timed
+                .work_item
+                .metadata_records
+                .links
+                .iter()
+                .all(|link| link.resolved_target_file_id.is_none())
+        );
+    }
+
+    #[test]
+    fn run_read_parse_pipeline_resolves_wiki_embed_and_markdown_note_links() {
+        let dir = tempdir().expect("tempdir");
+        let home = write_source(
+            dir.path(),
+            "Home.md",
+            "# Home\n\n[[Target]]\n![[Target]]\n[Target](Target.md#Section)\n[Site](https://example.com)\n",
+        );
+        let target = write_source(dir.path(), "Target.md", "# Target\n");
+        let sources = vec![home, target.clone()];
+        let mut parsed = Vec::new();
+
+        run_read_parse_pipeline(&sources, &IndexingPipelineOptions::serial(), |timed| {
+            parsed.push(timed);
+            Ok::<(), IndexingPipelineError>(())
+        })
+        .expect("pipeline");
+
+        let home = parsed
+            .iter()
+            .find(|timed| timed.work_item.relative_path == PathBuf::from("Home.md"))
+            .expect("home");
+        let links = &home.work_item.metadata_records.links;
+        assert_eq!(links.len(), 4);
+        assert_eq!(
+            links
+                .iter()
+                .filter(|link| {
+                    link.resolved_target_file_id.as_deref() == Some(target.file_id.as_str())
+                })
+                .count(),
+            3
+        );
+        assert_eq!(
+            links
+                .iter()
+                .find(|link| link.target_text == "https://example.com")
+                .and_then(|link| link.resolved_target_file_id.as_deref()),
+            None
+        );
+    }
+
+    #[test]
+    fn run_read_parse_pipeline_keeps_duplicate_basename_unresolved() {
+        let dir = tempdir().expect("tempdir");
+        let home = write_source(dir.path(), "Home.md", "# Home\n\n[[Target]]\n");
+        let first = write_source(dir.path(), "A/Target.md", "# A\n");
+        let second = write_source(dir.path(), "B/Target.md", "# B\n");
+        let sources = vec![home, first, second];
+        let mut parsed = Vec::new();
+
+        run_read_parse_pipeline(&sources, &IndexingPipelineOptions::serial(), |timed| {
+            parsed.push(timed);
+            Ok::<(), IndexingPipelineError>(())
+        })
+        .expect("pipeline");
+
+        let home = parsed
+            .iter()
+            .find(|timed| timed.work_item.relative_path == PathBuf::from("Home.md"))
+            .expect("home");
+        assert_eq!(
+            home.work_item.metadata_records.links[0].resolved_target_file_id,
+            None
+        );
+    }
+
+    fn write_source(root: &Path, relative_path: &str, body: &str) -> SearchDocumentSource {
+        let absolute_path = root.join(relative_path);
+        fs::create_dir_all(absolute_path.parent().expect("parent")).expect("parent dir");
+        fs::write(&absolute_path, body).expect("markdown");
+        let metadata = fs::metadata(&absolute_path).expect("metadata");
+        let relative_path = PathBuf::from(relative_path);
+        SearchDocumentSource {
+            file_id: lookup_key(&relative_path),
+            relative_path,
+            absolute_path,
+            kind: ScanEntryKind::Markdown,
+            size_bytes: metadata.len(),
+            modified: metadata.modified().ok(),
+            file_identity: FileIdentity {
+                device: 0,
+                inode: 0,
+            },
+        }
+    }
 }
