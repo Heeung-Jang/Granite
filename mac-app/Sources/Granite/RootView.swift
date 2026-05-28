@@ -609,7 +609,7 @@ private struct ObsidianVaultFooter: View {
                 Button("Close Vault", role: .destructive, action: closeVault)
                     .disabled(!canCloseVault)
             } label: {
-                Image(systemName: "gearshape")
+                Image(systemName: "ellipsis.circle")
                     .font(.system(size: ObsidianUI.fontSize(13, scale: appContentZoomScale)))
                     .frame(
                         width: ObsidianUI.scaled(24, scale: appContentZoomScale),
