@@ -1,6 +1,6 @@
 import Foundation
 
-public struct IndexConfiguration: Equatable {
+public struct IndexConfiguration: Equatable, Sendable {
     public static let defaultSchemaVersion = "metadata-v3"
     public static let defaultBackendVersion = "sqlite+tantivy"
     public static let defaultTokenizerConfig = "tantivy"
@@ -20,7 +20,7 @@ public struct IndexConfiguration: Equatable {
     }
 }
 
-public struct AppOwnedIndexLocation: Equatable {
+public struct AppOwnedIndexLocation: Equatable, Sendable {
     public let vaultIdentityHash: String
     public let rootDirectory: URL
     public let dataDirectory: URL

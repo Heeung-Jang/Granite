@@ -31,6 +31,37 @@ public protocol ReadIndexRebuilding: Sendable {
     func rebuildIndex(vaultURL: URL, location: AppOwnedIndexLocation) throws
 }
 
+public protocol ReadIndexRecoveryScheduling: Sendable {
+    func schedule(
+        _ work: @escaping @Sendable () -> Result<Void, any Error>,
+        completion: @escaping @Sendable (Result<Void, any Error>) -> Void
+    )
+}
+
+public final class BackgroundReadIndexRecoveryScheduler: ReadIndexRecoveryScheduling, @unchecked Sendable {
+    private let queue: OperationQueue
+
+    public init() {
+        let queue = OperationQueue()
+        queue.name = "Granite read index recovery"
+        queue.qualityOfService = .utility
+        queue.maxConcurrentOperationCount = 1
+        self.queue = queue
+    }
+
+    public func schedule(
+        _ work: @escaping @Sendable () -> Result<Void, any Error>,
+        completion: @escaping @Sendable (Result<Void, any Error>) -> Void
+    ) {
+        queue.addOperation {
+            let result = work()
+            DispatchQueue.main.async {
+                completion(result)
+            }
+        }
+    }
+}
+
 public struct EngineReadIndexRebuilder: ReadIndexRebuilding {
     public init() {}
 

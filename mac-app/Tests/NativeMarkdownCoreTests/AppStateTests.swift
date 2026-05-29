@@ -33,12 +33,14 @@ func appStateOpensReadClientForSelectedVault() throws {
         .appendingPathComponent(UUID().uuidString, isDirectory: true)
     let client = FakeReadClient()
     let factory = FakeReadClientFactory(clients: [client])
+    let recoveryScheduler = FakeReadIndexRecoveryScheduler()
     let state = AppState(
         engineHealth: EngineHealthStatus(state: .loaded, abiVersion: 1, message: "test"),
         indexDirectoryResolver: AppOwnedIndexDirectoryResolver(applicationSupportRoot: supportRoot),
         vaultAccessValidator: AllowingVaultAccessValidator(),
         recentVaultStorage: MemoryRecentVaultStorage(),
-        readClientFactory: factory.make
+        readClientFactory: factory.make,
+        readIndexRecoveryScheduler: recoveryScheduler
     )
     let vaultURL = URL(fileURLWithPath: "/tmp/read-vault", isDirectory: true)
 
@@ -50,6 +52,7 @@ func appStateOpensReadClientForSelectedVault() throws {
     #expect(state.readAvailability == .ready)
     #expect((state.readClient as? FakeReadClient) === client)
     #expect(state.readGeneration == 1)
+    #expect(recoveryScheduler.pendingWorkCount == 0)
 }
 
 @Test
@@ -83,19 +86,31 @@ func appStateRebuildsReadIndexForRecoverableOpenErrors() throws {
             errors: [engineReadOpenError(code: code)]
         )
         let rebuilder = FakeReadIndexRebuilder()
+        let recoveryScheduler = FakeReadIndexRecoveryScheduler()
         let state = AppState(
             engineHealth: EngineHealthStatus(state: .loaded, abiVersion: 1, message: "test"),
             indexDirectoryResolver: AppOwnedIndexDirectoryResolver(applicationSupportRoot: supportRoot),
             vaultAccessValidator: AllowingVaultAccessValidator(),
             recentVaultStorage: MemoryRecentVaultStorage(),
             readClientFactory: factory.make,
-            readIndexRebuilder: rebuilder
+            readIndexRebuilder: rebuilder,
+            readIndexRecoveryScheduler: recoveryScheduler
         )
         let vaultURL = URL(fileURLWithPath: "/tmp/read-rebuild-\(code)", isDirectory: true)
 
         try state.selectVault(vaultURL)
 
         let location = try #require(state.indexLocation)
+        #expect(factory.openedMetadataURLs == [location.metadataStoreFile])
+        #expect(factory.openedTantivyURLs == [location.tantivyIndexDirectory])
+        #expect(rebuilder.rebuiltVaultURLs.isEmpty)
+        #expect(rebuilder.rebuiltLocations.isEmpty)
+        #expect(state.readAvailability == .opening)
+        #expect(state.readClient == nil)
+        #expect(recoveryScheduler.pendingWorkCount == 1)
+
+        recoveryScheduler.runNext()
+
         #expect(factory.openedMetadataURLs == [location.metadataStoreFile, location.metadataStoreFile])
         #expect(factory.openedTantivyURLs == [location.tantivyIndexDirectory, location.tantivyIndexDirectory])
         #expect(rebuilder.rebuiltVaultURLs == [vaultURL.standardizedFileURL])
@@ -103,6 +118,7 @@ func appStateRebuildsReadIndexForRecoverableOpenErrors() throws {
         #expect(state.readAvailability == .ready)
         #expect((state.readClient as? FakeReadClient) === client)
         #expect(state.readGeneration == 1)
+        #expect(recoveryScheduler.pendingWorkCount == 0)
     }
 }
 
@@ -112,19 +128,22 @@ func appStateDoesNotRebuildReadIndexForNonrecoverableOpenErrors() throws {
         .appendingPathComponent(UUID().uuidString, isDirectory: true)
     let factory = FakeReadClientFactory(error: engineReadOpenError(code: "tokenizer_mismatch"))
     let rebuilder = FakeReadIndexRebuilder()
+    let recoveryScheduler = FakeReadIndexRecoveryScheduler()
     let state = AppState(
         engineHealth: EngineHealthStatus(state: .loaded, abiVersion: 1, message: "test"),
         indexDirectoryResolver: AppOwnedIndexDirectoryResolver(applicationSupportRoot: supportRoot),
         vaultAccessValidator: AllowingVaultAccessValidator(),
         recentVaultStorage: MemoryRecentVaultStorage(),
         readClientFactory: factory.make,
-        readIndexRebuilder: rebuilder
+        readIndexRebuilder: rebuilder,
+        readIndexRecoveryScheduler: recoveryScheduler
     )
 
     try state.selectVault(URL(fileURLWithPath: "/tmp/read-nonrecoverable-vault", isDirectory: true))
 
     #expect(state.readClient == nil)
     #expect(rebuilder.rebuiltVaultURLs.isEmpty)
+    #expect(recoveryScheduler.pendingWorkCount == 0)
     #expect(factory.openedMetadataURLs.count == 1)
     if case .error(let message) = state.readAvailability {
         #expect(message.contains("tokenizer_mismatch"))
@@ -139,19 +158,126 @@ func appStateSanitizesReadIndexRecoveryFailureMessage() throws {
         .appendingPathComponent(UUID().uuidString, isDirectory: true)
     let factory = FakeReadClientFactory(errors: [engineReadOpenError(code: "missing_metadata")])
     let rebuilder = FakeReadIndexRebuilder(error: engineReadOpenError(code: "missing_metadata"))
+    let recoveryScheduler = FakeReadIndexRecoveryScheduler()
     let state = AppState(
         engineHealth: EngineHealthStatus(state: .loaded, abiVersion: 1, message: "test"),
         indexDirectoryResolver: AppOwnedIndexDirectoryResolver(applicationSupportRoot: supportRoot),
         vaultAccessValidator: AllowingVaultAccessValidator(),
         recentVaultStorage: MemoryRecentVaultStorage(),
         readClientFactory: factory.make,
-        readIndexRebuilder: rebuilder
+        readIndexRebuilder: rebuilder,
+        readIndexRecoveryScheduler: recoveryScheduler
     )
 
     try state.selectVault(URL(fileURLWithPath: "/tmp/read-recovery-fails-vault", isDirectory: true))
 
     #expect(state.readClient == nil)
+    #expect(state.readAvailability == .opening)
+    #expect(recoveryScheduler.pendingWorkCount == 1)
+
+    recoveryScheduler.runNext()
+
+    #expect(state.readClient == nil)
     #expect(state.readAvailability == .error("read index rebuild failed: missing_metadata"))
+    #expect(recoveryScheduler.pendingWorkCount == 0)
+}
+
+@Test
+func appStateIgnoresStaleReadIndexRecoveryAfterVaultSwitch() throws {
+    let supportRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let secondClient = FakeReadClient()
+    let factory = FakeReadClientFactory(
+        clients: [secondClient],
+        errors: [engineReadOpenError(code: "missing_metadata")]
+    )
+    let rebuilder = FakeReadIndexRebuilder()
+    let recoveryScheduler = FakeReadIndexRecoveryScheduler()
+    let state = AppState(
+        engineHealth: EngineHealthStatus(state: .loaded, abiVersion: 1, message: "test"),
+        indexDirectoryResolver: AppOwnedIndexDirectoryResolver(applicationSupportRoot: supportRoot),
+        vaultAccessValidator: AllowingVaultAccessValidator(),
+        recentVaultStorage: MemoryRecentVaultStorage(),
+        readClientFactory: factory.make,
+        readIndexRebuilder: rebuilder,
+        readIndexRecoveryScheduler: recoveryScheduler
+    )
+    let firstVault = URL(fileURLWithPath: "/tmp/read-stale-first", isDirectory: true)
+    let secondVault = URL(fileURLWithPath: "/tmp/read-stale-second", isDirectory: true)
+
+    try state.selectVault(firstVault)
+    let firstLocation = try #require(state.indexLocation)
+
+    #expect(state.vaultSelection == .selected(firstVault))
+    #expect(state.readAvailability == .opening)
+    #expect(recoveryScheduler.pendingWorkCount == 1)
+
+    try state.selectVault(secondVault)
+    let secondLocation = try #require(state.indexLocation)
+
+    #expect(state.vaultSelection == .selected(secondVault))
+    #expect(state.readAvailability == .ready)
+    #expect((state.readClient as? FakeReadClient) === secondClient)
+    #expect(state.readGeneration == 2)
+
+    recoveryScheduler.runNext()
+
+    #expect(rebuilder.rebuiltVaultURLs == [firstVault.standardizedFileURL])
+    #expect(rebuilder.rebuiltLocations == [firstLocation])
+    #expect(factory.openedMetadataURLs == [
+        firstLocation.metadataStoreFile,
+        secondLocation.metadataStoreFile
+    ])
+    #expect(factory.openedTantivyURLs == [
+        firstLocation.tantivyIndexDirectory,
+        secondLocation.tantivyIndexDirectory
+    ])
+    #expect(state.vaultSelection == .selected(secondVault))
+    #expect(state.readAvailability == .ready)
+    #expect((state.readClient as? FakeReadClient) === secondClient)
+    #expect(state.readGeneration == 2)
+}
+
+@Test
+func appStateIgnoresStaleReadIndexRecoveryAfterClearVault() throws {
+    let supportRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let factory = FakeReadClientFactory(errors: [engineReadOpenError(code: "missing_metadata")])
+    let rebuilder = FakeReadIndexRebuilder()
+    let recoveryScheduler = FakeReadIndexRecoveryScheduler()
+    let state = AppState(
+        engineHealth: EngineHealthStatus(state: .loaded, abiVersion: 1, message: "test"),
+        indexDirectoryResolver: AppOwnedIndexDirectoryResolver(applicationSupportRoot: supportRoot),
+        vaultAccessValidator: AllowingVaultAccessValidator(),
+        recentVaultStorage: MemoryRecentVaultStorage(),
+        readClientFactory: factory.make,
+        readIndexRebuilder: rebuilder,
+        readIndexRecoveryScheduler: recoveryScheduler
+    )
+    let vaultURL = URL(fileURLWithPath: "/tmp/read-stale-clear", isDirectory: true)
+
+    try state.selectVault(vaultURL)
+    let location = try #require(state.indexLocation)
+
+    #expect(state.vaultSelection == .selected(vaultURL))
+    #expect(state.readAvailability == .opening)
+    #expect(recoveryScheduler.pendingWorkCount == 1)
+
+    state.clearVault()
+    #expect(state.vaultSelection == .noVault)
+    #expect(state.readAvailability == .unavailable)
+    #expect(state.readGeneration == 2)
+
+    recoveryScheduler.runNext()
+
+    #expect(rebuilder.rebuiltVaultURLs == [vaultURL.standardizedFileURL])
+    #expect(rebuilder.rebuiltLocations == [location])
+    #expect(factory.openedMetadataURLs == [location.metadataStoreFile])
+    #expect(factory.openedTantivyURLs == [location.tantivyIndexDirectory])
+    #expect(state.vaultSelection == .noVault)
+    #expect(state.readClient == nil)
+    #expect(state.readAvailability == .unavailable)
+    #expect(state.readGeneration == 2)
 }
 
 @Test
@@ -2085,6 +2211,30 @@ private final class FakeReadIndexRebuilder: ReadIndexRebuilding, @unchecked Send
         if let error {
             throw error
         }
+    }
+}
+
+private final class FakeReadIndexRecoveryScheduler: ReadIndexRecoveryScheduling, @unchecked Sendable {
+    private var scheduledWork: [@Sendable () -> Void] = []
+
+    var pendingWorkCount: Int {
+        scheduledWork.count
+    }
+
+    func schedule(
+        _ work: @escaping @Sendable () -> Result<Void, any Error>,
+        completion: @escaping @Sendable (Result<Void, any Error>) -> Void
+    ) {
+        scheduledWork.append {
+            completion(work())
+        }
+    }
+
+    func runNext() {
+        guard !scheduledWork.isEmpty else {
+            return
+        }
+        scheduledWork.removeFirst()()
     }
 }
 

@@ -141,6 +141,7 @@ public final class AppState: ObservableObject {
     private let paneLayoutStore: PaneLayoutStore
     private let readClientFactory: ReadClientFactory
     private let readIndexRebuilder: any ReadIndexRebuilding
+    private let readIndexRecoveryScheduler: any ReadIndexRecoveryScheduling
     private let maxRecentVaults: Int
     private var nextSearchRequestID: UInt64 = 0
     private var didAttemptLastVaultAutoRestore = false
@@ -160,6 +161,7 @@ public final class AppState: ObservableObject {
             try EngineReadClient.open(metadataURL: metadataURL, tantivyURL: tantivyURL)
         },
         readIndexRebuilder: any ReadIndexRebuilding = EngineReadIndexRebuilder(),
+        readIndexRecoveryScheduler: any ReadIndexRecoveryScheduling = BackgroundReadIndexRecoveryScheduler(),
         maxRecentVaults: Int = 10
     ) {
         let paneLayoutStore = PaneLayoutStore(
@@ -177,6 +179,7 @@ public final class AppState: ObservableObject {
         self.paneLayoutStore = paneLayoutStore
         self.readClientFactory = readClientFactory
         self.readIndexRebuilder = readIndexRebuilder
+        self.readIndexRecoveryScheduler = readIndexRecoveryScheduler
         self.maxRecentVaults = max(1, maxRecentVaults)
         self.readAvailability = .unavailable
         self.readGeneration = 0
@@ -207,8 +210,9 @@ public final class AppState: ObservableObject {
 
         let preparedIndexLocation = try indexDirectoryResolver.prepareIndexLocation(forVaultAt: vaultURL)
         resetReadClient(availability: .opening)
+        let readOpenGeneration = readGeneration
         indexLocation = preparedIndexLocation
-        openReadClient(vaultURL: vaultURL, location: preparedIndexLocation)
+        openReadClient(vaultURL: vaultURL, location: preparedIndexLocation, generation: readOpenGeneration)
         vaultSelection = .selected(vaultURL)
         resetWorkspaceState()
         restoreWorkspacePaneLayout(for: vaultURL)
@@ -1033,7 +1037,11 @@ public final class AppState: ObservableObject {
         readAvailability = availability
     }
 
-    private func openReadClient(vaultURL: URL, location: AppOwnedIndexLocation) {
+    private func openReadClient(
+        vaultURL: URL,
+        location: AppOwnedIndexLocation,
+        generation: UInt64
+    ) {
         do {
             readClient = try readClientFactory(
                 location.metadataStoreFile,
@@ -1046,17 +1054,53 @@ public final class AppState: ObservableObject {
                 return
             }
 
-            do {
+            scheduleReadIndexRecovery(vaultURL: vaultURL, location: location, generation: generation)
+        }
+    }
+
+    private func scheduleReadIndexRecovery(
+        vaultURL: URL,
+        location: AppOwnedIndexLocation,
+        generation: UInt64
+    ) {
+        let completionSink = ReadIndexRecoveryCompletionSink(owner: self)
+        readIndexRecoveryScheduler.schedule { [readIndexRebuilder] in
+            Result {
                 try readIndexRebuilder.rebuildIndex(vaultURL: vaultURL, location: location)
-                readClient = try readClientFactory(
-                    location.metadataStoreFile,
-                    location.tantivyIndexDirectory
-                )
-                readAvailability = .ready
-            } catch {
-                readClient = nil
-                readAvailability = .error(Self.readIndexRecoveryErrorMessage(error))
             }
+        } completion: { [completionSink] result in
+            completionSink.finish(
+                result,
+                vaultURL: vaultURL,
+                location: location,
+                generation: generation
+            )
+        }
+    }
+
+    fileprivate func finishReadIndexRecovery(
+        _ result: Result<Void, any Error>,
+        vaultURL: URL,
+        location: AppOwnedIndexLocation,
+        generation: UInt64
+    ) {
+        guard readGeneration == generation,
+              vaultSelection == .selected(vaultURL),
+              indexLocation == location
+        else {
+            return
+        }
+
+        do {
+            try result.get()
+            readClient = try readClientFactory(
+                location.metadataStoreFile,
+                location.tantivyIndexDirectory
+            )
+            readAvailability = .ready
+        } catch {
+            readClient = nil
+            readAvailability = .error(Self.readIndexRecoveryErrorMessage(error))
         }
     }
 
@@ -1119,4 +1163,26 @@ public final class AppState: ObservableObject {
 private struct ActiveEditorBufferProvider {
     let descriptor: ActiveEditorBufferDescriptor
     let provider: () -> String
+}
+
+private final class ReadIndexRecoveryCompletionSink: @unchecked Sendable {
+    private weak var owner: AppState?
+
+    init(owner: AppState) {
+        self.owner = owner
+    }
+
+    func finish(
+        _ result: Result<Void, any Error>,
+        vaultURL: URL,
+        location: AppOwnedIndexLocation,
+        generation: UInt64
+    ) {
+        owner?.finishReadIndexRecovery(
+            result,
+            vaultURL: vaultURL,
+            location: location,
+            generation: generation
+        )
+    }
 }
