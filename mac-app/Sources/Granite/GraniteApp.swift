@@ -196,6 +196,12 @@ struct GraniteApp: App {
             Foundation.exit(report.passed ? 0 : 2)
         }
 
+        if CommandLine.arguments.contains("--file-tree-actions-probe") {
+            let report = FileTreeActionsProbe.run()
+            print(FileTreeActionsProbe.encodedReport(report))
+            Foundation.exit(report.passed ? 0 : 2)
+        }
+
         if CommandLine.arguments.contains("--workspace-pane-layout-probe") {
             let report = WorkspacePaneLayoutProbe.run()
             print(WorkspacePaneLayoutProbe.encodedReport(report))

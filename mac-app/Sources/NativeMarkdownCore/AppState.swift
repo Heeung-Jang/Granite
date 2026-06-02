@@ -135,6 +135,10 @@ public final class AppState: ObservableObject {
     @Published public private(set) var fileTreeOverlayRevision: UInt64
     @Published public private(set) var fileTreeOverlayItems: [FileTreeItem]
     @Published public private(set) var fileTreeOverlayFolderPaths: [String]
+    @Published public private(set) var fileTreeOverlayRemovedItemIDs: Set<String>
+    @Published public private(set) var fileTreeOverlayRemovedFolderPaths: Set<String>
+    @Published public private(set) var fileTreeCollapseRequestID: UInt64
+    @Published public private(set) var fileTreeSortMode: FileTreeSortMode
 
     private let indexDirectoryResolver: any IndexDirectoryResolving
     private let vaultAccessValidator: any VaultAccessValidating
@@ -142,10 +146,12 @@ public final class AppState: ObservableObject {
     private let startupVaultRestoreStorage: any StartupVaultRestoreStoring
     private let workspaceTabSessionStore: any WorkspaceTabSessionStoring
     private let paneLayoutStore: PaneLayoutStore
+    private let fileTreeSortModeStore: any FileTreeSortModeStoring
     private let readClientFactory: ReadClientFactory
     private let readIndexRebuilder: any ReadIndexRebuilding
     private let readIndexRecoveryScheduler: any ReadIndexRecoveryScheduling
     private let maxRecentVaults: Int
+    private static let maxNavigationHistoryEntries = 100
     private var nextSearchRequestID: UInt64 = 0
     private var didAttemptLastVaultAutoRestore = false
     private var dirtyEditorFiles: [String: FileTreeItem] = [:]
@@ -160,6 +166,7 @@ public final class AppState: ObservableObject {
         startupVaultRestoreStorage: any StartupVaultRestoreStoring = UserDefaultsStartupVaultRestoreStorage(),
         workspaceTabSessionStore: any WorkspaceTabSessionStoring = UserDefaultsWorkspaceTabSessionStore(),
         workspacePaneLayoutStore: any WorkspacePaneLayoutStoring = UserDefaultsWorkspacePaneLayoutStore(),
+        fileTreeSortModeStore: any FileTreeSortModeStoring = UserDefaultsFileTreeSortModeStore(),
         readClientFactory: @escaping ReadClientFactory = { metadataURL, tantivyURL in
             try EngineReadClient.open(metadataURL: metadataURL, tantivyURL: tantivyURL)
         },
@@ -180,6 +187,7 @@ public final class AppState: ObservableObject {
         self.startupVaultRestoreStorage = startupVaultRestoreStorage
         self.workspaceTabSessionStore = workspaceTabSessionStore
         self.paneLayoutStore = paneLayoutStore
+        self.fileTreeSortModeStore = fileTreeSortModeStore
         self.readClientFactory = readClientFactory
         self.readIndexRebuilder = readIndexRebuilder
         self.readIndexRecoveryScheduler = readIndexRecoveryScheduler
@@ -194,6 +202,10 @@ public final class AppState: ObservableObject {
         self.fileTreeOverlayRevision = 0
         self.fileTreeOverlayItems = []
         self.fileTreeOverlayFolderPaths = []
+        self.fileTreeOverlayRemovedItemIDs = []
+        self.fileTreeOverlayRemovedFolderPaths = []
+        self.fileTreeCollapseRequestID = 0
+        self.fileTreeSortMode = vaultSelection.url.map(fileTreeSortModeStore.loadSortMode(forVaultAt:)) ?? .nameAscending
         self.recentVaults = Self.normalizedRecentVaults(
             from: recentVaultStorage.loadRecentVaultURLs(),
             limit: self.maxRecentVaults
@@ -209,6 +221,7 @@ public final class AppState: ObservableObject {
             clearAllDirtyWarnings()
             vaultSelection = .unavailable(issue)
             restoreWorkspacePaneLayout(for: vaultURL)
+            fileTreeSortMode = fileTreeSortModeStore.loadSortMode(forVaultAt: vaultURL)
             rememberVault(vaultURL)
             startupVaultRestoreStorage.saveSuppressesLastVaultRestore(false)
             return
@@ -222,6 +235,7 @@ public final class AppState: ObservableObject {
         vaultSelection = .selected(vaultURL)
         resetWorkspaceState()
         restoreWorkspacePaneLayout(for: vaultURL)
+        fileTreeSortMode = fileTreeSortModeStore.loadSortMode(forVaultAt: vaultURL)
         restoreWorkspaceTabSession(for: vaultURL)
         clearAllDirtyWarnings()
         rememberVault(vaultURL)
@@ -274,6 +288,7 @@ public final class AppState: ObservableObject {
         let vaultURL = url.standardizedFileURL
         vaultSelection = .unavailable(.staleBookmark(vaultURL))
         restoreWorkspacePaneLayout(for: vaultURL)
+        fileTreeSortMode = fileTreeSortModeStore.loadSortMode(forVaultAt: vaultURL)
         rememberVault(vaultURL)
         startupVaultRestoreStorage.saveSuppressesLastVaultRestore(false)
     }
@@ -291,6 +306,7 @@ public final class AppState: ObservableObject {
         indexLocation = nil
         resetWorkspaceState()
         workspacePaneLayout = paneLayoutStore.resetToDefault()
+        fileTreeSortMode = .nameAscending
         clearAllDirtyWarnings()
     }
 
@@ -305,6 +321,7 @@ public final class AppState: ObservableObject {
         persistRecentVaults()
         workspaceTabSessionStore.clearSession(forVaultAt: url)
         paneLayoutStore.clearStoredLayout(forVaultAt: url)
+        fileTreeSortModeStore.clearSortMode(forVaultAt: url)
 
         if removedCurrentVault {
             startupVaultRestoreStorage.saveSuppressesLastVaultRestore(true)
@@ -342,6 +359,20 @@ public final class AppState: ObservableObject {
 
     public func toggleRightSidebarCollapsed() {
         workspacePaneLayout = paneLayoutStore.toggleRightSidebarCollapsed(vaultURL: vaultSelection.url)
+    }
+
+    public func setFileTreeSortMode(_ mode: FileTreeSortMode) {
+        guard fileTreeSortMode != mode else {
+            return
+        }
+        fileTreeSortMode = mode
+        if let vaultURL = vaultSelection.url {
+            fileTreeSortModeStore.saveSortMode(mode, forVaultAt: vaultURL)
+        }
+    }
+
+    public func requestFileTreeCollapseAll() {
+        fileTreeCollapseRequestID &+= 1
     }
 
     public func refreshEngineHealth(using loader: EngineHealthLoading = EngineHealthClient()) {
@@ -453,6 +484,14 @@ public final class AppState: ObservableObject {
         _ item: FileTreeItem,
         disposition: WorkspaceTabOpenDisposition
     ) -> Bool {
+        openFile(item, disposition: disposition, recordsHistory: true)
+    }
+
+    private func openFile(
+        _ item: FileTreeItem,
+        disposition: WorkspaceTabOpenDisposition,
+        recordsHistory: Bool
+    ) -> Bool {
         guard let requestedKey = WorkspacePathIdentity.key(for: item) else {
             return false
         }
@@ -492,6 +531,12 @@ public final class AppState: ObservableObject {
                     ))
                     return false
                 }
+                if recordsHistory,
+                   let currentFile = workspaceTabs[activeIndex].file,
+                   WorkspacePathIdentity.key(for: currentFile) != requestedKey {
+                    appendNavigationHistory(currentFile, toTabAt: activeIndex)
+                    workspaceTabs[activeIndex].forwardStack = []
+                }
                 workspaceTabs[activeIndex].replaceFile(item)
                 activeTabID = workspaceTabs[activeIndex].id
                 selectedFile = item
@@ -515,6 +560,59 @@ public final class AppState: ObservableObject {
 
     public var activeFile: FileTreeItem? {
         activeTab?.file
+    }
+
+    public var activeTabCanNavigateBack: Bool {
+        activeTab?.backStack.isEmpty == false
+    }
+
+    public var activeTabCanNavigateForward: Bool {
+        activeTab?.forwardStack.isEmpty == false
+    }
+
+    public var activeTabViewMode: WorkspaceTabViewMode {
+        activeTab?.viewMode ?? .livePreview
+    }
+
+    public func navigateActiveTabBack() {
+        guard let activeIndex = activeTabIndex,
+              let currentFile = workspaceTabs[activeIndex].file,
+              let previousFile = workspaceTabs[activeIndex].backStack.popLast()
+        else {
+            return
+        }
+        appendForwardHistory(currentFile, toTabAt: activeIndex)
+        workspaceTabs[activeIndex].replaceFile(previousFile)
+        activeTabID = workspaceTabs[activeIndex].id
+        selectedFile = previousFile
+        workspaceSelection = .note(previousFile)
+        clearAllDirtyWarnings()
+        persistWorkspaceTabSession()
+    }
+
+    public func navigateActiveTabForward() {
+        guard let activeIndex = activeTabIndex,
+              let currentFile = workspaceTabs[activeIndex].file,
+              let nextFile = workspaceTabs[activeIndex].forwardStack.popLast()
+        else {
+            return
+        }
+        appendNavigationHistory(currentFile, toTabAt: activeIndex)
+        workspaceTabs[activeIndex].replaceFile(nextFile)
+        activeTabID = workspaceTabs[activeIndex].id
+        selectedFile = nextFile
+        workspaceSelection = .note(nextFile)
+        clearAllDirtyWarnings()
+        persistWorkspaceTabSession()
+    }
+
+    public func toggleActiveTabReadingView() {
+        guard let activeIndex = activeTabIndex else {
+            return
+        }
+        workspaceTabs[activeIndex].viewMode = workspaceTabs[activeIndex].viewMode == .reading
+            ? .livePreview
+            : .reading
     }
 
     public var hasDirtyEditors: Bool {
@@ -552,11 +650,17 @@ public final class AppState: ObservableObject {
     }
 
     private func clearFileTreeCreationOverlays() {
-        guard !fileTreeOverlayItems.isEmpty || !fileTreeOverlayFolderPaths.isEmpty else {
+        guard !fileTreeOverlayItems.isEmpty ||
+            !fileTreeOverlayFolderPaths.isEmpty ||
+            !fileTreeOverlayRemovedItemIDs.isEmpty ||
+            !fileTreeOverlayRemovedFolderPaths.isEmpty
+        else {
             return
         }
         fileTreeOverlayItems = []
         fileTreeOverlayFolderPaths = []
+        fileTreeOverlayRemovedItemIDs = []
+        fileTreeOverlayRemovedFolderPaths = []
         fileTreeOverlayRevision &+= 1
     }
 
@@ -738,6 +842,77 @@ public final class AppState: ObservableObject {
             return false
         }
         return dirtyEditorFiles[key] != nil
+    }
+
+    public func dirtyFileBlockingOperation(file: FileTreeItem) -> FileTreeItem? {
+        guard let key = WorkspacePathIdentity.key(for: file) else {
+            return nil
+        }
+        return dirtyEditorFiles[key]
+    }
+
+    public func dirtyFileBlockingOperation(folderPath: String) -> FileTreeItem? {
+        let prefix = folderPath.isEmpty ? "" : "\(folderPath)/"
+        return dirtyEditorFiles.values.first { file in
+            file.relativePath == folderPath || file.relativePath.hasPrefix(prefix)
+        }
+    }
+
+    public func applyRenamedFile(_ result: VaultFileOperationResult) {
+        applyFilePathChange(oldFile: result.oldFile, newFile: result.newFile)
+    }
+
+    public func applyMovedFile(_ result: VaultFileOperationResult) {
+        applyFilePathChange(oldFile: result.oldFile, newFile: result.newFile)
+    }
+
+    public func applyDeletedFile(_ file: FileTreeItem) {
+        guard let oldKey = WorkspacePathIdentity.key(for: file) else {
+            return
+        }
+        fileTreeOverlayItems.removeAll { $0.id == oldKey }
+        fileTreeOverlayRemovedItemIDs.insert(oldKey)
+        removeTabs { $0 == file }
+        removeDeletedFileFromHistory(file)
+        dirtyEditorFiles.removeValue(forKey: oldKey)
+        if selectedFile?.id == oldKey {
+            selectedFile = activeTab?.file
+            workspaceSelection = selectedFile.map(WorkspaceSelection.note) ?? .empty
+        }
+        clearActiveEditorBufferIfNeeded(fileID: oldKey)
+        fileTreeOverlayRevision &+= 1
+        _ = requestCurrentVaultIndexRebuild()
+    }
+
+    public func applyRenamedFolder(oldPath: String, newPath: String, movedFiles: [FileTreeItem] = []) {
+        applyFolderPathChange(oldPath: oldPath, newPath: newPath, movedFiles: movedFiles)
+    }
+
+    public func applyMovedFolder(oldPath: String, newPath: String, movedFiles: [FileTreeItem] = []) {
+        applyFolderPathChange(oldPath: oldPath, newPath: newPath, movedFiles: movedFiles)
+    }
+
+    public func applyDeletedFolder(path: String) {
+        guard !path.isEmpty else {
+            return
+        }
+        let prefix = "\(path)/"
+        fileTreeOverlayItems.removeAll { $0.relativePath == path || $0.relativePath.hasPrefix(prefix) }
+        fileTreeOverlayFolderPaths.removeAll { $0 == path || $0.hasPrefix(prefix) }
+        fileTreeOverlayRemovedFolderPaths.insert(path)
+        removeTabs { $0.relativePath == path || $0.relativePath.hasPrefix(prefix) }
+        removeDeletedFolderFromHistory(path: path)
+        dirtyEditorFiles = dirtyEditorFiles.filter { _, file in
+            !(file.relativePath == path || file.relativePath.hasPrefix(prefix))
+        }
+        if selectedFile.map({ $0.relativePath == path || $0.relativePath.hasPrefix(prefix) }) == true {
+            selectedFile = activeTab?.file
+            workspaceSelection = selectedFile.map(WorkspaceSelection.note) ?? .empty
+        }
+        activeEditorBufferProvider = nil
+        fileTreeOverlayRevision &+= 1
+        _ = requestCurrentVaultIndexRebuild()
+        persistWorkspaceTabSession()
     }
 
     public func dismissDirtyNavigationWarning() {
@@ -936,6 +1111,195 @@ public final class AppState: ObservableObject {
         dirtyEditorFiles.removeValue(forKey: key)
     }
 
+    private func applyFilePathChange(oldFile: FileTreeItem, newFile: FileTreeItem) {
+        guard let oldKey = WorkspacePathIdentity.key(for: oldFile),
+              let newKey = WorkspacePathIdentity.key(for: newFile),
+              oldKey != newKey
+        else {
+            return
+        }
+
+        fileTreeOverlayRemovedItemIDs.insert(oldKey)
+        fileTreeOverlayItems.removeAll { $0.id == oldKey || $0.id == newKey }
+        fileTreeOverlayItems.append(newFile)
+        replaceFileReferences(oldFile: oldFile, newFile: newFile)
+        if let dirtyFile = dirtyEditorFiles.removeValue(forKey: oldKey) {
+            dirtyEditorFiles[newKey] = FileTreeItem(relativePath: newKey)
+            if dirtyFile.id == selectedFile?.id {
+                selectedFile = newFile
+            }
+        }
+        if selectedFile?.id == oldKey {
+            selectedFile = newFile
+            workspaceSelection = .note(newFile)
+        }
+        clearActiveEditorBufferIfNeeded(fileID: oldKey)
+        fileTreeOverlayRevision &+= 1
+        _ = requestCurrentVaultIndexRebuild()
+        persistWorkspaceTabSession()
+    }
+
+    private func applyFolderPathChange(oldPath: String, newPath: String, movedFiles: [FileTreeItem]) {
+        guard !oldPath.isEmpty,
+              let oldKey = WorkspacePathIdentity.canonicalRelativePath(oldPath),
+              let newKey = WorkspacePathIdentity.canonicalRelativePath(newPath),
+              oldKey != newKey
+        else {
+            return
+        }
+
+        fileTreeOverlayRemovedFolderPaths.insert(oldKey)
+        fileTreeOverlayFolderPaths.removeAll { $0 == oldKey || $0.hasPrefix("\(oldKey)/") || $0 == newKey }
+        fileTreeOverlayFolderPaths.append(newKey)
+
+        let oldPrefix = "\(oldKey)/"
+        let newPrefix = "\(newKey)/"
+        fileTreeOverlayItems = fileTreeOverlayItems.compactMap { item in
+            if item.relativePath == oldKey {
+                return nil
+            }
+            guard item.relativePath.hasPrefix(oldPrefix) else {
+                return item
+            }
+            return FileTreeItem(relativePath: newPrefix + String(item.relativePath.dropFirst(oldPrefix.count)))
+        }
+        for movedFile in movedFiles where !fileTreeOverlayItems.contains(where: { $0.id == movedFile.id }) {
+            fileTreeOverlayItems.append(movedFile)
+        }
+
+        workspaceTabs = workspaceTabs.map { tab in
+            rewriteTab(tab, oldPrefix: oldPrefix, newPrefix: newPrefix)
+        }
+        dirtyEditorFiles = Dictionary(uniqueKeysWithValues: dirtyEditorFiles.values.map { file in
+            let updated = rewriteFile(file, oldPrefix: oldPrefix, newPrefix: newPrefix)
+            return (WorkspacePathIdentity.key(for: updated) ?? updated.relativePath, updated)
+        })
+        if let selectedFile {
+            let updated = rewriteFile(selectedFile, oldPrefix: oldPrefix, newPrefix: newPrefix)
+            if updated != selectedFile {
+                self.selectedFile = updated
+                workspaceSelection = .note(updated)
+            }
+        }
+        activeEditorBufferProvider = nil
+        fileTreeOverlayRevision &+= 1
+        _ = requestCurrentVaultIndexRebuild()
+        persistWorkspaceTabSession()
+    }
+
+    private func replaceFileReferences(oldFile: FileTreeItem, newFile: FileTreeItem) {
+        workspaceTabs = workspaceTabs.map { tab in
+            var updated = tab
+            if tab.file == oldFile {
+                updated.replaceFile(newFile)
+            }
+            updated.backStack = tab.backStack.map { $0 == oldFile ? newFile : $0 }
+            updated.forwardStack = tab.forwardStack.map { $0 == oldFile ? newFile : $0 }
+            return updated
+        }
+    }
+
+    private func rewriteTab(_ tab: WorkspaceTab, oldPrefix: String, newPrefix: String) -> WorkspaceTab {
+        var updated = tab
+        if let file = tab.file {
+            updated.replaceFile(rewriteFile(file, oldPrefix: oldPrefix, newPrefix: newPrefix))
+        }
+        updated.backStack = tab.backStack.map { rewriteFile($0, oldPrefix: oldPrefix, newPrefix: newPrefix) }
+        updated.forwardStack = tab.forwardStack.map { rewriteFile($0, oldPrefix: oldPrefix, newPrefix: newPrefix) }
+        return updated
+    }
+
+    private func rewriteFile(_ file: FileTreeItem, oldPrefix: String, newPrefix: String) -> FileTreeItem {
+        guard file.relativePath.hasPrefix(oldPrefix) else {
+            return file
+        }
+        return FileTreeItem(relativePath: newPrefix + String(file.relativePath.dropFirst(oldPrefix.count)))
+    }
+
+    private func removeTabs(matching shouldRemove: (FileTreeItem) -> Bool) {
+        let previousActiveID = activeTabID
+        let previousActiveIndex = activeTabIndex
+        workspaceTabs.removeAll { tab in
+            guard let file = tab.file else {
+                return false
+            }
+            return shouldRemove(file)
+        }
+
+        if workspaceTabs.isEmpty {
+            activeTabID = nil
+            selectedFile = nil
+            workspaceSelection = .empty
+            persistWorkspaceTabSession()
+            return
+        }
+
+        if previousActiveID.map({ id in workspaceTabs.contains { $0.id == id } }) == true {
+            activeTabID = previousActiveID
+        } else {
+            let fallbackIndex = min(previousActiveIndex ?? 0, workspaceTabs.count - 1)
+            activeTabID = workspaceTabs[fallbackIndex].id
+        }
+        selectedFile = activeTab?.file
+        if workspaceSelection != .graph {
+            workspaceSelection = selectedFile.map(WorkspaceSelection.note) ?? .empty
+        }
+        persistWorkspaceTabSession()
+    }
+
+    private func removeDeletedFileFromHistory(_ file: FileTreeItem) {
+        workspaceTabs = workspaceTabs.map { tab in
+            var updated = tab
+            updated.backStack.removeAll { $0 == file }
+            updated.forwardStack.removeAll { $0 == file }
+            return updated
+        }
+    }
+
+    private func removeDeletedFolderFromHistory(path: String) {
+        let prefix = "\(path)/"
+        workspaceTabs = workspaceTabs.map { tab in
+            var updated = tab
+            updated.backStack.removeAll { $0.relativePath == path || $0.relativePath.hasPrefix(prefix) }
+            updated.forwardStack.removeAll { $0.relativePath == path || $0.relativePath.hasPrefix(prefix) }
+            return updated
+        }
+    }
+
+    private func clearActiveEditorBufferIfNeeded(fileID: String) {
+        guard activeEditorBufferProvider?.descriptor.fileID == fileID else {
+            return
+        }
+        activeEditorBufferProvider = nil
+    }
+
+    private func appendNavigationHistory(_ file: FileTreeItem, toTabAt index: Int) {
+        guard workspaceTabs.indices.contains(index) else {
+            return
+        }
+        if workspaceTabs[index].backStack.last != file {
+            workspaceTabs[index].backStack.append(file)
+        }
+        capNavigationHistory(&workspaceTabs[index].backStack)
+    }
+
+    private func appendForwardHistory(_ file: FileTreeItem, toTabAt index: Int) {
+        guard workspaceTabs.indices.contains(index) else {
+            return
+        }
+        if workspaceTabs[index].forwardStack.last != file {
+            workspaceTabs[index].forwardStack.append(file)
+        }
+        capNavigationHistory(&workspaceTabs[index].forwardStack)
+    }
+
+    private func capNavigationHistory(_ stack: inout [FileTreeItem]) {
+        guard stack.count > Self.maxNavigationHistoryEntries else {
+            return
+        }
+        stack.removeFirst(stack.count - Self.maxNavigationHistoryEntries)
+    }
+
     private func appendFileTab(_ file: FileTreeItem) {
         let tab = WorkspaceTab(file: file)
         workspaceTabs.append(tab)
@@ -991,6 +1355,8 @@ public final class AppState: ObservableObject {
         activeEditorBufferProvider = nil
         fileTreeOverlayItems = []
         fileTreeOverlayFolderPaths = []
+        fileTreeOverlayRemovedItemIDs = []
+        fileTreeOverlayRemovedFolderPaths = []
         fileTreeOverlayRevision &+= 1
     }
 

@@ -706,6 +706,7 @@ private struct ObsidianLeftSidebar: View {
 }
 
 private struct ObsidianSidebarToolbar: View {
+    @EnvironmentObject private var appState: AppState
     @Environment(\.appContentZoomScale) private var appContentZoomScale
     let selectedPanel: ObsidianLeftPanel
     let createNote: () -> Void
@@ -718,9 +719,38 @@ private struct ObsidianSidebarToolbar: View {
             case .files:
                 ObsidianIconButton(systemName: "square.and.pencil", accessibilityLabel: "New note", action: createNote)
                 ObsidianIconButton(systemName: "folder.badge.plus", accessibilityLabel: "New folder", action: createFolder)
-                ObsidianIconButton(systemName: "arrow.up.arrow.down", accessibilityLabel: "Sort files", action: {})
+                Menu {
+                    ForEach(FileTreeSortMode.allCases) { mode in
+                        Button {
+                            appState.setFileTreeSortMode(mode)
+                        } label: {
+                            if appState.fileTreeSortMode == mode {
+                                Label(mode.displayName, systemImage: "checkmark")
+                            } else {
+                                Text(mode.displayName)
+                            }
+                        }
+                    }
+                } label: {
+                    Image(systemName: "arrow.up.arrow.down")
+                        .font(.system(size: ObsidianUI.iconFontSize(scale: appContentZoomScale)))
+                        .foregroundStyle(.secondary)
+                        .frame(
+                            width: ObsidianUI.iconButtonSize(scale: appContentZoomScale),
+                            height: ObsidianUI.iconButtonSize(scale: appContentZoomScale)
+                        )
+                        .contentShape(Rectangle())
+                }
+                .menuStyle(.borderlessButton)
+                .buttonStyle(.plain)
+                .help("Sort files")
+                .accessibilityLabel("Sort files")
                 Spacer()
-                ObsidianIconButton(systemName: "rectangle.compress.vertical", accessibilityLabel: "Collapse all", action: {})
+                ObsidianIconButton(
+                    systemName: "rectangle.compress.vertical",
+                    accessibilityLabel: "Collapse all",
+                    action: appState.requestFileTreeCollapseAll
+                )
             case .search:
                 Text("Search")
                     .font(.system(size: ObsidianUI.fontSize(13, scale: appContentZoomScale), weight: .semibold))

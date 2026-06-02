@@ -19,6 +19,7 @@ struct SourceNoteView: View {
     let chrome: SourceNoteChrome
     let isActive: Bool
     let focusRequestID: WorkspaceTab.ID?
+    let isReadOnly: Bool
     private let noteSaver: any EngineNoteSaving
 
     @State private var state: SourceNoteViewState = .loading
@@ -46,6 +47,7 @@ struct SourceNoteView: View {
         chrome: SourceNoteChrome = .native,
         isActive: Bool = true,
         focusRequestID: WorkspaceTab.ID? = nil,
+        isReadOnly: Bool = false,
         noteSaver: any EngineNoteSaving = EngineSaveClient()
     ) {
         self.vaultURL = vaultURL
@@ -53,6 +55,7 @@ struct SourceNoteView: View {
         self.chrome = chrome
         self.isActive = isActive
         self.focusRequestID = focusRequestID
+        self.isReadOnly = isReadOnly
         self.noteSaver = noteSaver
     }
 
@@ -70,7 +73,7 @@ struct SourceNoteView: View {
             case .loaded:
                 MarkdownEditorView(
                     text: $text,
-                    isEditable: saveSession?.canEdit == true,
+                    isEditable: saveSession?.canEdit == true && !isReadOnly,
                     livePreviewMode: livePreviewMode,
                     linkStyleMap: livePreviewLinkStyleMap,
                     embedPreviewMap: livePreviewEmbedPreviewMap,

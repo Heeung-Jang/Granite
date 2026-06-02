@@ -1,14 +1,31 @@
 import Foundation
 
+public enum WorkspaceTabViewMode: String, Equatable, Sendable {
+    case livePreview
+    case reading
+}
+
 public struct WorkspaceTab: Identifiable, Equatable, Sendable {
     public let id: UUID
     public var file: FileTreeItem?
     public var relativePathKey: String?
+    public var backStack: [FileTreeItem]
+    public var forwardStack: [FileTreeItem]
+    public var viewMode: WorkspaceTabViewMode
 
-    public init(id: UUID = UUID(), file: FileTreeItem? = nil) {
+    public init(
+        id: UUID = UUID(),
+        file: FileTreeItem? = nil,
+        backStack: [FileTreeItem] = [],
+        forwardStack: [FileTreeItem] = [],
+        viewMode: WorkspaceTabViewMode = .livePreview
+    ) {
         self.id = id
         self.file = file
         self.relativePathKey = file.flatMap(WorkspacePathIdentity.key(for:))
+        self.backStack = backStack
+        self.forwardStack = forwardStack
+        self.viewMode = viewMode
     }
 
     public var isEmpty: Bool {

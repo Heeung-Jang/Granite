@@ -74,6 +74,7 @@ struct ObsidianIconButton: View {
     let systemName: String
     let accessibilityLabel: String
     var isSelected = false
+    var isDisabled = false
     var action: () -> Void
 
     var body: some View {
@@ -83,7 +84,7 @@ struct ObsidianIconButton: View {
                     size: ObsidianUI.iconFontSize(scale: appContentZoomScale),
                     weight: isSelected ? .semibold : .regular
                 ))
-                .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+                .foregroundStyle(isDisabled ? Color.secondary.opacity(0.35) : (isSelected ? Color.accentColor : .secondary))
                 .frame(
                     width: ObsidianUI.iconButtonSize(scale: appContentZoomScale),
                     height: ObsidianUI.iconButtonSize(scale: appContentZoomScale)
@@ -93,6 +94,7 @@ struct ObsidianIconButton: View {
         .buttonStyle(.plain)
         .background(isSelected ? ObsidianUI.selectedFill : Color.clear)
         .clipShape(RoundedRectangle(cornerRadius: ObsidianUI.iconCornerRadius(scale: appContentZoomScale)))
+        .disabled(isDisabled)
         .help(accessibilityLabel)
         .accessibilityLabel(accessibilityLabel)
     }

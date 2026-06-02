@@ -35,11 +35,25 @@ public struct FileTreeOutline: Equatable, Sendable {
     private let childFoldersByParent: [String: [String]]
     private let childFilesByParent: [String: [FileTreeItem]]
 
-    public init(snapshot: FileTreeSnapshot) {
-        self.init(items: snapshot.items, folderPaths: snapshot.folderPaths)
+    public init(
+        snapshot: FileTreeSnapshot,
+        sortMode: FileTreeSortMode = .nameAscending,
+        modifiedDates: [String: Date] = [:]
+    ) {
+        self.init(
+            items: snapshot.items,
+            folderPaths: snapshot.folderPaths,
+            sortMode: sortMode,
+            modifiedDates: modifiedDates
+        )
     }
 
-    public init(items: [FileTreeItem], folderPaths: [String] = []) {
+    public init(
+        items: [FileTreeItem],
+        folderPaths: [String] = [],
+        sortMode: FileTreeSortMode = .nameAscending,
+        modifiedDates: [String: Date] = [:]
+    ) {
         itemsByID = Dictionary(
             items.map { ($0.id, $0) },
             uniquingKeysWith: { first, _ in first }
@@ -70,12 +84,12 @@ public struct FileTreeOutline: Equatable, Sendable {
 
         childFoldersByParent = foldersByParent.mapValues { folders in
             folders.sorted {
-                Self.displayName(forFolderID: $0).localizedStandardCompare(Self.displayName(forFolderID: $1)) == .orderedAscending
+                Self.compareFolders($0, $1, sortMode: sortMode, modifiedDates: modifiedDates)
             }
         }
         childFilesByParent = filesByParent.mapValues { files in
             files.sorted {
-                $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending
+                Self.compareFiles($0, $1, sortMode: sortMode, modifiedDates: modifiedDates)
             }
         }
     }
@@ -128,6 +142,56 @@ public struct FileTreeOutline: Equatable, Sendable {
 
     private static func displayName(forFolderID folderID: String) -> String {
         (folderID as NSString).lastPathComponent
+    }
+
+    private static func compareFolders(
+        _ lhs: String,
+        _ rhs: String,
+        sortMode: FileTreeSortMode,
+        modifiedDates: [String: Date]
+    ) -> Bool {
+        switch sortMode {
+        case .nameAscending:
+            return displayName(forFolderID: lhs).localizedStandardCompare(displayName(forFolderID: rhs)) == .orderedAscending
+        case .nameDescending:
+            return displayName(forFolderID: lhs).localizedStandardCompare(displayName(forFolderID: rhs)) == .orderedDescending
+        case .modifiedNewest:
+            return compareModified(lhs, rhs, modifiedDates: modifiedDates, newestFirst: true)
+        case .modifiedOldest:
+            return compareModified(lhs, rhs, modifiedDates: modifiedDates, newestFirst: false)
+        }
+    }
+
+    private static func compareFiles(
+        _ lhs: FileTreeItem,
+        _ rhs: FileTreeItem,
+        sortMode: FileTreeSortMode,
+        modifiedDates: [String: Date]
+    ) -> Bool {
+        switch sortMode {
+        case .nameAscending:
+            return lhs.displayName.localizedStandardCompare(rhs.displayName) == .orderedAscending
+        case .nameDescending:
+            return lhs.displayName.localizedStandardCompare(rhs.displayName) == .orderedDescending
+        case .modifiedNewest:
+            return compareModified(lhs.relativePath, rhs.relativePath, modifiedDates: modifiedDates, newestFirst: true)
+        case .modifiedOldest:
+            return compareModified(lhs.relativePath, rhs.relativePath, modifiedDates: modifiedDates, newestFirst: false)
+        }
+    }
+
+    private static func compareModified(
+        _ lhs: String,
+        _ rhs: String,
+        modifiedDates: [String: Date],
+        newestFirst: Bool
+    ) -> Bool {
+        let lhsDate = modifiedDates[lhs] ?? .distantPast
+        let rhsDate = modifiedDates[rhs] ?? .distantPast
+        if lhsDate != rhsDate {
+            return newestFirst ? lhsDate > rhsDate : lhsDate < rhsDate
+        }
+        return lhs.localizedStandardCompare(rhs) == .orderedAscending
     }
 
     private func appendChildren(

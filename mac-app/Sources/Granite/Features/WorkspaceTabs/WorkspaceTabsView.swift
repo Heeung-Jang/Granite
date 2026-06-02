@@ -191,6 +191,7 @@ struct EditorTabContentStack: View {
                     ObsidianEditorPane(
                         vaultURL: vaultURL,
                         file: file,
+                        viewMode: tab.viewMode,
                         isActive: tab.id == activeTabID,
                         focusRequestID: tab.id == activeTabID ? focusRequestID : nil
                     )
@@ -241,12 +242,13 @@ struct EditorTabContentStack: View {
 private struct ObsidianEditorPane: View {
     let vaultURL: URL
     let file: FileTreeItem
+    let viewMode: WorkspaceTabViewMode
     var isActive = true
     var focusRequestID: WorkspaceTab.ID?
 
     var body: some View {
         VStack(spacing: 0) {
-            ObsidianNoteToolbar(file: file)
+            ObsidianNoteToolbar(file: file, viewMode: viewMode)
 
             Divider()
 
@@ -255,20 +257,33 @@ private struct ObsidianEditorPane: View {
                 file: file,
                 chrome: .obsidian,
                 isActive: isActive,
-                focusRequestID: focusRequestID
+                focusRequestID: focusRequestID,
+                isReadOnly: viewMode == .reading
             )
         }
     }
 }
 
 private struct ObsidianNoteToolbar: View {
+    @EnvironmentObject private var appState: AppState
     @Environment(\.appContentZoomScale) private var appContentZoomScale
     let file: FileTreeItem
+    let viewMode: WorkspaceTabViewMode
 
     var body: some View {
         HStack(spacing: ObsidianUI.scaled(10, scale: appContentZoomScale)) {
-            ObsidianIconButton(systemName: "chevron.left", accessibilityLabel: "Back", action: {})
-            ObsidianIconButton(systemName: "chevron.right", accessibilityLabel: "Forward", action: {})
+            ObsidianIconButton(
+                systemName: "chevron.left",
+                accessibilityLabel: "Back",
+                isDisabled: !appState.activeTabCanNavigateBack,
+                action: appState.navigateActiveTabBack
+            )
+            ObsidianIconButton(
+                systemName: "chevron.right",
+                accessibilityLabel: "Forward",
+                isDisabled: !appState.activeTabCanNavigateForward,
+                action: appState.navigateActiveTabForward
+            )
 
             Text(breadcrumb)
                 .font(.system(size: ObsidianUI.fontSize(13, scale: appContentZoomScale)))
@@ -277,7 +292,12 @@ private struct ObsidianNoteToolbar: View {
 
             Spacer()
 
-            ObsidianIconButton(systemName: "book", accessibilityLabel: "Reading view", action: {})
+            ObsidianIconButton(
+                systemName: "book",
+                accessibilityLabel: "Reading view",
+                isSelected: viewMode == .reading,
+                action: appState.toggleActiveTabReadingView
+            )
             ObsidianMarkerStyleMenu()
         }
         .padding(.horizontal, ObsidianUI.scaled(14, scale: appContentZoomScale))
