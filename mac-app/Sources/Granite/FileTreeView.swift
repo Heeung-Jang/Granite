@@ -5,12 +5,18 @@ struct FileTreeView: View {
     private static let fileTreeItemLimit = 100_000
 
     var showsHeader = true
+    @Binding var selectedFolderPath: String?
 
     @EnvironmentObject private var appState: AppState
     @Environment(\.appContentZoomScale) private var appContentZoomScale
     @State private var state: FileTreeViewState = .idle
     @State private var selectedFileID: String?
     @State private var expandedFolderIDs: Set<String> = []
+
+    init(showsHeader: Bool = true, selectedFolderPath: Binding<String?> = .constant(nil)) {
+        self.showsHeader = showsHeader
+        self._selectedFolderPath = selectedFolderPath
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -26,12 +32,16 @@ struct FileTreeView: View {
         }
         .task(id: FileTreeTaskKey(
             vaultPath: appState.vaultSelection.url?.path,
-            readGeneration: appState.readGeneration
+            readGeneration: appState.readGeneration,
+            overlayRevision: appState.fileTreeOverlayRevision
         )) {
             await reload(for: appState.vaultSelection)
         }
         .onChange(of: appState.selectedFile?.id) { _, newValue in
             selectedFileID = newValue
+            if newValue != nil {
+                selectedFolderPath = nil
+            }
             expandToSelectedFileIfNeeded()
         }
         .accessibilityElement(children: .contain)
@@ -122,10 +132,12 @@ struct FileTreeView: View {
         case .noVault:
             state = .idle
             expandedFolderIDs = []
+            selectedFolderPath = nil
         case .unavailable(let issue):
             state = .unavailable(issue)
             expandedFolderIDs = []
-        case .selected:
+            selectedFolderPath = nil
+        case .selected(let vaultURL):
             let timer = AppTelemetryTimer()
             state = .loading
             guard let reader = appState.readClient, appState.readAvailability == .ready else {
@@ -135,10 +147,19 @@ struct FileTreeView: View {
                 return
             }
             let generation = appState.readGeneration
+            let folderTask = Task.detached(priority: .utility) {
+                try FileSystemFolderTreeLoader().loadFolderPaths(at: vaultURL)
+            }
             do {
-                let snapshot = try await EngineFileTreeLoader(reader: reader).loadFileTree(
+                let engineSnapshot = try await EngineFileTreeLoader(reader: reader).loadFileTree(
                     requestID: generation,
                     maxItems: Self.fileTreeItemLimit
+                )
+                let folderPaths = (try? await folderTask.value) ?? []
+                let snapshot = FileTreeSnapshot(
+                    items: mergedItems(engineSnapshot.items, appState.fileTreeOverlayItems),
+                    folderPaths: mergedFolderPaths(folderPaths, appState.fileTreeOverlayFolderPaths),
+                    state: engineSnapshot.state
                 )
 
                 if Task.isCancelled {
@@ -161,7 +182,7 @@ struct FileTreeView: View {
                 }
 
                 expandedFolderIDs = outlineBuild.expandedFolderIDs
-                state = snapshot.items.isEmpty
+                state = snapshot.items.isEmpty && snapshot.folderPaths.isEmpty
                     ? .empty
                     : .loaded(FileTreeLoadedState(
                         snapshot: snapshot,
@@ -174,6 +195,7 @@ struct FileTreeView: View {
                     durationMilliseconds: timer.elapsedMilliseconds()
                 )
             } catch {
+                folderTask.cancel()
                 if Task.isCancelled {
                     return
                 }
@@ -202,6 +224,23 @@ struct FileTreeView: View {
         }
     }
 
+    private func mergedItems(_ engineItems: [FileTreeItem], _ overlayItems: [FileTreeItem]) -> [FileTreeItem] {
+        Dictionary(
+            (engineItems + overlayItems).map { ($0.id, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        .values
+        .sorted {
+            $0.relativePath.localizedStandardCompare($1.relativePath) == .orderedAscending
+        }
+    }
+
+    private func mergedFolderPaths(_ engineFolders: [String], _ overlayFolders: [String]) -> [String] {
+        Array(Set(engineFolders + overlayFolders)).sorted {
+            $0.localizedStandardCompare($1) == .orderedAscending
+        }
+    }
+
     private func item(withID id: String?) -> FileTreeItem? {
         guard let id, case .loaded(let loaded) = state else {
             return nil
@@ -212,6 +251,8 @@ struct FileTreeView: View {
     private func handle(_ row: FileTreeOutlineRow) {
         switch row.kind {
         case .folder:
+            selectedFolderPath = row.id
+            selectedFileID = nil
             let isExpanding: Bool
             if expandedFolderIDs.contains(row.id) {
                 expandedFolderIDs.remove(row.id)
@@ -225,6 +266,7 @@ struct FileTreeView: View {
             guard let file = row.file else {
                 return
             }
+            selectedFolderPath = nil
             selectedFileID = file.id
             let disposition = OpenDispositionResolver.resolve(
                 isCommandPressed: NSApp.currentEvent?.modifierFlags.contains(.command) == true
@@ -306,6 +348,7 @@ struct FileTreeView: View {
 private struct FileTreeTaskKey: Hashable {
     let vaultPath: String?
     let readGeneration: UInt64
+    let overlayRevision: UInt64
 }
 
 private enum FileTreeViewState {

@@ -6,10 +6,16 @@ struct VaultPickerView: View {
     @EnvironmentObject private var appState: AppState
     @State private var selectionError: String?
     let closeVault: (() -> Void)?
+    let createVault: (() -> Void)?
     let dismiss: (() -> Void)?
 
-    init(closeVault: (() -> Void)? = nil, dismiss: (() -> Void)? = nil) {
+    init(
+        closeVault: (() -> Void)? = nil,
+        createVault: (() -> Void)? = nil,
+        dismiss: (() -> Void)? = nil
+    ) {
         self.closeVault = closeVault
+        self.createVault = createVault
         self.dismiss = dismiss
     }
 
@@ -56,14 +62,16 @@ struct VaultPickerView: View {
                         .keyboardShortcut(.cancelAction)
                 }
 
-                Button {
-                    openVaultPanel()
+                Menu {
+                    Button("Open Existing Vault", action: openVaultPanel)
+                    Button("Create New Vault", action: createNewVault)
+                        .disabled(createVault == nil)
                 } label: {
                     Image(systemName: "folder.badge.plus")
                 }
-                .buttonStyle(.borderless)
-                .help("Choose Other")
-                .accessibilityLabel("Choose other vault")
+                .menuStyle(.borderlessButton)
+                .help("Vault actions")
+                .accessibilityLabel("Vault actions")
             }
 
             Text(appState.engineHealth.displayText)
@@ -84,12 +92,21 @@ struct VaultPickerView: View {
     private var currentVaultState: some View {
         switch appState.vaultSelection {
         case .noVault:
-            Button {
-                openVaultPanel()
-            } label: {
-                Label("Open Vault", systemImage: "folder")
+            HStack {
+                Button {
+                    openVaultPanel()
+                } label: {
+                    Label("Open Existing Vault", systemImage: "folder")
+                }
+                .buttonStyle(.borderedProminent)
+
+                Button {
+                    createNewVault()
+                } label: {
+                    Label("Create New Vault", systemImage: "folder.badge.plus")
+                }
+                .disabled(createVault == nil)
             }
-            .buttonStyle(.borderedProminent)
 
         case .selected(let url):
             VaultStateSummary(
@@ -110,6 +127,13 @@ struct VaultPickerView: View {
                 } label: {
                     Label("Choose Other", systemImage: "folder")
                 }
+
+                Button {
+                    createNewVault()
+                } label: {
+                    Label("Create New", systemImage: "folder.badge.plus")
+                }
+                .disabled(createVault == nil)
             }
 
         case .unavailable(let issue):
@@ -141,6 +165,13 @@ struct VaultPickerView: View {
                     Label("Choose Other", systemImage: "folder")
                 }
 
+                Button {
+                    createNewVault()
+                } label: {
+                    Label("Create New Vault", systemImage: "folder.badge.plus")
+                }
+                .disabled(createVault == nil)
+
                 Button(role: .destructive) {
                     appState.removeRecentVault(at: issue.url)
                 } label: {
@@ -160,6 +191,10 @@ struct VaultPickerView: View {
         if panel.runModal() == .OK, let url = panel.url {
             selectVault(at: url)
         }
+    }
+
+    private func createNewVault() {
+        createVault?()
     }
 
     private func closeCurrentVault() {

@@ -59,6 +59,13 @@ public enum GraphTelemetryStage: String, Equatable, Sendable {
     }
 }
 
+public enum VaultCreationTelemetryOperation: String, Equatable, Sendable {
+    case createVault
+    case createNote
+    case createFolder
+    case indexRebuild
+}
+
 public struct GraphStageSignpostInterval {
     fileprivate let stage: GraphTelemetryStage
     fileprivate let name: StaticString
@@ -74,6 +81,7 @@ public enum AppTelemetry {
     private static let editorLogger = Logger(subsystem: subsystem, category: "Editor")
     private static let saveLogger = Logger(subsystem: subsystem, category: "Save")
     private static let graphLogger = Logger(subsystem: subsystem, category: "Graph")
+    private static let vaultLogger = Logger(subsystem: subsystem, category: "Vault")
     private static let graphSignposter = OSSignposter(logger: graphLogger)
 
     public static let privacySchema = AppTelemetryPrivacySchema(
@@ -96,8 +104,10 @@ public enum AppTelemetry {
             "memoryDeltaBytes",
             "mode",
             "nodeCount",
+            "operation",
             "edgeCount",
             "rendererKind",
+            "result",
             "resultCount",
             "source",
             "stageName",
@@ -258,6 +268,14 @@ public enum AppTelemetry {
         durationMilliseconds: Double
     ) {
         editorLogger.debug("Editor decoration text_length=\(textLength, privacy: .public) duration_ms=\(durationMilliseconds, privacy: .public)")
+    }
+
+    public static func vaultCreationCompleted(
+        operation: VaultCreationTelemetryOperation,
+        result: String,
+        durationMilliseconds: Double
+    ) {
+        vaultLogger.info("vault_creation operation=\(operation.rawValue, privacy: .public) result=\(result, privacy: .public) duration_ms=\(durationMilliseconds, privacy: .public)")
     }
 }
 

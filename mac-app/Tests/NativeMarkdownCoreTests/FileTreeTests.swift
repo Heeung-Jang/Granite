@@ -49,6 +49,26 @@ func fileTreeLoaderReportsCompleteWhenCountEqualsLimit() throws {
 }
 
 @Test
+func folderTreeLoaderReturnsEmptyFoldersAndSkipsMetadataDirectories() throws {
+    let vaultURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: vaultURL, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(
+        at: vaultURL.appendingPathComponent("Empty/Subfolder", isDirectory: true),
+        withIntermediateDirectories: true
+    )
+    try FileManager.default.createDirectory(
+        at: vaultURL.appendingPathComponent(".obsidian/Internal", isDirectory: true),
+        withIntermediateDirectories: true
+    )
+    try write("content", to: vaultURL.appendingPathComponent("Empty/Subfolder/Note.md"))
+
+    let folders = try FileSystemFolderTreeLoader().loadFolderPaths(at: vaultURL)
+
+    #expect(folders == ["Empty", "Empty/Subfolder"])
+}
+
+@Test
 func appStateTracksSelectedFileAndClearsItWithVault() {
     let state = AppState(
         engineHealth: EngineHealthStatus(state: .loaded, abiVersion: 1, message: "test"),
