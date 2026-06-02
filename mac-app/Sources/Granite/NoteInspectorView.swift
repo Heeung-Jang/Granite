@@ -16,6 +16,9 @@ struct NoteInspectorView: View {
     @State private var summaryState: SummaryPanelViewState = .ready
     @State private var summaryCoordinator = SummaryCoordinator()
     @State private var summaryTask: Task<Void, Never>?
+    @State private var indexingRetryState = InspectorIndexingRetryState()
+    @State private var indexingLimitTask: Task<Void, Never>?
+    @State private var retryStateFileID: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -46,6 +49,7 @@ struct NoteInspectorView: View {
         }
         .onDisappear {
             cancelSummary()
+            cancelIndexingLimitCheck()
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Inspector")
@@ -103,6 +107,11 @@ struct NoteInspectorView: View {
     }
 
     private func resetAndLoadDefaultPanel() async {
+        if retryStateFileID != file.id {
+            indexingRetryState.resetAll()
+            retryStateFileID = file.id
+        }
+        cancelIndexingLimitCheck()
         backlinksState = .idle
         outgoingState = .idle
         tagsState = .idle
@@ -149,11 +158,6 @@ struct NoteInspectorView: View {
         }
     }
 
-    private func errorMessage(_ error: any Error) -> String {
-        let message = String(describing: error)
-        return message.isEmpty ? "Inspector failed" : message
-    }
-
     private func loadBacklinks() async {
         guard backlinksState.shouldLoad else {
             return
@@ -185,7 +189,7 @@ struct NoteInspectorView: View {
                 durationMilliseconds: timer.elapsedMilliseconds()
             )
         } catch {
-            backlinksState = .failed(errorMessage(error))
+            handleInspectorLoadFailure(panel: .backlinks, error: error)
         }
     }
 
@@ -211,7 +215,7 @@ struct NoteInspectorView: View {
             }
             outgoingState = .loaded(outgoing)
         } catch {
-            outgoingState = .failed(errorMessage(error))
+            handleInspectorLoadFailure(panel: .outgoing, error: error)
         }
     }
 
@@ -246,7 +250,7 @@ struct NoteInspectorView: View {
             }
             tagsState = .loaded(TagsPropertiesPayload(tags: tags, properties: properties))
         } catch {
-            tagsState = .failed(errorMessage(error))
+            handleInspectorLoadFailure(panel: .tags, error: error)
         }
     }
 
@@ -272,7 +276,95 @@ struct NoteInspectorView: View {
             }
             attachmentsState = .loaded(attachments)
         } catch {
-            attachmentsState = .failed(errorMessage(error))
+            handleInspectorLoadFailure(panel: .attachments, error: error)
+        }
+    }
+
+    private func handleInspectorLoadFailure(panel: NoteInspectorPanel, error: any Error) {
+        switch InspectorReadErrorKind.classify(error) {
+        case .indexedTargetNotFound:
+            handleIndexedTargetNotFound(panel: panel)
+        case .userFacingFailure(let message):
+            setPanelRecoveryState(.failed(message), for: panel)
+        }
+    }
+
+    private func handleIndexedTargetNotFound(panel: NoteInspectorPanel) {
+        guard panel != .summary else {
+            return
+        }
+        guard InspectorFilePresence.resolve(vaultURL: vaultURL, file: file) == .existingVaultFile else {
+            setPanelRecoveryState(.missingNote, for: panel)
+            return
+        }
+
+        let key = InspectorRetryKey(file: file, panel: panel)
+        switch indexingRetryState.decision(for: key, readGeneration: appState.readGeneration, now: Date()) {
+        case .requestRebuild:
+            setPanelRecoveryState(.indexing, for: panel)
+            scheduleIndexingLimitCheck(for: key, panel: panel)
+            if !appState.requestCurrentVaultIndexRebuild() {
+                cancelIndexingLimitCheck()
+                setPanelRecoveryState(.failed("Index unavailable"), for: panel)
+            }
+        case .waitForExistingRebuild:
+            setPanelRecoveryState(.indexing, for: panel)
+            scheduleIndexingLimitCheck(for: key, panel: panel)
+        case .limitExceeded:
+            cancelIndexingLimitCheck()
+            setPanelRecoveryState(.indexingLimitExceeded, for: panel)
+        }
+    }
+
+    private func retrySelectedInspectorPanel() {
+        guard selectedPanel != .summary else {
+            return
+        }
+        let key = InspectorRetryKey(file: file, panel: selectedPanel)
+        indexingRetryState.reset(for: key)
+        setPanelRecoveryState(.indexing, for: selectedPanel)
+        scheduleIndexingLimitCheck(for: key, panel: selectedPanel)
+        if !appState.requestCurrentVaultIndexRebuild() {
+            cancelIndexingLimitCheck()
+            setPanelRecoveryState(.failed("Index unavailable"), for: selectedPanel)
+        }
+    }
+
+    private func scheduleIndexingLimitCheck(for key: InspectorRetryKey, panel: NoteInspectorPanel) {
+        cancelIndexingLimitCheck()
+        let delayNanoseconds = UInt64(indexingRetryState.maxAutomaticDuration * 1_000_000_000)
+        indexingLimitTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: delayNanoseconds)
+            guard !Task.isCancelled,
+                  selectedPanel == panel,
+                  indexingRetryState.limitExceeded(for: key, now: Date())
+            else {
+                return
+            }
+            setPanelRecoveryState(.indexingLimitExceeded, for: panel)
+        }
+    }
+
+    private func cancelIndexingLimitCheck() {
+        indexingLimitTask?.cancel()
+        indexingLimitTask = nil
+    }
+
+    private func setPanelRecoveryState(
+        _ state: InspectorPanelRecoveryState,
+        for panel: NoteInspectorPanel
+    ) {
+        switch panel {
+        case .backlinks:
+            backlinksState = state.panelState()
+        case .outgoing:
+            outgoingState = state.panelState()
+        case .tags:
+            tagsState = state.panelState()
+        case .attachments:
+            attachmentsState = state.panelState()
+        case .summary:
+            break
         }
     }
 
@@ -423,6 +515,22 @@ struct NoteInspectorView: View {
                     .controlSize(.small)
                 EmptyInlineText(loadingText)
             }
+        case .indexing:
+            HStack(spacing: ObsidianUI.scaled(6, scale: appContentZoomScale)) {
+                ProgressView()
+                    .controlSize(.small)
+                EmptyInlineText("Indexing this note...")
+            }
+        case .indexingLimitExceeded:
+            VStack(alignment: .leading, spacing: ObsidianUI.scaled(8, scale: appContentZoomScale)) {
+                EmptyInspectorState(title: "Still indexing. Try again later.", systemImage: "clock")
+                Button("Retry") {
+                    retrySelectedInspectorPanel()
+                }
+                .controlSize(.small)
+            }
+        case .missingNote:
+            EmptyInspectorState(title: "Note not found", systemImage: "doc.questionmark")
         case .failed(let message):
             EmptyInspectorState(title: message, systemImage: "xmark.octagon")
         case .loaded(let value):
@@ -524,14 +632,19 @@ struct NoteInspectorView: View {
 private enum InspectorPanelState<Value> {
     case idle
     case loading
+    case indexing
+    case indexingLimitExceeded
+    case missingNote
     case loaded(Value)
     case failed(String)
 
     var isLoading: Bool {
-        if case .loading = self {
+        switch self {
+        case .loading, .indexing:
             return true
+        default:
+            return false
         }
-        return false
     }
 
     var shouldLoad: Bool {
@@ -542,12 +655,32 @@ private enum InspectorPanelState<Value> {
     }
 }
 
+private enum InspectorPanelRecoveryState {
+    case indexing
+    case indexingLimitExceeded
+    case missingNote
+    case failed(String)
+
+    func panelState<Value>() -> InspectorPanelState<Value> {
+        switch self {
+        case .indexing:
+            return .indexing
+        case .indexingLimitExceeded:
+            return .indexingLimitExceeded
+        case .missingNote:
+            return .missingNote
+        case .failed(let message):
+            return .failed(message)
+        }
+    }
+}
+
 private struct TagsPropertiesPayload: Equatable {
     let tags: [String]
     let properties: [PropertyItem]
 }
 
-enum NoteInspectorPanel: CaseIterable {
+enum NoteInspectorPanel: CaseIterable, Hashable {
     case backlinks
     case outgoing
     case tags

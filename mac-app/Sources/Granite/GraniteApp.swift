@@ -202,6 +202,12 @@ struct GraniteApp: App {
             Foundation.exit(report.passed ? 0 : 2)
         }
 
+        if CommandLine.arguments.contains("--inspector-indexing-state-probe") {
+            let report = InspectorIndexingRecoveryProbe.run()
+            print(InspectorIndexingRecoveryProbe.encodedReport(report))
+            Foundation.exit(report.passed ? 0 : 2)
+        }
+
         if CommandLine.arguments.contains("--workspace-pane-layout-probe") {
             let report = WorkspacePaneLayoutProbe.run()
             print(WorkspacePaneLayoutProbe.encodedReport(report))

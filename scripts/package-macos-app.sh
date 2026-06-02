@@ -143,6 +143,7 @@ run_packaged_probe "live-preview-probe" --live-preview-probe >/dev/null
 run_packaged_probe "workspace-tabs-probe" --workspace-tabs-probe >/dev/null
 run_packaged_probe "startup-vault-restore-probe" --startup-vault-restore-probe >/dev/null
 run_packaged_probe "file-tree-actions-probe" --file-tree-actions-probe >/dev/null
+run_packaged_probe "inspector-indexing-state-probe" --inspector-indexing-state-probe >/dev/null
 run_packaged_probe "workspace-pane-layout-probe" --workspace-pane-layout-probe >/dev/null
 run_packaged_probe "app-content-zoom-probe" --app-content-zoom-probe >/dev/null
 run_packaged_probe "summary-panel-probe" --summary-panel-probe >/dev/null
