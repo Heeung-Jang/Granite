@@ -132,6 +132,9 @@ public final class AppState: ObservableObject {
     @Published public private(set) var dirtyLifecycleWarning: DirtyLifecycleWarning?
     @Published public private(set) var dirtyEditorActionWarning: DirtyEditorActionWarning?
     @Published public private(set) var dirtyTabCloseWarning: DirtyTabCloseWarning?
+    @Published public private(set) var fileTreeOverlayRevision: UInt64
+    @Published public private(set) var fileTreeOverlayItems: [FileTreeItem]
+    @Published public private(set) var fileTreeOverlayFolderPaths: [String]
 
     private let indexDirectoryResolver: any IndexDirectoryResolving
     private let vaultAccessValidator: any VaultAccessValidating
@@ -188,6 +191,9 @@ public final class AppState: ObservableObject {
         self.activeTabID = nil
         self.recentlyClosedTabs = []
         self.workspacePaneLayout = paneLayoutStore.layout
+        self.fileTreeOverlayRevision = 0
+        self.fileTreeOverlayItems = []
+        self.fileTreeOverlayFolderPaths = []
         self.recentVaults = Self.normalizedRecentVaults(
             from: recentVaultStorage.loadRecentVaultURLs(),
             limit: self.maxRecentVaults
@@ -238,6 +244,25 @@ public final class AppState: ObservableObject {
 
         didAttemptLastVaultAutoRestore = true
         try openRecentVault(recentVault)
+        return true
+    }
+
+    @discardableResult
+    public func requestCurrentVaultIndexRebuild() -> Bool {
+        guard let vaultURL = vaultSelection.url,
+              let location = indexLocation
+        else {
+            return false
+        }
+
+        let timer = AppTelemetryTimer()
+        scheduleReadIndexRecovery(
+            vaultURL: vaultURL,
+            location: location,
+            generation: readGeneration,
+            incrementsGenerationOnSuccess: true,
+            telemetryTimer: timer
+        )
         return true
     }
 
@@ -490,6 +515,49 @@ public final class AppState: ObservableObject {
 
     public var activeFile: FileTreeItem? {
         activeTab?.file
+    }
+
+    public var hasDirtyEditors: Bool {
+        firstDirtyEditorFile != nil
+    }
+
+    public var isActiveEditorDirty: Bool {
+        guard let activeTab else {
+            return false
+        }
+        return dirtyFile(for: activeTab) != nil
+    }
+
+    public func discardDirtyChangesForVaultSwitch() {
+        dirtyEditorFiles.removeAll()
+        clearAllDirtyWarnings()
+    }
+
+    public func registerCreatedFileTreeItem(_ item: FileTreeItem) {
+        guard !fileTreeOverlayItems.contains(where: { $0.id == item.id }) else {
+            return
+        }
+        fileTreeOverlayItems.append(item)
+        fileTreeOverlayRevision &+= 1
+    }
+
+    public func registerCreatedFileTreeFolder(path: String) {
+        guard !path.isEmpty,
+              !fileTreeOverlayFolderPaths.contains(path)
+        else {
+            return
+        }
+        fileTreeOverlayFolderPaths.append(path)
+        fileTreeOverlayRevision &+= 1
+    }
+
+    private func clearFileTreeCreationOverlays() {
+        guard !fileTreeOverlayItems.isEmpty || !fileTreeOverlayFolderPaths.isEmpty else {
+            return
+        }
+        fileTreeOverlayItems = []
+        fileTreeOverlayFolderPaths = []
+        fileTreeOverlayRevision &+= 1
     }
 
     public func newEmptyTab() {
@@ -921,6 +989,9 @@ public final class AppState: ObservableObject {
         recentlyClosedTabs = []
         dirtyEditorFiles.removeAll()
         activeEditorBufferProvider = nil
+        fileTreeOverlayItems = []
+        fileTreeOverlayFolderPaths = []
+        fileTreeOverlayRevision &+= 1
     }
 
     private func restoreWorkspaceTabSession(for vaultURL: URL) {
@@ -1054,14 +1125,22 @@ public final class AppState: ObservableObject {
                 return
             }
 
-            scheduleReadIndexRecovery(vaultURL: vaultURL, location: location, generation: generation)
+            scheduleReadIndexRecovery(
+                vaultURL: vaultURL,
+                location: location,
+                generation: generation,
+                incrementsGenerationOnSuccess: false,
+                telemetryTimer: nil
+            )
         }
     }
 
     private func scheduleReadIndexRecovery(
         vaultURL: URL,
         location: AppOwnedIndexLocation,
-        generation: UInt64
+        generation: UInt64,
+        incrementsGenerationOnSuccess: Bool,
+        telemetryTimer: AppTelemetryTimer?
     ) {
         let completionSink = ReadIndexRecoveryCompletionSink(owner: self)
         readIndexRecoveryScheduler.schedule { [readIndexRebuilder] in
@@ -1073,7 +1152,9 @@ public final class AppState: ObservableObject {
                 result,
                 vaultURL: vaultURL,
                 location: location,
-                generation: generation
+                generation: generation,
+                incrementsGenerationOnSuccess: incrementsGenerationOnSuccess,
+                telemetryTimer: telemetryTimer
             )
         }
     }
@@ -1082,7 +1163,9 @@ public final class AppState: ObservableObject {
         _ result: Result<Void, any Error>,
         vaultURL: URL,
         location: AppOwnedIndexLocation,
-        generation: UInt64
+        generation: UInt64,
+        incrementsGenerationOnSuccess: Bool,
+        telemetryTimer: AppTelemetryTimer?
     ) {
         guard readGeneration == generation,
               vaultSelection == .selected(vaultURL),
@@ -1093,14 +1176,35 @@ public final class AppState: ObservableObject {
 
         do {
             try result.get()
+            readClient?.close()
             readClient = try readClientFactory(
                 location.metadataStoreFile,
                 location.tantivyIndexDirectory
             )
             readAvailability = .ready
+            if incrementsGenerationOnSuccess {
+                readGeneration &+= 1
+                clearFileTreeCreationOverlays()
+            }
+            if let telemetryTimer {
+                AppTelemetry.vaultCreationCompleted(
+                    operation: .indexRebuild,
+                    result: "success",
+                    durationMilliseconds: telemetryTimer.elapsedMilliseconds()
+                )
+            }
         } catch {
-            readClient = nil
-            readAvailability = .error(Self.readIndexRecoveryErrorMessage(error))
+            if !incrementsGenerationOnSuccess {
+                readClient = nil
+                readAvailability = .error(Self.readIndexRecoveryErrorMessage(error))
+            }
+            if let telemetryTimer {
+                AppTelemetry.vaultCreationCompleted(
+                    operation: .indexRebuild,
+                    result: "failure",
+                    durationMilliseconds: telemetryTimer.elapsedMilliseconds()
+                )
+            }
         }
     }
 
@@ -1176,13 +1280,17 @@ private final class ReadIndexRecoveryCompletionSink: @unchecked Sendable {
         _ result: Result<Void, any Error>,
         vaultURL: URL,
         location: AppOwnedIndexLocation,
-        generation: UInt64
+        generation: UInt64,
+        incrementsGenerationOnSuccess: Bool,
+        telemetryTimer: AppTelemetryTimer?
     ) {
         owner?.finishReadIndexRecovery(
             result,
             vaultURL: vaultURL,
             location: location,
-            generation: generation
+            generation: generation,
+            incrementsGenerationOnSuccess: incrementsGenerationOnSuccess,
+            telemetryTimer: telemetryTimer
         )
     }
 }

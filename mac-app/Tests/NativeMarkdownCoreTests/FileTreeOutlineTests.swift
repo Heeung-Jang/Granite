@@ -21,6 +21,20 @@ func fileTreeOutlineCachesLookupAndVisibleRows() {
 }
 
 @Test
+func fileTreeOutlineShowsExplicitEmptyFolders() {
+    let outline = FileTreeOutline(
+        items: [FileTreeItem(relativePath: "Inbox/Note.md")],
+        folderPaths: ["Empty", "Projects/Waiting"]
+    )
+
+    let rows = outline.visibleRows(expandedFolderIDs: ["Projects"])
+
+    #expect(rows.map(\.id) == ["Empty", "Inbox", "Projects", "Projects/Waiting"])
+    #expect(rows.first { $0.id == "Empty" }?.kind == .folder)
+    #expect(rows.first { $0.id == "Projects/Waiting" }?.kind == .folder)
+}
+
+@Test
 func fileTreeOutlineExpandsRootAndSelectedAncestors() {
     let selected = FileTreeItem(relativePath: "Codex/Conversations/2026/Note.md")
     let outline = FileTreeOutline(items: [

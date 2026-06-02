@@ -36,16 +36,23 @@ public struct FileTreeOutline: Equatable, Sendable {
     private let childFilesByParent: [String: [FileTreeItem]]
 
     public init(snapshot: FileTreeSnapshot) {
-        self.init(items: snapshot.items)
+        self.init(items: snapshot.items, folderPaths: snapshot.folderPaths)
     }
 
-    public init(items: [FileTreeItem]) {
+    public init(items: [FileTreeItem], folderPaths: [String] = []) {
         itemsByID = Dictionary(
             items.map { ($0.id, $0) },
             uniquingKeysWith: { first, _ in first }
         )
 
         var folderIDs = Set<String>()
+        for folderPath in folderPaths where !folderPath.isEmpty {
+            var current = ""
+            for component in folderPath.split(separator: "/") {
+                current = current.isEmpty ? String(component) : "\(current)/\(component)"
+                folderIDs.insert(current)
+            }
+        }
         var filesByParent: [String: [FileTreeItem]] = [:]
         for item in items {
             filesByParent[item.parentPath, default: []].append(item)

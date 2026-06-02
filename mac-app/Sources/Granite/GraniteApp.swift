@@ -190,6 +190,12 @@ struct GraniteApp: App {
             Foundation.exit(report.passed ? 0 : 2)
         }
 
+        if CommandLine.arguments.contains("--vault-creation-probe") {
+            let report = VaultCreationProbe.run()
+            print(VaultCreationProbe.encodedReport(report))
+            Foundation.exit(report.passed ? 0 : 2)
+        }
+
         if CommandLine.arguments.contains("--workspace-pane-layout-probe") {
             let report = WorkspacePaneLayoutProbe.run()
             print(WorkspacePaneLayoutProbe.encodedReport(report))
@@ -244,6 +250,7 @@ struct GraniteApp: App {
         .defaultSize(width: 1440, height: 900)
         .commands {
             EditorCommands()
+            VaultCommands()
             AppContentZoomCommands()
             GraphCommands(appState: appState)
         }

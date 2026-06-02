@@ -10,6 +10,10 @@ struct RootView: View {
     @State private var selectedInspectorPanel: NoteInspectorPanel = .backlinks
     @State private var vaultSelectionError: String?
     @State private var presentedSheet: RootSheet?
+    @State private var selectedFileTreeFolderPath: String?
+    @State private var vaultCreationError: String?
+    @State private var vaultItemCreationError: String?
+    @State private var pendingVaultCreationRequest: VaultCreationRequest?
 
     var body: some View {
         GeometryReader { geometry in
@@ -32,9 +36,12 @@ struct RootView: View {
                         selectedPanel: $leftPanel,
                         showVaultPicker: showVaultPicker,
                         revealVaultInFinder: revealVaultInFinder,
+                        createNote: { presentVaultItemCreation(.note) },
+                        createFolder: { presentVaultItemCreation(.folder) },
                         closeVault: closeVault,
                         collapseSidebar: appState.toggleLeftSidebarCollapsed,
-                        vaultSelectionError: vaultSelectionError
+                        vaultSelectionError: vaultSelectionError,
+                        selectedFolderPath: $selectedFileTreeFolderPath
                     )
                     .frame(width: ObsidianUI.displayedPaneWidth(
                         logicalWidth: appState.workspacePaneLayout.leftSidebarWidth,
@@ -126,20 +133,56 @@ struct RootView: View {
         } message: {
             Text(dirtyTabCloseMessage)
         }
+        .alert("Unsaved Changes", isPresented: pendingVaultCreationAlertBinding) {
+            Button("Stay", role: .cancel) {
+                pendingVaultCreationRequest = nil
+            }
+            Button("Discard and Create", role: .destructive) {
+                guard let request = pendingVaultCreationRequest else {
+                    return
+                }
+                pendingVaultCreationRequest = nil
+                appState.discardDirtyChangesForVaultSwitch()
+                _ = performVaultCreation(request)
+            }
+        } message: {
+            Text("There are unsaved changes in open tabs. Discard them and create the new vault?")
+        }
         .sheet(item: $presentedSheet) { sheet in
             switch sheet {
             case .help:
                 GraniteHelpView(dismiss: dismissPresentedSheet)
                 .frame(width: 420, height: 320)
             case .vaultPicker:
-                VaultPickerView(closeVault: closeVault, dismiss: dismissPresentedSheet)
+                VaultPickerView(
+                    closeVault: closeVault,
+                    createVault: presentVaultCreation,
+                    dismiss: dismissPresentedSheet
+                )
                     .environmentObject(appState)
                     .frame(width: 360, height: 460)
+            case .createVault:
+                VaultCreationSheet(
+                    error: $vaultCreationError,
+                    submit: submitVaultCreation,
+                    cancel: dismissPresentedSheet
+                )
+                .frame(width: 460, height: 300)
+            case .createItem(let kind, let defaultName):
+                VaultItemCreationSheet(
+                    kind: kind,
+                    defaultName: defaultName,
+                    error: $vaultItemCreationError,
+                    submit: { submitVaultItemCreation(kind: kind, name: $0) },
+                    cancel: dismissPresentedSheet
+                )
+                .frame(width: 360, height: 190)
             }
         }
         .background(DirtyLifecycleWindowGuard())
         .background(WorkspaceTabKeyCommandGuard(action: workspaceTabAction))
         .focusedValue(\.workspaceTabAction, workspaceTabAction)
+        .focusedValue(\.vaultCommandAction, vaultCommandAction)
         .onAppear {
             AppLifecycleController.shared.appState = appState
             restoreLastVaultOnLaunch()
@@ -271,6 +314,16 @@ struct RootView: View {
         return "Discard unsaved changes in \"\(warning.dirtyFile.displayName)\" and close this tab?"
     }
 
+    private var pendingVaultCreationAlertBinding: Binding<Bool> {
+        Binding {
+            pendingVaultCreationRequest != nil
+        } set: { isPresented in
+            if !isPresented {
+                pendingVaultCreationRequest = nil
+            }
+        }
+    }
+
     private func openVaultPanel() {
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
@@ -301,6 +354,29 @@ struct RootView: View {
         presentedSheet = .vaultPicker
     }
 
+    private func presentVaultCreation() {
+        vaultCreationError = nil
+        presentedSheet = .createVault
+    }
+
+    private func presentVaultItemCreation(_ kind: VaultItemCreationKind) {
+        guard let vaultURL = appState.vaultSelection.url else {
+            vaultSelectionError = "Open a vault before creating notes or folders."
+            return
+        }
+        let parentURL = parentFolderURL(in: vaultURL)
+        let suggestion = VaultNameSuggestion()
+        let defaultName: String
+        switch kind {
+        case .note:
+            defaultName = suggestion.suggestedNoteName(in: parentURL)
+        case .folder:
+            defaultName = suggestion.suggestedFolderName(in: parentURL)
+        }
+        vaultItemCreationError = nil
+        presentedSheet = .createItem(kind: kind, defaultName: defaultName)
+    }
+
     private func restoreLastVaultOnLaunch() {
         do {
             if try appState.restoreLastVaultOnLaunchIfNeeded() {
@@ -314,6 +390,8 @@ struct RootView: View {
 
     private func dismissPresentedSheet() {
         presentedSheet = nil
+        vaultCreationError = nil
+        vaultItemCreationError = nil
     }
 
     private func revealVaultInFinder() {
@@ -327,6 +405,7 @@ struct RootView: View {
 
     private func closeVault() {
         presentedSheet = nil
+        selectedFileTreeFolderPath = nil
         appState.requestCloseVault()
     }
 
@@ -366,6 +445,109 @@ struct RootView: View {
         )
     }
 
+    private var vaultCommandAction: VaultCommandAction {
+        VaultCommandAction(newVault: presentVaultCreation)
+    }
+
+    private func submitVaultCreation(_ request: VaultCreationRequest) -> Bool {
+        vaultCreationError = nil
+        guard !appState.hasDirtyEditors else {
+            pendingVaultCreationRequest = request
+            return false
+        }
+        return performVaultCreation(request)
+    }
+
+    private func performVaultCreation(_ request: VaultCreationRequest) -> Bool {
+        let timer = AppTelemetryTimer()
+        do {
+            let outcome = try VaultCreator().createVault(request)
+            try appState.selectVault(outcome.vaultURL)
+            _ = appState.openFile(outcome.initialNote, disposition: .currentTab)
+            selectedFileTreeFolderPath = nil
+            vaultSelectionError = nil
+            vaultCreationError = nil
+            leftPanel = .files
+            presentedSheet = nil
+            AppTelemetry.vaultCreationCompleted(
+                operation: .createVault,
+                result: "success",
+                durationMilliseconds: timer.elapsedMilliseconds()
+            )
+            return true
+        } catch {
+            vaultCreationError = error.localizedDescription
+            AppTelemetry.vaultCreationCompleted(
+                operation: .createVault,
+                result: "failure",
+                durationMilliseconds: timer.elapsedMilliseconds()
+            )
+            return false
+        }
+    }
+
+    private func submitVaultItemCreation(kind: VaultItemCreationKind, name: String) -> Bool {
+        guard let vaultURL = appState.vaultSelection.url else {
+            vaultItemCreationError = "Open a vault before creating notes or folders."
+            return false
+        }
+
+        let context = creationContext()
+        let timer = AppTelemetryTimer()
+        do {
+            switch kind {
+            case .note:
+                let item = try VaultItemCreator().createNote(
+                    vaultURL: vaultURL,
+                    parentFolderPath: context.parentFolderPath,
+                    name: name
+                )
+                appState.registerCreatedFileTreeItem(item)
+                let disposition: WorkspaceTabOpenDisposition = appState.isActiveEditorDirty ? .newTab : .currentTab
+                _ = appState.openFile(item, disposition: disposition)
+            case .folder:
+                let folderPath = try VaultItemCreator().createFolder(
+                    vaultURL: vaultURL,
+                    parentFolderPath: context.parentFolderPath,
+                    name: name
+                )
+                appState.registerCreatedFileTreeFolder(path: folderPath)
+                selectedFileTreeFolderPath = folderPath
+            }
+            _ = appState.requestCurrentVaultIndexRebuild()
+            vaultItemCreationError = nil
+            presentedSheet = nil
+            AppTelemetry.vaultCreationCompleted(
+                operation: kind == .note ? .createNote : .createFolder,
+                result: "success",
+                durationMilliseconds: timer.elapsedMilliseconds()
+            )
+            return true
+        } catch {
+            vaultItemCreationError = error.localizedDescription
+            AppTelemetry.vaultCreationCompleted(
+                operation: kind == .note ? .createNote : .createFolder,
+                result: "failure",
+                durationMilliseconds: timer.elapsedMilliseconds()
+            )
+            return false
+        }
+    }
+
+    private func creationContext() -> VaultCreationContext {
+        VaultCreationContext.from(
+            selectedFolderPath: selectedFileTreeFolderPath,
+            selectedFile: appState.selectedFile
+        )
+    }
+
+    private func parentFolderURL(in vaultURL: URL) -> URL {
+        let parentPath = creationContext().parentFolderPath
+        return parentPath.isEmpty
+            ? vaultURL
+            : vaultURL.appendingPathComponent(parentPath, isDirectory: true)
+    }
+
     private func openGraphFromRibbon() {
         appState.openGraph(source: .ribbon)
     }
@@ -387,6 +569,8 @@ private enum ObsidianLeftPanel {
 private enum RootSheet: Identifiable {
     case help
     case vaultPicker
+    case createVault
+    case createItem(kind: VaultItemCreationKind, defaultName: String)
 
     var id: String {
         switch self {
@@ -394,6 +578,10 @@ private enum RootSheet: Identifiable {
             return "help"
         case .vaultPicker:
             return "vaultPicker"
+        case .createVault:
+            return "createVault"
+        case .createItem(let kind, let defaultName):
+            return "createItem-\(kind.rawValue)-\(defaultName)"
         }
     }
 }
@@ -473,14 +661,19 @@ private struct ObsidianLeftSidebar: View {
     @Binding var selectedPanel: ObsidianLeftPanel
     let showVaultPicker: () -> Void
     let revealVaultInFinder: () -> Void
+    let createNote: () -> Void
+    let createFolder: () -> Void
     let closeVault: () -> Void
     let collapseSidebar: () -> Void
     let vaultSelectionError: String?
+    @Binding var selectedFolderPath: String?
 
     var body: some View {
         VStack(spacing: 0) {
             ObsidianSidebarToolbar(
                 selectedPanel: selectedPanel,
+                createNote: createNote,
+                createFolder: createFolder,
                 collapseSidebar: collapseSidebar
             )
 
@@ -489,7 +682,7 @@ private struct ObsidianLeftSidebar: View {
             Group {
                 switch selectedPanel {
                 case .files:
-                    FileTreeView(showsHeader: false)
+                    FileTreeView(showsHeader: false, selectedFolderPath: $selectedFolderPath)
                 case .search:
                     SearchPanelView()
                 case .bookmarks:
@@ -515,14 +708,16 @@ private struct ObsidianLeftSidebar: View {
 private struct ObsidianSidebarToolbar: View {
     @Environment(\.appContentZoomScale) private var appContentZoomScale
     let selectedPanel: ObsidianLeftPanel
+    let createNote: () -> Void
+    let createFolder: () -> Void
     let collapseSidebar: () -> Void
 
     var body: some View {
         HStack(spacing: ObsidianUI.scaled(8, scale: appContentZoomScale)) {
             switch selectedPanel {
             case .files:
-                ObsidianIconButton(systemName: "square.and.pencil", accessibilityLabel: "New note", action: {})
-                ObsidianIconButton(systemName: "folder.badge.plus", accessibilityLabel: "New folder", action: {})
+                ObsidianIconButton(systemName: "square.and.pencil", accessibilityLabel: "New note", action: createNote)
+                ObsidianIconButton(systemName: "folder.badge.plus", accessibilityLabel: "New folder", action: createFolder)
                 ObsidianIconButton(systemName: "arrow.up.arrow.down", accessibilityLabel: "Sort files", action: {})
                 Spacer()
                 ObsidianIconButton(systemName: "rectangle.compress.vertical", accessibilityLabel: "Collapse all", action: {})

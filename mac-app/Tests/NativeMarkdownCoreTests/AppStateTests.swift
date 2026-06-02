@@ -281,6 +281,99 @@ func appStateIgnoresStaleReadIndexRecoveryAfterClearVault() throws {
 }
 
 @Test
+func appStateExplicitlyRebuildsCurrentVaultIndexAndPublishesRefreshGeneration() throws {
+    let supportRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let firstClient = FakeReadClient()
+    let secondClient = FakeReadClient()
+    let factory = FakeReadClientFactory(clients: [firstClient, secondClient])
+    let rebuilder = FakeReadIndexRebuilder()
+    let recoveryScheduler = FakeReadIndexRecoveryScheduler()
+    let state = AppState(
+        engineHealth: EngineHealthStatus(state: .loaded, abiVersion: 1, message: "test"),
+        indexDirectoryResolver: AppOwnedIndexDirectoryResolver(applicationSupportRoot: supportRoot),
+        vaultAccessValidator: AllowingVaultAccessValidator(),
+        recentVaultStorage: MemoryRecentVaultStorage(),
+        readClientFactory: factory.make,
+        readIndexRebuilder: rebuilder,
+        readIndexRecoveryScheduler: recoveryScheduler
+    )
+    let vaultURL = URL(fileURLWithPath: "/tmp/read-explicit-rebuild", isDirectory: true)
+
+    try state.selectVault(vaultURL)
+    let location = try #require(state.indexLocation)
+    #expect(state.readAvailability == .ready)
+    #expect(state.readGeneration == 1)
+    state.registerCreatedFileTreeItem(FileTreeItem(relativePath: "Created.md"))
+    state.registerCreatedFileTreeFolder(path: "Empty")
+
+    #expect(state.requestCurrentVaultIndexRebuild())
+
+    #expect(firstClient.closeCount == 0)
+    #expect(state.readAvailability == .ready)
+    #expect((state.readClient as? FakeReadClient) === firstClient)
+    #expect(state.readGeneration == 1)
+    #expect(recoveryScheduler.pendingWorkCount == 1)
+
+    recoveryScheduler.runNext()
+
+    #expect(rebuilder.rebuiltVaultURLs == [vaultURL.standardizedFileURL])
+    #expect(rebuilder.rebuiltLocations == [location])
+    #expect(firstClient.closeCount == 1)
+    #expect((state.readClient as? FakeReadClient) === secondClient)
+    #expect(state.readAvailability == .ready)
+    #expect(state.readGeneration == 2)
+    #expect(state.fileTreeOverlayItems.isEmpty)
+    #expect(state.fileTreeOverlayFolderPaths.isEmpty)
+}
+
+@Test
+func appStateExplicitRebuildFailureKeepsCurrentReadClientAndOverlays() throws {
+    let supportRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let firstClient = FakeReadClient()
+    let factory = FakeReadClientFactory(clients: [firstClient])
+    let rebuilder = FakeReadIndexRebuilder(error: engineReadOpenError(code: "missing_metadata"))
+    let recoveryScheduler = FakeReadIndexRecoveryScheduler()
+    let state = AppState(
+        engineHealth: EngineHealthStatus(state: .loaded, abiVersion: 1, message: "test"),
+        indexDirectoryResolver: AppOwnedIndexDirectoryResolver(applicationSupportRoot: supportRoot),
+        vaultAccessValidator: AllowingVaultAccessValidator(),
+        recentVaultStorage: MemoryRecentVaultStorage(),
+        readClientFactory: factory.make,
+        readIndexRebuilder: rebuilder,
+        readIndexRecoveryScheduler: recoveryScheduler
+    )
+    let vaultURL = URL(fileURLWithPath: "/tmp/read-explicit-rebuild-failure", isDirectory: true)
+    let createdItem = FileTreeItem(relativePath: "Created.md")
+
+    try state.selectVault(vaultURL)
+    let location = try #require(state.indexLocation)
+    state.registerCreatedFileTreeItem(createdItem)
+    state.registerCreatedFileTreeFolder(path: "Empty")
+
+    #expect(state.requestCurrentVaultIndexRebuild())
+    recoveryScheduler.runNext()
+
+    #expect(rebuilder.rebuiltVaultURLs == [vaultURL.standardizedFileURL])
+    #expect(rebuilder.rebuiltLocations == [location])
+    #expect(firstClient.closeCount == 0)
+    #expect((state.readClient as? FakeReadClient) === firstClient)
+    #expect(state.readAvailability == .ready)
+    #expect(state.readGeneration == 1)
+    #expect(state.fileTreeOverlayItems == [createdItem])
+    #expect(state.fileTreeOverlayFolderPaths == ["Empty"])
+}
+
+@Test
+func appStateExplicitRebuildReturnsFalseWithoutSelectedVault() {
+    let state = AppState()
+
+    #expect(!state.requestCurrentVaultIndexRebuild())
+    #expect(state.readAvailability == .unavailable)
+}
+
+@Test
 func appStateClosesReadClientOnClearUnavailableAndStaleVault() throws {
     let supportRoot = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString, isDirectory: true)

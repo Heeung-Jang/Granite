@@ -47,6 +47,8 @@ func telemetrySchemaDefinesAllowedAndDisallowedFields() {
     #expect(schema.allowsPublicField("memoryDeltaBytes"))
     #expect(schema.allowsPublicField("nodeCount"))
     #expect(schema.allowsPublicField("edgeCount"))
+    #expect(schema.allowsPublicField("operation"))
+    #expect(schema.allowsPublicField("result"))
     #expect(schema.allowsPublicField("rendererKind"))
     #expect(schema.allowsPublicField("source"))
     #expect(schema.rejectsRawField("absolutePath"))
@@ -109,4 +111,12 @@ func graphTelemetryStagesUsePublicStageNames() {
     #expect(GraphTelemetryStage.layout.signpostName == "graph.layout")
     #expect(GraphTelemetryStage.draw.signpostName == "graph.draw")
     #expect(GraphTelemetryStage.totalFirstRender.signpostName == "graph.first_render")
+}
+
+@Test
+func vaultCreationTelemetryUsesPublicOperationNames() {
+    #expect(VaultCreationTelemetryOperation.createVault.rawValue == "createVault")
+    #expect(VaultCreationTelemetryOperation.createNote.rawValue == "createNote")
+    #expect(VaultCreationTelemetryOperation.createFolder.rawValue == "createFolder")
+    #expect(VaultCreationTelemetryOperation.indexRebuild.rawValue == "indexRebuild")
 }

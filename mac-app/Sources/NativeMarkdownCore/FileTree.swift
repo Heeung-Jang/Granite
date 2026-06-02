@@ -29,10 +29,16 @@ public struct FileTreeItem: Identifiable, Equatable, Sendable {
 
 public struct FileTreeSnapshot: Equatable, Sendable {
     public let items: [FileTreeItem]
+    public let folderPaths: [String]
     public let state: FileTreeResultState
 
-    public init(items: [FileTreeItem], state: FileTreeResultState) {
+    public init(
+        items: [FileTreeItem],
+        folderPaths: [String] = [],
+        state: FileTreeResultState
+    ) {
         self.items = items
+        self.folderPaths = folderPaths
         self.state = state
     }
 }
@@ -134,6 +140,66 @@ public struct FileSystemFileTreeLoader: FileTreeLoading {
         relativePath
             .split(separator: "/")
             .contains { Self.excludedDirectories.contains(String($0)) }
+    }
+
+    private static let excludedDirectories: Set<String> = [
+        ".obsidian",
+        ".git",
+        ".worktrees",
+        ".native-markdown-index"
+    ]
+}
+
+public struct FileSystemFolderTreeLoader {
+    public init() {}
+
+    public func loadFolderPaths(at vaultURL: URL) throws -> [String] {
+        let rootURL = vaultURL.standardizedFileURL
+        let fileManager = FileManager.default
+        guard let enumerator = fileManager.enumerator(
+            at: rootURL,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsPackageDescendants]
+        ) else {
+            throw FileTreeLoadError.cannotEnumerate(rootURL)
+        }
+
+        var folders: [String] = []
+        for case let fileURL as URL in enumerator {
+            guard let relativePath = Self.relativePath(for: fileURL, under: rootURL) else {
+                continue
+            }
+
+            let resourceValues = try? fileURL.resourceValues(forKeys: [.isDirectoryKey])
+            guard resourceValues?.isDirectory == true else {
+                continue
+            }
+            if Self.shouldSkipDirectory(relativePath) {
+                enumerator.skipDescendants()
+                continue
+            }
+            folders.append(relativePath)
+        }
+
+        return folders.sorted {
+            $0.localizedStandardCompare($1) == .orderedAscending
+        }
+    }
+
+    private static func relativePath(for fileURL: URL, under rootURL: URL) -> String? {
+        let rootPath = rootURL.path
+        let path = fileURL.standardizedFileURL.path
+        guard path.hasPrefix("\(rootPath)/") else {
+            return nil
+        }
+        return String(path.dropFirst(rootPath.count + 1))
+    }
+
+    private static func shouldSkipDirectory(_ relativePath: String) -> Bool {
+        guard let name = relativePath.split(separator: "/").last else {
+            return false
+        }
+        return excludedDirectories.contains(String(name))
     }
 
     private static let excludedDirectories: Set<String> = [
