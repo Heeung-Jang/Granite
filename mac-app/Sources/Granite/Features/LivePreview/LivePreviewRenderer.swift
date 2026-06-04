@@ -14,7 +14,6 @@ enum LivePreviewRenderer {
     private static let calloutPrefixRegex = regex(#"^\s*>\s?\[![^\]\n]+\]\s?"#)
     private static let calloutQuotePrefixRegex = regex(#"^\s*>\s?"#)
     private static let tablePipeRegex = regex(#"\|"#)
-    private static let fenceLineRegex = regex(#"^\s*(```+|~~~+).*$"#)
     private static let wikiEmbedTokenRegex = regex(#"!\[\[|\]\]"#)
     private static let wikiLinkTokenRegex = regex(#"!?\[\[|\]\]"#)
 
@@ -769,7 +768,7 @@ enum LivePreviewRenderer {
         case .horizontalRule:
             ranges = [block.contentRange.nsRange]
         case .fencedCode:
-            return matches(in: source, range: block.sourceRange.nsRange, regex: fenceLineRegex)
+            return block.tokenRanges.map(\.nsRange)
         case .frontmatter:
             return [block.sourceRange.nsRange]
         }

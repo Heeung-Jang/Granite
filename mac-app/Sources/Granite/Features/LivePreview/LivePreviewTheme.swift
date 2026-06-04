@@ -50,9 +50,7 @@ enum LivePreviewTheme {
     static let codeColor = NSColor.systemBrown
     static let inlineCodeBackgroundColor = NSColor.controlBackgroundColor
     static let codeBlockBackgroundColor = NSColor.controlBackgroundColor
-    static let codeCardBackgroundColor = NSColor.controlBackgroundColor.withAlphaComponent(0.52)
-    static let codeCardBorderColor = NSColor.separatorColor.withAlphaComponent(0.62)
-    static let codeBadgeBackgroundColor = NSColor.controlBackgroundColor.withAlphaComponent(0.88)
+    static let codeCardBackgroundColor = NSColor.controlBackgroundColor.withAlphaComponent(0.32)
     static let codeBadgeTextColor = NSColor.secondaryLabelColor
     static let codeSyntaxKeywordColor = NSColor.systemBlue
     static let codeSyntaxStringColor = NSColor.systemGreen
@@ -76,9 +74,7 @@ enum LivePreviewTheme {
     static let codeCardCornerRadius: CGFloat = 6
     static let codeCardHorizontalInset: CGFloat = 10
     static let codeCardVerticalInset: CGFloat = 7
-    static let codeCardBorderWidth: CGFloat = 1
-    static let codeBadgeHorizontalPadding: CGFloat = 7
-    static let codeBadgeVerticalPadding: CGFloat = 3
+    static let codeCardBorderWidth: CGFloat = 0
     static let codeBadgeInset: CGFloat = 8
     static let codeBadgeMaxWidth: CGFloat = 96
 
@@ -141,14 +137,6 @@ enum LivePreviewTheme {
 
     static func scaledCodeCardBorderWidth(scale: Double) -> CGFloat {
         scaled(codeCardBorderWidth, scale: scale)
-    }
-
-    static func scaledCodeBadgeHorizontalPadding(scale: Double) -> CGFloat {
-        scaled(codeBadgeHorizontalPadding, scale: scale)
-    }
-
-    static func scaledCodeBadgeVerticalPadding(scale: Double) -> CGFloat {
-        scaled(codeBadgeVerticalPadding, scale: scale)
     }
 
     static func scaledCodeBadgeInset(scale: Double) -> CGFloat {

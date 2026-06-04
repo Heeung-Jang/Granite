@@ -122,9 +122,11 @@ public enum LivePreviewParser {
         let start = index
         index += 1
         var isClosed = false
+        var tokenRanges = [LivePreviewRangeMapper.sourceRange(for: line.contentRange, in: source)]
         while index < lines.count {
-            if lines[index].trimmed.hasPrefix(opener.fence) {
+            if isFenceCloser(lines[index].trimmed, opener: opener.fence) {
                 isClosed = true
+                tokenRanges.append(LivePreviewRangeMapper.sourceRange(for: lines[index].contentRange, in: source))
                 index += 1
                 break
             }
@@ -137,6 +139,7 @@ public enum LivePreviewParser {
             start: start,
             end: index,
             kind: .fencedCode(fence: opener.fence, info: opener.info, isClosed: isClosed),
+            tokenRanges: tokenRanges,
             isInert: true
         )
     }
@@ -275,6 +278,7 @@ public enum LivePreviewParser {
         start: Int,
         end: Int,
         kind: LivePreviewBlockKind,
+        tokenRanges: [LivePreviewSourceRange] = [],
         isInert: Bool = false
     ) -> LivePreviewBlockSpan {
         let lower = lines[start].fullRange.lowerBound
@@ -291,6 +295,7 @@ public enum LivePreviewParser {
             kind: kind,
             sourceRange: sourceRange,
             contentRange: contentRange,
+            tokenRanges: tokenRanges,
             inlineSpans: inlineSpans,
             isInert: isInert,
             isEditable: true
@@ -442,16 +447,33 @@ public enum LivePreviewParser {
     }
 
     private static func fenceOpener(in trimmedLine: String) -> (fence: String, info: String?)? {
-        let fence: String
-        if trimmedLine.hasPrefix("```") {
-            fence = "```"
-        } else if trimmedLine.hasPrefix("~~~") {
-            fence = "~~~"
-        } else {
+        guard let marker = trimmedLine.first,
+              marker == "`" || marker == "~"
+        else {
             return nil
         }
-        let info = trimmedLine.dropFirst(3).trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let markerLength = trimmedLine.prefix { $0 == marker }.count
+        guard markerLength >= 3 else {
+            return nil
+        }
+
+        let fence = String(repeating: String(marker), count: markerLength)
+        let info = trimmedLine.dropFirst(markerLength).trimmingCharacters(in: .whitespacesAndNewlines)
         return (fence, info.isEmpty ? nil : info)
+    }
+
+    private static func isFenceCloser(_ trimmedLine: String, opener: String) -> Bool {
+        guard let marker = opener.first else {
+            return false
+        }
+
+        let markerLength = trimmedLine.prefix { $0 == marker }.count
+        guard markerLength >= opener.count else {
+            return false
+        }
+
+        return trimmedLine.dropFirst(markerLength).allSatisfy(\.isWhitespace)
     }
 
     private static func isTaskList(_ trimmedLine: String, checked: Bool) -> Bool {

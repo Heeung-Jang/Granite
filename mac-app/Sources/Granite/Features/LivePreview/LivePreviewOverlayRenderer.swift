@@ -214,9 +214,6 @@ enum LivePreviewOverlayRenderer {
         let path = NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius)
         LivePreviewTheme.codeCardBackgroundColor.setFill()
         path.fill()
-        LivePreviewTheme.codeCardBorderColor.setStroke()
-        path.lineWidth = LivePreviewTheme.scaledCodeCardBorderWidth(scale: scale)
-        path.stroke()
     }
 
     private static func drawCodeLanguageBadge(
@@ -235,35 +232,27 @@ enum LivePreviewOverlayRenderer {
         }
         let scale = overlayScale(for: textView)
         let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: scaled(11, scale: scale), weight: .medium),
+            .font: NSFont.systemFont(ofSize: scaled(11, scale: scale), weight: .regular),
             .foregroundColor: LivePreviewTheme.codeBadgeTextColor
         ]
         let textSize = (label as NSString).size(withAttributes: attributes)
-        let horizontalPadding = LivePreviewTheme.scaledCodeBadgeHorizontalPadding(scale: scale)
-        let verticalPadding = LivePreviewTheme.scaledCodeBadgeVerticalPadding(scale: scale)
         let maxWidth = LivePreviewTheme.scaledCodeBadgeMaxWidth(scale: scale)
-        let badgeWidth = min(maxWidth, textSize.width + horizontalPadding * 2)
-        let badgeHeight = textSize.height + verticalPadding * 2
+        let labelWidth = min(maxWidth, textSize.width)
+        let labelHeight = textSize.height
         let inset = LivePreviewTheme.scaledCodeBadgeInset(scale: scale)
-        let badgeRect = NSRect(
-            x: cardRect.maxX - badgeWidth - inset,
+        let labelRect = NSRect(
+            x: cardRect.maxX - labelWidth - inset,
             y: cardRect.minY + inset,
-            width: badgeWidth,
-            height: badgeHeight
+            width: labelWidth,
+            height: labelHeight
         )
-        guard badgeRect.intersects(dirtyRect) else {
+        guard labelRect.intersects(dirtyRect) else {
             return
         }
 
-        LivePreviewTheme.codeBadgeBackgroundColor.setFill()
-        NSBezierPath(
-            roundedRect: badgeRect,
-            xRadius: badgeHeight / 2,
-            yRadius: badgeHeight / 2
-        ).fill()
         drawString(
             label,
-            in: badgeRect.insetBy(dx: horizontalPadding, dy: verticalPadding - scaled(1, scale: scale)),
+            in: labelRect,
             attributes: attributes,
             dirtyRect: dirtyRect
         )

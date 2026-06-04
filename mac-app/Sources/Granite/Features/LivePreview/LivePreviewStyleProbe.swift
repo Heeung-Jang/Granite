@@ -21,6 +21,10 @@ struct LivePreviewStyleProbeReport: Codable, Equatable {
     var fencedCodeFenceConcealedOutsideReveal: Bool
     var fencedCodeFenceRevealedInsideBlock: Bool
     var fencedCodePreservesSource: Bool
+    var fencedCodeBorderSuppressed: Bool
+    var fencedCodeLanguageLabelUsesSecondaryText: Bool
+    var fencedCodeRevealKeepsFollowingMarkersConcealed: Bool
+    var fencedCodeConcealsOnlyDelimiterLines: Bool
     var listParagraphIndentApplied: Bool
     var listMarkerConcealedOutsideReveal: Bool
     var listMarkerStyledInsideReveal: Bool
@@ -344,6 +348,8 @@ enum LivePreviewStyleProbe {
             )
         }
         let revealedFenceColor = foregroundColor(in: textView, source: source, marker: "```swift")
+        let codeRevealListMarkerColor = foregroundColor(in: textView, source: source, marker: "- Bullet")
+        let codeRevealHeadingMarkerColor = foregroundColor(in: textView, source: source, marker: "## Heading 2")
 
         if let listOffset = utf16Offset(of: "Bullet item", in: source) {
             textView.setSelectedRange(NSRange(location: listOffset, length: 0))
@@ -463,6 +469,11 @@ enum LivePreviewStyleProbe {
             fencedCodeFenceConcealedOutsideReveal: hiddenFenceColor == LivePreviewTheme.concealedColor,
             fencedCodeFenceRevealedInsideBlock: revealedFenceColor != LivePreviewTheme.concealedColor,
             fencedCodePreservesSource: textView.string.contains("```swift\nlet value = 1\n```"),
+            fencedCodeBorderSuppressed: LivePreviewTheme.scaledCodeCardBorderWidth(scale: 1.0) == 0,
+            fencedCodeLanguageLabelUsesSecondaryText: LivePreviewTheme.codeBadgeTextColor == LivePreviewTheme.secondaryTextColor,
+            fencedCodeRevealKeepsFollowingMarkersConcealed: codeRevealListMarkerColor == LivePreviewTheme.concealedColor
+                && codeRevealHeadingMarkerColor == LivePreviewTheme.concealedColor,
+            fencedCodeConcealsOnlyDelimiterLines: probeFencedCodeDelimiterConcealment(),
             listParagraphIndentApplied: listParagraphStyle?.headIndent ?? 0 > 0,
             listMarkerConcealedOutsideReveal: hiddenListMarkerColor == LivePreviewTheme.concealedColor,
             listMarkerStyledInsideReveal: revealedListMarkerColor == LivePreviewTheme.listMarkerColor,
@@ -940,6 +951,44 @@ enum LivePreviewStyleProbe {
             horizontalRuleGeometryScales,
             listMarkerGeometryScales
         )
+    }
+
+    private static func probeFencedCodeDelimiterConcealment() -> Bool {
+        let source = """
+        ````
+        body line
+        ``` not a delimiter
+        ````
+
+        # After
+        """
+        let textView = MarkdownEditorTextViewFactory.makeTextView()
+        textView.string = source
+        textView.setSelectedRange(NSRange(location: (source as NSString).length, length: 0))
+        MarkdownVisibleRangeDecorator.decorateVisibleRange(
+            in: textView,
+            livePreviewMode: .livePreview,
+            revealRange: textView.selectedRange(),
+            markerStyle: .hidden
+        )
+
+        let openingFenceConcealed = foregroundColor(
+            in: textView,
+            source: source,
+            marker: "````"
+        ) == LivePreviewTheme.concealedColor
+        let codeContentVisible = foregroundColor(
+            in: textView,
+            source: source,
+            marker: "``` not a delimiter"
+        ) != LivePreviewTheme.concealedColor
+        let followingHeadingConcealed = foregroundColor(
+            in: textView,
+            source: source,
+            marker: "# After"
+        ) == LivePreviewTheme.concealedColor
+
+        return openingFenceConcealed && codeContentVisible && followingHeadingConcealed
     }
 
     private static func probeAppZoomPrimaryFontFields() -> (

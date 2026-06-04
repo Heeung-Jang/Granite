@@ -100,6 +100,133 @@ func livePreviewParserLoadsFencedCodeBlocksFixture() throws {
 }
 
 @Test
+func livePreviewParserUsesStrictFenceClosingRules() throws {
+    let cases: [(name: String, source: String, expectedFence: String, expectedBody: String)] = [
+        (
+            name: "longer-backtick-opener",
+            source: """
+            ````
+            body line
+            ```
+            still code
+            ````
+            # After
+            """,
+            expectedFence: "````",
+            expectedBody: "still code"
+        ),
+        (
+            name: "trailing-content",
+            source: """
+            ```text
+            body line
+            ``` trailing
+            still code
+            ```
+            # After
+            """,
+            expectedFence: "```",
+            expectedBody: "still code"
+        ),
+        (
+            name: "mismatched-tilde-opener",
+            source: """
+            ~~~text
+            body line
+            ```
+            still code
+            ~~~
+            # After
+            """,
+            expectedFence: "~~~",
+            expectedBody: "still code"
+        )
+    ]
+
+    for testCase in cases {
+        let result = LivePreviewParser.parse(testCase.source)
+        let fencedBlocks = result.blocks.filter {
+            if case .fencedCode = $0.kind {
+                return true
+            }
+            return false
+        }
+        let fence = try #require(fencedBlocks.first, "missing fence for \(testCase.name)")
+
+        if case .fencedCode(let marker, _, let isClosed) = fence.kind {
+            #expect(marker == testCase.expectedFence)
+            #expect(isClosed)
+        } else {
+            Issue.record("Expected fenced code for \(testCase.name)")
+        }
+        #expect(string(for: fence.sourceRange, in: testCase.source)?.contains(testCase.expectedBody) == true)
+        #expect(result.blocks.containsBlock { if case .heading(level: 1) = $0 { true } else { false } })
+    }
+}
+
+@Test
+func livePreviewParserStoresOnlyFencedCodeDelimiterTokenRanges() throws {
+    let source = """
+    ````
+    body line
+    ``` not a delimiter
+    ```
+    still code
+    ````
+    # After
+    """
+    let result = LivePreviewParser.parse(source)
+    let fencedBlock = try #require(result.blocks.first {
+        if case .fencedCode = $0.kind {
+            return true
+        }
+        return false
+    })
+    let tokenStrings = fencedBlock.tokenRanges.compactMap { string(for: $0, in: source) }
+
+    #expect(tokenStrings == ["````", "````"])
+    #expect(!tokenStrings.contains("``` not a delimiter"))
+    #expect(!tokenStrings.contains("```"))
+}
+
+@Test
+func livePreviewParserKeepsMarkdownAfterFencedBlocksSeparate() throws {
+    let source = """
+    # Boundary Fixture
+
+    ```text
+    first block
+    ```
+
+    ## Between fenced blocks
+
+    ```
+    second block
+    ```
+
+    ## Next heading after fenced blocks
+
+    ```
+    third block
+    ```
+
+    Final paragraph outside fenced code.
+    """
+    let result = LivePreviewParser.parse(source)
+    let fencedBlocks = result.blocks.filter {
+        if case .fencedCode = $0.kind {
+            return true
+        }
+        return false
+    }
+
+    #expect(fencedBlocks.count == 3)
+    #expect(result.blocks.containsBlock { if case .heading(level: 2) = $0 { true } else { false } })
+    #expect(result.blocks.last?.kind == .paragraph)
+    #expect(string(for: result.blocks.last?.sourceRange, in: source)?.contains("Final paragraph") == true)
+}
+
+@Test
 func livePreviewParserGroupsObsidianCalloutBodyLines() throws {
     let source = """
     > [!summary] TL;DR

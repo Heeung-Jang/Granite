@@ -78,5 +78,37 @@ plain text without info
 tilde: true
 ~~~
 
+# Boundary Fixture
+
+```text
+first block
+```
+
+## Between fenced blocks
+
+````
+body line
+``` not a closer because trailing content exists
+``` not a closer because trailing content exists
+```
+still inside four-backtick block
+````
+
+Normal paragraph after the four-backtick block.
+
+```text
+second block
+~~~
+tilde line should not close a backtick block
+```
+
+## Next heading after fenced blocks
+
+```
+third block
+```
+
+Final paragraph outside fenced code.
+
 ```rust
 unclosed_body();
