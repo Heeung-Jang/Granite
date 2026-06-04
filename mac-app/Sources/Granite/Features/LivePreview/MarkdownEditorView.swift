@@ -3,6 +3,12 @@ import NativeMarkdownCore
 import SwiftUI
 
 @MainActor
+struct MarkdownEditorSelectionRequest: Equatable {
+    let id: UUID
+    let range: NSRange
+}
+
+@MainActor
 struct MarkdownEditorView: NSViewRepresentable {
     @Binding var text: String
     var isEditable = true
@@ -15,6 +21,7 @@ struct MarkdownEditorView: NSViewRepresentable {
     var appContentZoomScale = AppContentZoom.defaultScale
     var isActive = true
     var focusRequestID: UUID?
+    var selectionRequest: MarkdownEditorSelectionRequest?
     var interactionHandler: ((MarkdownEditorInteractionRequest) -> Void)?
 
     func makeCoordinator() -> Coordinator {
@@ -28,7 +35,8 @@ struct MarkdownEditorView: NSViewRepresentable {
             documentTitle: documentTitle,
             fontSet: fontSet,
             appContentZoomScale: appContentZoomScale,
-            focusRequestID: focusRequestID
+            focusRequestID: focusRequestID,
+            selectionRequest: selectionRequest
         )
     }
 
@@ -75,7 +83,8 @@ struct MarkdownEditorView: NSViewRepresentable {
             documentTitle: documentTitle,
             fontSet: fontSet,
             appContentZoomScale: appContentZoomScale,
-            focusRequestID: focusRequestID
+            focusRequestID: focusRequestID,
+            selectionRequest: selectionRequest
         )
         guard let textView = scrollView.documentView as? NSTextView else {
             return
@@ -108,6 +117,7 @@ struct MarkdownEditorView: NSViewRepresentable {
         }
         MarkdownEditorAccessibility.apply(to: textView, isEditable: isEditable, mode: livePreviewMode)
         context.coordinator.applyFocusRequestIfNeeded(isActive: isActive, in: scrollView)
+        context.coordinator.applySelectionRequestIfNeeded(isActive: isActive, in: scrollView)
     }
 
     static func dismantleNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {
@@ -135,6 +145,8 @@ struct MarkdownEditorView: NSViewRepresentable {
         private var appContentZoomScale: Double
         private var focusRequestID: UUID?
         private var appliedFocusRequestID: UUID?
+        private var selectionRequest: MarkdownEditorSelectionRequest?
+        private var appliedSelectionRequestID: UUID?
         private var isDecoratingLivePreview = false
         private var decorationGeneration = 0
         weak var textView: NSTextView?
@@ -150,7 +162,8 @@ struct MarkdownEditorView: NSViewRepresentable {
             documentTitle: String? = nil,
             fontSet: LivePreviewFontSet = LivePreviewTheme.defaultFontSet,
             appContentZoomScale: Double = AppContentZoom.defaultScale,
-            focusRequestID: UUID? = nil
+            focusRequestID: UUID? = nil,
+            selectionRequest: MarkdownEditorSelectionRequest? = nil
         ) {
             _text = text
             self.interactionHandler = interactionHandler
@@ -162,6 +175,7 @@ struct MarkdownEditorView: NSViewRepresentable {
             self.fontSet = fontSet
             self.appContentZoomScale = AppContentZoom(rawScale: appContentZoomScale).scale
             self.focusRequestID = focusRequestID
+            self.selectionRequest = selectionRequest
         }
 
         @discardableResult
@@ -175,7 +189,8 @@ struct MarkdownEditorView: NSViewRepresentable {
             documentTitle: String?,
             fontSet: LivePreviewFontSet = LivePreviewTheme.defaultFontSet,
             appContentZoomScale: Double,
-            focusRequestID: UUID?
+            focusRequestID: UUID?,
+            selectionRequest: MarkdownEditorSelectionRequest? = nil
         ) -> Bool {
             let previousScale = appContentZoomScale
             let nextScale = AppContentZoom(rawScale: appContentZoomScale).scale
@@ -190,6 +205,7 @@ struct MarkdownEditorView: NSViewRepresentable {
             self.fontSet = fontSet
             self.appContentZoomScale = nextScale
             self.focusRequestID = focusRequestID
+            self.selectionRequest = selectionRequest
             if let textView = textView as? MarkdownInteractionTextView {
                 textView.livePreviewDocumentTitle = documentTitle
                 textView.livePreviewMarkerStyle = markerStyle
@@ -208,6 +224,25 @@ struct MarkdownEditorView: NSViewRepresentable {
             }
             appliedFocusRequestID = focusRequestID
             scrollView.window?.makeFirstResponder(textView)
+            applySelectionRequestIfNeeded(isActive: isActive, in: scrollView)
+        }
+
+        func applySelectionRequestIfNeeded(isActive: Bool, in scrollView: NSScrollView) {
+            guard isActive,
+                  let selectionRequest,
+                  appliedSelectionRequestID != selectionRequest.id,
+                  let textView = scrollView.documentView as? NSTextView
+            else {
+                return
+            }
+            appliedSelectionRequestID = selectionRequest.id
+            scrollView.window?.makeFirstResponder(textView)
+            let textLength = (textView.string as NSString).length
+            let location = min(max(0, selectionRequest.range.location), textLength)
+            let maxLength = max(0, textLength - location)
+            let length = min(max(0, selectionRequest.range.length), maxLength)
+            textView.setSelectedRange(NSRange(location: location, length: length))
+            textView.scrollRangeToVisible(NSRange(location: location, length: 0))
         }
 
         func textDidChange(_ notification: Notification) {

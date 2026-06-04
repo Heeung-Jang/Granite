@@ -2,6 +2,7 @@ import SwiftUI
 
 struct EditorCommands: Commands {
     @FocusedValue(\.editorSaveAction) private var editorSaveAction
+    @FocusedValue(\.editorFilePropertyAction) private var editorFilePropertyAction
     @FocusedValue(\.workspaceTabAction) private var workspaceTabAction
     @ObservedObject private var workspaceTabCommandRegistry = WorkspaceTabCommandRegistry.shared
 
@@ -16,6 +17,14 @@ struct EditorCommands: Commands {
             }
             .keyboardShortcut("s")
             .disabled(editorSaveAction?.isAvailable != true)
+        }
+
+        CommandGroup(after: .textEditing) {
+            Button("Add File Property") {
+                editorFilePropertyAction?.perform()
+            }
+            .keyboardShortcut(";", modifiers: [.command])
+            .disabled(editorFilePropertyAction?.isAvailable != true)
         }
 
         CommandMenu("Tabs") {

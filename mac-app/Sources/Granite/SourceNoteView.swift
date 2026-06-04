@@ -39,6 +39,9 @@ struct SourceNoteView: View {
     @State private var summaryBuffer = SourceSummaryBufferBox()
     @State private var summaryBufferOwnerID = UUID()
     @State private var summaryBufferRevision: UInt64 = 0
+    @State private var editorSelectionRequest: MarkdownEditorSelectionRequest?
+    @State private var propertyDraft: FilePropertyDraft?
+    private let filePropertyTypeStore = UserDefaultsFilePropertyTypeStore()
     @AppStorage(LivePreviewMarkerStyle.storageKey) private var markerStyleRaw = LivePreviewMarkerStyle.defaultValue.rawValue
 
     init(
@@ -71,20 +74,33 @@ struct SourceNoteView: View {
                     .controlSize(.small)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             case .loaded:
-                MarkdownEditorView(
-                    text: $text,
-                    isEditable: saveSession?.canEdit == true && !isReadOnly,
-                    livePreviewMode: livePreviewMode,
-                    linkStyleMap: livePreviewLinkStyleMap,
-                    embedPreviewMap: livePreviewEmbedPreviewMap,
-                    markerStyle: livePreviewMarkerStyle,
-                    documentTitle: file.displayName,
-                    fontSet: editorFontSettings.fontSet,
-                    appContentZoomScale: appContentZoomScale,
-                    isActive: isActive,
-                    focusRequestID: focusRequestID,
-                    interactionHandler: handleEditorInteraction
-                )
+                ZStack(alignment: .topLeading) {
+                    MarkdownEditorView(
+                        text: $text,
+                        isEditable: saveSession?.canEdit == true && !isReadOnly,
+                        livePreviewMode: livePreviewMode,
+                        linkStyleMap: livePreviewLinkStyleMap,
+                        embedPreviewMap: livePreviewEmbedPreviewMap,
+                        markerStyle: livePreviewMarkerStyle,
+                        documentTitle: file.displayName,
+                        fontSet: editorFontSettings.fontSet,
+                        appContentZoomScale: appContentZoomScale,
+                        isActive: isActive,
+                        focusRequestID: focusRequestID,
+                        selectionRequest: editorSelectionRequest,
+                        interactionHandler: handleEditorInteraction
+                    )
+
+                    if let draftBinding = propertyDraftBinding {
+                        FilePropertyQuickAddOverlay(
+                            draft: draftBinding,
+                            suggestions: filePropertySuggestions,
+                            typeForPropertyName: filePropertyType(for:),
+                            commit: commitFilePropertyDraft,
+                            cancel: cancelFilePropertyDraft
+                        )
+                    }
+                }
                     .frame(minHeight: ObsidianUI.scaled(320, scale: appContentZoomScale))
                     .padding(.horizontal, ObsidianUI.scaled(chrome.editorHorizontalPadding, scale: appContentZoomScale))
                     .padding(.vertical, ObsidianUI.scaled(chrome.editorVerticalPadding, scale: appContentZoomScale))
@@ -171,6 +187,7 @@ struct SourceNoteView: View {
             }
         }
         .focusedSceneValue(\.editorSaveAction, activeEditorSaveAction)
+        .focusedSceneValue(\.editorFilePropertyAction, activeEditorFilePropertyAction)
         .alert("Open External Link?", isPresented: externalLinkAlertBinding) {
             Button("Open") {
                 if let url = pendingExternalLink?.url {
@@ -235,6 +252,18 @@ struct SourceNoteView: View {
             }
             .keyboardShortcut("e", modifiers: [.command, .shift])
             .help("Toggle Live Preview and Source mode")
+
+            Menu {
+                Button("Add File Property") {
+                    addFileProperty()
+                }
+                .disabled(!canAddFileProperty)
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: ObsidianUI.fontSize(13, scale: appContentZoomScale), weight: .semibold))
+            }
+            .menuStyle(.borderlessButton)
+            .help("More actions")
         }
     }
 
@@ -325,6 +354,113 @@ struct SourceNoteView: View {
 
     private var activeEditorSaveAction: EditorSaveAction? {
         isActive ? editorSaveAction : nil
+    }
+
+    private var canAddFileProperty: Bool {
+        saveSession?.canEdit == true && !isReadOnly
+    }
+
+    private var editorFilePropertyAction: EditorFilePropertyAction {
+        EditorFilePropertyAction(isAvailable: canAddFileProperty) {
+            addFileProperty()
+        }
+    }
+
+    private var activeEditorFilePropertyAction: EditorFilePropertyAction? {
+        isActive ? editorFilePropertyAction : nil
+    }
+
+    private var propertyDraftBinding: Binding<FilePropertyDraft>? {
+        guard propertyDraft != nil else {
+            return nil
+        }
+        return Binding(
+            get: {
+                propertyDraft ?? FilePropertyDraft()
+            },
+            set: { nextValue in
+                propertyDraft = nextValue
+            }
+        )
+    }
+
+    private var filePropertySuggestions: [FilePropertySuggestion] {
+        FilePropertySuggestions.suggestions(
+            source: text,
+            storedTypes: filePropertyTypeStore.loadTypes(forVaultAt: vaultURL)
+        )
+    }
+
+    private func filePropertyType(for propertyName: String) -> FilePropertyType {
+        filePropertyTypeStore.loadType(for: propertyName, vaultURL: vaultURL)
+            ?? FilePropertySuggestions.defaultType(for: propertyName)
+    }
+
+    private func addFileProperty() {
+        guard canAddFileProperty else {
+            return
+        }
+        if livePreviewMode.rendersSourceOnly {
+            applySourceModeFilePropertyCommand()
+        } else {
+            propertyDraft = FilePropertyDraft(type: filePropertyType(for: ""))
+        }
+    }
+
+    private func applySourceModeFilePropertyCommand() {
+        let plan = FrontmatterSourceCommandPlanner.planAddFilePropertyCommand(source: text)
+        applyFrontmatterEditPlan(plan)
+    }
+
+    private func commitFilePropertyDraft(_ draft: FilePropertyDraft) {
+        guard var currentDraft = propertyDraft else {
+            return
+        }
+        let name = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else {
+            propertyDraft = nil
+            return
+        }
+        guard let propertyValue = draft.propertyValue else {
+            currentDraft.warning = "Enter a valid value for \(draft.type.label)."
+            propertyDraft = currentDraft
+            return
+        }
+
+        let plan = FrontmatterEditPlanner.planAddProperty(source: text, key: name, value: propertyValue)
+        switch plan {
+        case .duplicateKey(let key, _):
+            currentDraft.warning = "\(key) already exists in this note."
+            propertyDraft = currentDraft
+        case .replaceText:
+            filePropertyTypeStore.saveType(draft.type, for: name, vaultURL: vaultURL)
+            applyFrontmatterEditPlan(plan)
+            propertyDraft = nil
+        case .complexValueRequiresSourceMode:
+            currentDraft.warning = "Edit this property in Source mode."
+            propertyDraft = currentDraft
+        case .noOp:
+            propertyDraft = nil
+        }
+    }
+
+    private func cancelFilePropertyDraft() {
+        propertyDraft = nil
+    }
+
+    private func applyFrontmatterEditPlan(_ plan: FrontmatterEditPlan) {
+        guard case .replaceText(let replacement, let focus) = plan else {
+            return
+        }
+        if !replacement.text.isEmpty || !replacement.range.isEmpty {
+            text.replaceSubrange(replacement.range, with: replacement.text)
+        }
+        if let focus {
+            editorSelectionRequest = MarkdownEditorSelectionRequest(
+                id: UUID(),
+                range: focus.range.nsRange
+            )
+        }
     }
 
     private func load() async {
