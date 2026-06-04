@@ -90,11 +90,14 @@ struct MarkdownEditorView: NSViewRepresentable {
             return
         }
 
-        MarkdownEditorTextSynchronizer.applyExternalText(
+        let didApplyExternalText = MarkdownEditorTextSynchronizer.applyExternalText(
             text,
             to: textView,
             isApplyingAppKitChange: context.coordinator.isApplyingAppKitChange
         )
+        if didApplyExternalText {
+            context.coordinator.resetLivePreviewRevealState()
+        }
         MarkdownEditorTextViewFactory.applyAppContentZoomScale(appContentZoomScale, to: textView, fontSet: fontSet)
         let decorationTimer = AppTelemetryTimer()
         context.coordinator.decorateVisibleRange(in: textView)
@@ -149,6 +152,8 @@ struct MarkdownEditorView: NSViewRepresentable {
         private var appliedSelectionRequestID: UUID?
         private var isDecoratingLivePreview = false
         private var decorationGeneration = 0
+        private var previousActiveDecorationRange: NSRange?
+        private var previousActiveDecorationDocumentLength: Int?
         weak var textView: NSTextView?
         var isApplyingAppKitChange = false
 
@@ -195,6 +200,9 @@ struct MarkdownEditorView: NSViewRepresentable {
             let previousScale = appContentZoomScale
             let nextScale = AppContentZoom(rawScale: appContentZoomScale).scale
             let fontSetDidChange = !Self.fontSet(self.fontSet.scaled(by: previousScale), matches: fontSet.scaled(by: nextScale))
+            let shouldResetRevealState = self.livePreviewMode != livePreviewMode
+                || self.documentTitle != documentTitle
+                || livePreviewMode.rendersSourceOnly
             _text = text
             self.interactionHandler = interactionHandler
             self.livePreviewMode = livePreviewMode
@@ -206,6 +214,9 @@ struct MarkdownEditorView: NSViewRepresentable {
             self.appContentZoomScale = nextScale
             self.focusRequestID = focusRequestID
             self.selectionRequest = selectionRequest
+            if shouldResetRevealState {
+                resetLivePreviewRevealState()
+            }
             if let textView = textView as? MarkdownInteractionTextView {
                 textView.livePreviewDocumentTitle = documentTitle
                 textView.livePreviewMarkerStyle = markerStyle
@@ -255,6 +266,7 @@ struct MarkdownEditorView: NSViewRepresentable {
 
             isApplyingAppKitChange = true
             text = textView.string
+            resetLivePreviewRevealState()
             scheduleLivePreviewDecoration(in: textView, afterTextMutation: true)
             isApplyingAppKitChange = false
         }
@@ -308,8 +320,28 @@ struct MarkdownEditorView: NSViewRepresentable {
 
             isDecoratingLivePreview = true
             defer { isDecoratingLivePreview = false }
-            MarkdownVisibleRangeDecorator.decorateVisibleRange(
+            let tracksActiveReveal = !livePreviewMode.rendersSourceOnly && !textView.hasMarkedText()
+            let documentLength = (textView.string as NSString).length
+            let currentActiveDecorationRange = tracksActiveReveal
+                ? LivePreviewActiveRevealRange.decorationContextRange(
+                    source: textView.string,
+                    selection: textView.selectedRange()
+                )
+                : nil
+            let previousActiveDecorationRange = tracksActiveReveal
+                ? validPreviousActiveDecorationRange(forDocumentLength: documentLength)
+                : nil
+            let decorationRange = tracksActiveReveal
+                ? LivePreviewDecorationInvalidationRange.expandedVisibleRange(
+                    in: textView,
+                    previousActiveRange: previousActiveDecorationRange,
+                    currentActiveRange: currentActiveDecorationRange
+                )
+                : nil
+
+            let result = MarkdownVisibleRangeDecorator.decorateVisibleRange(
                 in: textView,
+                range: decorationRange,
                 livePreviewMode: livePreviewMode,
                 revealRange: textView.selectedRange(),
                 linkStyleMap: linkStyleMap,
@@ -318,6 +350,12 @@ struct MarkdownEditorView: NSViewRepresentable {
                 fontSet: fontSet,
                 scale: appContentZoomScale
             )
+            if tracksActiveReveal && result.mode == "live-preview" {
+                self.previousActiveDecorationRange = currentActiveDecorationRange
+                self.previousActiveDecorationDocumentLength = documentLength
+            } else {
+                resetLivePreviewRevealState()
+            }
             if let textView = textView as? MarkdownInteractionTextView {
                 textView.livePreviewMarkerStyle = markerStyle
                 textView.refreshLivePreviewOverlayState(revealRange: textView.selectedRange())
@@ -367,6 +405,25 @@ struct MarkdownEditorView: NSViewRepresentable {
                 actualCharacterRange: nil
             )
             textView.needsDisplay = true
+        }
+
+        func resetLivePreviewRevealState() {
+            previousActiveDecorationRange = nil
+            previousActiveDecorationDocumentLength = nil
+        }
+
+        private func validPreviousActiveDecorationRange(forDocumentLength documentLength: Int) -> NSRange? {
+            guard previousActiveDecorationDocumentLength == documentLength,
+                  let range = previousActiveDecorationRange,
+                  range.location >= 0,
+                  range.length > 0,
+                  range.location <= documentLength,
+                  range.length <= documentLength - range.location
+            else {
+                resetLivePreviewRevealState()
+                return nil
+            }
+            return range
         }
 
         private static func fontSet(_ lhs: LivePreviewFontSet, matches rhs: LivePreviewFontSet) -> Bool {

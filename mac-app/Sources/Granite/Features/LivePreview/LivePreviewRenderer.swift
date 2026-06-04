@@ -49,7 +49,10 @@ enum LivePreviewRenderer {
         }
 
         let text = textView.string as NSString
-        let visibleRange = clamped(requestedRange ?? inferredVisibleRange(in: textView), length: text.length)
+        let visibleRange = LivePreviewTextViewRange.clamped(
+            requestedRange ?? LivePreviewTextViewRange.inferredVisibleRange(in: textView),
+            documentLength: text.length
+        )
         guard visibleRange.length > 0, let storage = textView.textStorage else {
             return MarkdownDecorationResult(
                 mode: "live-preview",
@@ -106,7 +109,10 @@ enum LivePreviewRenderer {
         start: UInt64
     ) -> MarkdownDecorationResult {
         let text = textView.string as NSString
-        let visibleRange = clamped(requestedRange ?? inferredVisibleRange(in: textView), length: text.length)
+        let visibleRange = LivePreviewTextViewRange.clamped(
+            requestedRange ?? LivePreviewTextViewRange.inferredVisibleRange(in: textView),
+            documentLength: text.length
+        )
         guard visibleRange.length > 0, let storage = textView.textStorage else {
             return MarkdownDecorationResult(
                 mode: resultMode(for: mode),
@@ -1132,25 +1138,6 @@ enum LivePreviewRenderer {
             return reason.rawValue
         }
         return nil
-    }
-
-    private static func inferredVisibleRange(in textView: NSTextView) -> NSRange {
-        guard let layoutManager = textView.layoutManager,
-              let textContainer = textView.textContainer else {
-            return NSRange(location: 0, length: (textView.string as NSString).length)
-        }
-
-        let glyphRange = layoutManager.glyphRange(
-            forBoundingRect: textView.visibleRect,
-            in: textContainer
-        )
-        return layoutManager.characterRange(forGlyphRange: glyphRange, actualGlyphRange: nil)
-    }
-
-    private static func clamped(_ range: NSRange, length: Int) -> NSRange {
-        let location = min(range.location, length)
-        let maxLength = max(0, length - location)
-        return NSRange(location: location, length: min(range.length, maxLength))
     }
 
     private static func elapsedMilliseconds(since start: UInt64) -> Double {

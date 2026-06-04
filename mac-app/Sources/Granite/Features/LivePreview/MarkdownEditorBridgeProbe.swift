@@ -28,6 +28,7 @@ struct MarkdownEditorBridgeProbeReport: Codable, Equatable {
     var activeListLineMovementPreservesSource: Bool
     var activeTaskLineMovementPreservesSource: Bool
     var activeHorizontalRuleLineMovementPreservesSource: Bool
+    var selectionRevealStateClearsPreviousBlock: Bool
     var nestedActiveRevealLocalized: Bool
     var nestedActiveUnorderedMarkerRevealedInsideLine: Bool
     var nestedActiveOrderedMarkerRevealedInsideLine: Bool
@@ -159,6 +160,7 @@ enum MarkdownEditorBridgeProbe {
         let modeProbe = probeModeTransitions()
         let renderProbe = probeLivePreviewRendering()
         let sourcePreservationProbe = probeSourcePreservationGuards()
+        let selectionRevealProbe = probeSelectionRevealStateInvalidation()
         let nestedActiveRevealProbe = probeNestedListActiveReveal()
         let nestedModeBypassProbe = probeNestedListModeBypass()
         let nestedMultiLineSelectionProbe = probeNestedListMultiLineSelection()
@@ -202,6 +204,7 @@ enum MarkdownEditorBridgeProbe {
             activeListLineMovementPreservesSource: sourcePreservationProbe.activeListLineMovementPreservesSource,
             activeTaskLineMovementPreservesSource: sourcePreservationProbe.activeTaskLineMovementPreservesSource,
             activeHorizontalRuleLineMovementPreservesSource: sourcePreservationProbe.activeHorizontalRuleLineMovementPreservesSource,
+            selectionRevealStateClearsPreviousBlock: selectionRevealProbe,
             nestedActiveRevealLocalized: nestedActiveRevealProbe.localized,
             nestedActiveUnorderedMarkerRevealedInsideLine: nestedActiveRevealProbe.unorderedRevealed,
             nestedActiveOrderedMarkerRevealedInsideLine: nestedActiveRevealProbe.orderedRevealed,
@@ -509,6 +512,84 @@ enum MarkdownEditorBridgeProbe {
             unorderedParentConcealed && unorderedGrandchildConcealed && parentOverlayStillDraws,
             sourcePreserved
         )
+    }
+
+    private static func probeSelectionRevealStateInvalidation() -> Bool {
+        let source = """
+        ```text
+        first block
+        ```
+
+        ## Header
+
+        Paragraph between blocks.
+
+        ```text
+        second block
+        ```
+        """
+        var modelText = source
+        let binding = Binding<String>(
+            get: { modelText },
+            set: { modelText = $0 }
+        )
+        let coordinator = MarkdownEditorView.Coordinator(
+            text: binding,
+            livePreviewMode: .livePreview,
+            markerStyle: .obsidian,
+            appContentZoomScale: 1.0
+        )
+        let textView = MarkdownEditorTextViewFactory.makeTextView(scale: 1.0)
+        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 460, height: 90))
+        scrollView.documentView = textView
+        textView.delegate = coordinator
+        coordinator.textView = textView
+        textView.string = source
+
+        func select(_ marker: String) -> Bool {
+            guard let offset = utf16Offset(of: marker, in: source) else {
+                return false
+            }
+            let range = NSRange(location: offset, length: 0)
+            textView.setSelectedRange(range)
+            textView.scrollRangeToVisible(range)
+            coordinator.decorateVisibleRange(in: textView)
+            if let textContainer = textView.textContainer {
+                textView.layoutManager?.ensureLayout(for: textContainer)
+            }
+            return true
+        }
+
+        guard select("first block"), select("Header") else {
+            return false
+        }
+        let headingRevealed = foregroundColor(
+            in: textView,
+            text: source,
+            marker: "## Header"
+        ) != LivePreviewTheme.concealedColor
+
+        guard select("second block"),
+              let secondOffset = utf16Offset(of: "second block", in: source)
+        else {
+            return false
+        }
+        let headingConcealedAfterSecondBlock = foregroundColor(
+            in: textView,
+            text: source,
+            marker: "## Header"
+        ) == LivePreviewTheme.concealedColor
+        let secondCodeStyled = textView.textStorage?.attribute(
+            .foregroundColor,
+            at: secondOffset,
+            effectiveRange: nil
+        ) as? NSColor == LivePreviewTheme.codeColor
+
+        return headingRevealed
+            && headingConcealedAfterSecondBlock
+            && secondCodeStyled
+            && textView.string == source
+            && NSEqualRanges(textView.selectedRange(), NSRange(location: secondOffset, length: 0))
     }
 
     private static func probeNestedListModeBypass() -> (
