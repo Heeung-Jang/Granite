@@ -227,6 +227,88 @@ func livePreviewParserKeepsMarkdownAfterFencedBlocksSeparate() throws {
 }
 
 @Test
+func livePreviewPartialParserKeepsMarkdownAfterLargeFencedBlockCloser() throws {
+    let largeBody = (0..<3_500)
+        .map { "fixture line \($0)" }
+        .joined(separator: "\n")
+    let source = """
+    ```text
+    \(largeBody)
+    ```
+
+    ## After Large Fence
+
+    ```text
+    next block
+    ```
+    """
+    let nsSource = source as NSString
+    let closingMarkerRange = nsSource.range(of: "\n```\n\n## After Large Fence")
+    let closingLocation = try #require(
+        closingMarkerRange.location == NSNotFound ? nil : closingMarkerRange.location + 1
+    )
+    let partial = LivePreviewParser.parse(
+        source,
+        in: LivePreviewSourceRange(
+            location: closingLocation,
+            length: nsSource.length - closingLocation
+        )
+    )
+    let fencedBlocks = partial.blocks.filter {
+        if case .fencedCode = $0.kind {
+            return true
+        }
+        return false
+    }
+
+    #expect(partial.isPartial)
+    #expect(fencedBlocks.count == 2)
+    #expect(partial.blocks.containsBlock { if case .heading(level: 2) = $0 { true } else { false } })
+    #expect(string(for: fencedBlocks.last?.sourceRange, in: source)?.contains("next block") == true)
+}
+
+@Test
+func livePreviewPartialParserAlignsMidLineFenceCloserRange() throws {
+    let largeBody = (0..<3_500)
+        .map { "fixture line \($0)" }
+        .joined(separator: "\n")
+    let source = """
+    ```text
+    \(largeBody)
+    ```
+
+    ## After Large Fence
+
+    ```text
+    next block
+    ```
+    """
+    let nsSource = source as NSString
+    let closingMarkerRange = nsSource.range(of: "\n```\n\n## After Large Fence")
+    let closingLocation = try #require(
+        closingMarkerRange.location == NSNotFound ? nil : closingMarkerRange.location + 1
+    )
+    let partial = LivePreviewParser.parse(
+        source,
+        in: LivePreviewSourceRange(
+            location: closingLocation + 1,
+            length: nsSource.length - closingLocation - 1
+        )
+    )
+    let fencedBlocks = partial.blocks.filter {
+        if case .fencedCode = $0.kind {
+            return true
+        }
+        return false
+    }
+
+    #expect(partial.isPartial)
+    #expect(fencedBlocks.count == 2)
+    #expect(partial.blocks.containsBlock { if case .heading(level: 2) = $0 { true } else { false } })
+    #expect(string(for: fencedBlocks.last?.sourceRange, in: source)?.contains("next block") == true)
+}
+
+@Test
 func livePreviewParserGroupsObsidianCalloutBodyLines() throws {
     let source = """
     > [!summary] TL;DR

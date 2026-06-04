@@ -29,6 +29,7 @@ struct MarkdownEditorBridgeProbeReport: Codable, Equatable {
     var activeTaskLineMovementPreservesSource: Bool
     var activeHorizontalRuleLineMovementPreservesSource: Bool
     var selectionRevealStateClearsPreviousBlock: Bool
+    var selectionRevealStateSurvivesLargePreviousFence: Bool
     var nestedActiveRevealLocalized: Bool
     var nestedActiveUnorderedMarkerRevealedInsideLine: Bool
     var nestedActiveOrderedMarkerRevealedInsideLine: Bool
@@ -161,6 +162,7 @@ enum MarkdownEditorBridgeProbe {
         let renderProbe = probeLivePreviewRendering()
         let sourcePreservationProbe = probeSourcePreservationGuards()
         let selectionRevealProbe = probeSelectionRevealStateInvalidation()
+        let largeSelectionRevealProbe = probeLargeFenceSelectionRevealStateInvalidation()
         let nestedActiveRevealProbe = probeNestedListActiveReveal()
         let nestedModeBypassProbe = probeNestedListModeBypass()
         let nestedMultiLineSelectionProbe = probeNestedListMultiLineSelection()
@@ -205,6 +207,7 @@ enum MarkdownEditorBridgeProbe {
             activeTaskLineMovementPreservesSource: sourcePreservationProbe.activeTaskLineMovementPreservesSource,
             activeHorizontalRuleLineMovementPreservesSource: sourcePreservationProbe.activeHorizontalRuleLineMovementPreservesSource,
             selectionRevealStateClearsPreviousBlock: selectionRevealProbe,
+            selectionRevealStateSurvivesLargePreviousFence: largeSelectionRevealProbe,
             nestedActiveRevealLocalized: nestedActiveRevealProbe.localized,
             nestedActiveUnorderedMarkerRevealedInsideLine: nestedActiveRevealProbe.unorderedRevealed,
             nestedActiveOrderedMarkerRevealedInsideLine: nestedActiveRevealProbe.orderedRevealed,
@@ -587,6 +590,93 @@ enum MarkdownEditorBridgeProbe {
 
         return headingRevealed
             && headingConcealedAfterSecondBlock
+            && secondCodeStyled
+            && textView.string == source
+            && NSEqualRanges(textView.selectedRange(), NSRange(location: secondOffset, length: 0))
+    }
+
+    private static func probeLargeFenceSelectionRevealStateInvalidation() -> Bool {
+        let largeBody = (0..<3_500)
+            .map { "fixture line \($0)" }
+            .joined(separator: "\n")
+        let source = """
+        ```text
+        \(largeBody)
+        ```
+
+        ## After Large Fence
+
+        Paragraph between blocks.
+
+        ```text
+        next block
+        ```
+        """
+        var modelText = source
+        let binding = Binding<String>(
+            get: { modelText },
+            set: { modelText = $0 }
+        )
+        let coordinator = MarkdownEditorView.Coordinator(
+            text: binding,
+            livePreviewMode: .livePreview,
+            markerStyle: .obsidian,
+            appContentZoomScale: 1.0
+        )
+        let textView = MarkdownEditorTextViewFactory.makeTextView(scale: 1.0)
+        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 460, height: 120))
+        scrollView.documentView = textView
+        textView.delegate = coordinator
+        coordinator.textView = textView
+        textView.string = source
+
+        func select(_ marker: String) -> Bool {
+            guard let offset = utf16Offset(of: marker, in: source) else {
+                return false
+            }
+            let range = NSRange(location: offset, length: 0)
+            textView.setSelectedRange(range)
+            textView.scrollRangeToVisible(range)
+            coordinator.decorateVisibleRange(in: textView)
+            if let textContainer = textView.textContainer {
+                textView.layoutManager?.ensureLayout(for: textContainer)
+            }
+            return true
+        }
+
+        guard select("fixture line 32"), select("After Large Fence") else {
+            return false
+        }
+        let headingRevealed = foregroundColor(
+            in: textView,
+            text: source,
+            marker: "## After Large Fence"
+        ) != LivePreviewTheme.concealedColor
+
+        guard select("next block"),
+              let secondOffset = utf16Offset(of: "next block", in: source)
+        else {
+            return false
+        }
+        let headingConcealedAfterSecondBlock = foregroundColor(
+            in: textView,
+            text: source,
+            marker: "## After Large Fence"
+        ) == LivePreviewTheme.concealedColor
+        let headingFontRestored = font(
+            in: textView,
+            text: source,
+            marker: "After Large Fence"
+        ) == LivePreviewTheme.defaultFontSet.h2Font
+        let secondCodeStyled = textView.textStorage?.attribute(
+            .foregroundColor,
+            at: secondOffset,
+            effectiveRange: nil
+        ) as? NSColor == LivePreviewTheme.codeColor
+
+        return headingRevealed
+            && headingConcealedAfterSecondBlock
+            && headingFontRestored
             && secondCodeStyled
             && textView.string == source
             && NSEqualRanges(textView.selectedRange(), NSRange(location: secondOffset, length: 0))

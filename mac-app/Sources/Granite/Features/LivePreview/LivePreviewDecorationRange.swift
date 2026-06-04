@@ -27,39 +27,24 @@ enum LivePreviewTextViewRange {
 
 @MainActor
 enum LivePreviewActiveRevealRange {
-    static func decorationContextRange(source: String, selection: NSRange) -> NSRange? {
+    static func activeBlockRange(source: String, selection: NSRange) -> NSRange? {
         guard let resolved = activeBlock(source: source, selection: selection) else {
             return nil
         }
-        let activeRange = resolved.block.sourceRange.nsRange
-        guard resolved.index > 0 else {
-            return activeRange
-        }
-        // Preserve parser context when the visible range would otherwise start on a closing fence line.
-        let previousRange = resolved.blocks[resolved.index - 1].sourceRange.nsRange
-        return union(activeRange, previousRange)
+        return resolved.sourceRange.nsRange
     }
 
     private static func activeBlock(
         source: String,
         selection: NSRange
-    ) -> (block: LivePreviewBlockSpan, index: Int, blocks: [LivePreviewBlockSpan])? {
+    ) -> LivePreviewBlockSpan? {
         let documentLength = (source as NSString).length
         guard documentLength > 0 else {
             return nil
         }
         let selection = LivePreviewTextViewRange.clamped(selection, documentLength: documentLength)
         let blocks = LivePreviewParser.parse(source).blocks
-        guard let index = blocks.firstIndex(where: { $0.sourceRange.nsRange.intersectsOrContainsCaret(selection) }) else {
-            return nil
-        }
-        return (blocks[index], index, blocks)
-    }
-
-    private static func union(_ lhs: NSRange, _ rhs: NSRange) -> NSRange {
-        let lower = min(lhs.location, rhs.location)
-        let upper = max(lhs.upperBound, rhs.upperBound)
-        return NSRange(location: lower, length: max(0, upper - lower))
+        return blocks.first { $0.sourceRange.nsRange.intersectsOrContainsCaret(selection) }
     }
 }
 

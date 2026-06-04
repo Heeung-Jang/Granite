@@ -323,7 +323,7 @@ struct MarkdownEditorView: NSViewRepresentable {
             let tracksActiveReveal = !livePreviewMode.rendersSourceOnly && !textView.hasMarkedText()
             let documentLength = (textView.string as NSString).length
             let currentActiveDecorationRange = tracksActiveReveal
-                ? LivePreviewActiveRevealRange.decorationContextRange(
+                ? LivePreviewActiveRevealRange.activeBlockRange(
                     source: textView.string,
                     selection: textView.selectedRange()
                 )

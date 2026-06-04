@@ -4,6 +4,11 @@ public enum LivePreviewParser {
     private static let maxFrontmatterDelimiterLines = 512
     private static let maxFrontmatterDelimiterUTF16Length = 16_384
 
+    private struct FenceContext {
+        var fence: String
+        var info: String?
+    }
+
     public static func parse(_ source: String, sourceVersion: UInt64 = 0) -> LivePreviewParseResult {
         let fullRange = LivePreviewSourceRange(location: 0, length: (source as NSString).length)
         return parse(source, in: fullRange, sourceVersion: sourceVersion)
@@ -14,20 +19,33 @@ public enum LivePreviewParser {
         in requestedRange: LivePreviewSourceRange,
         sourceVersion: UInt64 = 0
     ) -> LivePreviewParseResult {
-        let sourceRange = LivePreviewRangeMapper.clamped(requestedRange, in: source)
-        guard let stringRange = LivePreviewRangeMapper.stringRange(for: sourceRange, in: source) else {
+        let requestedSourceRange = LivePreviewRangeMapper.clamped(requestedRange, in: source)
+        guard let requestedStringRange = LivePreviewRangeMapper.stringRange(for: requestedSourceRange, in: source) else {
             return LivePreviewParseResult(
                 sourceVersion: sourceVersion,
-                sourceRange: sourceRange,
+                sourceRange: requestedSourceRange,
                 blocks: [],
                 isPartial: true
             )
         }
+        let stringRange = lineAlignedRange(for: requestedStringRange, in: source)
+        let sourceRange = LivePreviewRangeMapper.sourceRange(for: stringRange, in: source)
 
         let lines = LineIndex.lines(in: source, range: stringRange)
         let frontmatterDelimiterRanges = frontmatterDelimiterRanges(in: source)
         var blocks: [LivePreviewBlockSpan] = []
         var index = 0
+
+        if sourceRange.location > 0,
+           let fenceContext = fenceContextBeforeRange(source: source, start: stringRange.lowerBound),
+           let block = parseFencedCodeContinuation(
+            source: source,
+            lines: lines,
+            index: &index,
+            context: fenceContext
+           ) {
+            blocks.append(block)
+        }
 
         if sourceRange.location == 0,
            let frontmatter = parseFrontmatter(source: source, lines: lines, index: &index) {
@@ -77,6 +95,22 @@ public enum LivePreviewParser {
             blocks: blocks,
             isPartial: sourceRange.location != 0 || sourceRange.length != (source as NSString).length
         )
+    }
+
+    private static func lineAlignedRange(
+        for range: Range<String.Index>,
+        in source: String
+    ) -> Range<String.Index> {
+        guard !source.isEmpty else {
+            return range
+        }
+        guard !range.isEmpty else {
+            guard range.lowerBound < source.endIndex else {
+                return range
+            }
+            return source.lineRange(for: range.lowerBound..<range.lowerBound)
+        }
+        return source.lineRange(for: range)
     }
 
     private static func parseFrontmatter(
@@ -142,6 +176,66 @@ public enum LivePreviewParser {
             tokenRanges: tokenRanges,
             isInert: true
         )
+    }
+
+    private static func parseFencedCodeContinuation(
+        source: String,
+        lines: [LineIndex.Line],
+        index: inout Int,
+        context: FenceContext
+    ) -> LivePreviewBlockSpan? {
+        guard lines.indices.contains(index) else {
+            return nil
+        }
+
+        let start = index
+        var isClosed = false
+        var tokenRanges: [LivePreviewSourceRange] = []
+        while index < lines.count {
+            if isFenceCloser(lines[index].trimmed, opener: context.fence) {
+                isClosed = true
+                tokenRanges.append(LivePreviewRangeMapper.sourceRange(for: lines[index].contentRange, in: source))
+                index += 1
+                break
+            }
+            index += 1
+        }
+
+        return makeBlock(
+            source: source,
+            lines: lines,
+            start: start,
+            end: index,
+            kind: .fencedCode(fence: context.fence, info: context.info, isClosed: isClosed),
+            tokenRanges: tokenRanges,
+            isInert: true
+        )
+    }
+
+    private static func fenceContextBeforeRange(source: String, start: String.Index) -> FenceContext? {
+        guard start > source.startIndex else {
+            return nil
+        }
+
+        var index = source.startIndex
+        var activeContext: FenceContext?
+        while index < start,
+              let line = LineIndex.line(in: source, startingAt: index) {
+            if line.fullRange.upperBound > start {
+                return activeContext
+            }
+
+            if let context = activeContext {
+                if isFenceCloser(line.trimmed, opener: context.fence) {
+                    activeContext = nil
+                }
+            } else if let opener = fenceOpener(in: line.trimmed) {
+                activeContext = FenceContext(fence: opener.fence, info: opener.info)
+            }
+            index = line.fullRange.upperBound
+        }
+
+        return activeContext
     }
 
     private static func parseTable(
