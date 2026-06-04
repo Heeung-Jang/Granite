@@ -70,6 +70,8 @@ enum LivePreviewOverlayRenderer {
             switch renderBlock.block.kind {
             case .callout:
                 drawCalloutBackground(renderBlock.block, in: textView, dirtyRect: dirtyRect)
+            case .fencedCode:
+                drawCodeCardBackground(renderBlock.block, in: textView, dirtyRect: dirtyRect)
             case .table:
                 if let table = renderBlock.table {
                     drawTableBackground(table, in: textView, dirtyRect: dirtyRect, fontSet: fontSet)
@@ -102,6 +104,8 @@ enum LivePreviewOverlayRenderer {
                 }
             case .horizontalRule:
                 drawHorizontalRule(renderBlock.block, in: textView, dirtyRect: dirtyRect, state: state)
+            case .fencedCode:
+                drawCodeLanguageBadge(renderBlock.block, in: textView, dirtyRect: dirtyRect)
             case .unorderedList, .orderedList, .taskList:
                 drawMarkerOverlay(renderBlock, in: textView, dirtyRect: dirtyRect, state: state, fontSet: fontSet)
             default:
@@ -193,6 +197,88 @@ enum LivePreviewOverlayRenderer {
             xRadius: accentWidth / 2,
             yRadius: accentWidth / 2
         ).fill()
+    }
+
+    private static func drawCodeCardBackground(
+        _ block: LivePreviewBlockSpan,
+        in textView: NSTextView,
+        dirtyRect: NSRect
+    ) {
+        guard let rect = codeCardRect(for: block, in: textView),
+              rect.intersects(dirtyRect)
+        else {
+            return
+        }
+        let scale = overlayScale(for: textView)
+        let radius = LivePreviewTheme.scaledCodeCardCornerRadius(scale: scale)
+        let path = NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius)
+        LivePreviewTheme.codeCardBackgroundColor.setFill()
+        path.fill()
+        LivePreviewTheme.codeCardBorderColor.setStroke()
+        path.lineWidth = LivePreviewTheme.scaledCodeCardBorderWidth(scale: scale)
+        path.stroke()
+    }
+
+    private static func drawCodeLanguageBadge(
+        _ block: LivePreviewBlockSpan,
+        in textView: NSTextView,
+        dirtyRect: NSRect
+    ) {
+        guard case .fencedCode(_, let info, _) = block.kind else {
+            return
+        }
+        let language = LivePreviewCodeFenceLanguage(info: info)
+        guard let label = language.displayName,
+              let cardRect = codeCardRect(for: block, in: textView)
+        else {
+            return
+        }
+        let scale = overlayScale(for: textView)
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: scaled(11, scale: scale), weight: .medium),
+            .foregroundColor: LivePreviewTheme.codeBadgeTextColor
+        ]
+        let textSize = (label as NSString).size(withAttributes: attributes)
+        let horizontalPadding = LivePreviewTheme.scaledCodeBadgeHorizontalPadding(scale: scale)
+        let verticalPadding = LivePreviewTheme.scaledCodeBadgeVerticalPadding(scale: scale)
+        let maxWidth = LivePreviewTheme.scaledCodeBadgeMaxWidth(scale: scale)
+        let badgeWidth = min(maxWidth, textSize.width + horizontalPadding * 2)
+        let badgeHeight = textSize.height + verticalPadding * 2
+        let inset = LivePreviewTheme.scaledCodeBadgeInset(scale: scale)
+        let badgeRect = NSRect(
+            x: cardRect.maxX - badgeWidth - inset,
+            y: cardRect.minY + inset,
+            width: badgeWidth,
+            height: badgeHeight
+        )
+        guard badgeRect.intersects(dirtyRect) else {
+            return
+        }
+
+        LivePreviewTheme.codeBadgeBackgroundColor.setFill()
+        NSBezierPath(
+            roundedRect: badgeRect,
+            xRadius: badgeHeight / 2,
+            yRadius: badgeHeight / 2
+        ).fill()
+        drawString(
+            label,
+            in: badgeRect.insetBy(dx: horizontalPadding, dy: verticalPadding - scaled(1, scale: scale)),
+            attributes: attributes,
+            dirtyRect: dirtyRect
+        )
+    }
+
+    private static func codeCardRect(
+        for block: LivePreviewBlockSpan,
+        in textView: NSTextView
+    ) -> NSRect? {
+        let scale = overlayScale(for: textView)
+        return unionLineRect(for: block.sourceRange.nsRange, in: textView)?
+            .insetBy(
+                dx: -LivePreviewTheme.scaledCodeCardHorizontalInset(scale: scale),
+                dy: -LivePreviewTheme.scaledCodeCardVerticalInset(scale: scale)
+            )
     }
 
     private static func drawProperties(

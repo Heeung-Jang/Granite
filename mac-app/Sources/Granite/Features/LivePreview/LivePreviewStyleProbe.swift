@@ -457,8 +457,8 @@ enum LivePreviewStyleProbe {
                 && inlineCodeAttributes?[.backgroundColor] as? NSColor == LivePreviewTheme.inlineCodeBackgroundColor,
             inlineCodePreservesSource: textView.string.contains("`code`"),
             fencedCodeStyleApplied: fencedCodeAttributes?[.font] as? NSFont == expectedFontSet.codeFont
-                && fencedCodeAttributes?[.foregroundColor] as? NSColor == LivePreviewTheme.codeColor
-                && fencedCodeAttributes?[.backgroundColor] as? NSColor == LivePreviewTheme.codeBlockBackgroundColor
+                && fencedCodeAttributes?[.foregroundColor] as? NSColor == LivePreviewTheme.codeSyntaxKeywordColor
+                && fencedCodeAttributes?[.backgroundColor] == nil
                 && (fencedCodeAttributes?[.paragraphStyle] as? NSParagraphStyle)?.paragraphSpacing ?? 0 > 0,
             fencedCodeFenceConcealedOutsideReveal: hiddenFenceColor == LivePreviewTheme.concealedColor,
             fencedCodeFenceRevealedInsideBlock: revealedFenceColor != LivePreviewTheme.concealedColor,

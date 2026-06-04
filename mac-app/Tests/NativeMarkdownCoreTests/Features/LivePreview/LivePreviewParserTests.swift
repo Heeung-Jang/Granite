@@ -81,6 +81,25 @@ func livePreviewParserLoadsNestedListHierarchyFixture() throws {
 }
 
 @Test
+func livePreviewParserLoadsFencedCodeBlocksFixture() throws {
+    let source = try fixture("fenced-code-blocks.md")
+    let result = LivePreviewParser.parse(source)
+    let fencedBlocks = result.blocks.filter {
+        if case .fencedCode = $0.kind {
+            return true
+        }
+        return false
+    }
+
+    #expect(fencedBlocks.count >= 14)
+    #expect(fencedBlocks.allSatisfy { $0.isInert })
+    #expect(fencedBlocks.allSatisfy { $0.inlineSpans.isEmpty })
+    #expect(result.blocks.containsBlock { if case .fencedCode(fence: "```", info: "yaml", isClosed: true) = $0 { true } else { false } })
+    #expect(result.blocks.containsBlock { if case .fencedCode(fence: "~~~", info: "yaml", isClosed: true) = $0 { true } else { false } })
+    #expect(result.blocks.containsBlock { if case .fencedCode(fence: "```", info: "rust", isClosed: false) = $0 { true } else { false } })
+}
+
+@Test
 func livePreviewParserGroupsObsidianCalloutBodyLines() throws {
     let source = """
     > [!summary] TL;DR

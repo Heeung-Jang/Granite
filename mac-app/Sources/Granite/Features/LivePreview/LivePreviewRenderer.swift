@@ -187,6 +187,12 @@ enum LivePreviewRenderer {
                 visibleRange: visibleRange,
                 markerStyle: markerStyle
             )
+            applyCodeFenceSyntaxAttributes(
+                block,
+                source: source,
+                plan: plan,
+                visibleRange: visibleRange
+            )
             applyPropertyAttributes(properties, source: source, plan: plan, visibleRange: visibleRange, fontSet: fontSet, scale: scale)
             applyTableAttributes(table, plan: plan, visibleRange: visibleRange, fontSet: fontSet)
             applyEmbedAttributes(embedPreview, plan: plan, visibleRange: visibleRange, fontSet: fontSet)
@@ -241,7 +247,6 @@ enum LivePreviewRenderer {
             plan.addAttributes([
                 .font: fontSet.codeFont,
                 .foregroundColor: LivePreviewTheme.codeColor,
-                .backgroundColor: LivePreviewTheme.codeBlockBackgroundColor,
                 .paragraphStyle: LivePreviewTheme.codeBlockParagraphStyle(scale: scale)
             ], range: range)
         case .table:
@@ -289,6 +294,31 @@ enum LivePreviewRenderer {
         let style = LivePreviewTheme.listParagraphStyle(depth: cacheKey, scale: scale)
         cache[cacheKey] = style
         return style
+    }
+
+    private static func applyCodeFenceSyntaxAttributes(
+        _ block: LivePreviewBlockSpan,
+        source: String,
+        plan: LivePreviewAttributePlan,
+        visibleRange: NSRange
+    ) {
+        guard case .fencedCode = block.kind else {
+            return
+        }
+        let result = LivePreviewCodeFenceSyntaxHighlighter.highlight(
+            source: source,
+            block: block,
+            visibleRange: LivePreviewSourceRange(location: visibleRange.location, length: visibleRange.length)
+        )
+        for token in result.tokens {
+            let range = NSIntersectionRange(token.sourceRange.nsRange, visibleRange)
+            guard range.length > 0 else {
+                continue
+            }
+            plan.addAttributes([
+                .foregroundColor: LivePreviewTheme.codeSyntaxColor(for: token.kind)
+            ], range: range)
+        }
     }
 
     private static func applyBlockTokenAttributes(
