@@ -50,6 +50,16 @@ enum LivePreviewTheme {
     static let codeColor = NSColor.systemBrown
     static let inlineCodeBackgroundColor = NSColor.controlBackgroundColor
     static let codeBlockBackgroundColor = NSColor.controlBackgroundColor
+    static let codeCardBackgroundColor = NSColor.controlBackgroundColor.withAlphaComponent(0.52)
+    static let codeCardBorderColor = NSColor.separatorColor.withAlphaComponent(0.62)
+    static let codeBadgeBackgroundColor = NSColor.controlBackgroundColor.withAlphaComponent(0.88)
+    static let codeBadgeTextColor = NSColor.secondaryLabelColor
+    static let codeSyntaxKeywordColor = NSColor.systemBlue
+    static let codeSyntaxStringColor = NSColor.systemGreen
+    static let codeSyntaxNumberColor = NSColor.systemOrange
+    static let codeSyntaxCommentColor = NSColor.secondaryLabelColor
+    static let codeSyntaxPropertyColor = NSColor.systemPurple
+    static let codeSyntaxOperatorColor = NSColor.tertiaryLabelColor
     static let quoteColor = NSColor.secondaryLabelColor
     static let quoteBarColor = NSColor.systemGray
     static let calloutAccentColor = NSColor.systemBlue
@@ -63,6 +73,14 @@ enum LivePreviewTheme {
     static let propertySectionParagraphSpacing: CGFloat = 8
     static let propertyRowLineHeight: CGFloat = 28
     static let propertyRowParagraphSpacing: CGFloat = 4
+    static let codeCardCornerRadius: CGFloat = 6
+    static let codeCardHorizontalInset: CGFloat = 10
+    static let codeCardVerticalInset: CGFloat = 7
+    static let codeCardBorderWidth: CGFloat = 1
+    static let codeBadgeHorizontalPadding: CGFloat = 7
+    static let codeBadgeVerticalPadding: CGFloat = 3
+    static let codeBadgeInset: CGFloat = 8
+    static let codeBadgeMaxWidth: CGFloat = 96
 
     static func headingFont(level: Int) -> NSFont {
         defaultFontSet.headingFont(level: level)
@@ -107,6 +125,55 @@ enum LivePreviewTheme {
 
     private static func scaled(_ value: CGFloat, scale: Double) -> CGFloat {
         value * normalizedScale(scale)
+    }
+
+    static func scaledCodeCardCornerRadius(scale: Double) -> CGFloat {
+        scaled(codeCardCornerRadius, scale: scale)
+    }
+
+    static func scaledCodeCardHorizontalInset(scale: Double) -> CGFloat {
+        scaled(codeCardHorizontalInset, scale: scale)
+    }
+
+    static func scaledCodeCardVerticalInset(scale: Double) -> CGFloat {
+        scaled(codeCardVerticalInset, scale: scale)
+    }
+
+    static func scaledCodeCardBorderWidth(scale: Double) -> CGFloat {
+        scaled(codeCardBorderWidth, scale: scale)
+    }
+
+    static func scaledCodeBadgeHorizontalPadding(scale: Double) -> CGFloat {
+        scaled(codeBadgeHorizontalPadding, scale: scale)
+    }
+
+    static func scaledCodeBadgeVerticalPadding(scale: Double) -> CGFloat {
+        scaled(codeBadgeVerticalPadding, scale: scale)
+    }
+
+    static func scaledCodeBadgeInset(scale: Double) -> CGFloat {
+        scaled(codeBadgeInset, scale: scale)
+    }
+
+    static func scaledCodeBadgeMaxWidth(scale: Double) -> CGFloat {
+        scaled(codeBadgeMaxWidth, scale: scale)
+    }
+
+    static func codeSyntaxColor(for kind: LivePreviewCodeFenceToken.Kind) -> NSColor {
+        switch kind {
+        case .keyword:
+            codeSyntaxKeywordColor
+        case .string:
+            codeSyntaxStringColor
+        case .number:
+            codeSyntaxNumberColor
+        case .comment:
+            codeSyntaxCommentColor
+        case .propertyKey:
+            codeSyntaxPropertyColor
+        case .operatorToken:
+            codeSyntaxOperatorColor
+        }
     }
 
     static var baseParagraphStyle: NSParagraphStyle {

@@ -140,6 +140,7 @@ run_packaged_probe "smoke-test" --smoke-test
 run_packaged_probe "engine-smoke-test" --engine-smoke-test
 run_packaged_probe "telemetry-smoke-test" --telemetry-smoke-test
 run_packaged_probe "live-preview-probe" --live-preview-probe >/dev/null
+run_packaged_probe "live-preview-style-probe" --live-preview-style-probe >/dev/null
 run_packaged_probe "workspace-tabs-probe" --workspace-tabs-probe >/dev/null
 run_packaged_probe "startup-vault-restore-probe" --startup-vault-restore-probe >/dev/null
 run_packaged_probe "file-tree-actions-probe" --file-tree-actions-probe >/dev/null

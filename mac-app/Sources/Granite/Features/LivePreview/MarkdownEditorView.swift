@@ -504,13 +504,23 @@ final class MarkdownInteractionTextView: NSTextView, NSTextFieldDelegate {
     override func draw(_ dirtyRect: NSRect) {
         refreshLivePreviewOverlayState(syncEditor: false)
         let overlayState = livePreviewOverlayState
-        super.draw(dirtyRect)
+        let wasDrawingBackground = drawsBackground
+        let previousBackgroundColor = backgroundColor
+        if wasDrawingBackground {
+            previousBackgroundColor.setFill()
+            dirtyRect.fill()
+            drawsBackground = false
+        }
         LivePreviewOverlayRenderer.drawBackgrounds(
             in: self,
             dirtyRect: dirtyRect,
             state: overlayState,
             fontSet: livePreviewFontSet
         )
+        super.draw(dirtyRect)
+        if wasDrawingBackground {
+            drawsBackground = true
+        }
         LivePreviewOverlayRenderer.drawForegrounds(
             in: self,
             dirtyRect: dirtyRect,
