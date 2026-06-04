@@ -9,6 +9,11 @@ public enum LivePreviewParser {
         var info: String?
     }
 
+    private enum FenceContextResolution {
+        case resolved(FenceContext?)
+        case unresolved
+    }
+
     public static func parse(_ source: String, sourceVersion: UInt64 = 0) -> LivePreviewParseResult {
         let fullRange = LivePreviewSourceRange(location: 0, length: (source as NSString).length)
         return parse(source, in: fullRange, sourceVersion: sourceVersion)
@@ -217,6 +222,13 @@ public enum LivePreviewParser {
             return nil
         }
 
+        switch nearbyFenceContextBeforeRange(source: source, start: start) {
+        case .resolved(let context):
+            return context
+        case .unresolved:
+            break
+        }
+
         var index = source.startIndex
         var activeContext: FenceContext?
         while index < start,
@@ -236,6 +248,80 @@ public enum LivePreviewParser {
         }
 
         return activeContext
+    }
+
+    private static func nearbyFenceContextBeforeRange(
+        source: String,
+        start: String.Index
+    ) -> FenceContextResolution {
+        guard let previous = previousFenceCandidateLine(in: source, before: start),
+              let previousOpener = fenceOpener(in: previous.line.trimmed)
+        else {
+            return .resolved(nil)
+        }
+
+        if previousOpener.info != nil {
+            return .resolved(FenceContext(fence: previousOpener.fence, info: previousOpener.info))
+        }
+
+        guard let beforePrevious = previousFenceCandidateLine(in: source, before: previous.nextSearchUpperBound),
+              let beforePreviousOpener = fenceOpener(in: beforePrevious.line.trimmed)
+        else {
+            return .resolved(FenceContext(fence: previousOpener.fence, info: previousOpener.info))
+        }
+
+        if beforePrevious.nextSearchUpperBound == source.startIndex,
+           isFenceCloser(previous.line.trimmed, opener: beforePreviousOpener.fence) {
+            return .resolved(nil)
+        }
+
+        if beforePreviousOpener.info != nil,
+           isFenceCloser(previous.line.trimmed, opener: beforePreviousOpener.fence) {
+            return .resolved(nil)
+        }
+
+        return .unresolved
+    }
+
+    private static func previousFenceCandidateLine(
+        in source: String,
+        before upperBound: String.Index
+    ) -> (line: LineIndex.Line, nextSearchUpperBound: String.Index)? {
+        var searchUpperBound = upperBound
+        while searchUpperBound > source.startIndex {
+            let searchRange = source.startIndex..<searchUpperBound
+            let backtickRange = source.range(of: "```", options: .backwards, range: searchRange)
+            let tildeRange = source.range(of: "~~~", options: .backwards, range: searchRange)
+            guard let markerRange = laterRange(backtickRange, tildeRange) else {
+                return nil
+            }
+
+            let lineRange = source.lineRange(for: markerRange)
+            searchUpperBound = lineRange.lowerBound
+            guard let line = LineIndex.line(in: source, startingAt: lineRange.lowerBound, upperBound: lineRange.upperBound),
+                  fenceOpener(in: line.trimmed) != nil
+            else {
+                continue
+            }
+            return (line, searchUpperBound)
+        }
+        return nil
+    }
+
+    private static func laterRange(
+        _ lhs: Range<String.Index>?,
+        _ rhs: Range<String.Index>?
+    ) -> Range<String.Index>? {
+        switch (lhs, rhs) {
+        case let (lhs?, rhs?):
+            return lhs.lowerBound > rhs.lowerBound ? lhs : rhs
+        case let (lhs?, nil):
+            return lhs
+        case let (nil, rhs?):
+            return rhs
+        case (nil, nil):
+            return nil
+        }
     }
 
     private static func parseTable(
