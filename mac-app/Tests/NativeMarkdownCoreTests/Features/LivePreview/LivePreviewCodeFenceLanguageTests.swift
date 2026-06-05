@@ -14,6 +14,15 @@ func codeFenceLanguageNormalizesSupportedAliases() {
     #expect(LivePreviewCodeFenceLanguage(info: "swift").displayName == "Swift")
     #expect(LivePreviewCodeFenceLanguage(info: "json").displayName == "JSON")
     #expect(LivePreviewCodeFenceLanguage(info: "sql").displayName == "SQL")
+    #expect(LivePreviewCodeFenceLanguage(info: "javascript").highlightMode == .javascript)
+    #expect(LivePreviewCodeFenceLanguage(info: "js").displayName == "JavaScript")
+    #expect(LivePreviewCodeFenceLanguage(info: "typescript").highlightMode == .typescript)
+    #expect(LivePreviewCodeFenceLanguage(info: "ts").displayName == "TypeScript")
+    #expect(LivePreviewCodeFenceLanguage(info: "python").highlightMode == .python)
+    #expect(LivePreviewCodeFenceLanguage(info: "py").displayName == "Python")
+    #expect(LivePreviewCodeFenceLanguage(info: "html").displayName == "HTML")
+    #expect(LivePreviewCodeFenceLanguage(info: "css").displayName == "CSS")
+    #expect(LivePreviewCodeFenceLanguage(info: "md").displayName == "Markdown")
 }
 
 @Test

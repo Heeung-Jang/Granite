@@ -16,6 +16,7 @@ public enum EngineReadABI {
         public static let graphNode: UInt32 = 17
         public static let graphEdge: UInt32 = 18
         public static let livePreviewMetadata: UInt32 = 19
+        public static let syntaxToken: UInt32 = 20
     }
 
     public enum State {
@@ -57,6 +58,7 @@ public enum EngineReadDecodeError: Error, Equatable, Sendable {
     case unknownState(UInt32)
     case unknownGraphNodeKind(UInt32)
     case unknownGraphEdgeDirection(UInt32)
+    case unknownSyntaxTokenKind(UInt32)
 }
 
 public struct EngineReadStringRef: Equatable, Sendable {
@@ -114,6 +116,16 @@ public struct EngineLivePreviewMetadata: Equatable, Sendable {
             references: attachments,
             previewStatesByID: previewStatesByID
         )
+    }
+}
+
+public struct EngineSyntaxHighlightResult: Equatable, Sendable {
+    public let requestID: UInt64
+    public let tokens: [LivePreviewCodeFenceToken]
+
+    public init(requestID: UInt64, tokens: [LivePreviewCodeFenceToken]) {
+        self.requestID = requestID
+        self.tokens = tokens
     }
 }
 
@@ -215,6 +227,16 @@ public enum EngineReadBufferDecoder {
         _ buffer: UnsafeRawBufferPointer
     ) throws -> EngineLivePreviewMetadata {
         try EngineReadBinaryDecoder(buffer: buffer).decodeLivePreviewMetadata()
+    }
+
+    public static func decodeSyntaxHighlight(_ data: Data) throws -> EngineSyntaxHighlightResult {
+        try data.withUnsafeBytes { try decodeSyntaxHighlight($0) }
+    }
+
+    public static func decodeSyntaxHighlight(
+        _ buffer: UnsafeRawBufferPointer
+    ) throws -> EngineSyntaxHighlightResult {
+        try EngineReadBinaryDecoder(buffer: buffer).decodeSyntaxHighlight()
     }
 }
 
@@ -419,6 +441,20 @@ private struct EngineReadBinaryDecoder {
         return EngineLivePreviewMetadata(outgoingLinks: outgoing, attachments: attachments)
     }
 
+    func decodeSyntaxHighlight() throws -> EngineSyntaxHighlightResult {
+        let header = try validatedHeader(rowKind: EngineReadABI.RowKind.syntaxToken, rowSize: 12)
+        let tokens = try rows(header: header, rowSize: 12).map { offset in
+            LivePreviewCodeFenceToken(
+                kind: try syntaxTokenKind(try uint32(at: offset)),
+                sourceRange: LivePreviewSourceRange(
+                    location: Int(try uint32(at: offset + 4)),
+                    length: Int(try uint32(at: offset + 8))
+                )
+            )
+        }
+        return EngineSyntaxHighlightResult(requestID: header.requestID, tokens: tokens)
+    }
+
     private func validatedHeader(rowKind: UInt32, rowSize: UInt32) throws -> EngineReadResultHeader {
         let header = try decodeHeader()
         guard header.rowKind == rowKind else {
@@ -594,6 +630,25 @@ private struct EngineReadBinaryDecoder {
             return .backlink
         default:
             throw EngineReadDecodeError.unknownGraphEdgeDirection(value)
+        }
+    }
+
+    private func syntaxTokenKind(_ value: UInt32) throws -> LivePreviewCodeFenceToken.Kind {
+        switch value {
+        case 1:
+            return .keyword
+        case 2:
+            return .string
+        case 3:
+            return .number
+        case 4:
+            return .comment
+        case 5:
+            return .propertyKey
+        case 6:
+            return .operatorToken
+        default:
+            throw EngineReadDecodeError.unknownSyntaxTokenKind(value)
         }
     }
 

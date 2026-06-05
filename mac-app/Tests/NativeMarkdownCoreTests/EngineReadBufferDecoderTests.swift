@@ -7,6 +7,7 @@ func engineReadConstantsMatchRustLayout() {
     #expect(EngineReadABI.version == 1)
     #expect(EngineReadABI.RowKind.fileTree == 10)
     #expect(EngineReadABI.RowKind.livePreviewMetadata == 19)
+    #expect(EngineReadABI.RowKind.syntaxToken == 20)
     #expect(EngineReadABI.State.indexUnavailable == 5)
     #expect(EngineReadABI.SearchMode.fileName == 1)
     #expect(EngineReadABI.SearchMode.body == 2)
@@ -237,6 +238,27 @@ func engineReadLivePreviewMetadataBuildsMaps() throws {
     #expect(previewMap.preview(for: block)?.status == .nonImage)
 }
 
+@Test
+func engineReadDecodesSyntaxHighlightRows() throws {
+    var syntax = ReadTestBufferBuilder(rowKind: EngineReadABI.RowKind.syntaxToken, requestID: 77)
+    syntax.appendSyntaxToken(kind: 1, startUTF16: 0, lengthUTF16: 2)
+    syntax.appendSyntaxToken(kind: 2, startUTF16: 12, lengthUTF16: 9)
+
+    let result = try EngineReadBufferDecoder.decodeSyntaxHighlight(syntax.finish(rowStride: 12))
+
+    #expect(result.requestID == 77)
+    #expect(result.tokens == [
+        LivePreviewCodeFenceToken(
+            kind: .keyword,
+            sourceRange: LivePreviewSourceRange(location: 0, length: 2)
+        ),
+        LivePreviewCodeFenceToken(
+            kind: .string,
+            sourceRange: LivePreviewSourceRange(location: 12, length: 9)
+        )
+    ])
+}
+
 struct TestStringRef {
     var offset: UInt32
     var length: UInt32
@@ -381,6 +403,13 @@ struct ReadTestBufferBuilder {
         appendRef(string(alias))
         appendUInt32(state)
         appendUInt32(source)
+        rowCount += 1
+    }
+
+    mutating func appendSyntaxToken(kind: UInt32, startUTF16: UInt32, lengthUTF16: UInt32) {
+        appendUInt32(kind)
+        appendUInt32(startUTF16)
+        appendUInt32(lengthUTF16)
         rowCount += 1
     }
 

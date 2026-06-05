@@ -5,8 +5,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_NAME="Granite"
 EXECUTABLE_NAME="Granite"
 BUNDLE_IDENTIFIER="com.codex.granite"
-APP_VERSION="0.4.12"
-APP_BUILD="16"
+APP_VERSION="0.4.13"
+APP_BUILD="17"
 ICON_NAME="GraniteAppIcon"
 ICON_SOURCE="${ROOT_DIR}/assets/${ICON_NAME}.png"
 DIST_DIR="${ROOT_DIR}/dist"
@@ -141,6 +141,7 @@ run_packaged_probe "engine-smoke-test" --engine-smoke-test
 run_packaged_probe "telemetry-smoke-test" --telemetry-smoke-test
 run_packaged_probe "live-preview-probe" --live-preview-probe >/dev/null
 run_packaged_probe "live-preview-style-probe" --live-preview-style-probe >/dev/null
+run_packaged_probe "live-preview-syntax-probe" --live-preview-syntax-probe >/dev/null
 run_packaged_probe "workspace-tabs-probe" --workspace-tabs-probe >/dev/null
 run_packaged_probe "startup-vault-restore-probe" --startup-vault-restore-probe >/dev/null
 run_packaged_probe "file-tree-actions-probe" --file-tree-actions-probe >/dev/null

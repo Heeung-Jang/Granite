@@ -9,5 +9,6 @@
   "EngineReadAttachmentRow": { "size": 32, "align": 4 },
   "EngineReadGraphNodeRow": { "size": 28, "align": 4 },
   "EngineReadGraphEdgeRow": { "size": 36, "align": 4 },
-  "EngineReadLivePreviewMetadataRow": { "size": 60, "align": 4 }
+  "EngineReadLivePreviewMetadataRow": { "size": 60, "align": 4 },
+  "EngineSyntaxHighlightTokenRow": { "size": 12, "align": 4 }
 }

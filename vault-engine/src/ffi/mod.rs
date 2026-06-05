@@ -29,6 +29,7 @@ mod read;
 pub mod read_rows;
 mod save;
 mod strings;
+mod syntax_highlighting;
 
 pub use self::graph::engine_graph_snapshot;
 pub use self::health::abi_version;
@@ -43,6 +44,7 @@ pub use self::save::{
     engine_save_overwrite_after_conflict, engine_save_reload_after_conflict, engine_save_write,
 };
 use self::strings::{read_bytes, read_c_string, read_read_string, read_rebuild_c_string};
+pub use self::syntax_highlighting::engine_live_preview_highlight_code;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]

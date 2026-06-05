@@ -30,6 +30,7 @@ pub const ENGINE_READ_ROW_KIND_ATTACHMENT: u32 = 16;
 pub const ENGINE_READ_ROW_KIND_GRAPH_NODE: u32 = 17;
 pub const ENGINE_READ_ROW_KIND_GRAPH_EDGE: u32 = 18;
 pub const ENGINE_READ_ROW_KIND_LIVE_PREVIEW_METADATA: u32 = 19;
+pub const ENGINE_READ_ROW_KIND_SYNTAX_TOKEN: u32 = 20;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -161,6 +162,14 @@ pub struct EngineReadLivePreviewMetadataRow {
     pub alias: EngineReadStringRef,
     pub state_kind: u32,
     pub source_kind: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EngineSyntaxHighlightTokenRow {
+    pub token_kind: u32,
+    pub start_utf16: u32,
+    pub length_utf16: u32,
 }
 
 pub struct EngineReadResultBuilder {
@@ -522,6 +531,16 @@ impl EngineReadLivePreviewMetadataRow {
     }
 }
 
+impl EngineSyntaxHighlightTokenRow {
+    pub fn from_token(token: &crate::core::syntax_highlighting::SyntaxHighlightToken) -> Self {
+        Self {
+            token_kind: token.kind.abi_code(),
+            start_utf16: token.start_utf16,
+            length_utf16: token.length_utf16,
+        }
+    }
+}
+
 #[cfg(test)]
 pub fn decode_header_for_test(buffer: &EngineReadResultBuffer) -> EngineReadResultHeader {
     assert!(!buffer.ptr.is_null());
@@ -544,6 +563,32 @@ pub fn string_for_test(buffer: &EngineReadResultBuffer, string_ref: EngineReadSt
     // remains owned by the caller for this test helper call.
     let bytes = unsafe { std::slice::from_raw_parts(buffer.ptr.add(start), end - start) };
     String::from_utf8(bytes.to_vec()).expect("utf8 string")
+}
+
+#[cfg(test)]
+pub fn syntax_rows_for_test(buffer: &EngineReadResultBuffer) -> Vec<EngineSyntaxHighlightTokenRow> {
+    let header = decode_header_for_test(buffer);
+    assert_eq!(header.row_kind, ENGINE_READ_ROW_KIND_SYNTAX_TOKEN);
+    assert_eq!(
+        header.row_stride as usize,
+        size_of::<EngineSyntaxHighlightTokenRow>()
+    );
+    let mut rows = Vec::new();
+    for index in 0..header.row_count as usize {
+        let offset =
+            header.rows_offset as usize + index * size_of::<EngineSyntaxHighlightTokenRow>();
+        assert!(offset + size_of::<EngineSyntaxHighlightTokenRow>() <= buffer.len);
+        // SAFETY: Bounds are checked and rows are copied out by value.
+        rows.push(unsafe {
+            std::ptr::read_unaligned(
+                buffer
+                    .ptr
+                    .add(offset)
+                    .cast::<EngineSyntaxHighlightTokenRow>(),
+            )
+        });
+    }
+    rows
 }
 
 unsafe fn bytes_of<T>(value: &T) -> &[u8] {
@@ -905,6 +950,7 @@ mod tests {
             &fixture,
             "EngineReadLivePreviewMetadataRow",
         );
+        assert_layout::<EngineSyntaxHighlightTokenRow>(&fixture, "EngineSyntaxHighlightTokenRow");
     }
 
     fn string_for_builder(

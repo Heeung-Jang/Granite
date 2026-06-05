@@ -78,7 +78,7 @@ public enum LivePreviewCodeFenceSyntaxHighlighter {
             bashTokens(in: segment, baseLocation: baseLocation)
         case .sql:
             sqlTokens(in: segment, baseLocation: baseLocation)
-        case .text, .unsupported:
+        case .javascript, .typescript, .python, .html, .css, .markdown, .text, .unsupported:
             []
         }
     }

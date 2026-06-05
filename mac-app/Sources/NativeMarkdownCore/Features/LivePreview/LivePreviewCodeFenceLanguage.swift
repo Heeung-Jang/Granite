@@ -9,6 +9,12 @@ public struct LivePreviewCodeFenceLanguage: Equatable, Sendable {
         case json
         case bash
         case sql
+        case javascript
+        case typescript
+        case python
+        case html
+        case css
+        case markdown
         case text
         case unsupported
     }
@@ -60,6 +66,18 @@ public struct LivePreviewCodeFenceLanguage: Equatable, Sendable {
             .bash
         case "sql":
             .sql
+        case "javascript", "js":
+            .javascript
+        case "typescript", "ts":
+            .typescript
+        case "python", "py":
+            .python
+        case "html":
+            .html
+        case "css":
+            .css
+        case "markdown", "md":
+            .markdown
         case "text", "txt", "plain":
             .text
         default:
@@ -83,6 +101,18 @@ public struct LivePreviewCodeFenceLanguage: Equatable, Sendable {
             return "Bash"
         case .sql:
             return "SQL"
+        case .javascript:
+            return "JavaScript"
+        case .typescript:
+            return "TypeScript"
+        case .python:
+            return "Python"
+        case .html:
+            return "HTML"
+        case .css:
+            return "CSS"
+        case .markdown:
+            return "Markdown"
         case .text:
             return nil
         case .unsupported:

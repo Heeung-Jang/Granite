@@ -22,6 +22,7 @@ enum MarkdownVisibleRangeDecorator {
         revealRange: NSRange? = nil,
         linkStyleMap: LivePreviewLinkStyleMap = LivePreviewLinkStyleMap(),
         embedPreviewMap: LivePreviewEmbedPreviewMap = LivePreviewEmbedPreviewMap(),
+        syntaxSnapshot: LivePreviewCodeFenceSyntaxSnapshot = .empty,
         markerStyle: LivePreviewMarkerStyle = .defaultValue,
         fontSet: LivePreviewFontSet = LivePreviewTheme.defaultFontSet,
         scale: Double = AppContentZoom.defaultScale
@@ -33,6 +34,7 @@ enum MarkdownVisibleRangeDecorator {
             revealRange: revealRange,
             linkStyleMap: linkStyleMap,
             embedPreviewMap: embedPreviewMap,
+            syntaxSnapshot: syntaxSnapshot,
             markerStyle: markerStyle,
             fontSet: fontSet,
             scale: scale

@@ -178,6 +178,15 @@ struct GraniteApp: App {
             Foundation.exit(report.hardCeilingPassed ? 0 : 2)
         }
 
+        if CommandLine.arguments.contains("--live-preview-syntax-probe") {
+            Task.detached {
+                let report = await LivePreviewSyntaxHighlightProbe.run()
+                print(LivePreviewSyntaxHighlightProbe.encodedReport(report))
+                Foundation.exit(report.summary.passed ? 0 : 2)
+            }
+            dispatchMain()
+        }
+
         if CommandLine.arguments.contains("--workspace-tabs-probe") {
             let report = WorkspaceTabsProbe.run()
             print(WorkspaceTabsProbe.encodedReport(report))

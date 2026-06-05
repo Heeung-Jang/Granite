@@ -8,3 +8,4 @@ pub(crate) mod metadata;
 pub(crate) mod paths;
 pub(crate) mod scan;
 pub(crate) mod search;
+pub(crate) mod syntax_highlighting;

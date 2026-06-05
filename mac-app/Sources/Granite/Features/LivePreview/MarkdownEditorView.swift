@@ -154,6 +154,7 @@ struct MarkdownEditorView: NSViewRepresentable {
         private var decorationGeneration = 0
         private var previousActiveDecorationRange: NSRange?
         private var previousActiveDecorationDocumentLength: Int?
+        private let syntaxHighlightController = LivePreviewCodeFenceSyntaxController()
         weak var textView: NSTextView?
         var isApplyingAppKitChange = false
 
@@ -181,6 +182,13 @@ struct MarkdownEditorView: NSViewRepresentable {
             self.appContentZoomScale = AppContentZoom(rawScale: appContentZoomScale).scale
             self.focusRequestID = focusRequestID
             self.selectionRequest = selectionRequest
+            super.init()
+            syntaxHighlightController.onUpdate = { [weak self] in
+                guard let self, let textView = self.textView else {
+                    return
+                }
+                self.scheduleLivePreviewDecoration(in: textView)
+            }
         }
 
         @discardableResult
@@ -267,6 +275,7 @@ struct MarkdownEditorView: NSViewRepresentable {
             isApplyingAppKitChange = true
             text = textView.string
             resetLivePreviewRevealState()
+            syntaxHighlightController.invalidate()
             scheduleLivePreviewDecoration(in: textView, afterTextMutation: true)
             isApplyingAppKitChange = false
         }
@@ -338,6 +347,11 @@ struct MarkdownEditorView: NSViewRepresentable {
                     currentActiveRange: currentActiveDecorationRange
                 )
                 : nil
+            let syntaxSnapshot = syntaxHighlightController.snapshot(
+                in: textView,
+                requestedRange: decorationRange,
+                mode: livePreviewMode
+            )
 
             let result = MarkdownVisibleRangeDecorator.decorateVisibleRange(
                 in: textView,
@@ -346,6 +360,7 @@ struct MarkdownEditorView: NSViewRepresentable {
                 revealRange: textView.selectedRange(),
                 linkStyleMap: linkStyleMap,
                 embedPreviewMap: embedPreviewMap,
+                syntaxSnapshot: syntaxSnapshot,
                 markerStyle: markerStyle,
                 fontSet: fontSet,
                 scale: appContentZoomScale

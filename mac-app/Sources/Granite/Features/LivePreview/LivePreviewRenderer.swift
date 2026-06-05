@@ -25,6 +25,7 @@ enum LivePreviewRenderer {
         revealRange: NSRange? = nil,
         linkStyleMap: LivePreviewLinkStyleMap = LivePreviewLinkStyleMap(),
         embedPreviewMap: LivePreviewEmbedPreviewMap = LivePreviewEmbedPreviewMap(),
+        syntaxSnapshot: LivePreviewCodeFenceSyntaxSnapshot = .empty,
         markerStyle: LivePreviewMarkerStyle = .defaultValue,
         fontSet: LivePreviewFontSet = LivePreviewTheme.defaultFontSet,
         scale: Double = AppContentZoom.defaultScale
@@ -79,6 +80,7 @@ enum LivePreviewRenderer {
             revealRange: resolvedRevealRange,
             linkStyleMap: linkStyleMap,
             embedPreviewMap: embedPreviewMap,
+            syntaxSnapshot: syntaxSnapshot,
             markerStyle: markerStyle,
             fontSet: fontSet,
             scale: scale
@@ -149,6 +151,7 @@ enum LivePreviewRenderer {
         revealRange: NSRange,
         linkStyleMap: LivePreviewLinkStyleMap,
         embedPreviewMap: LivePreviewEmbedPreviewMap,
+        syntaxSnapshot: LivePreviewCodeFenceSyntaxSnapshot,
         markerStyle: LivePreviewMarkerStyle,
         fontSet: LivePreviewFontSet,
         scale: Double
@@ -196,7 +199,8 @@ enum LivePreviewRenderer {
                 block,
                 source: source,
                 plan: plan,
-                visibleRange: visibleRange
+                visibleRange: visibleRange,
+                syntaxSnapshot: syntaxSnapshot
             )
             applyPropertyAttributes(properties, source: source, plan: plan, visibleRange: visibleRange, fontSet: fontSet, scale: scale)
             applyTableAttributes(table, plan: plan, visibleRange: visibleRange, fontSet: fontSet)
@@ -305,17 +309,25 @@ enum LivePreviewRenderer {
         _ block: LivePreviewBlockSpan,
         source: String,
         plan: LivePreviewAttributePlan,
-        visibleRange: NSRange
+        visibleRange: NSRange,
+        syntaxSnapshot: LivePreviewCodeFenceSyntaxSnapshot
     ) {
         guard case .fencedCode = block.kind else {
             return
         }
-        let result = LivePreviewCodeFenceSyntaxHighlighter.highlight(
-            source: source,
-            block: block,
-            visibleRange: LivePreviewSourceRange(location: visibleRange.location, length: visibleRange.length)
-        )
-        for token in result.tokens {
+        let tokens: [LivePreviewCodeFenceToken]
+        if let contentRange = LivePreviewCodeFenceContentRange.contentRange(for: block, in: source),
+           let snapshotTokens = syntaxSnapshot.tokens(for: contentRange) {
+            tokens = snapshotTokens
+        } else {
+            let result = LivePreviewCodeFenceSyntaxHighlighter.highlight(
+                source: source,
+                block: block,
+                visibleRange: LivePreviewSourceRange(location: visibleRange.location, length: visibleRange.length)
+            )
+            tokens = result.tokens
+        }
+        for token in tokens {
             let range = NSIntersectionRange(token.sourceRange.nsRange, visibleRange)
             guard range.length > 0 else {
                 continue
