@@ -1,7 +1,7 @@
 import Foundation
 
 public struct IndexConfiguration: Equatable, Sendable {
-    public static let defaultSchemaVersion = "metadata-v3"
+    public static let defaultSchemaVersion = "metadata-v4"
     public static let defaultBackendVersion = "sqlite+tantivy"
     public static let defaultTokenizerConfig = "tantivy"
 

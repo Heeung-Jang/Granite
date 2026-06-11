@@ -200,6 +200,9 @@ where
                     let Some(source) = sources.get(index) else {
                         break;
                     };
+                    if source.kind != ScanEntryKind::Markdown {
+                        continue;
+                    }
                     let result = read_parse_source_at_with_note_targets(
                         index,
                         source,

@@ -11,6 +11,7 @@ use crate::adapters::fs::path_resolver::VaultRoot;
 use crate::adapters::fs::scanner::scan_vault;
 #[cfg(test)]
 use crate::adapters::sqlite::IndexingQueueSummary;
+use crate::adapters::sqlite::{FileMetadataRecords, FileRecord};
 use crate::adapters::sqlite::{IndexingQueueError, MetadataStoreError};
 #[cfg(test)]
 use crate::adapters::sqlite::{IndexingQueueReason, MetadataStore};
@@ -267,6 +268,30 @@ pub struct SearchDocumentSource {
     pub file_identity: FileIdentity,
 }
 
+impl SearchDocumentSource {
+    pub(crate) fn metadata_only_records(&self, generation: u64) -> FileMetadataRecords {
+        FileMetadataRecords {
+            file: FileRecord {
+                file_id: self.file_id.clone(),
+                relative_path: self.relative_path.clone(),
+                kind: self.kind,
+                size_bytes: self.size_bytes,
+                modified: self.modified,
+                file_identity: self.file_identity.clone(),
+                content_hash: None,
+                generation,
+                status: crate::adapters::sqlite::FileIndexStatus::SeenMetadata,
+                last_error: None,
+            },
+            links: Vec::new(),
+            tags: Vec::new(),
+            properties: Vec::new(),
+            headings: Vec::new(),
+            attachments: Vec::new(),
+        }
+    }
+}
+
 pub struct LoadedSearchDocumentSources {
     pub sources: Vec<SearchDocumentSource>,
     pub stages: PipelineCorpusStageMetrics,
@@ -289,7 +314,12 @@ pub fn load_search_document_sources(
     let sources = scan
         .entries
         .into_iter()
-        .filter(|entry| entry.kind == ScanEntryKind::Markdown)
+        .filter(|entry| {
+            matches!(
+                entry.kind,
+                ScanEntryKind::Markdown | ScanEntryKind::Attachment
+            )
+        })
         .map(|entry| {
             let relative_path = entry.relative_path;
             let absolute_path = root.canonical_root().join(&relative_path);
@@ -363,8 +393,13 @@ pub(crate) fn process_indexing_queue_batch_impl(
 
         match source_for_queue_item(root, &queue_item) {
             Ok(Some(source)) => {
-                batch_sources.push(source.clone());
-                parse_items.push((queue_item, source));
+                if source.kind == ScanEntryKind::Markdown {
+                    batch_sources.push(source.clone());
+                    parse_items.push((queue_item, source));
+                } else {
+                    metadata_records.push(source.metadata_only_records(queue_item.generation));
+                    successful_item_ids.push(queue_item.item_id);
+                }
             }
             Ok(None) => {
                 successful_item_ids.push(queue_item.item_id);
@@ -650,6 +685,10 @@ mod tests {
     use crate::use_cases::index_rebuild::{
         IndexRebuildError, IndexRebuildPathError, IndexRebuildPaths,
     };
+    use crate::use_cases::read_types::{
+        LivePreviewMetadataItemKind, LivePreviewMetadataSource, LivePreviewMetadataState,
+    };
+    use crate::use_cases::read_vault::VaultReadApi;
     #[cfg(unix)]
     use std::os::unix::fs::symlink;
     use std::path::{Path, PathBuf};
@@ -1252,6 +1291,74 @@ mod tests {
         assert_eq!(
             links[0].resolved_target_file_id.as_deref(),
             Some(lookup_key(Path::new("Target.md")).as_str())
+        );
+    }
+
+    #[test]
+    fn full_rebuild_indexes_root_image_attachment_for_live_preview() {
+        let temp = tempdir().expect("tempdir");
+        let root = fixture_vault(temp.path(), &[]);
+        std::fs::create_dir_all(root.canonical_root().join("my")).expect("my dir");
+        let note_body = "---\ntags:\n  - 원신\n---\n![[스크린샷 2026-04-13 오후 12.47.08.png]]\n";
+        std::fs::write(
+            root.canonical_root().join("my").join("니콜 육성 재료.md"),
+            note_body,
+        )
+        .expect("note");
+        std::fs::write(
+            root.canonical_root()
+                .join("스크린샷 2026-04-13 오후 12.47.08.png"),
+            b"fake png bytes",
+        )
+        .expect("image");
+        let paths = rebuild_paths(temp.path());
+        let metadata = IndexSchemaMetadata::new("sqlite+tantivy", "metadata-v1", "tantivy", 4);
+        let loaded = load_search_document_sources(&root).expect("sources");
+
+        let result = run_full_rebuild_pipeline(
+            &paths,
+            &loaded.sources,
+            &metadata,
+            &IndexingPipelineOptions::serial(),
+        )
+        .expect("rebuild");
+
+        assert_eq!(result.failed_count, 0);
+        assert!(
+            loaded
+                .sources
+                .iter()
+                .any(|source| source.kind == ScanEntryKind::Attachment
+                    && source.relative_path
+                        == PathBuf::from("스크린샷 2026-04-13 오후 12.47.08.png"))
+        );
+        let metadata_store =
+            MetadataStore::open(paths.rebuild_directory.join("metadata.sqlite"), &metadata)
+                .expect("metadata");
+        assert!(
+            metadata_store
+                .lookup_file("스크린샷 2026-04-13 오후 12.47.08.png")
+                .expect("lookup")
+                .is_some()
+        );
+        let tantivy =
+            TantivySearchIndex::open_existing_dir(paths.rebuild_directory.join("tantivy"))
+                .expect("tantivy");
+        let api = VaultReadApi::new(metadata_store, tantivy);
+
+        let page = api
+            .live_preview_metadata(1, "my/니콜 육성 재료.md", note_body)
+            .expect("live preview metadata");
+        let attachment = page
+            .items
+            .iter()
+            .find(|item| item.kind == LivePreviewMetadataItemKind::Attachment)
+            .expect("attachment");
+        assert_eq!(attachment.source, LivePreviewMetadataSource::WikiEmbed);
+        assert_eq!(attachment.state, LivePreviewMetadataState::Resolved);
+        assert_eq!(
+            attachment.resolved_relative_path.as_deref(),
+            Some("스크린샷 2026-04-13 오후 12.47.08.png")
         );
     }
 

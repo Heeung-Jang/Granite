@@ -24,6 +24,7 @@ use crate::adapters::sqlite::{FileRecord, IndexingQueue, IndexingQueueReason, Me
 use crate::adapters::sqlite::{IndexSchemaMetadata, IndexingQueueError, MetadataStore};
 use crate::adapters::tantivy::{TantivyIndexingStageMetrics, TantivySearchIndex};
 use crate::core::paths::PathError;
+use crate::core::scan::ScanEntryKind;
 #[cfg(test)]
 use crate::core::scan::ScanSummary;
 
@@ -206,6 +207,19 @@ pub fn run_full_rebuild_pipeline(
     let batch_size = options.metadata_batch_size;
     let mut pending = Vec::with_capacity(batch_size);
     let mut sqlite_metadata_write_micros = 0;
+
+    for source in sources
+        .iter()
+        .filter(|source| source.kind == ScanEntryKind::Attachment)
+    {
+        pending.push(source.metadata_only_records(metadata.generation));
+        if pending.len() >= batch_size {
+            let start = Instant::now();
+            metadata_store.replace_file_records_batch(&pending)?;
+            sqlite_metadata_write_micros += duration_micros_nonzero(start.elapsed());
+            pending.clear();
+        }
+    }
 
     run_read_parse_pipeline(sources, &options, |timed| {
         let mut records = timed.work_item.metadata_records;
