@@ -112,6 +112,7 @@ enum LivePreviewOverlayRenderer {
                 continue
             }
         }
+        drawImages(renderBlocks, in: textView, dirtyRect: dirtyRect, state: state)
         if state.markerStyle == .obsidian {
             drawListGuideSegments(
                 renderBlocks
@@ -255,6 +256,44 @@ enum LivePreviewOverlayRenderer {
             in: labelRect,
             attributes: attributes,
             dirtyRect: dirtyRect
+        )
+    }
+
+    private static func drawImages(
+        _ renderBlocks: [RenderBlock],
+        in textView: MarkdownInteractionTextView,
+        dirtyRect: NSRect,
+        state: LivePreviewOverlayState
+    ) {
+        guard state.drawsLivePreviewChrome else {
+            return
+        }
+        for renderBlock in renderBlocks where renderBlock.block.kind == .embed {
+            guard !renderBlock.block.sourceRange.nsRange.intersectsOrContainsCaret(state.revealRange),
+                  let entry = textView.livePreviewImageSnapshot.entry(intersecting: renderBlock.block.sourceRange),
+                  let lineRect = unionLineRect(for: renderBlock.block.sourceRange.nsRange, in: textView)
+            else {
+                continue
+            }
+            let imageRect = imageRect(for: entry, in: lineRect, textView: textView)
+            guard imageRect.intersects(dirtyRect) else {
+                continue
+            }
+            entry.image.draw(in: imageRect, from: .zero, operation: .sourceOver, fraction: 1)
+        }
+    }
+
+    private static func imageRect(
+        for entry: LivePreviewImageRenderEntry,
+        in lineRect: NSRect,
+        textView: NSTextView
+    ) -> NSRect {
+        let inset = scaled(6, scale: overlayScale(for: textView))
+        return NSRect(
+            x: lineRect.minX,
+            y: lineRect.minY + inset,
+            width: min(entry.displaySize.width, max(1, lineRect.width)),
+            height: entry.displaySize.height
         )
     }
 

@@ -25,6 +25,7 @@ enum LivePreviewRenderer {
         revealRange: NSRange? = nil,
         linkStyleMap: LivePreviewLinkStyleMap = LivePreviewLinkStyleMap(),
         embedPreviewMap: LivePreviewEmbedPreviewMap = LivePreviewEmbedPreviewMap(),
+        imageSnapshot: LivePreviewImageRenderSnapshot = .empty,
         syntaxSnapshot: LivePreviewCodeFenceSyntaxSnapshot = .empty,
         markerStyle: LivePreviewMarkerStyle = .defaultValue,
         fontSet: LivePreviewFontSet = LivePreviewTheme.defaultFontSet,
@@ -80,6 +81,7 @@ enum LivePreviewRenderer {
             revealRange: resolvedRevealRange,
             linkStyleMap: linkStyleMap,
             embedPreviewMap: embedPreviewMap,
+            imageSnapshot: imageSnapshot,
             syntaxSnapshot: syntaxSnapshot,
             markerStyle: markerStyle,
             fontSet: fontSet,
@@ -151,6 +153,7 @@ enum LivePreviewRenderer {
         revealRange: NSRange,
         linkStyleMap: LivePreviewLinkStyleMap,
         embedPreviewMap: LivePreviewEmbedPreviewMap,
+        imageSnapshot: LivePreviewImageRenderSnapshot,
         syntaxSnapshot: LivePreviewCodeFenceSyntaxSnapshot,
         markerStyle: LivePreviewMarkerStyle,
         fontSet: LivePreviewFontSet,
@@ -223,6 +226,15 @@ enum LivePreviewRenderer {
                 visibleRange: visibleRange,
                 revealRange: revealRange,
                 markerStyle: markerStyle
+            )
+            applyImagePresentationAttributes(
+                block,
+                preview: embedPreview,
+                imageSnapshot: imageSnapshot,
+                plan: plan,
+                visibleRange: visibleRange,
+                revealRange: revealRange,
+                scale: scale
             )
         }
     }
@@ -593,6 +605,43 @@ enum LivePreviewRenderer {
             .foregroundColor: color,
             .backgroundColor: LivePreviewTheme.embedBackgroundColor
         ]
+    }
+
+    private static func applyImagePresentationAttributes(
+        _ block: LivePreviewBlockSpan,
+        preview: LivePreviewEmbedPreview?,
+        imageSnapshot: LivePreviewImageRenderSnapshot,
+        plan: LivePreviewAttributePlan,
+        visibleRange: NSRange,
+        revealRange: NSRange,
+        scale: Double
+    ) {
+        guard case .embed = block.kind,
+              let preview,
+              let entry = imageSnapshot.entry(intersecting: preview.span.sourceRange),
+              !block.sourceRange.nsRange.intersectsOrContainsCaret(revealRange)
+        else {
+            return
+        }
+        let blockRange = NSIntersectionRange(block.sourceRange.nsRange, visibleRange)
+        guard blockRange.length > 0 else {
+            return
+        }
+        plan.addAttributes([
+            .foregroundColor: NSColor.clear,
+            .backgroundColor: NSColor.clear,
+            .paragraphStyle: imageParagraphStyle(height: entry.displaySize.height, scale: scale)
+        ], range: blockRange)
+    }
+
+    private static func imageParagraphStyle(height: CGFloat, scale: Double) -> NSParagraphStyle {
+        let style = NSMutableParagraphStyle()
+        style.lineBreakMode = .byWordWrapping
+        style.minimumLineHeight = max(1, height + 16 * CGFloat(scale))
+        style.maximumLineHeight = style.minimumLineHeight
+        style.paragraphSpacing = 12 * CGFloat(scale)
+        style.paragraphSpacingBefore = 8 * CGFloat(scale)
+        return style
     }
 
     private static func applyInlineAttributes(

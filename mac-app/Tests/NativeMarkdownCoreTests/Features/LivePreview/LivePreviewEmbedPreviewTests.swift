@@ -80,6 +80,7 @@ func livePreviewEmbedPreviewMapConsumesGateStatesWithoutMarkdownLinks() {
     let blocks = LivePreviewParser.parse(source).blocks.filter { $0.kind == .embed }
 
     #expect(map.preview(for: blocks[0])?.status == .imageReady)
+    #expect(map.preview(for: blocks[0])?.previewInfo?.url.path == "/tmp/vault/image.png")
     #expect(map.preview(for: blocks[0])?.span.requestedSize == LivePreviewEmbedSize(width: 100))
     #expect(map.preview(for: blocks[1])?.status == .blocked(.missing))
     #expect(map.preview(for: blocks[2])?.status == .nonImage)
@@ -128,6 +129,7 @@ func livePreviewEmbedPreviewMapKeepsBlockEmbedOrderAfterFrontmatterAndInlineImag
     #expect(plan.referenceIDs == [references[1].id])
     #expect(map.preview(for: blocks[0])?.span.rawTarget == "block.png")
     #expect(map.preview(for: blocks[0])?.status == .imageReady)
+    #expect(map.preview(for: blocks[0])?.previewInfo?.pixelWidth == 320)
     #expect(map.preview(for: blocks[0])?.span.requestedSize == LivePreviewEmbedSize(width: 100))
 }
 

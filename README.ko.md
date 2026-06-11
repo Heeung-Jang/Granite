@@ -143,6 +143,7 @@ swift run --package-path mac-app Granite --smoke-test
 swift run --package-path mac-app Granite --engine-smoke-test
 swift run --package-path mac-app Granite --live-preview-probe
 swift run --package-path mac-app Granite --live-preview-style-probe
+swift run --package-path mac-app Granite --live-preview-image-probe
 swift run --package-path mac-app Granite --editor-bridge-probe
 swift run --package-path mac-app Granite --workspace-tabs-probe
 swift run --package-path mac-app Granite --startup-vault-restore-probe
@@ -157,6 +158,7 @@ Foundation Models performance probe는 개인 vault를 사용하는 수동 bench
 ```sh
 codesign --verify --deep --strict dist/Granite.app
 dist/Granite.app/Contents/MacOS/Granite --live-preview-style-probe
+dist/Granite.app/Contents/MacOS/Granite --live-preview-image-probe
 dist/Granite.app/Contents/MacOS/Granite --editor-bridge-probe
 dist/Granite.app/Contents/MacOS/Granite --foundation-models-smoke-probe
 dist/Granite.app/Contents/MacOS/Granite --foundation-models-performance-probe --vault "/path/to/your/vault"
@@ -188,5 +190,7 @@ Granite는 GNU Affero General Public License v3.0 only 조건으로 배포됩니
 - 사용자의 note, vault 구조, summary, index, graph, recovery 데이터에 대한 소유권과 통제권은 사용자에게 있습니다.
 - 검색 인덱싱, 그래프 계산, Live Preview 렌더링은 로컬 머신에서 처리됩니다.
 - 사용자의 Markdown source를 변환하거나 import하지 않고, 기존 파일을 그대로 다룹니다.
+- 로컬 이미지 첨부는 Markdown 파일을 변경하지 않고 Live Preview에서 렌더링됩니다.
+- 원격 이미지 embed는 설정이 켜져 있을 때 Live Preview에서 로드될 수 있습니다. Granite는 메모리 전용 이미지 캐시만 사용하며 가져온 원격 이미지 데이터를 디스크에 저장하지 않습니다.
+- 안전하지 않은 로컬 참조와 지원하지 않는 URL scheme은 비활성 상태로 유지됩니다.
 - 앱이 생성하는 index, graph, recovery 데이터는 로컬 앱 전용 위치에서 관리합니다.
-- remote attachment와 unsafe local reference는 inert 상태로 남기며, preview 목적으로 원격 콘텐츠를 가져오지 않습니다.

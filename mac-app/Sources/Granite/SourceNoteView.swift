@@ -43,6 +43,7 @@ struct SourceNoteView: View {
     @State private var propertyDraft: FilePropertyDraft?
     private let filePropertyTypeStore = UserDefaultsFilePropertyTypeStore()
     @AppStorage(LivePreviewMarkerStyle.storageKey) private var markerStyleRaw = LivePreviewMarkerStyle.defaultValue.rawValue
+    @AppStorage(LivePreviewRemoteImagePolicy.storageKey) private var remoteImagesEnabled = LivePreviewRemoteImagePolicy.defaultValue.isEnabled
 
     init(
         vaultURL: URL,
@@ -81,6 +82,8 @@ struct SourceNoteView: View {
                         livePreviewMode: livePreviewMode,
                         linkStyleMap: livePreviewLinkStyleMap,
                         embedPreviewMap: livePreviewEmbedPreviewMap,
+                        vaultURL: vaultURL,
+                        remoteImagesEnabled: remoteImagesEnabled,
                         markerStyle: livePreviewMarkerStyle,
                         documentTitle: file.displayName,
                         fontSet: editorFontSettings.fontSet,

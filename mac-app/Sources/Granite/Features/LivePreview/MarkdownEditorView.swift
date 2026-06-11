@@ -15,6 +15,8 @@ struct MarkdownEditorView: NSViewRepresentable {
     var livePreviewMode: LivePreviewMode = .livePreview
     var linkStyleMap = LivePreviewLinkStyleMap()
     var embedPreviewMap = LivePreviewEmbedPreviewMap()
+    var vaultURL: URL?
+    var remoteImagesEnabled = LivePreviewRemoteImagePolicy.defaultValue.isEnabled
     var markerStyle: LivePreviewMarkerStyle = .defaultValue
     var documentTitle: String?
     var fontSet: LivePreviewFontSet = LivePreviewTheme.defaultFontSet
@@ -31,6 +33,8 @@ struct MarkdownEditorView: NSViewRepresentable {
             livePreviewMode: livePreviewMode,
             linkStyleMap: linkStyleMap,
             embedPreviewMap: embedPreviewMap,
+            vaultURL: vaultURL,
+            remoteImagesEnabled: remoteImagesEnabled,
             markerStyle: markerStyle,
             documentTitle: documentTitle,
             fontSet: fontSet,
@@ -79,6 +83,8 @@ struct MarkdownEditorView: NSViewRepresentable {
             livePreviewMode: livePreviewMode,
             linkStyleMap: linkStyleMap,
             embedPreviewMap: embedPreviewMap,
+            vaultURL: vaultURL,
+            remoteImagesEnabled: remoteImagesEnabled,
             markerStyle: markerStyle,
             documentTitle: documentTitle,
             fontSet: fontSet,
@@ -133,6 +139,7 @@ struct MarkdownEditorView: NSViewRepresentable {
             textView.interactionDelegate = nil
         }
         coordinator.textView = nil
+        coordinator.cancelImageRendering()
     }
 
     @MainActor
@@ -142,6 +149,8 @@ struct MarkdownEditorView: NSViewRepresentable {
         private var livePreviewMode: LivePreviewMode
         private var linkStyleMap: LivePreviewLinkStyleMap
         private var embedPreviewMap: LivePreviewEmbedPreviewMap
+        private var vaultURL: URL?
+        private var remoteImagesEnabled: Bool
         private var markerStyle: LivePreviewMarkerStyle
         private var documentTitle: String?
         private var fontSet: LivePreviewFontSet
@@ -155,6 +164,7 @@ struct MarkdownEditorView: NSViewRepresentable {
         private var previousActiveDecorationRange: NSRange?
         private var previousActiveDecorationDocumentLength: Int?
         private let syntaxHighlightController = LivePreviewCodeFenceSyntaxController()
+        private let imageController = LivePreviewImageController()
         weak var textView: NSTextView?
         var isApplyingAppKitChange = false
 
@@ -164,6 +174,8 @@ struct MarkdownEditorView: NSViewRepresentable {
             livePreviewMode: LivePreviewMode = .livePreview,
             linkStyleMap: LivePreviewLinkStyleMap = LivePreviewLinkStyleMap(),
             embedPreviewMap: LivePreviewEmbedPreviewMap = LivePreviewEmbedPreviewMap(),
+            vaultURL: URL? = nil,
+            remoteImagesEnabled: Bool = LivePreviewRemoteImagePolicy.defaultValue.isEnabled,
             markerStyle: LivePreviewMarkerStyle = .defaultValue,
             documentTitle: String? = nil,
             fontSet: LivePreviewFontSet = LivePreviewTheme.defaultFontSet,
@@ -176,6 +188,8 @@ struct MarkdownEditorView: NSViewRepresentable {
             self.livePreviewMode = livePreviewMode
             self.linkStyleMap = linkStyleMap
             self.embedPreviewMap = embedPreviewMap
+            self.vaultURL = vaultURL
+            self.remoteImagesEnabled = remoteImagesEnabled
             self.markerStyle = markerStyle
             self.documentTitle = documentTitle
             self.fontSet = fontSet
@@ -198,6 +212,8 @@ struct MarkdownEditorView: NSViewRepresentable {
             livePreviewMode: LivePreviewMode,
             linkStyleMap: LivePreviewLinkStyleMap,
             embedPreviewMap: LivePreviewEmbedPreviewMap,
+            vaultURL: URL? = nil,
+            remoteImagesEnabled: Bool = LivePreviewRemoteImagePolicy.defaultValue.isEnabled,
             markerStyle: LivePreviewMarkerStyle,
             documentTitle: String?,
             fontSet: LivePreviewFontSet = LivePreviewTheme.defaultFontSet,
@@ -216,6 +232,8 @@ struct MarkdownEditorView: NSViewRepresentable {
             self.livePreviewMode = livePreviewMode
             self.linkStyleMap = linkStyleMap
             self.embedPreviewMap = embedPreviewMap
+            self.vaultURL = vaultURL
+            self.remoteImagesEnabled = remoteImagesEnabled
             self.markerStyle = markerStyle
             self.documentTitle = documentTitle
             self.fontSet = fontSet
@@ -360,11 +378,27 @@ struct MarkdownEditorView: NSViewRepresentable {
                 revealRange: textView.selectedRange(),
                 linkStyleMap: linkStyleMap,
                 embedPreviewMap: embedPreviewMap,
+                imageSnapshot: (textView as? MarkdownInteractionTextView)?.livePreviewImageSnapshot ?? .empty,
                 syntaxSnapshot: syntaxSnapshot,
                 markerStyle: markerStyle,
                 fontSet: fontSet,
                 scale: appContentZoomScale
             )
+            if let textView = textView as? MarkdownInteractionTextView {
+                imageController.update(
+                    textView: textView,
+                    embedPreviewMap: embedPreviewMap,
+                    vaultURL: vaultURL,
+                    remotePolicy: LivePreviewRemoteImagePolicy(isEnabled: remoteImagesEnabled),
+                    livePreviewMode: livePreviewMode,
+                    scale: appContentZoomScale
+                ) { [weak self, weak textView] in
+                    guard let self, let textView else {
+                        return
+                    }
+                    self.scheduleLivePreviewDecoration(in: textView)
+                }
+            }
             if tracksActiveReveal && result.mode == "live-preview" {
                 self.previousActiveDecorationRange = currentActiveDecorationRange
                 self.previousActiveDecorationDocumentLength = documentLength
@@ -425,6 +459,10 @@ struct MarkdownEditorView: NSViewRepresentable {
         func resetLivePreviewRevealState() {
             previousActiveDecorationRange = nil
             previousActiveDecorationDocumentLength = nil
+        }
+
+        func cancelImageRendering() {
+            imageController.cancelAll()
         }
 
         private func validPreviousActiveDecorationRange(forDocumentLength documentLength: Int) -> NSRange? {
@@ -562,6 +600,11 @@ final class MarkdownInteractionTextView: NSTextView, NSTextFieldDelegate {
         }
     }
     private(set) var livePreviewOverlayState = LivePreviewOverlayState()
+    var livePreviewImageSnapshot = LivePreviewImageRenderSnapshot.empty {
+        didSet {
+            needsDisplay = true
+        }
+    }
     private var livePreviewOverlaySourceVersion = 0
     private var tableCellMenuTarget: LivePreviewTableCell?
     private(set) var tableCellEditor: NSTextField?

@@ -5,6 +5,7 @@ import SwiftUI
 struct GraniteSettingsView: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var editorFontSettings: EditorFontSettings
+    @AppStorage(LivePreviewRemoteImagePolicy.storageKey) private var remoteImagesEnabled = LivePreviewRemoteImagePolicy.defaultValue.isEnabled
     @State private var activeFontRole: FontPreferenceRole?
     @State private var fontPanelCoordinator = FontPanelCoordinator()
 
@@ -47,6 +48,13 @@ struct GraniteSettingsView: View {
                     chooseAction: chooseMonospaceFont,
                     resetAction: { editorFontSettings.resetMonospaceFont() }
                 )
+            }
+
+            Section("Live Preview") {
+                Toggle("Load remote images", isOn: $remoteImagesEnabled)
+                Text("Remote image embeds may contact external servers. Granite keeps fetched image data in memory only.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)

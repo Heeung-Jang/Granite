@@ -139,6 +139,7 @@ swift run --package-path mac-app Granite --smoke-test
 swift run --package-path mac-app Granite --engine-smoke-test
 swift run --package-path mac-app Granite --live-preview-probe
 swift run --package-path mac-app Granite --live-preview-style-probe
+swift run --package-path mac-app Granite --live-preview-image-probe
 swift run --package-path mac-app Granite --editor-bridge-probe
 swift run --package-path mac-app Granite --workspace-tabs-probe
 swift run --package-path mac-app Granite --startup-vault-restore-probe
@@ -153,6 +154,7 @@ Packaged app verification:
 ```sh
 codesign --verify --deep --strict dist/Granite.app
 dist/Granite.app/Contents/MacOS/Granite --live-preview-style-probe
+dist/Granite.app/Contents/MacOS/Granite --live-preview-image-probe
 dist/Granite.app/Contents/MacOS/Granite --editor-bridge-probe
 dist/Granite.app/Contents/MacOS/Granite --foundation-models-smoke-probe
 dist/Granite.app/Contents/MacOS/Granite --foundation-models-performance-probe --vault "/path/to/your/vault"
@@ -185,4 +187,6 @@ Granite is licensed under the GNU Affero General Public License v3.0 only. See [
 - Search indexing, graph computation, and Live Preview rendering run locally on your machine.
 - Granite does not import or transform your Markdown source; it works directly with existing files.
 - App-generated index, graph, and recovery data are managed in local app-owned storage.
-- Remote attachments and unsafe local references remain inert; Granite does not fetch remote content for preview rendering.
+- Local image attachments render in Live Preview without changing Markdown files.
+- Remote image embeds can be loaded in Live Preview when the setting is enabled. Granite uses memory-only image caching and does not persist fetched remote image data to disk.
+- Unsafe local references and unsupported URL schemes remain inert.

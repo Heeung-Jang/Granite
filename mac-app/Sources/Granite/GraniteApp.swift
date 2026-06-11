@@ -166,6 +166,15 @@ struct GraniteApp: App {
             Foundation.exit(report.summary.passed ? 0 : 2)
         }
 
+        if CommandLine.arguments.contains("--live-preview-image-probe") {
+            Task {
+                let report = await LivePreviewImageProbe.run()
+                print(LivePreviewImageProbe.encodedReport(report))
+                Foundation.exit(report.summary.passed ? 0 : 2)
+            }
+            dispatchMain()
+        }
+
         if CommandLine.arguments.contains("--font-settings-probe") {
             let report = FontSettingsProbe.run()
             print(FontSettingsProbe.encodedReport(report))

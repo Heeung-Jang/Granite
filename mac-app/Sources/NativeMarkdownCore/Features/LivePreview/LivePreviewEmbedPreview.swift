@@ -50,10 +50,16 @@ public enum LivePreviewEmbedPreviewStatus: Equatable, Sendable {
 public struct LivePreviewEmbedPreview: Equatable, Sendable {
     public var span: LivePreviewEmbedSpan
     public var status: LivePreviewEmbedPreviewStatus
+    public var previewInfo: AttachmentPreviewInfo?
 
-    public init(span: LivePreviewEmbedSpan, status: LivePreviewEmbedPreviewStatus) {
+    public init(
+        span: LivePreviewEmbedSpan,
+        status: LivePreviewEmbedPreviewStatus,
+        previewInfo: AttachmentPreviewInfo? = nil
+    ) {
         self.span = span
         self.status = status
+        self.previewInfo = previewInfo
     }
 }
 
@@ -180,10 +186,15 @@ public struct LivePreviewEmbedPreviewMap: Equatable, Sendable {
         var previews: [LivePreviewSourceRange: LivePreviewEmbedPreview] = [:]
 
         for pair in previewPairs {
-            let status = previewStatesByID[pair.referenceID].map { state in
+            let state = previewStatesByID[pair.referenceID]
+            let status = state.map { state in
                 Self.status(for: state)
             } ?? .pending
-            previews[pair.blockRange] = LivePreviewEmbedPreview(span: pair.span, status: status)
+            previews[pair.blockRange] = LivePreviewEmbedPreview(
+                span: pair.span,
+                status: status,
+                previewInfo: state.flatMap(Self.previewInfo)
+            )
         }
         self.init(previewsByBlockRange: previews)
     }
@@ -199,6 +210,13 @@ public struct LivePreviewEmbedPreviewMap: Equatable, Sendable {
         return previewsByBlockRange[block.sourceRange]
     }
 
+    public func previews(intersecting range: NSRange) -> [LivePreviewEmbedPreview] {
+        previewsByBlockRange
+            .filter { NSIntersectionRange($0.key.nsRange, range).length > 0 }
+            .sorted { $0.key.location < $1.key.location }
+            .map(\.value)
+    }
+
     private static func status(for state: AttachmentPreviewState) -> LivePreviewEmbedPreviewStatus {
         switch state {
         case .eligible:
@@ -211,6 +229,13 @@ public struct LivePreviewEmbedPreviewMap: Equatable, Sendable {
                 .blocked(reason)
             }
         }
+    }
+
+    private static func previewInfo(for state: AttachmentPreviewState) -> AttachmentPreviewInfo? {
+        if case .eligible(let info) = state {
+            return info
+        }
+        return nil
     }
 }
 
