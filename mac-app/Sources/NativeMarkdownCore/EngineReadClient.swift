@@ -77,6 +77,10 @@ struct EngineReadSymbols: @unchecked Sendable {
         UnsafePointer<CChar>?,
         UnsafePointer<CChar>?
     ) -> EngineReadResultBuffer
+    typealias CheckIndexFreshnessFunction = @convention(c) (
+        UnsafePointer<CChar>?,
+        UnsafePointer<CChar>?
+    ) -> EngineReadResultBuffer
     typealias FileTreeFunction = @convention(c) (
         UnsafeMutableRawPointer?,
         UInt64,
@@ -119,6 +123,7 @@ struct EngineReadSymbols: @unchecked Sendable {
     let close: CloseFunction
     let freeResult: FreeResultFunction
     let rebuildIndex: RebuildIndexFunction
+    let checkIndexFreshness: CheckIndexFreshnessFunction
     let fileTree: FileTreeFunction
     let search: SearchFunction
     let inspectorPanel: InspectorPanelFunction
@@ -130,6 +135,7 @@ struct EngineReadSymbols: @unchecked Sendable {
         close: @escaping CloseFunction,
         freeResult: @escaping FreeResultFunction,
         rebuildIndex: @escaping RebuildIndexFunction,
+        checkIndexFreshness: @escaping CheckIndexFreshnessFunction,
         fileTree: @escaping FileTreeFunction,
         search: @escaping SearchFunction,
         inspectorPanel: @escaping InspectorPanelFunction,
@@ -140,6 +146,7 @@ struct EngineReadSymbols: @unchecked Sendable {
         self.close = close
         self.freeResult = freeResult
         self.rebuildIndex = rebuildIndex
+        self.checkIndexFreshness = checkIndexFreshness
         self.fileTree = fileTree
         self.search = search
         self.inspectorPanel = inspectorPanel
@@ -206,6 +213,40 @@ public final class EngineReadClient: EngineReading, @unchecked Sendable {
         if let error = try errorPayload(from: data) {
             throw EngineReadClientError.engine(error)
         }
+    }
+
+    public static func checkIndexFreshness(
+        vaultURL: URL,
+        metadataURL: URL
+    ) throws -> EngineIndexFreshnessReport {
+        try checkIndexFreshness(
+            vaultURL: vaultURL,
+            metadataURL: metadataURL,
+            libraryPath: EngineLibraryPath.defaultPath(),
+            symbolLoader: EngineReadClient.loadSymbols
+        )
+    }
+
+    static func checkIndexFreshness(
+        vaultURL: URL,
+        metadataURL: URL,
+        libraryPath: String?,
+        symbolLoader: SymbolLoader
+    ) throws -> EngineIndexFreshnessReport {
+        let loaded = try symbolLoader(libraryPath)
+        defer {
+            if let libraryHandle = loaded.libraryHandle {
+                dlclose(libraryHandle)
+            }
+        }
+
+        let buffer = vaultURL.path.withCString { vaultPath in
+            metadataURL.path.withCString { metadataPath in
+                loaded.symbols.checkIndexFreshness(vaultPath, metadataPath)
+            }
+        }
+        let data = try data(from: buffer, free: loaded.symbols.freeResult)
+        return try decode(data, EngineReadBufferDecoder.decodeIndexFreshness)
     }
 
     public static func open(
@@ -487,6 +528,11 @@ public final class EngineReadClient: EngineReading, @unchecked Sendable {
                     handle,
                     "engine_read_rebuild_index",
                     as: EngineReadSymbols.RebuildIndexFunction.self
+                ),
+                checkIndexFreshness: loadSymbol(
+                    handle,
+                    "engine_read_check_index_freshness",
+                    as: EngineReadSymbols.CheckIndexFreshnessFunction.self
                 ),
                 fileTree: loadSymbol(handle, "engine_read_file_tree", as: EngineReadSymbols.FileTreeFunction.self),
                 search: loadSymbol(handle, "engine_read_search", as: EngineReadSymbols.SearchFunction.self),

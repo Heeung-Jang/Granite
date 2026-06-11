@@ -17,6 +17,7 @@ public enum EngineReadABI {
         public static let graphEdge: UInt32 = 18
         public static let livePreviewMetadata: UInt32 = 19
         public static let syntaxToken: UInt32 = 20
+        public static let indexFreshness: UInt32 = 21
     }
 
     public enum State {
@@ -129,6 +130,58 @@ public struct EngineSyntaxHighlightResult: Equatable, Sendable {
     }
 }
 
+public struct EngineIndexFreshnessReport: Equatable, Sendable {
+    public let stale: Bool
+    public let unchanged: UInt64
+    public let created: UInt64
+    public let modified: UInt64
+    public let deleted: UInt64
+    public let incomplete: UInt64
+    public let currentMarkdownFiles: UInt64
+    public let indexedMarkdownFiles: UInt64
+    public let currentRowsScanned: UInt64
+    public let storedRowsRead: UInt64
+    public let scanMicros: UInt64
+    public let sqliteReadMicros: UInt64
+    public let compareMicros: UInt64
+    public let elapsedMicros: UInt64
+    public let rebuildScheduled: Bool
+
+    public init(
+        stale: Bool,
+        unchanged: UInt64,
+        created: UInt64,
+        modified: UInt64,
+        deleted: UInt64,
+        incomplete: UInt64,
+        currentMarkdownFiles: UInt64,
+        indexedMarkdownFiles: UInt64,
+        currentRowsScanned: UInt64,
+        storedRowsRead: UInt64,
+        scanMicros: UInt64,
+        sqliteReadMicros: UInt64,
+        compareMicros: UInt64,
+        elapsedMicros: UInt64,
+        rebuildScheduled: Bool
+    ) {
+        self.stale = stale
+        self.unchanged = unchanged
+        self.created = created
+        self.modified = modified
+        self.deleted = deleted
+        self.incomplete = incomplete
+        self.currentMarkdownFiles = currentMarkdownFiles
+        self.indexedMarkdownFiles = indexedMarkdownFiles
+        self.currentRowsScanned = currentRowsScanned
+        self.storedRowsRead = storedRowsRead
+        self.scanMicros = scanMicros
+        self.sqliteReadMicros = sqliteReadMicros
+        self.compareMicros = compareMicros
+        self.elapsedMicros = elapsedMicros
+        self.rebuildScheduled = rebuildScheduled
+    }
+}
+
 public enum EngineReadBufferDecoder {
     public static func decodeHeader(_ data: Data) throws -> EngineReadResultHeader {
         try data.withUnsafeBytes { try decodeHeader($0) }
@@ -237,6 +290,16 @@ public enum EngineReadBufferDecoder {
         _ buffer: UnsafeRawBufferPointer
     ) throws -> EngineSyntaxHighlightResult {
         try EngineReadBinaryDecoder(buffer: buffer).decodeSyntaxHighlight()
+    }
+
+    public static func decodeIndexFreshness(_ data: Data) throws -> EngineIndexFreshnessReport {
+        try data.withUnsafeBytes { try decodeIndexFreshness($0) }
+    }
+
+    public static func decodeIndexFreshness(
+        _ buffer: UnsafeRawBufferPointer
+    ) throws -> EngineIndexFreshnessReport {
+        try EngineReadBinaryDecoder(buffer: buffer).decodeIndexFreshness()
     }
 }
 
@@ -453,6 +516,30 @@ private struct EngineReadBinaryDecoder {
             )
         }
         return EngineSyntaxHighlightResult(requestID: header.requestID, tokens: tokens)
+    }
+
+    func decodeIndexFreshness() throws -> EngineIndexFreshnessReport {
+        let header = try validatedHeader(rowKind: EngineReadABI.RowKind.indexFreshness, rowSize: 120)
+        guard let offset = try rows(header: header, rowSize: 120).first else {
+            throw EngineReadDecodeError.bufferTooShort(required: 120, actual: 0)
+        }
+        return EngineIndexFreshnessReport(
+            stale: try uint32(at: offset) != 0,
+            unchanged: try uint64(at: offset + 8),
+            created: try uint64(at: offset + 16),
+            modified: try uint64(at: offset + 24),
+            deleted: try uint64(at: offset + 32),
+            incomplete: try uint64(at: offset + 40),
+            currentMarkdownFiles: try uint64(at: offset + 48),
+            indexedMarkdownFiles: try uint64(at: offset + 56),
+            currentRowsScanned: try uint64(at: offset + 64),
+            storedRowsRead: try uint64(at: offset + 72),
+            scanMicros: try uint64(at: offset + 80),
+            sqliteReadMicros: try uint64(at: offset + 88),
+            compareMicros: try uint64(at: offset + 96),
+            elapsedMicros: try uint64(at: offset + 104),
+            rebuildScheduled: try uint32(at: offset + 112) != 0
+        )
     }
 
     private func validatedHeader(rowKind: UInt32, rowSize: UInt32) throws -> EngineReadResultHeader {

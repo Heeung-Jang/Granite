@@ -83,6 +83,8 @@ pub(crate) fn create_projection_indexes(connection: &Connection) -> MetadataStor
         CREATE INDEX IF NOT EXISTS idx_files_relative_path ON files(relative_path);
         CREATE INDEX IF NOT EXISTS idx_files_kind_status_generation
             ON files(kind, status, generation);
+        CREATE INDEX IF NOT EXISTS idx_files_kind_relative_path
+            ON files(kind, relative_path);
         CREATE INDEX IF NOT EXISTS idx_links_source_file_id ON links(source_file_id);
         CREATE INDEX IF NOT EXISTS idx_links_resolved_target_file_id
             ON links(resolved_target_file_id);
@@ -109,6 +111,7 @@ pub(crate) fn drop_projection_indexes(connection: &Connection) -> MetadataStoreR
         "
         DROP INDEX IF EXISTS idx_files_relative_path;
         DROP INDEX IF EXISTS idx_files_kind_status_generation;
+        DROP INDEX IF EXISTS idx_files_kind_relative_path;
         DROP INDEX IF EXISTS idx_links_source_file_id;
         DROP INDEX IF EXISTS idx_links_resolved_target_file_id;
         DROP INDEX IF EXISTS idx_links_resolved_pair;

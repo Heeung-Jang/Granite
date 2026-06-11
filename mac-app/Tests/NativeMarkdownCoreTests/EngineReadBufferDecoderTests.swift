@@ -413,6 +413,43 @@ struct ReadTestBufferBuilder {
         rowCount += 1
     }
 
+    mutating func appendIndexFreshness(
+        stale: Bool,
+        unchanged: UInt64,
+        created: UInt64,
+        modified: UInt64,
+        deleted: UInt64,
+        incomplete: UInt64,
+        currentMarkdownFiles: UInt64,
+        indexedMarkdownFiles: UInt64,
+        currentRowsScanned: UInt64,
+        storedRowsRead: UInt64,
+        scanMicros: UInt64,
+        sqliteReadMicros: UInt64,
+        compareMicros: UInt64,
+        elapsedMicros: UInt64,
+        rebuildScheduled: Bool
+    ) {
+        appendUInt32(stale ? 1 : 0)
+        appendUInt32(0)
+        appendUInt64(unchanged)
+        appendUInt64(created)
+        appendUInt64(modified)
+        appendUInt64(deleted)
+        appendUInt64(incomplete)
+        appendUInt64(currentMarkdownFiles)
+        appendUInt64(indexedMarkdownFiles)
+        appendUInt64(currentRowsScanned)
+        appendUInt64(storedRowsRead)
+        appendUInt64(scanMicros)
+        appendUInt64(sqliteReadMicros)
+        appendUInt64(compareMicros)
+        appendUInt64(elapsedMicros)
+        appendUInt32(rebuildScheduled ? 1 : 0)
+        appendUInt32(0)
+        rowCount += 1
+    }
+
     func finish(abiVersion: UInt32 = EngineReadABI.version, rowStride: UInt32) -> Data {
         var data = Data()
         writeUInt32(abiVersion, to: &data)

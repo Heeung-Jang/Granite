@@ -10,6 +10,7 @@ use crate::core::metadata::{
     IndexPropertyValue, LinkProjection, PropertyProjection, PropertyRecord, TagRecord, TagSource,
 };
 use crate::core::scan::ScanEntryKind;
+use crate::use_cases::index_freshness::ReadIndexFreshnessSummary;
 use crate::use_cases::read_graph::{
     LocalGraphEdge, LocalGraphEdgeDirection, LocalGraphNode, LocalGraphNodeKind,
 };
@@ -31,6 +32,7 @@ pub const ENGINE_READ_ROW_KIND_GRAPH_NODE: u32 = 17;
 pub const ENGINE_READ_ROW_KIND_GRAPH_EDGE: u32 = 18;
 pub const ENGINE_READ_ROW_KIND_LIVE_PREVIEW_METADATA: u32 = 19;
 pub const ENGINE_READ_ROW_KIND_SYNTAX_TOKEN: u32 = 20;
+pub const ENGINE_READ_ROW_KIND_INDEX_FRESHNESS: u32 = 21;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -170,6 +172,26 @@ pub struct EngineSyntaxHighlightTokenRow {
     pub token_kind: u32,
     pub start_utf16: u32,
     pub length_utf16: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EngineReadIndexFreshnessRow {
+    pub stale: u32,
+    pub unchanged: u64,
+    pub created: u64,
+    pub modified: u64,
+    pub deleted: u64,
+    pub incomplete: u64,
+    pub current_markdown_files: u64,
+    pub indexed_markdown_files: u64,
+    pub current_rows_scanned: u64,
+    pub stored_rows_read: u64,
+    pub scan_micros: u64,
+    pub sqlite_read_micros: u64,
+    pub compare_micros: u64,
+    pub elapsed_micros: u64,
+    pub rebuild_scheduled: u32,
 }
 
 pub struct EngineReadResultBuilder {
@@ -347,6 +369,28 @@ impl EngineReadSearchHitRow {
             title: builder.push_string(&hit.title),
             snippet: builder.push_string(&hit.snippet),
             rank: hit.rank,
+        }
+    }
+}
+
+impl EngineReadIndexFreshnessRow {
+    pub fn from_summary(summary: &ReadIndexFreshnessSummary) -> Self {
+        Self {
+            stale: u32::from(summary.stale),
+            unchanged: summary.unchanged,
+            created: summary.created,
+            modified: summary.modified,
+            deleted: summary.deleted,
+            incomplete: summary.incomplete,
+            current_markdown_files: summary.current_markdown_files,
+            indexed_markdown_files: summary.indexed_markdown_files,
+            current_rows_scanned: summary.current_rows_scanned,
+            stored_rows_read: summary.stored_rows_read,
+            scan_micros: summary.scan_micros,
+            sqlite_read_micros: summary.sqlite_read_micros,
+            compare_micros: summary.compare_micros,
+            elapsed_micros: summary.elapsed_micros,
+            rebuild_scheduled: u32::from(summary.rebuild_scheduled),
         }
     }
 }

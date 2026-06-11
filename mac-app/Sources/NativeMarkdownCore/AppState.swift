@@ -119,6 +119,7 @@ public final class AppState: ObservableObject {
     @Published public private(set) var indexLocation: AppOwnedIndexLocation?
     @Published public private(set) var readClient: (any EngineReading)?
     @Published public private(set) var readAvailability: ReadAvailability
+    @Published public private(set) var vaultIndexSyncState: VaultIndexSyncState
     @Published public private(set) var readGeneration: UInt64
     @Published public private(set) var recentVaults: [RecentVault]
     @Published public private(set) var workspaceSelection: WorkspaceSelection
@@ -150,6 +151,8 @@ public final class AppState: ObservableObject {
     private let readClientFactory: ReadClientFactory
     private let readIndexRebuilder: any ReadIndexRebuilding
     private let readIndexRecoveryScheduler: any ReadIndexRecoveryScheduling
+    private let readIndexFreshnessChecker: any ReadIndexFreshnessChecking
+    private let readIndexFreshnessScheduler: any ReadIndexFreshnessScheduling
     private let vaultChangeWatcher: any VaultChangeWatching
     private let vaultIndexRefreshScheduler: any VaultIndexRefreshScheduling
     private let vaultIndexRefreshDebounceInterval: TimeInterval
@@ -161,6 +164,7 @@ public final class AppState: ObservableObject {
     private var activeEditorBufferProvider: ActiveEditorBufferProvider?
     private var activeVaultChangeWatch: (any VaultChangeWatch)?
     private var readIndexRecoveryInProgress = false
+    private var readIndexFreshnessCheckInProgress = false
     private var pendingReadIndexRefresh = false
 
     public init(
@@ -178,6 +182,8 @@ public final class AppState: ObservableObject {
         },
         readIndexRebuilder: any ReadIndexRebuilding = EngineReadIndexRebuilder(),
         readIndexRecoveryScheduler: any ReadIndexRecoveryScheduling = BackgroundReadIndexRecoveryScheduler(),
+        readIndexFreshnessChecker: any ReadIndexFreshnessChecking = EngineReadIndexFreshnessChecker(),
+        readIndexFreshnessScheduler: any ReadIndexFreshnessScheduling = BackgroundReadIndexFreshnessScheduler(),
         vaultChangeWatcher: any VaultChangeWatching = FSEventsVaultChangeWatcher(),
         vaultIndexRefreshScheduler: any VaultIndexRefreshScheduling = DispatchVaultIndexRefreshScheduler(),
         vaultIndexRefreshDebounceInterval: TimeInterval = 1.0,
@@ -200,11 +206,14 @@ public final class AppState: ObservableObject {
         self.readClientFactory = readClientFactory
         self.readIndexRebuilder = readIndexRebuilder
         self.readIndexRecoveryScheduler = readIndexRecoveryScheduler
+        self.readIndexFreshnessChecker = readIndexFreshnessChecker
+        self.readIndexFreshnessScheduler = readIndexFreshnessScheduler
         self.vaultChangeWatcher = vaultChangeWatcher
         self.vaultIndexRefreshScheduler = vaultIndexRefreshScheduler
         self.vaultIndexRefreshDebounceInterval = vaultIndexRefreshDebounceInterval
         self.maxRecentVaults = max(1, maxRecentVaults)
         self.readAvailability = .unavailable
+        self.vaultIndexSyncState = .idle
         self.readGeneration = 0
         self.workspaceSelection = .empty
         self.workspaceTabs = []
@@ -259,6 +268,11 @@ public final class AppState: ObservableObject {
         clearAllDirtyWarnings()
         rememberVault(vaultURL)
         startupVaultRestoreStorage.saveSuppressesLastVaultRestore(false)
+        scheduleReadIndexFreshnessCheckIfReady(
+            vaultURL: vaultURL,
+            location: preparedIndexLocation,
+            generation: readOpenGeneration
+        )
     }
 
     public func openRecentVault(_ recentVault: RecentVault) throws {
@@ -289,6 +303,7 @@ public final class AppState: ObservableObject {
         }
 
         let timer = AppTelemetryTimer()
+        vaultIndexSyncState = .updating
         scheduleReadIndexRecovery(
             vaultURL: vaultURL,
             location: location,
@@ -297,6 +312,11 @@ public final class AppState: ObservableObject {
             telemetryTimer: timer
         )
         return true
+    }
+
+    @discardableResult
+    public func retryCurrentVaultIndexSync() -> Bool {
+        requestCurrentVaultIndexRebuild()
     }
 
     @discardableResult
@@ -1504,7 +1524,9 @@ public final class AppState: ObservableObject {
         stopVaultChangeWatcher()
         vaultIndexRefreshScheduler.cancel()
         readIndexRecoveryInProgress = false
+        readIndexFreshnessCheckInProgress = false
         pendingReadIndexRefresh = false
+        vaultIndexSyncState = .idle
         readClient?.close()
         readClient = nil
         readGeneration &+= 1
@@ -1529,6 +1551,118 @@ public final class AppState: ObservableObject {
 
     private func performScheduledVaultIndexRefresh() {
         _ = requestCurrentVaultIndexRebuild()
+    }
+
+    private func scheduleReadIndexFreshnessCheckIfReady(
+        vaultURL: URL,
+        location: AppOwnedIndexLocation,
+        generation: UInt64
+    ) {
+        guard readAvailability == .ready else {
+            return
+        }
+        scheduleReadIndexFreshnessCheck(
+            vaultURL: vaultURL,
+            location: location,
+            generation: generation
+        )
+    }
+
+    private func scheduleReadIndexFreshnessCheck(
+        vaultURL: URL,
+        location: AppOwnedIndexLocation,
+        generation: UInt64
+    ) {
+        guard !readIndexFreshnessCheckInProgress else {
+            return
+        }
+        guard readGeneration == generation,
+              vaultSelection == .selected(vaultURL),
+              indexLocation == location,
+              readAvailability == .ready
+        else {
+            return
+        }
+        if readIndexRecoveryInProgress {
+            vaultIndexSyncState = .updating
+            return
+        }
+
+        readIndexFreshnessCheckInProgress = true
+        vaultIndexSyncState = .checking
+        let timer = AppTelemetryTimer()
+        AppTelemetry.vaultIndexFreshnessStarted(generation: generation)
+        let completionSink = ReadIndexFreshnessCompletionSink(owner: self)
+        readIndexFreshnessScheduler.schedule { [readIndexFreshnessChecker] in
+            Result {
+                try readIndexFreshnessChecker.checkIndexFreshness(
+                    vaultURL: vaultURL,
+                    location: location
+                )
+            }
+        } completion: { [completionSink] result in
+            completionSink.finish(
+                result,
+                vaultURL: vaultURL,
+                location: location,
+                generation: generation,
+                telemetryTimer: timer
+            )
+        }
+    }
+
+    fileprivate func finishReadIndexFreshnessCheck(
+        _ result: Result<EngineIndexFreshnessReport, any Error>,
+        vaultURL: URL,
+        location: AppOwnedIndexLocation,
+        generation: UInt64,
+        telemetryTimer: AppTelemetryTimer
+    ) {
+        guard readGeneration == generation,
+              vaultSelection == .selected(vaultURL),
+              indexLocation == location,
+              readAvailability == .ready
+        else {
+            return
+        }
+
+        readIndexFreshnessCheckInProgress = false
+        switch result {
+        case .success(let report):
+            AppTelemetry.vaultIndexFreshnessCompleted(
+                report: report,
+                result: "success",
+                durationMilliseconds: telemetryTimer.elapsedMilliseconds()
+            )
+            guard report.stale else {
+                vaultIndexSyncState = .idle
+                return
+            }
+
+            vaultIndexSyncState = .updating
+            AppTelemetry.vaultIndexFreshnessRequestedRebuild(
+                generation: generation,
+                created: report.created,
+                modified: report.modified,
+                deleted: report.deleted,
+                incomplete: report.incomplete
+            )
+            if readIndexRecoveryInProgress {
+                return
+            }
+            scheduleReadIndexRecovery(
+                vaultURL: vaultURL,
+                location: location,
+                generation: generation,
+                incrementsGenerationOnSuccess: true,
+                telemetryTimer: AppTelemetryTimer()
+            )
+        case .failure:
+            vaultIndexSyncState = .failed("Index update failed")
+            AppTelemetry.vaultIndexFreshnessFailed(
+                durationMilliseconds: telemetryTimer.elapsedMilliseconds()
+            )
+        }
     }
 
     private func openReadClient(
@@ -1567,10 +1701,12 @@ public final class AppState: ObservableObject {
     ) {
         if readIndexRecoveryInProgress {
             pendingReadIndexRefresh = true
+            vaultIndexSyncState = .updating
             return
         }
 
         readIndexRecoveryInProgress = true
+        vaultIndexSyncState = .updating
         let completionSink = ReadIndexRecoveryCompletionSink(owner: self)
         readIndexRecoveryScheduler.schedule { [readIndexRebuilder] in
             Result {
@@ -1612,6 +1748,7 @@ public final class AppState: ObservableObject {
                 location.tantivyIndexDirectory
             )
             readAvailability = .ready
+            vaultIndexSyncState = .idle
             if incrementsGenerationOnSuccess {
                 readGeneration &+= 1
                 clearFileTreeCreationOverlays()
@@ -1628,6 +1765,7 @@ public final class AppState: ObservableObject {
                 readClient = nil
                 readAvailability = .error(Self.readIndexRecoveryErrorMessage(error))
             }
+            vaultIndexSyncState = .failed("Index update failed")
             if let telemetryTimer {
                 AppTelemetry.vaultCreationCompleted(
                     operation: .indexRebuild,
@@ -1718,6 +1856,30 @@ public final class AppState: ObservableObject {
 private struct ActiveEditorBufferProvider {
     let descriptor: ActiveEditorBufferDescriptor
     let provider: () -> String
+}
+
+private final class ReadIndexFreshnessCompletionSink: @unchecked Sendable {
+    private weak var owner: AppState?
+
+    init(owner: AppState) {
+        self.owner = owner
+    }
+
+    func finish(
+        _ result: Result<EngineIndexFreshnessReport, any Error>,
+        vaultURL: URL,
+        location: AppOwnedIndexLocation,
+        generation: UInt64,
+        telemetryTimer: AppTelemetryTimer
+    ) {
+        owner?.finishReadIndexFreshnessCheck(
+            result,
+            vaultURL: vaultURL,
+            location: location,
+            generation: generation,
+            telemetryTimer: telemetryTimer
+        )
+    }
 }
 
 private final class ReadIndexRecoveryCompletionSink: @unchecked Sendable {

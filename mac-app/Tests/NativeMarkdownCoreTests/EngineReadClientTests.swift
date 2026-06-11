@@ -181,6 +181,51 @@ func engineReadClientWrapsReadFFIMethodsAndErrors() async throws {
     )
     #expect(metadata.outgoingLinks.first?.state == .resolved(FileTreeItem(relativePath: "Target.md")))
 
+    EngineReadClientFakeFFI.freshnessData = {
+        var builder = ReadTestBufferBuilder(rowKind: EngineReadABI.RowKind.indexFreshness)
+        builder.appendIndexFreshness(
+            stale: true,
+            unchanged: 2,
+            created: 3,
+            modified: 5,
+            deleted: 7,
+            incomplete: 11,
+            currentMarkdownFiles: 13,
+            indexedMarkdownFiles: 17,
+            currentRowsScanned: 19,
+            storedRowsRead: 23,
+            scanMicros: 29,
+            sqliteReadMicros: 31,
+            compareMicros: 37,
+            elapsedMicros: 41,
+            rebuildScheduled: true
+        )
+        return builder.finish(rowStride: 120)
+    }
+    let freshness = try EngineReadClient.checkIndexFreshness(
+        vaultURL: URL(filePath: "/tmp/vault"),
+        metadataURL: URL(filePath: "/tmp/metadata-v1/store.sqlite"),
+        libraryPath: "/tmp/libvault_engine.dylib",
+        symbolLoader: { _ in EngineReadClientFakeFFI.loadedSymbols() }
+    )
+    #expect(freshness == EngineIndexFreshnessReport(
+        stale: true,
+        unchanged: 2,
+        created: 3,
+        modified: 5,
+        deleted: 7,
+        incomplete: 11,
+        currentMarkdownFiles: 13,
+        indexedMarkdownFiles: 17,
+        currentRowsScanned: 19,
+        storedRowsRead: 23,
+        scanMicros: 29,
+        sqliteReadMicros: 31,
+        compareMicros: 37,
+        elapsedMicros: 41,
+        rebuildScheduled: true
+    ))
+
     client.close()
     client.close()
     #expect(EngineReadClientFakeFFI.closeCount == 1)
@@ -265,6 +310,9 @@ private enum EngineReadClientFakeFFI {
     nonisolated(unsafe) static var rebuildData: () -> Data = {
         emptyBuffer(rowKind: EngineReadABI.RowKind.openStatus, rowStride: 0)
     }
+    nonisolated(unsafe) static var freshnessData: () -> Data = {
+        emptyBuffer(rowKind: EngineReadABI.RowKind.indexFreshness, rowStride: 0)
+    }
     nonisolated(unsafe) static var closeCount = 0
     nonisolated(unsafe) static var lastSearchMode: UInt32 = 0
     nonisolated(unsafe) static var lastGraphDepth: UInt32 = 0
@@ -281,6 +329,7 @@ private enum EngineReadClientFakeFFI {
         openHandle = handle
         openData = { emptyBuffer(rowKind: EngineReadABI.RowKind.openStatus, rowStride: 0) }
         rebuildData = { emptyBuffer(rowKind: EngineReadABI.RowKind.openStatus, rowStride: 0) }
+        freshnessData = { emptyBuffer(rowKind: EngineReadABI.RowKind.indexFreshness, rowStride: 0) }
         closeCount = 0
         lastSearchMode = 0
         lastGraphDepth = 0
@@ -306,6 +355,9 @@ private enum EngineReadClientFakeFFI {
                 },
                 rebuildIndex: { vaultPath, dataPath, rebuildPath in
                     EngineReadClientFakeFFI.rebuildIndex(vaultPath, dataPath, rebuildPath)
+                },
+                checkIndexFreshness: { vaultPath, metadataPath in
+                    EngineReadClientFakeFFI.checkIndexFreshness(vaultPath, metadataPath)
                 },
                 fileTree: { handle, requestID, offset, limit in
                     EngineReadClientFakeFFI.fileTree(handle, requestID, offset, limit)
@@ -346,6 +398,13 @@ private enum EngineReadClientFakeFFI {
         _ rebuildPath: UnsafePointer<CChar>?
     ) -> EngineReadResultBuffer {
         ffiBuffer(rebuildData())
+    }
+
+    static func checkIndexFreshness(
+        _ vaultPath: UnsafePointer<CChar>?,
+        _ metadataPath: UnsafePointer<CChar>?
+    ) -> EngineReadResultBuffer {
+        ffiBuffer(freshnessData())
     }
 
     static func free(_ buffer: EngineReadResultBuffer) {

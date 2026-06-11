@@ -5,9 +5,14 @@ use std::ptr::NonNull;
 use crate::ffi::read_rows::{
     ENGINE_READ_ROW_KIND_ATTACHMENT, ENGINE_READ_ROW_KIND_BACKLINK,
     ENGINE_READ_ROW_KIND_GRAPH_EDGE, ENGINE_READ_ROW_KIND_GRAPH_NODE,
-    ENGINE_READ_ROW_KIND_OPEN_STATUS, ENGINE_READ_ROW_KIND_OUTGOING_LINK,
-    ENGINE_READ_ROW_KIND_PROPERTY, ENGINE_READ_ROW_KIND_TAG, EngineReadResultBuffer,
-    EngineReadResultBuilder, error_result_buffer, open_error_buffer, open_status_buffer,
+    ENGINE_READ_ROW_KIND_INDEX_FRESHNESS, ENGINE_READ_ROW_KIND_OPEN_STATUS,
+    ENGINE_READ_ROW_KIND_OUTGOING_LINK, ENGINE_READ_ROW_KIND_PROPERTY, ENGINE_READ_ROW_KIND_TAG,
+    EngineReadIndexFreshnessRow, EngineReadResultBuffer, EngineReadResultBuilder,
+    error_result_buffer, open_error_buffer, open_status_buffer,
+};
+use crate::use_cases::index_freshness::{
+    ReadIndexFreshnessError, ReadIndexFreshnessSummary,
+    check_read_index_freshness as check_read_index_freshness_use_case,
 };
 use crate::use_cases::index_rebuild::{
     ReadIndexRebuildError, rebuild_read_index as rebuild_read_index_use_case,
@@ -96,6 +101,46 @@ impl From<ReadIndexRebuildError> for ReadRebuildFfiError {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ReadFreshnessFfiError {
+    code: &'static str,
+    message: &'static str,
+}
+
+impl ReadFreshnessFfiError {
+    pub(super) fn invalid_input(_field: &'static str) -> Self {
+        Self {
+            code: "invalid_input",
+            message: "invalid freshness input",
+        }
+    }
+
+    fn check_failed() -> Self {
+        Self {
+            code: "freshness_check_failed",
+            message: "index freshness check failed",
+        }
+    }
+
+    fn panic() -> Self {
+        Self {
+            code: "panic",
+            message: "vault engine FFI call panicked",
+        }
+    }
+}
+
+impl From<ReadIndexFreshnessError> for ReadFreshnessFfiError {
+    fn from(error: ReadIndexFreshnessError) -> Self {
+        match error {
+            ReadIndexFreshnessError::InvalidInput(_) => Self::invalid_input("input"),
+            ReadIndexFreshnessError::Path(_)
+            | ReadIndexFreshnessError::Scan(_)
+            | ReadIndexFreshnessError::Metadata(_) => Self::check_failed(),
+        }
+    }
+}
+
 pub(super) fn read_rebuild_response<F>(call: F) -> EngineReadResultBuffer
 where
     F: FnOnce() -> Result<u64, ReadRebuildFfiError>,
@@ -114,12 +159,49 @@ where
     }
 }
 
+pub(super) fn read_freshness_response<F>(call: F) -> EngineReadResultBuffer
+where
+    F: FnOnce() -> Result<ReadIndexFreshnessSummary, ReadFreshnessFfiError>,
+{
+    match catch_unwind(AssertUnwindSafe(call))
+        .unwrap_or_else(|_| Err(ReadFreshnessFfiError::panic()))
+    {
+        Ok(summary) => {
+            let mut builder = EngineReadResultBuilder::new(
+                ENGINE_READ_ROW_KIND_INDEX_FRESHNESS,
+                0,
+                0,
+                ENGINE_READ_STATE_COMPLETE,
+                None,
+            );
+            let row = EngineReadIndexFreshnessRow::from_summary(&summary);
+            builder.push_row(&row);
+            builder.finish()
+        }
+        Err(error) => error_result_buffer(
+            ENGINE_READ_ROW_KIND_INDEX_FRESHNESS,
+            0,
+            0,
+            ENGINE_READ_STATE_ERROR,
+            error.code,
+            error.message,
+        ),
+    }
+}
+
 pub(super) fn rebuild_read_index(
     vault_path: &Path,
     data_path: &Path,
     rebuild_path: &Path,
 ) -> Result<u64, ReadRebuildFfiError> {
     rebuild_read_index_use_case(vault_path, data_path, rebuild_path).map_err(Into::into)
+}
+
+pub(super) fn check_read_index_freshness(
+    vault_path: &Path,
+    metadata_path: &Path,
+) -> Result<ReadIndexFreshnessSummary, ReadFreshnessFfiError> {
+    check_read_index_freshness_use_case(vault_path, metadata_path).map_err(Into::into)
 }
 
 pub(super) fn read_page_response<T, Row, Call, BuildRow>(

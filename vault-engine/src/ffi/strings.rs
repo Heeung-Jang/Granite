@@ -5,7 +5,7 @@ use std::slice;
 use crate::use_cases::read_types::ReadApiError;
 
 use super::json::FfiError;
-use super::read::ReadRebuildFfiError;
+use super::read::{ReadFreshnessFfiError, ReadRebuildFfiError};
 
 pub(super) unsafe fn read_rebuild_c_string(
     ptr: *const c_char,
@@ -14,6 +14,15 @@ pub(super) unsafe fn read_rebuild_c_string(
     // SAFETY: The caller of this unsafe helper carries the same C-string
     // validity contract as `read_c_string`.
     unsafe { read_c_string(ptr, field) }.map_err(|_| ReadRebuildFfiError::invalid_input(field))
+}
+
+pub(super) unsafe fn read_freshness_c_string(
+    ptr: *const c_char,
+    field: &'static str,
+) -> Result<String, ReadFreshnessFfiError> {
+    // SAFETY: The caller of this unsafe helper carries the same C-string
+    // validity contract as `read_c_string`.
+    unsafe { read_c_string(ptr, field) }.map_err(|_| ReadFreshnessFfiError::invalid_input(field))
 }
 
 pub(super) unsafe fn read_read_string(

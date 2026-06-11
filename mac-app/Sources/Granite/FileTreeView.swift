@@ -129,6 +129,8 @@ struct FileTreeView: View {
             EmptyFileTreeState(title: message, systemImage: "xmark.octagon")
         case .loaded(let loaded):
             VStack(spacing: 0) {
+                indexSyncStatusRow
+
                 if loaded.snapshot.state != .complete {
                     HStack {
                         Image(systemName: loaded.snapshot.state == .stale ? "clock.badge.exclamationmark" : "ellipsis")
@@ -180,6 +182,71 @@ struct FileTreeView: View {
                 }
                 .accessibilityLabel("Markdown files")
             }
+        }
+    }
+
+    @ViewBuilder
+    private var indexSyncStatusRow: some View {
+        switch appState.vaultIndexSyncState {
+        case .idle:
+            EmptyView()
+        case .checking:
+            fileTreeStatusRow(
+                systemImage: "arrow.triangle.2.circlepath",
+                title: "Syncing...",
+                accessibilityLabel: "Index sync in progress"
+            )
+        case .updating:
+            fileTreeStatusRow(
+                systemImage: "arrow.triangle.2.circlepath",
+                title: "Updating index...",
+                accessibilityLabel: "Index update in progress"
+            )
+        case .failed:
+            HStack(spacing: ObsidianUI.scaled(6, scale: appContentZoomScale)) {
+                Image(systemName: "exclamationmark.circle")
+                Text("Index update failed")
+                Spacer(minLength: 0)
+                Button {
+                    _ = appState.retryCurrentVaultIndexSync()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale)))
+                }
+                .buttonStyle(.borderless)
+                .help("Retry index update")
+                .accessibilityLabel("Retry index update")
+            }
+            .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale)))
+            .foregroundStyle(.secondary)
+            .frame(height: ObsidianUI.scaled(28, scale: appContentZoomScale))
+            .padding(.horizontal, ObsidianUI.scaled(12, scale: appContentZoomScale))
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Index update failed")
+
+            Divider()
+        }
+    }
+
+    private func fileTreeStatusRow(
+        systemImage: String,
+        title: String,
+        accessibilityLabel: String
+    ) -> some View {
+        VStack(spacing: 0) {
+            HStack(spacing: ObsidianUI.scaled(6, scale: appContentZoomScale)) {
+                Image(systemName: systemImage)
+                Text(title)
+                Spacer(minLength: 0)
+            }
+            .font(.system(size: ObsidianUI.fontSize(12, scale: appContentZoomScale)))
+            .foregroundStyle(.secondary)
+            .frame(height: ObsidianUI.scaled(28, scale: appContentZoomScale))
+            .padding(.horizontal, ObsidianUI.scaled(12, scale: appContentZoomScale))
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(accessibilityLabel)
+
+            Divider()
         }
     }
 

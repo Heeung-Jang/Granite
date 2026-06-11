@@ -35,15 +35,17 @@ pub use self::graph::engine_graph_snapshot;
 pub use self::health::abi_version;
 pub use self::lifecycle::{engine_read_close, engine_read_result_free, engine_string_free};
 use self::read::{
-    graph_error_result, panel_row_kind, read_api_error_buffer, read_generation, read_handle,
-    read_items_buffer, read_open_response, read_page_response, read_rebuild_response,
-    read_state_code, rebuild_read_index,
+    check_read_index_freshness, graph_error_result, panel_row_kind, read_api_error_buffer,
+    read_freshness_response, read_generation, read_handle, read_items_buffer, read_open_response,
+    read_page_response, read_rebuild_response, read_state_code, rebuild_read_index,
 };
 pub use self::save::{
     engine_save_capture_baseline, engine_save_keep_conflict_as_new_note,
     engine_save_overwrite_after_conflict, engine_save_reload_after_conflict, engine_save_write,
 };
-use self::strings::{read_bytes, read_c_string, read_read_string, read_rebuild_c_string};
+use self::strings::{
+    read_bytes, read_c_string, read_freshness_c_string, read_read_string, read_rebuild_c_string,
+};
 pub use self::syntax_highlighting::engine_live_preview_highlight_code;
 
 #[repr(C)]
@@ -116,6 +118,27 @@ pub unsafe extern "C" fn engine_read_rebuild_index(
             Path::new(&data_path),
             Path::new(&rebuild_path),
         )
+    })
+}
+
+/// Checks whether the existing read index is stale relative to the vault filesystem.
+///
+/// # Safety
+///
+/// `vault_path` and `metadata_path` may be null, which returns a structured
+/// error. Non-null pointers must reference valid NUL-terminated byte sequences
+/// for the duration of this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn engine_read_check_index_freshness(
+    vault_path: *const c_char,
+    metadata_path: *const c_char,
+) -> EngineReadResultBuffer {
+    read_freshness_response(|| {
+        // SAFETY: The caller owns the FFI string lifetime contract documented on this function.
+        let vault_path = unsafe { read_freshness_c_string(vault_path, "vault_path")? };
+        // SAFETY: The caller owns the FFI string lifetime contract documented on this function.
+        let metadata_path = unsafe { read_freshness_c_string(metadata_path, "metadata_path")? };
+        check_read_index_freshness(Path::new(&vault_path), Path::new(&metadata_path))
     })
 }
 
@@ -419,12 +442,13 @@ mod tests {
     use crate::ffi::read_rows::{
         ENGINE_READ_NO_NEXT_OFFSET, ENGINE_READ_ROW_KIND_ATTACHMENT, ENGINE_READ_ROW_KIND_BACKLINK,
         ENGINE_READ_ROW_KIND_FILE_TREE, ENGINE_READ_ROW_KIND_GRAPH_EDGE,
-        ENGINE_READ_ROW_KIND_GRAPH_NODE, ENGINE_READ_ROW_KIND_LIVE_PREVIEW_METADATA,
-        ENGINE_READ_ROW_KIND_OPEN_STATUS, ENGINE_READ_ROW_KIND_OUTGOING_LINK,
-        ENGINE_READ_ROW_KIND_PROPERTY, ENGINE_READ_ROW_KIND_SEARCH_HIT, ENGINE_READ_ROW_KIND_TAG,
-        EngineReadAttachmentRow, EngineReadFileTreeRow, EngineReadGraphNodeRow, EngineReadLinkRow,
-        EngineReadLivePreviewMetadataRow, EngineReadPropertyRow, EngineReadSearchHitRow,
-        EngineReadTagRow, decode_header_for_test, string_for_test,
+        ENGINE_READ_ROW_KIND_GRAPH_NODE, ENGINE_READ_ROW_KIND_INDEX_FRESHNESS,
+        ENGINE_READ_ROW_KIND_LIVE_PREVIEW_METADATA, ENGINE_READ_ROW_KIND_OPEN_STATUS,
+        ENGINE_READ_ROW_KIND_OUTGOING_LINK, ENGINE_READ_ROW_KIND_PROPERTY,
+        ENGINE_READ_ROW_KIND_SEARCH_HIT, ENGINE_READ_ROW_KIND_TAG, EngineReadAttachmentRow,
+        EngineReadFileTreeRow, EngineReadGraphNodeRow, EngineReadIndexFreshnessRow,
+        EngineReadLinkRow, EngineReadLivePreviewMetadataRow, EngineReadPropertyRow,
+        EngineReadSearchHitRow, EngineReadTagRow, decode_header_for_test, string_for_test,
     };
     use crate::use_cases::read_types::{
         ENGINE_READ_INSPECTOR_PANEL_ATTACHMENTS, ENGINE_READ_INSPECTOR_PANEL_BACKLINKS,
@@ -561,6 +585,88 @@ mod tests {
             engine_read_result_free(response.result);
             engine_read_close(response.handle);
         }
+    }
+
+    #[test]
+    fn engine_read_check_index_freshness_reports_clean_rebuilt_index() {
+        let dir = tempdir().expect("tempdir");
+        let vault_path = dir.path().join("vault");
+        fs::create_dir_all(&vault_path).expect("vault dir");
+        fs::write(vault_path.join("Home.md"), "# Home").expect("home file");
+        fs::write(vault_path.join("Target.md"), "# Target").expect("target file");
+        let index_root = dir.path().join("support").join("Indexes").join("vault-id");
+        let data_path = index_root.join("data");
+        let rebuild_path = index_root.join("rebuild");
+        rebuild_fixture_index(&vault_path, &data_path, &rebuild_path);
+
+        let vault = CString::new(vault_path.to_string_lossy().as_bytes()).expect("vault");
+        let metadata = CString::new(
+            data_path
+                .join("metadata.sqlite")
+                .to_string_lossy()
+                .as_bytes(),
+        )
+        .expect("metadata");
+        let buffer =
+            unsafe { engine_read_check_index_freshness(vault.as_ptr(), metadata.as_ptr()) };
+        let header = decode_header_for_test(&buffer);
+        let row: EngineReadIndexFreshnessRow = unsafe { row_at(&buffer, 0) };
+        unsafe {
+            engine_read_result_free(buffer);
+        }
+
+        assert_eq!(header.row_kind, ENGINE_READ_ROW_KIND_INDEX_FRESHNESS);
+        assert_eq!(header.state, ENGINE_READ_STATE_COMPLETE);
+        assert_eq!(header.row_count, 1);
+        assert_eq!(row.stale, 0);
+        assert_eq!(row.unchanged, 2);
+        assert_eq!(row.current_markdown_files, 2);
+        assert_eq!(row.indexed_markdown_files, 2);
+    }
+
+    #[test]
+    fn engine_read_check_index_freshness_reports_created_markdown() {
+        let dir = tempdir().expect("tempdir");
+        let vault_path = dir.path().join("vault");
+        fs::create_dir_all(&vault_path).expect("vault dir");
+        fs::write(vault_path.join("Home.md"), "# Home").expect("home file");
+        let index_root = dir.path().join("support").join("Indexes").join("vault-id");
+        let data_path = index_root.join("data");
+        let rebuild_path = index_root.join("rebuild");
+        rebuild_fixture_index(&vault_path, &data_path, &rebuild_path);
+        fs::write(vault_path.join("New.md"), "# New").expect("new file");
+
+        let vault = CString::new(vault_path.to_string_lossy().as_bytes()).expect("vault");
+        let metadata = CString::new(
+            data_path
+                .join("metadata.sqlite")
+                .to_string_lossy()
+                .as_bytes(),
+        )
+        .expect("metadata");
+        let buffer =
+            unsafe { engine_read_check_index_freshness(vault.as_ptr(), metadata.as_ptr()) };
+        let header = decode_header_for_test(&buffer);
+        let row: EngineReadIndexFreshnessRow = unsafe { row_at(&buffer, 0) };
+        unsafe {
+            engine_read_result_free(buffer);
+        }
+
+        assert_eq!(header.row_kind, ENGINE_READ_ROW_KIND_INDEX_FRESHNESS);
+        assert_eq!(header.state, ENGINE_READ_STATE_COMPLETE);
+        assert_eq!(row.stale, 1);
+        assert_eq!(row.created, 1);
+    }
+
+    #[test]
+    fn engine_read_check_index_freshness_invalid_input_returns_sanitized_error() {
+        let buffer =
+            unsafe { engine_read_check_index_freshness(std::ptr::null(), std::ptr::null()) };
+        let (header, error_code) = unsafe { take_open_error(buffer) };
+
+        assert_eq!(header.row_kind, ENGINE_READ_ROW_KIND_INDEX_FRESHNESS);
+        assert_eq!(header.state, ENGINE_READ_STATE_ERROR);
+        assert_eq!(error_code, "invalid_input");
     }
 
     #[test]
@@ -1672,6 +1778,22 @@ mod tests {
             engine_read_result_free(response.result);
         }
         response.handle
+    }
+
+    fn rebuild_fixture_index(
+        vault_path: &std::path::Path,
+        data_path: &std::path::Path,
+        rebuild_path: &std::path::Path,
+    ) {
+        let vault = CString::new(vault_path.to_string_lossy().as_bytes()).expect("vault");
+        let data = CString::new(data_path.to_string_lossy().as_bytes()).expect("data");
+        let rebuild = CString::new(rebuild_path.to_string_lossy().as_bytes()).expect("rebuild");
+
+        let buffer =
+            unsafe { engine_read_rebuild_index(vault.as_ptr(), data.as_ptr(), rebuild.as_ptr()) };
+        let header = unsafe { take_open_header(buffer) };
+        assert_eq!(header.row_kind, ENGINE_READ_ROW_KIND_OPEN_STATUS);
+        assert_eq!(header.state, ENGINE_READ_STATE_COMPLETE);
     }
 
     struct ReadFixture {

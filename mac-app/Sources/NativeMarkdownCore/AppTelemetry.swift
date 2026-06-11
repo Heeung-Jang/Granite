@@ -100,18 +100,23 @@ public enum AppTelemetry {
             "fixtureID",
             "hardCeilingPassed",
             "hardCeilingViolations",
+            "incomplete",
             "iterationCount",
             "memoryDeltaBytes",
             "mode",
+            "modified",
             "nodeCount",
             "operation",
             "edgeCount",
             "rendererKind",
             "result",
             "resultCount",
+            "stale",
             "source",
             "stageName",
             "state",
+            "created",
+            "deleted",
             "tableCellCount",
             "textLength",
             "visibleRangeLength"
@@ -276,6 +281,32 @@ public enum AppTelemetry {
         durationMilliseconds: Double
     ) {
         vaultLogger.info("vault_creation operation=\(operation.rawValue, privacy: .public) result=\(result, privacy: .public) duration_ms=\(durationMilliseconds, privacy: .public)")
+    }
+
+    public static func vaultIndexFreshnessStarted(generation: UInt64) {
+        vaultLogger.info("vault_freshness_started generation=\(generation, privacy: .public)")
+    }
+
+    public static func vaultIndexFreshnessCompleted(
+        report: EngineIndexFreshnessReport,
+        result: String,
+        durationMilliseconds: Double
+    ) {
+        vaultLogger.info("vault_freshness_completed result=\(result, privacy: .public) stale=\(report.stale, privacy: .public) created=\(report.created, privacy: .public) modified=\(report.modified, privacy: .public) deleted=\(report.deleted, privacy: .public) incomplete=\(report.incomplete, privacy: .public) duration_ms=\(durationMilliseconds, privacy: .public)")
+    }
+
+    public static func vaultIndexFreshnessFailed(durationMilliseconds: Double) {
+        vaultLogger.info("vault_freshness_completed result=failure duration_ms=\(durationMilliseconds, privacy: .public)")
+    }
+
+    public static func vaultIndexFreshnessRequestedRebuild(
+        generation: UInt64,
+        created: UInt64,
+        modified: UInt64,
+        deleted: UInt64,
+        incomplete: UInt64
+    ) {
+        vaultLogger.info("vault_freshness_rebuild_requested generation=\(generation, privacy: .public) created=\(created, privacy: .public) modified=\(modified, privacy: .public) deleted=\(deleted, privacy: .public) incomplete=\(incomplete, privacy: .public)")
     }
 }
 

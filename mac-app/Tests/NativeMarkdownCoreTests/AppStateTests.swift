@@ -56,6 +56,145 @@ func appStateOpensReadClientForSelectedVault() throws {
 }
 
 @Test
+func appStateChecksReadIndexFreshnessAfterOpeningReadClient() throws {
+    let supportRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let client = FakeReadClient()
+    let factory = FakeReadClientFactory(clients: [client])
+    let recoveryScheduler = FakeReadIndexRecoveryScheduler()
+    let freshnessChecker = FakeReadIndexFreshnessChecker(reports: [
+        freshnessReport(stale: false, unchanged: 12, currentMarkdownFiles: 12, indexedMarkdownFiles: 12)
+    ])
+    let freshnessScheduler = FakeReadIndexFreshnessScheduler()
+    let state = AppState(
+        engineHealth: EngineHealthStatus(state: .loaded, abiVersion: 1, message: "test"),
+        indexDirectoryResolver: AppOwnedIndexDirectoryResolver(applicationSupportRoot: supportRoot),
+        vaultAccessValidator: AllowingVaultAccessValidator(),
+        recentVaultStorage: MemoryRecentVaultStorage(),
+        readClientFactory: factory.make,
+        readIndexRecoveryScheduler: recoveryScheduler,
+        readIndexFreshnessChecker: freshnessChecker,
+        readIndexFreshnessScheduler: freshnessScheduler
+    )
+    let vaultURL = URL(fileURLWithPath: "/tmp/read-freshness-clean", isDirectory: true)
+
+    try state.selectVault(vaultURL)
+    let location = try #require(state.indexLocation)
+
+    #expect(state.readAvailability == .ready)
+    #expect((state.readClient as? FakeReadClient) === client)
+    #expect(state.vaultIndexSyncState == .checking)
+    #expect(freshnessScheduler.pendingWorkCount == 1)
+    #expect(recoveryScheduler.pendingWorkCount == 0)
+
+    freshnessScheduler.runNext()
+
+    #expect(freshnessChecker.checkedVaultURLs == [vaultURL.standardizedFileURL])
+    #expect(freshnessChecker.checkedLocations == [location])
+    #expect(state.vaultIndexSyncState == .idle)
+    #expect(state.readAvailability == .ready)
+    #expect(state.readGeneration == 1)
+    #expect(recoveryScheduler.pendingWorkCount == 0)
+}
+
+@Test
+func appStateRebuildsReadIndexWhenFreshnessCheckFindsStaleIndex() throws {
+    let supportRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let firstClient = FakeReadClient()
+    let secondClient = FakeReadClient()
+    let factory = FakeReadClientFactory(clients: [firstClient, secondClient])
+    let rebuilder = FakeReadIndexRebuilder()
+    let recoveryScheduler = FakeReadIndexRecoveryScheduler()
+    let freshnessChecker = FakeReadIndexFreshnessChecker(reports: [
+        freshnessReport(stale: true, created: 1, currentMarkdownFiles: 2, indexedMarkdownFiles: 1)
+    ])
+    let freshnessScheduler = FakeReadIndexFreshnessScheduler()
+    let state = AppState(
+        engineHealth: EngineHealthStatus(state: .loaded, abiVersion: 1, message: "test"),
+        indexDirectoryResolver: AppOwnedIndexDirectoryResolver(applicationSupportRoot: supportRoot),
+        vaultAccessValidator: AllowingVaultAccessValidator(),
+        recentVaultStorage: MemoryRecentVaultStorage(),
+        readClientFactory: factory.make,
+        readIndexRebuilder: rebuilder,
+        readIndexRecoveryScheduler: recoveryScheduler,
+        readIndexFreshnessChecker: freshnessChecker,
+        readIndexFreshnessScheduler: freshnessScheduler
+    )
+    let vaultURL = URL(fileURLWithPath: "/tmp/read-freshness-stale", isDirectory: true)
+
+    try state.selectVault(vaultURL)
+    let location = try #require(state.indexLocation)
+
+    #expect(state.readAvailability == .ready)
+    #expect(state.vaultIndexSyncState == .checking)
+    #expect(recoveryScheduler.pendingWorkCount == 0)
+
+    freshnessScheduler.runNext()
+
+    #expect(state.vaultIndexSyncState == .updating)
+    #expect(recoveryScheduler.pendingWorkCount == 1)
+    #expect(rebuilder.rebuiltVaultURLs.isEmpty)
+
+    recoveryScheduler.runNext()
+
+    #expect(rebuilder.rebuiltVaultURLs == [vaultURL.standardizedFileURL])
+    #expect(rebuilder.rebuiltLocations == [location])
+    #expect(firstClient.closeCount == 1)
+    #expect((state.readClient as? FakeReadClient) === secondClient)
+    #expect(state.readAvailability == .ready)
+    #expect(state.vaultIndexSyncState == .idle)
+    #expect(state.readGeneration == 2)
+}
+
+@Test
+func appStateKeepsReadClientUsableWhenFreshnessCheckFailsAndCanRetry() throws {
+    let supportRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let firstClient = FakeReadClient()
+    let secondClient = FakeReadClient()
+    let factory = FakeReadClientFactory(clients: [firstClient, secondClient])
+    let rebuilder = FakeReadIndexRebuilder()
+    let recoveryScheduler = FakeReadIndexRecoveryScheduler()
+    let freshnessChecker = FakeReadIndexFreshnessChecker(errors: [FakeReadIndexFreshnessError.failed])
+    let freshnessScheduler = FakeReadIndexFreshnessScheduler()
+    let state = AppState(
+        engineHealth: EngineHealthStatus(state: .loaded, abiVersion: 1, message: "test"),
+        indexDirectoryResolver: AppOwnedIndexDirectoryResolver(applicationSupportRoot: supportRoot),
+        vaultAccessValidator: AllowingVaultAccessValidator(),
+        recentVaultStorage: MemoryRecentVaultStorage(),
+        readClientFactory: factory.make,
+        readIndexRebuilder: rebuilder,
+        readIndexRecoveryScheduler: recoveryScheduler,
+        readIndexFreshnessChecker: freshnessChecker,
+        readIndexFreshnessScheduler: freshnessScheduler
+    )
+    let vaultURL = URL(fileURLWithPath: "/tmp/read-freshness-failure", isDirectory: true)
+
+    try state.selectVault(vaultURL)
+    let location = try #require(state.indexLocation)
+    freshnessScheduler.runNext()
+
+    #expect(state.vaultIndexSyncState == .failed("Index update failed"))
+    #expect(state.readAvailability == .ready)
+    #expect((state.readClient as? FakeReadClient) === firstClient)
+    #expect(recoveryScheduler.pendingWorkCount == 0)
+
+    #expect(state.retryCurrentVaultIndexSync())
+    #expect(state.vaultIndexSyncState == .updating)
+    #expect(recoveryScheduler.pendingWorkCount == 1)
+
+    recoveryScheduler.runNext()
+
+    #expect(rebuilder.rebuiltVaultURLs == [vaultURL.standardizedFileURL])
+    #expect(rebuilder.rebuiltLocations == [location])
+    #expect(firstClient.closeCount == 1)
+    #expect((state.readClient as? FakeReadClient) === secondClient)
+    #expect(state.vaultIndexSyncState == .idle)
+    #expect(state.readGeneration == 2)
+}
+
+@Test
 func appStatePublishesReadErrorWhenClientOpenFails() throws {
     let supportRoot = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -2388,6 +2527,10 @@ private enum FakeReadFactoryError: Error {
     case openFailed
 }
 
+private enum FakeReadIndexFreshnessError: Error {
+    case failed
+}
+
 private final class FakeReadClientFactory: @unchecked Sendable {
     var clients: [FakeReadClient]
     let error: (any Error)?
@@ -2442,6 +2585,60 @@ private final class FakeReadIndexRecoveryScheduler: ReadIndexRecoveryScheduling,
     func schedule(
         _ work: @escaping @Sendable () -> Result<Void, any Error>,
         completion: @escaping @Sendable (Result<Void, any Error>) -> Void
+    ) {
+        scheduledWork.append {
+            completion(work())
+        }
+    }
+
+    func runNext() {
+        guard !scheduledWork.isEmpty else {
+            return
+        }
+        scheduledWork.removeFirst()()
+    }
+}
+
+private final class FakeReadIndexFreshnessChecker: ReadIndexFreshnessChecking, @unchecked Sendable {
+    var reports: [EngineIndexFreshnessReport]
+    var errors: [any Error]
+    private(set) var checkedVaultURLs: [URL] = []
+    private(set) var checkedLocations: [AppOwnedIndexLocation] = []
+
+    init(
+        reports: [EngineIndexFreshnessReport] = [],
+        errors: [any Error] = []
+    ) {
+        self.reports = reports
+        self.errors = errors
+    }
+
+    func checkIndexFreshness(
+        vaultURL: URL,
+        location: AppOwnedIndexLocation
+    ) throws -> EngineIndexFreshnessReport {
+        checkedVaultURLs.append(vaultURL.standardizedFileURL)
+        checkedLocations.append(location)
+        if !errors.isEmpty {
+            throw errors.removeFirst()
+        }
+        if !reports.isEmpty {
+            return reports.removeFirst()
+        }
+        return freshnessReport()
+    }
+}
+
+private final class FakeReadIndexFreshnessScheduler: ReadIndexFreshnessScheduling, @unchecked Sendable {
+    private var scheduledWork: [@Sendable () -> Void] = []
+
+    var pendingWorkCount: Int {
+        scheduledWork.count
+    }
+
+    func schedule(
+        _ work: @escaping @Sendable () -> Result<EngineIndexFreshnessReport, any Error>,
+        completion: @escaping @Sendable (Result<EngineIndexFreshnessReport, any Error>) -> Void
     ) {
         scheduledWork.append {
             completion(work())
@@ -2529,6 +2726,37 @@ private func engineReadOpenError(code: String) -> EngineReadClientError {
         message: code,
         state: EngineReadABI.State.error
     ))
+}
+
+private func freshnessReport(
+    stale: Bool = false,
+    unchanged: UInt64 = 0,
+    created: UInt64 = 0,
+    modified: UInt64 = 0,
+    deleted: UInt64 = 0,
+    incomplete: UInt64 = 0,
+    currentMarkdownFiles: UInt64 = 0,
+    indexedMarkdownFiles: UInt64 = 0,
+    currentRowsScanned: UInt64 = 0,
+    storedRowsRead: UInt64 = 0
+) -> EngineIndexFreshnessReport {
+    EngineIndexFreshnessReport(
+        stale: stale,
+        unchanged: unchanged,
+        created: created,
+        modified: modified,
+        deleted: deleted,
+        incomplete: incomplete,
+        currentMarkdownFiles: currentMarkdownFiles,
+        indexedMarkdownFiles: indexedMarkdownFiles,
+        currentRowsScanned: currentRowsScanned,
+        storedRowsRead: storedRowsRead,
+        scanMicros: 1,
+        sqliteReadMicros: 1,
+        compareMicros: 1,
+        elapsedMicros: 3,
+        rebuildScheduled: stale
+    )
 }
 
 private final class FakeReadClient: EngineReading, @unchecked Sendable {

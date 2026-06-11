@@ -1,5 +1,6 @@
 pub(crate) mod build_graph;
 pub(crate) mod highlight_code_fence;
+pub(crate) mod index_freshness;
 pub(crate) mod index_rebuild;
 pub(crate) mod indexing_pipeline;
 pub(crate) mod live_preview_metadata;

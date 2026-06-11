@@ -16,7 +16,8 @@ use crate::adapters::sqlite::reads::{
     graph_visible_edge_count as read_graph_visible_edge_count,
     graph_visible_node_count as read_graph_visible_node_count, headings as read_headings,
     list_files as read_list_files, list_markdown_files as read_list_markdown_files,
-    lookup_file as read_lookup_file, outgoing_link_projections as read_outgoing_link_projections,
+    list_markdown_files_after as read_list_markdown_files_after, lookup_file as read_lookup_file,
+    outgoing_link_projections as read_outgoing_link_projections,
     outgoing_links as read_outgoing_links, properties as read_properties,
     property_projections as read_property_projections,
     tag_note_projections as read_tag_note_projections, tags as read_tags,
@@ -430,6 +431,14 @@ impl MetadataStore {
         limit: usize,
     ) -> MetadataStoreResult<Vec<FileRecord>> {
         read_list_markdown_files(&self.connection, offset, limit)
+    }
+
+    pub fn list_markdown_files_after(
+        &self,
+        after_relative_path: Option<&str>,
+        limit: usize,
+    ) -> MetadataStoreResult<Vec<FileRecord>> {
+        read_list_markdown_files_after(&self.connection, after_relative_path, limit)
     }
 
     pub fn lookup_file(

@@ -217,6 +217,12 @@ struct GraniteApp: App {
             Foundation.exit(report.passed ? 0 : 2)
         }
 
+        if CommandLine.arguments.contains("--vault-open-freshness-probe") {
+            let report = VaultOpenFreshnessProbe.run()
+            print(VaultOpenFreshnessProbe.encodedReport(report))
+            Foundation.exit(report.passed ? 0 : 2)
+        }
+
         if CommandLine.arguments.contains("--inspector-indexing-state-probe") {
             let report = InspectorIndexingRecoveryProbe.run()
             print(InspectorIndexingRecoveryProbe.encodedReport(report))

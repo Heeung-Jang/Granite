@@ -5,8 +5,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_NAME="Granite"
 EXECUTABLE_NAME="Granite"
 BUNDLE_IDENTIFIER="com.codex.granite"
-APP_VERSION="0.4.14"
-APP_BUILD="18"
+APP_VERSION="0.4.15"
+APP_BUILD="19"
 ICON_NAME="GraniteAppIcon"
 ICON_SOURCE="${ROOT_DIR}/assets/${ICON_NAME}.png"
 DIST_DIR="${ROOT_DIR}/dist"
@@ -146,6 +146,7 @@ run_packaged_probe "workspace-tabs-probe" --workspace-tabs-probe >/dev/null
 run_packaged_probe "startup-vault-restore-probe" --startup-vault-restore-probe >/dev/null
 run_packaged_probe "file-tree-actions-probe" --file-tree-actions-probe >/dev/null
 run_packaged_probe "auto-index-refresh-probe" --auto-index-refresh-probe >/dev/null
+run_packaged_probe "vault-open-freshness-probe" --vault-open-freshness-probe >/dev/null
 run_packaged_probe "inspector-indexing-state-probe" --inspector-indexing-state-probe >/dev/null
 run_packaged_probe "workspace-pane-layout-probe" --workspace-pane-layout-probe >/dev/null
 run_packaged_probe "app-content-zoom-probe" --app-content-zoom-probe >/dev/null

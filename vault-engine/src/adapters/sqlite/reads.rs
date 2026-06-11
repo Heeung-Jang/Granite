@@ -63,6 +63,32 @@ pub(crate) fn list_markdown_files(
     rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
 }
 
+pub(crate) fn list_markdown_files_after(
+    connection: &Connection,
+    after_relative_path: Option<&str>,
+    limit: usize,
+) -> MetadataStoreResult<Vec<FileRecord>> {
+    let mut statement = match after_relative_path {
+        Some(_) => connection.prepare(
+            "SELECT file_id, relative_path, kind, size_bytes, modified_unix_ms, \
+             file_device, file_inode, content_hash, generation, status, last_error \
+             FROM files WHERE kind = 'markdown' AND relative_path > ?1 \
+             ORDER BY relative_path LIMIT ?2",
+        )?,
+        None => connection.prepare(
+            "SELECT file_id, relative_path, kind, size_bytes, modified_unix_ms, \
+             file_device, file_inode, content_hash, generation, status, last_error \
+             FROM files WHERE kind = 'markdown' \
+             ORDER BY relative_path LIMIT ?1",
+        )?,
+    };
+    let rows = match after_relative_path {
+        Some(path) => statement.query_map(params![path, limit as i64], row_to_file_record)?,
+        None => statement.query_map(params![limit as i64], row_to_file_record)?,
+    };
+    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+}
+
 pub(crate) fn lookup_file(
     connection: &Connection,
     file_id_or_relative_path: &str,
