@@ -150,12 +150,18 @@ public final class AppState: ObservableObject {
     private let readClientFactory: ReadClientFactory
     private let readIndexRebuilder: any ReadIndexRebuilding
     private let readIndexRecoveryScheduler: any ReadIndexRecoveryScheduling
+    private let vaultChangeWatcher: any VaultChangeWatching
+    private let vaultIndexRefreshScheduler: any VaultIndexRefreshScheduling
+    private let vaultIndexRefreshDebounceInterval: TimeInterval
     private let maxRecentVaults: Int
     private static let maxNavigationHistoryEntries = 100
     private var nextSearchRequestID: UInt64 = 0
     private var didAttemptLastVaultAutoRestore = false
     private var dirtyEditorFiles: [String: FileTreeItem] = [:]
     private var activeEditorBufferProvider: ActiveEditorBufferProvider?
+    private var activeVaultChangeWatch: (any VaultChangeWatch)?
+    private var readIndexRecoveryInProgress = false
+    private var pendingReadIndexRefresh = false
 
     public init(
         vaultSelection: VaultSelectionState = .noVault,
@@ -172,6 +178,9 @@ public final class AppState: ObservableObject {
         },
         readIndexRebuilder: any ReadIndexRebuilding = EngineReadIndexRebuilder(),
         readIndexRecoveryScheduler: any ReadIndexRecoveryScheduling = BackgroundReadIndexRecoveryScheduler(),
+        vaultChangeWatcher: any VaultChangeWatching = FSEventsVaultChangeWatcher(),
+        vaultIndexRefreshScheduler: any VaultIndexRefreshScheduling = DispatchVaultIndexRefreshScheduler(),
+        vaultIndexRefreshDebounceInterval: TimeInterval = 1.0,
         maxRecentVaults: Int = 10
     ) {
         let paneLayoutStore = PaneLayoutStore(
@@ -191,6 +200,9 @@ public final class AppState: ObservableObject {
         self.readClientFactory = readClientFactory
         self.readIndexRebuilder = readIndexRebuilder
         self.readIndexRecoveryScheduler = readIndexRecoveryScheduler
+        self.vaultChangeWatcher = vaultChangeWatcher
+        self.vaultIndexRefreshScheduler = vaultIndexRefreshScheduler
+        self.vaultIndexRefreshDebounceInterval = vaultIndexRefreshDebounceInterval
         self.maxRecentVaults = max(1, maxRecentVaults)
         self.readAvailability = .unavailable
         self.readGeneration = 0
@@ -210,6 +222,12 @@ public final class AppState: ObservableObject {
             from: recentVaultStorage.loadRecentVaultURLs(),
             limit: self.maxRecentVaults
         )
+    }
+
+    deinit {
+        stopVaultChangeWatcher()
+        vaultIndexRefreshScheduler.cancel()
+        readClient?.close()
     }
 
     public func selectVault(_ url: URL) throws {
@@ -233,6 +251,7 @@ public final class AppState: ObservableObject {
         indexLocation = preparedIndexLocation
         openReadClient(vaultURL: vaultURL, location: preparedIndexLocation, generation: readOpenGeneration)
         vaultSelection = .selected(vaultURL)
+        startVaultChangeWatcher(for: vaultURL)
         resetWorkspaceState()
         restoreWorkspacePaneLayout(for: vaultURL)
         fileTreeSortMode = fileTreeSortModeStore.loadSortMode(forVaultAt: vaultURL)
@@ -277,6 +296,20 @@ public final class AppState: ObservableObject {
             incrementsGenerationOnSuccess: true,
             telemetryTimer: timer
         )
+        return true
+    }
+
+    @discardableResult
+    public func scheduleCurrentVaultIndexRefresh() -> Bool {
+        guard vaultSelection.url != nil,
+              indexLocation != nil
+        else {
+            return false
+        }
+
+        vaultIndexRefreshScheduler.schedule(after: vaultIndexRefreshDebounceInterval) { [weak self] in
+            self?.performScheduledVaultIndexRefresh()
+        }
         return true
     }
 
@@ -1468,10 +1501,34 @@ public final class AppState: ObservableObject {
     }
 
     private func resetReadClient(availability: ReadAvailability) {
+        stopVaultChangeWatcher()
+        vaultIndexRefreshScheduler.cancel()
+        readIndexRecoveryInProgress = false
+        pendingReadIndexRefresh = false
         readClient?.close()
         readClient = nil
         readGeneration &+= 1
         readAvailability = availability
+    }
+
+    private func startVaultChangeWatcher(for vaultURL: URL) {
+        stopVaultChangeWatcher()
+        do {
+            activeVaultChangeWatch = try vaultChangeWatcher.startWatching(vaultURL: vaultURL) { [weak self] in
+                _ = self?.scheduleCurrentVaultIndexRefresh()
+            }
+        } catch {
+            activeVaultChangeWatch = nil
+        }
+    }
+
+    private func stopVaultChangeWatcher() {
+        activeVaultChangeWatch?.cancel()
+        activeVaultChangeWatch = nil
+    }
+
+    private func performScheduledVaultIndexRefresh() {
+        _ = requestCurrentVaultIndexRebuild()
     }
 
     private func openReadClient(
@@ -1508,6 +1565,12 @@ public final class AppState: ObservableObject {
         incrementsGenerationOnSuccess: Bool,
         telemetryTimer: AppTelemetryTimer?
     ) {
+        if readIndexRecoveryInProgress {
+            pendingReadIndexRefresh = true
+            return
+        }
+
+        readIndexRecoveryInProgress = true
         let completionSink = ReadIndexRecoveryCompletionSink(owner: self)
         readIndexRecoveryScheduler.schedule { [readIndexRebuilder] in
             Result {
@@ -1540,6 +1603,7 @@ public final class AppState: ObservableObject {
             return
         }
 
+        readIndexRecoveryInProgress = false
         do {
             try result.get()
             readClient?.close()
@@ -1572,6 +1636,27 @@ public final class AppState: ObservableObject {
                 )
             }
         }
+
+        schedulePendingReadIndexRefreshIfNeeded()
+    }
+
+    private func schedulePendingReadIndexRefreshIfNeeded() {
+        guard pendingReadIndexRefresh,
+              let vaultURL = vaultSelection.url,
+              let location = indexLocation
+        else {
+            pendingReadIndexRefresh = false
+            return
+        }
+
+        pendingReadIndexRefresh = false
+        scheduleReadIndexRecovery(
+            vaultURL: vaultURL,
+            location: location,
+            generation: readGeneration,
+            incrementsGenerationOnSuccess: true,
+            telemetryTimer: AppTelemetryTimer()
+        )
     }
 
     private func readAvailability(for issue: VaultAccessIssue) -> ReadAvailability {

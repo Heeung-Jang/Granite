@@ -563,6 +563,7 @@ struct SourceNoteView: View {
                 session.completeSave(outcome, savedContents: request.contents)
                 saveSession = session
                 refreshLivePreviewMetadataIfNeeded(contents: request.contents)
+                _ = appState.scheduleCurrentVaultIndexRefresh()
             } catch {
                 if Task.isCancelled {
                     return
@@ -652,6 +653,7 @@ struct SourceNoteView: View {
                 session.completeChoice(outcome, savedContents: savedSnapshot)
                 saveSession = session
                 refreshLivePreviewMetadataIfNeeded(contents: savedSnapshot)
+                _ = appState.scheduleCurrentVaultIndexRefresh()
                 appState.updateEditorDirtyState(file: file, isDirty: session.isDirty)
                 appState.openFile(FileTreeItem(relativePath: outcome.baseline.relativePath))
             } catch {
@@ -698,6 +700,7 @@ struct SourceNoteView: View {
                 session.completeChoice(outcome, savedContents: savedSnapshot)
                 saveSession = session
                 refreshLivePreviewMetadataIfNeeded(contents: savedSnapshot)
+                _ = appState.scheduleCurrentVaultIndexRefresh()
             } catch {
                 if Task.isCancelled {
                     return

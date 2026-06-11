@@ -374,6 +374,131 @@ func appStateExplicitRebuildReturnsFalseWithoutSelectedVault() {
 }
 
 @Test
+func appStateWatchesSelectedVaultAndDebouncesAutoIndexRefresh() throws {
+    let supportRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let firstClient = FakeReadClient()
+    let secondClient = FakeReadClient()
+    let factory = FakeReadClientFactory(clients: [firstClient, secondClient])
+    let rebuilder = FakeReadIndexRebuilder()
+    let recoveryScheduler = FakeReadIndexRecoveryScheduler()
+    let watcher = FakeVaultChangeWatcher()
+    let refreshScheduler = FakeVaultIndexRefreshScheduler()
+    let state = AppState(
+        engineHealth: EngineHealthStatus(state: .loaded, abiVersion: 1, message: "test"),
+        indexDirectoryResolver: AppOwnedIndexDirectoryResolver(applicationSupportRoot: supportRoot),
+        vaultAccessValidator: AllowingVaultAccessValidator(),
+        recentVaultStorage: MemoryRecentVaultStorage(),
+        readClientFactory: factory.make,
+        readIndexRebuilder: rebuilder,
+        readIndexRecoveryScheduler: recoveryScheduler,
+        vaultChangeWatcher: watcher,
+        vaultIndexRefreshScheduler: refreshScheduler,
+        vaultIndexRefreshDebounceInterval: 0.25
+    )
+    let vaultURL = URL(fileURLWithPath: "/tmp/read-auto-refresh", isDirectory: true)
+
+    try state.selectVault(vaultURL)
+    let location = try #require(state.indexLocation)
+
+    #expect(watcher.startedVaultURLs == [vaultURL.standardizedFileURL])
+    watcher.emitChange()
+
+    #expect(refreshScheduler.scheduledDelays == [0.25])
+    #expect(recoveryScheduler.pendingWorkCount == 0)
+
+    refreshScheduler.runPending()
+
+    #expect(recoveryScheduler.pendingWorkCount == 1)
+    recoveryScheduler.runNext()
+
+    #expect(rebuilder.rebuiltVaultURLs == [vaultURL.standardizedFileURL])
+    #expect(rebuilder.rebuiltLocations == [location])
+    #expect(firstClient.closeCount == 1)
+    #expect((state.readClient as? FakeReadClient) === secondClient)
+    #expect(state.readGeneration == 2)
+}
+
+@Test
+func appStateQueuesOneMoreAutoRefreshWhenVaultChangesDuringRebuild() throws {
+    let supportRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let firstClient = FakeReadClient()
+    let secondClient = FakeReadClient()
+    let thirdClient = FakeReadClient()
+    let factory = FakeReadClientFactory(clients: [firstClient, secondClient, thirdClient])
+    let rebuilder = FakeReadIndexRebuilder()
+    let recoveryScheduler = FakeReadIndexRecoveryScheduler()
+    let watcher = FakeVaultChangeWatcher()
+    let refreshScheduler = FakeVaultIndexRefreshScheduler()
+    let state = AppState(
+        engineHealth: EngineHealthStatus(state: .loaded, abiVersion: 1, message: "test"),
+        indexDirectoryResolver: AppOwnedIndexDirectoryResolver(applicationSupportRoot: supportRoot),
+        vaultAccessValidator: AllowingVaultAccessValidator(),
+        recentVaultStorage: MemoryRecentVaultStorage(),
+        readClientFactory: factory.make,
+        readIndexRebuilder: rebuilder,
+        readIndexRecoveryScheduler: recoveryScheduler,
+        vaultChangeWatcher: watcher,
+        vaultIndexRefreshScheduler: refreshScheduler,
+        vaultIndexRefreshDebounceInterval: 0
+    )
+    let vaultURL = URL(fileURLWithPath: "/tmp/read-auto-refresh-coalesced", isDirectory: true)
+
+    try state.selectVault(vaultURL)
+    watcher.emitChange()
+    refreshScheduler.runPending()
+    watcher.emitChange()
+    refreshScheduler.runPending()
+
+    #expect(recoveryScheduler.pendingWorkCount == 1)
+
+    recoveryScheduler.runNext()
+
+    #expect(recoveryScheduler.pendingWorkCount == 1)
+    #expect(rebuilder.rebuiltVaultURLs == [vaultURL.standardizedFileURL])
+    #expect((state.readClient as? FakeReadClient) === secondClient)
+    #expect(state.readGeneration == 2)
+
+    recoveryScheduler.runNext()
+
+    #expect(rebuilder.rebuiltVaultURLs == [vaultURL.standardizedFileURL, vaultURL.standardizedFileURL])
+    #expect((state.readClient as? FakeReadClient) === thirdClient)
+    #expect(state.readGeneration == 3)
+}
+
+@Test
+func appStateCancelsAutoRefreshWatcherAndDebounceWhenVaultClears() throws {
+    let supportRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let watcher = FakeVaultChangeWatcher()
+    let refreshScheduler = FakeVaultIndexRefreshScheduler()
+    let recoveryScheduler = FakeReadIndexRecoveryScheduler()
+    let state = AppState(
+        engineHealth: EngineHealthStatus(state: .loaded, abiVersion: 1, message: "test"),
+        indexDirectoryResolver: AppOwnedIndexDirectoryResolver(applicationSupportRoot: supportRoot),
+        vaultAccessValidator: AllowingVaultAccessValidator(),
+        recentVaultStorage: MemoryRecentVaultStorage(),
+        readClientFactory: FakeReadClientFactory(clients: [FakeReadClient()]).make,
+        readIndexRecoveryScheduler: recoveryScheduler,
+        vaultChangeWatcher: watcher,
+        vaultIndexRefreshScheduler: refreshScheduler
+    )
+    let vaultURL = URL(fileURLWithPath: "/tmp/read-auto-refresh-clear", isDirectory: true)
+
+    try state.selectVault(vaultURL)
+    watcher.emitChange()
+    #expect(refreshScheduler.pendingActionCount == 1)
+
+    state.clearVault()
+
+    #expect(watcher.activeWatch?.cancelCount == 1)
+    #expect(refreshScheduler.pendingActionCount == 0)
+    refreshScheduler.runPending()
+    #expect(recoveryScheduler.pendingWorkCount == 0)
+}
+
+@Test
 func appStateClosesReadClientOnClearUnavailableAndStaleVault() throws {
     let supportRoot = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -2328,6 +2453,73 @@ private final class FakeReadIndexRecoveryScheduler: ReadIndexRecoveryScheduling,
             return
         }
         scheduledWork.removeFirst()()
+    }
+}
+
+private final class FakeVaultChangeWatcher: VaultChangeWatching {
+    private(set) var startedVaultURLs: [URL] = []
+    private(set) var activeWatch: FakeVaultChangeWatch?
+
+    func startWatching(
+        vaultURL: URL,
+        onChange: @escaping () -> Void
+    ) throws -> any VaultChangeWatch {
+        let watch = FakeVaultChangeWatch(onChange: onChange)
+        startedVaultURLs.append(vaultURL.standardizedFileURL)
+        activeWatch = watch
+        return watch
+    }
+
+    func emitChange() {
+        activeWatch?.emitChange()
+    }
+}
+
+private final class FakeVaultChangeWatch: VaultChangeWatch {
+    private let onChange: () -> Void
+    private(set) var cancelCount = 0
+
+    init(onChange: @escaping () -> Void) {
+        self.onChange = onChange
+    }
+
+    func emitChange() {
+        guard cancelCount == 0 else {
+            return
+        }
+        onChange()
+    }
+
+    func cancel() {
+        cancelCount += 1
+    }
+}
+
+private final class FakeVaultIndexRefreshScheduler: VaultIndexRefreshScheduling {
+    private var action: (() -> Void)?
+    private(set) var scheduledDelays: [TimeInterval] = []
+    private(set) var cancelCount = 0
+
+    var pendingActionCount: Int {
+        action == nil ? 0 : 1
+    }
+
+    func schedule(after delay: TimeInterval, _ action: @escaping () -> Void) {
+        scheduledDelays.append(delay)
+        self.action = action
+    }
+
+    func cancel() {
+        cancelCount += 1
+        action = nil
+    }
+
+    func runPending() {
+        guard let pending = action else {
+            return
+        }
+        action = nil
+        pending()
     }
 }
 
